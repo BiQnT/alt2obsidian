@@ -103,14 +103,13 @@ Alt2Obsidian을 사용하려면 먼저 Alt 앱에서 강의 노트의 공유 링
    Alt2Obsidian/
    ├── CSED311/
    │   ├── CSED311 Lec7-pipelined-CPU.md    ← 강의 노트
-   │   └── assets/
-   │       ├── csed311_lec7-pipelined-cpu_slide_01.png
-   │       ├── csed311_lec7-pipelined-cpu_slide_02.png
+   │   ├── assets/
+   │   │   ├── csed311_lec7-pipelined-cpu_slide_01.png
+   │   │   └── ...
+   │   └── Concepts/                        ← 과목별 개념 노트
+   │       ├── Pipeline Hazard.md
+   │       ├── Forwarding.md
    │       └── ...
-   ├── Concepts/
-   │   ├── Pipeline Hazard.md               ← 개념 노트
-   │   ├── Forwarding.md
-   │   └── ...
    └── Exam/
        └── CSED311-시험요약.md              ← 시험 요약본
    ```

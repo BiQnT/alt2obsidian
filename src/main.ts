@@ -290,7 +290,7 @@ ${transcriptText}`,
     const noteFilename = sanitizeFilename(altData.title);
     const notePath = `${subjectFolder}/${noteFilename}.md`;
     await vm.saveNote(lectureMarkdown, notePath);
-    await vm.saveConceptNotes(conceptNotes, noteFilename);
+    await vm.saveConceptNotes(conceptNotes, noteFilename, subject);
 
     onProgress?.("완료!", 100);
 

@@ -64,9 +64,13 @@ export class VaultManager {
 
   async saveConceptNotes(
     concepts: ConceptNote[],
-    lectureTitle: string
+    lectureTitle: string,
+    subject?: string
   ): Promise<string[]> {
-    const conceptsFolder = normalizePath(`${this.basePath}/Concepts`);
+    // Organize concepts inside subject folder: Alt2Obsidian/{subject}/Concepts/
+    const conceptsFolder = subject
+      ? normalizePath(`${this.basePath}/${sanitizeFilename(subject)}/Concepts`)
+      : normalizePath(`${this.basePath}/Concepts`);
     await this.ensureFolder(conceptsFolder);
 
     const acquiredNames: string[] = [];
