@@ -276,6 +276,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
     } catch (e) {
       const msg = e instanceof Error ? e.message : "알 수 없는 오류";
       this.showError(msg);
+    } finally {
       this.setLoading(false);
     }
   }
