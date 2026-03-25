@@ -104,17 +104,20 @@ export default class Alt2ObsidianPlugin extends Plugin {
       return this.savePartialNote(altData, subject, url, llm, onProgress);
     }
 
-    // If transcript available and summary is short/missing, use LLM to generate proper summary
-    const summaryTooShort = !altData.summary || altData.summary.length < 500;
-    if (summaryTooShort && altData.transcript) {
-      onProgress?.("트랜스크립트에서 강의 노트 생성 중...", 25);
+    // Enhance summary with transcript if available
+    if (altData.transcript) {
       const transcriptText = altData.transcript.slice(0, 15000);
-      const memoContext = altData.summary
-        ? `\n\n[학생 메모]\n${altData.summary}`
-        : "";
+      const summaryTooShort = !altData.summary || altData.summary.length < 500;
 
-      altData.summary = await llm.generateText(
-        `다음은 강의 트랜스크립트입니다. 이 내용을 구조화된 강의 노트로 정리해주세요.
+      if (summaryTooShort) {
+        // No usable summary → generate from transcript
+        onProgress?.("트랜스크립트에서 강의 노트 생성 중...", 25);
+        const memoContext = altData.summary
+          ? `\n\n[학생 메모]\n${altData.summary}`
+          : "";
+
+        altData.summary = await llm.generateText(
+          `다음은 강의 트랜스크립트입니다. 이 내용을 구조화된 강의 노트로 정리해주세요.
 
 규칙:
 - 마크다운 형식으로, ## 섹션 헤더를 사용
@@ -126,11 +129,37 @@ ${memoContext}
 
 트랜스크립트:
 ${transcriptText}`,
-        {
-          systemPrompt: "You are an academic note-taking assistant. Create well-structured, comprehensive lecture notes in Korean with markdown formatting. Focus on key concepts, definitions, and relationships.",
-          maxOutputTokens: 4096,
-        }
-      );
+          {
+            systemPrompt: "You are an academic note-taking assistant. Create well-structured, comprehensive lecture notes in Korean with markdown formatting.",
+            maxOutputTokens: 4096,
+          }
+        );
+      } else {
+        // Summary exists → enhance with transcript details
+        onProgress?.("트랜스크립트로 요약 보강 중...", 25);
+
+        altData.summary = await llm.generateText(
+          `다음은 강의 요약본과 실제 강의 트랜스크립트입니다.
+요약본을 기반으로 하되, 트랜스크립트에서 빠진 부연설명, 예시, 세부 내용을 추가하여 더 풍부한 강의 노트를 만들어주세요.
+
+규칙:
+- 기존 요약본의 구조와 핵심 내용을 유지
+- 트랜스크립트에서 추가 설명, 예시, 교수 코멘트 등을 보강
+- 마크다운 형식, ## 섹션 헤더 사용
+- 핵심 개념을 **볼드**로, 전문 용어는 영어 병기
+- 트랜스크립트에만 있는 중요 내용은 새 섹션이나 불릿으로 추가
+
+[기존 요약본]
+${altData.summary}
+
+[강의 트랜스크립트]
+${transcriptText}`,
+          {
+            systemPrompt: "You are an academic note-taking assistant. Enhance lecture summaries with additional details from transcripts. Keep the original structure but add missing explanations, examples, and context.",
+            maxOutputTokens: 8192,
+          }
+        );
+      }
     }
 
     // Step 2: Start PDF download + LLM processing in PARALLEL
