@@ -147,9 +147,18 @@ export class Alt2ObsidianSidebarView extends ItemView {
     if (!this.recentListContainer) return;
     this.recentListContainer.empty();
 
-    const imports = this.plugin.data.recentImports;
+    // Filter out records whose files no longer exist in vault
+    const validImports = this.plugin.data.recentImports.filter((record) =>
+      this.app.vault.getAbstractFileByPath(record.path)
+    );
 
-    if (imports.length === 0) {
+    // Sync plugin data if stale entries were removed
+    if (validImports.length !== this.plugin.data.recentImports.length) {
+      this.plugin.data.recentImports = validImports;
+      this.plugin.savePluginData();
+    }
+
+    if (validImports.length === 0) {
       this.recentListContainer.createDiv({
         text: "아직 가져온 노트가 없습니다",
         cls: "alt2obsidian-empty",
@@ -157,7 +166,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
       return;
     }
 
-    for (const record of imports.slice(0, 20)) {
+    for (const record of validImports.slice(0, 20)) {
       const item = this.recentListContainer.createDiv({
         cls: "alt2obsidian-recent-item",
       });
@@ -180,10 +189,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
       }
 
       item.addEventListener("click", () => {
-        const file = this.app.vault.getAbstractFileByPath(record.path);
-        if (file) {
-          this.app.workspace.openLinkText(record.path, "", false);
-        }
+        this.app.workspace.openLinkText(record.path, "", false);
       });
     }
   }
@@ -192,9 +198,10 @@ export class Alt2ObsidianSidebarView extends ItemView {
     if (!this.examContainer) return;
     this.examContainer.empty();
 
-    // Group recent imports by subject
+    // Group recent imports by subject (only valid/existing files)
     const subjectMap = new Map<string, number>();
     for (const record of this.plugin.data.recentImports) {
+      if (!this.app.vault.getAbstractFileByPath(record.path)) continue;
       const count = subjectMap.get(record.subject) || 0;
       subjectMap.set(record.subject, count + 1);
     }
