@@ -55,7 +55,7 @@ Alt2Obsidian을 사용하려면 먼저 Alt 앱에서 강의 노트의 공유 링
 
 ### 1. Alt 앱 설치
 
-- [App Store (iOS)](https://apps.apple.com/app/alt-ai-lecture-tool/id6670164468)에서 **Alt** 앱을 다운로드합니다.
+- [alt.io](https://www.altalt.io/ko/features)에서 **Alt** 앱을 다운로드합니다.
 - 회원가입 후 강의 녹음/업로드를 통해 노트를 생성합니다.
 
 ### 2. 노트 공유 링크 복사

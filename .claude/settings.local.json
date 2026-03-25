@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.altalt.io)",
+      "WebFetch(domain:docs.obsidian.md)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:publish-01.obsidian.md)",
+      "WebFetch(domain:obsidian.md)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:ai.google.dev)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "Bash(npm run:*)",
+      "Bash(node:*)"
+    ]
+  }
+}
