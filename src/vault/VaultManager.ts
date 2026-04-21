@@ -1,5 +1,5 @@
 import { App, TFolder, normalizePath } from "obsidian";
-import { SlideImage, ConceptNote } from "../types";
+import { SlideImage, ConceptNote, ExamPeriod } from "../types";
 import { sanitizeFilename } from "../utils/helpers";
 import { ConceptRegistry } from "./ConceptRegistry";
 
@@ -107,7 +107,10 @@ export class VaultManager {
     return savedPaths;
   }
 
-  async readNotesForSubject(subject: string): Promise<{ title: string; content: string }[]> {
+  async readNotesForSubject(
+    subject: string,
+    period?: ExamPeriod
+  ): Promise<{ title: string; content: string }[]> {
     const subjectFolder = normalizePath(`${this.basePath}/${sanitizeFilename(subject)}`);
     const folder = this.app.vault.getAbstractFileByPath(subjectFolder);
 
@@ -115,16 +118,35 @@ export class VaultManager {
 
     const notes: { title: string; content: string }[] = [];
     for (const child of folder.children) {
-      if (child.name.endsWith(".md")) {
-        const content = await this.app.vault.read(child as any);
-        notes.push({
-          title: child.name.replace(/\.md$/, ""),
-          content,
-        });
+      if (!child.name.endsWith(".md")) continue;
+      const content = await this.app.vault.read(child as any);
+
+      if (period) {
+        const tagsMatch = content.match(/^tags:\s*\[([^\]]+)\]/m);
+        const tags = tagsMatch
+          ? tagsMatch[1].split(",").map((t) => t.trim())
+          : [];
+        if (!tags.includes(period)) continue;
       }
+
+      notes.push({ title: child.name.replace(/\.md$/, ""), content });
     }
 
     return notes;
+  }
+
+  async saveRawFile(data: ArrayBuffer, path: string): Promise<string> {
+    const normalized = normalizePath(path);
+    const dir = normalized.substring(0, normalized.lastIndexOf("/"));
+    await this.ensureFolder(dir);
+
+    const existing = this.app.vault.getAbstractFileByPath(normalized);
+    if (existing) {
+      await this.app.vault.modifyBinary(existing as any, data);
+    } else {
+      await this.app.vault.createBinary(normalized, data);
+    }
+    return normalized;
   }
 
   getKnownSubjects(): string[] {
