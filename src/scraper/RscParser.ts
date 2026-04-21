@@ -1,8 +1,10 @@
 import { AltNoteData, AltNoteMetadata } from "../types";
 
 const RSC_PUSH_REGEX = /self\.__next_f\.push\(\s*(\[[\s\S]*?\])\s*\)/g;
-const SUPABASE_URL_REGEX =
-  /https?:\/\/[a-z0-9]+\.supabase\.co\/storage\/v1\/object\/sign\/[^\s"'\\]+/g;
+// Alt migrated from Supabase to Cloudflare R2 for slide storage.
+// Primary extraction targets the "slides_url" JSON field; this regex is a fallback.
+const SLIDES_URL_REGEX =
+  /https?:\/\/(?:[a-z0-9-]+\.supabase\.co\/storage\/v1\/object\/sign|[a-z0-9-]+\.r2\.cloudflarestorage\.com)\/[^\s"'\\]+/g;
 const OG_TITLE_REGEX =
   /<meta\s+property="og:title"\s+content="([^"]*?)"\s*\/?>/i;
 const OG_DESC_REGEX =
@@ -105,20 +107,31 @@ export class RscParser {
       }
     }
 
-    // 4. Extract Supabase PDF URL (search both payloads)
-    const supabaseMatches =
-      unescapedPayload.match(SUPABASE_URL_REGEX) ||
-      rawPayload.match(SUPABASE_URL_REGEX);
-    if (supabaseMatches) {
-      for (const url of supabaseMatches) {
-        const cleaned = this.cleanUrl(url);
-        if (cleaned.includes("slides") || cleaned.includes(".pdf")) {
-          pdfUrl = cleaned;
-          break;
+    // 4. Extract slides PDF URL
+    // Primary: read the "slides_url" field from the note data component
+    const slidesFieldMatch = unescapedPayload.match(
+      /"slides_url"\s*:\s*"([^"]+)"/
+    );
+    if (slidesFieldMatch) {
+      pdfUrl = this.cleanUrl(slidesFieldMatch[1]);
+    }
+
+    // Fallback: scan for any Supabase or Cloudflare R2 URL (handles escaped raw payload too)
+    if (!pdfUrl) {
+      const urlMatches =
+        unescapedPayload.match(SLIDES_URL_REGEX) ||
+        rawPayload.match(SLIDES_URL_REGEX);
+      if (urlMatches) {
+        for (const url of urlMatches) {
+          const cleaned = this.cleanUrl(url);
+          if (cleaned.includes("slides") || cleaned.includes(".pdf")) {
+            pdfUrl = cleaned;
+            break;
+          }
         }
-      }
-      if (!pdfUrl && supabaseMatches.length > 0) {
-        pdfUrl = this.cleanUrl(supabaseMatches[0]);
+        if (!pdfUrl && urlMatches.length > 0) {
+          pdfUrl = this.cleanUrl(urlMatches[0]);
+        }
       }
     }
 
