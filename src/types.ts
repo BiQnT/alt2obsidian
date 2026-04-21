@@ -16,6 +16,8 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   rateDelayMs: 4000,
 };
 
+export type ExamPeriod = "midterm" | "final";
+
 export interface AltNoteData {
   title: string;
   summary: string;
@@ -70,12 +72,14 @@ export interface ImportRecord {
   path: string;
   date: string;
   parseQuality: "full" | "partial";
+  examPeriod?: ExamPeriod;
+  pdfPath?: string;
 }
 
 export interface ImportPreview {
   altData: AltNoteData;
   pdfData: ArrayBuffer | null;
-  slideThumbnails: string[]; // data URLs for thumbnails
+  slideThumbnails: string[];
   suggestedSubject: string;
   slideCount: number;
 }

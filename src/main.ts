@@ -5,6 +5,7 @@ import {
   ImportRecord,
   ImportPreview,
   LLMProvider as ILLMProvider,
+  ExamPeriod,
 } from "./types";
 import { AltScraper } from "./scraper/AltScraper";
 import { PdfProcessor } from "./pdf/PdfProcessor";
@@ -131,8 +132,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
   async importNote(
     url: string,
     preview: ImportPreview,
-    selectedSlides: number[], // 0-based indices of selected slides
+    selectedSlides: number[],
     subjectOverride?: string,
+    examPeriod?: ExamPeriod,
     onProgress?: (stage: string, percent: number) => void
   ): Promise<ImportRecord> {
     const settings = this.data.settings;
@@ -170,17 +172,24 @@ export default class Alt2ObsidianPlugin extends Plugin {
           `다음은 강의 트랜스크립트입니다. 이 내용을 구조화된 강의 노트로 정리해주세요.
 
 규칙:
-- 마크다운 형식으로, ## 섹션 헤더를 사용
-- 핵심 개념을 **볼드**로 표시
-- 한국어로 작성하되, 전문 용어는 영어 병기 (예: **파이프라인 해저드(Pipeline Hazard)**)
+- 마크다운 형식으로, ## 섹션 헤더 사용
+- 핵심 개념은 **볼드**, 전문 용어는 영어 병기 (예: **파이프라인 해저드(Pipeline Hazard)**)
 - 각 섹션에 핵심 포인트를 불릿 리스트로 정리
-- 수식이나 예시가 있으면 포함
+- 중요 정의는 Obsidian callout 사용:
+  > [!definition] 개념명
+  > 정의 내용
+- 시험 출제 가능 핵심 포인트는:
+  > [!important] 핵심 포인트 제목
+  > 내용
+- 예시, 의사코드, 수식이 있으면:
+  > [!example] 예시 제목
+  > 내용
 ${memoContext}
 
 트랜스크립트:
 ${transcriptText}`,
           {
-            systemPrompt: "You are an academic note-taking assistant. Create well-structured, comprehensive lecture notes in Korean with markdown formatting.",
+            systemPrompt: "You are an academic note-taking assistant. Create well-structured, comprehensive lecture notes in Korean with markdown formatting and Obsidian callout blocks.",
             maxOutputTokens: 4096,
           }
         );
@@ -197,6 +206,9 @@ ${transcriptText}`,
 - 마크다운 형식, ## 섹션 헤더 사용
 - 핵심 개념을 **볼드**로, 전문 용어는 영어 병기
 - 트랜스크립트에만 있는 중요 내용은 새 섹션이나 불릿으로 추가
+- 중요 정의는 > [!definition] 개념명 callout으로 표시
+- 시험 출제 포인트는 > [!important] callout으로 표시
+- 예시/코드는 > [!example] callout으로 표시
 
 [기존 요약본]
 ${altData.summary}
@@ -264,7 +276,7 @@ ${transcriptText}`,
     const llmResult = {
       processedSummary: altData.summary,
       concepts: conceptResult.concepts,
-      tags: conceptResult.tags,
+      tags: examPeriod ? [...conceptResult.tags, examPeriod] : conceptResult.tags,
       subjectSuggestion: subject,
       imagePlacements,
     };
@@ -294,6 +306,14 @@ ${transcriptText}`,
 
     onProgress?.("완료!", 100);
 
+    // Save raw PDF to vault for side-by-side view
+    let pdfPath: string | undefined;
+    if (preview.pdfData) {
+      const pdfFilename = sanitizeFilename(altData.title);
+      const rawPdfPath = `${assetsFolder}/${pdfFilename}.pdf`;
+      pdfPath = await vm.saveRawFile(preview.pdfData, rawPdfPath);
+    }
+
     const record: ImportRecord = {
       url,
       title: altData.title,
@@ -301,6 +321,8 @@ ${transcriptText}`,
       path: notePath,
       date: formatDate(),
       parseQuality: "full",
+      examPeriod,
+      pdfPath,
     };
     this.data.recentImports.unshift(record);
     if (this.data.recentImports.length > 50) {
@@ -311,7 +333,7 @@ ${transcriptText}`,
     return record;
   }
 
-  async generateExamSummary(subject: string): Promise<string> {
+  async generateExamSummary(subject: string, period?: ExamPeriod): Promise<string> {
     const settings = this.data.settings;
     if (!settings.apiKey) {
       throw new Error("API 키를 설정에서 입력해주세요");
@@ -325,7 +347,7 @@ ${transcriptText}`,
     );
 
     const generator = new ExamSummaryGenerator(llm, this.vaultManager!);
-    return generator.generate(subject);
+    return generator.generate(subject, period);
   }
 
   private async savePartialNote(

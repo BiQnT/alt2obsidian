@@ -1,6 +1,6 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, WorkspaceLeaf, TFile } from "obsidian";
 import type Alt2ObsidianPlugin from "../main";
-import { ImportPreview } from "../types";
+import { ImportPreview, ExamPeriod } from "../types";
 
 export const VIEW_TYPE_SIDEBAR = "alt2obsidian-sidebar";
 
@@ -16,6 +16,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
   private slideSelectionContainer: HTMLElement | null = null;
   private recentListContainer: HTMLElement | null = null;
   private examContainer: HTMLElement | null = null;
+  private examPeriodSelect: HTMLSelectElement | null = null;
   private currentPreview: ImportPreview | null = null;
   private selectedSlides: Set<number> = new Set();
 
@@ -95,6 +96,21 @@ export class Alt2ObsidianSidebarView extends ItemView {
       placeholder: subjects.length > 0
         ? "위에서 선택하거나 새 과목명 입력..."
         : "과목명 입력 (예: CSED311)",
+    });
+
+    // Exam period selection
+    const periodRow = section.createDiv({ cls: "alt2obsidian-subject-input" });
+    periodRow.createEl("label", { text: "시험 범위" });
+    this.examPeriodSelect = periodRow.createEl("select", {
+      cls: "alt2obsidian-period-select",
+    }) as HTMLSelectElement;
+    [
+      { value: "", text: "없음" },
+      { value: "midterm", text: "중간고사" },
+      { value: "final", text: "기말고사" },
+    ].forEach(({ value, text }) => {
+      const opt = this.examPeriodSelect!.createEl("option", { text });
+      opt.value = value;
     });
   }
 
@@ -199,11 +215,14 @@ export class Alt2ObsidianSidebarView extends ItemView {
     this.examContainer.empty();
 
     // Group recent imports by subject (only valid/existing files)
-    const subjectMap = new Map<string, number>();
+    const subjectMap = new Map<string, { midterm: number; final: number; none: number }>();
     for (const record of this.plugin.data.recentImports) {
       if (!this.app.vault.getAbstractFileByPath(record.path)) continue;
-      const count = subjectMap.get(record.subject) || 0;
-      subjectMap.set(record.subject, count + 1);
+      const counts = subjectMap.get(record.subject) || { midterm: 0, final: 0, none: 0 };
+      if (record.examPeriod === "midterm") counts.midterm++;
+      else if (record.examPeriod === "final") counts.final++;
+      else counts.none++;
+      subjectMap.set(record.subject, counts);
     }
 
     if (subjectMap.size === 0) {
@@ -214,28 +233,46 @@ export class Alt2ObsidianSidebarView extends ItemView {
       return;
     }
 
-    for (const [subject, count] of subjectMap) {
+    for (const [subject, counts] of subjectMap) {
       const row = this.examContainer.createDiv({
         cls: "alt2obsidian-exam-subject",
       });
 
-      const info = row.createDiv();
+      const info = row.createDiv({ cls: "alt2obsidian-exam-subject-info" });
+      info.createSpan({ text: subject, cls: "alt2obsidian-exam-subject-name" });
+
+      const countParts: string[] = [];
+      if (counts.midterm > 0) countParts.push(`중간 ${counts.midterm}`);
+      if (counts.final > 0) countParts.push(`기말 ${counts.final}`);
+      if (counts.none > 0) countParts.push(`미분류 ${counts.none}`);
       info.createSpan({
-        text: subject,
-        cls: "alt2obsidian-exam-subject-name",
-      });
-      info.createSpan({
-        text: ` (${count}강의)`,
+        text: ` (${countParts.join(" / ")})`,
         cls: "alt2obsidian-exam-subject-count",
       });
 
-      const btn = row.createEl("button", {
-        text: "시험요약본 생성",
+      const btnRow = row.createDiv({ cls: "alt2obsidian-exam-btn-row" });
+
+      if (counts.midterm > 0) {
+        const btn = btnRow.createEl("button", {
+          text: "중간",
+          cls: "alt2obsidian-exam-btn",
+        });
+        btn.addEventListener("click", () => this.handleExamSummary(subject, "midterm"));
+      }
+
+      if (counts.final > 0) {
+        const btn = btnRow.createEl("button", {
+          text: "기말",
+          cls: "alt2obsidian-exam-btn",
+        });
+        btn.addEventListener("click", () => this.handleExamSummary(subject, "final"));
+      }
+
+      const allBtn = btnRow.createEl("button", {
+        text: "전체",
         cls: "alt2obsidian-exam-btn",
       });
-      btn.addEventListener("click", () =>
-        this.handleExamSummary(subject)
-      );
+      allBtn.addEventListener("click", () => this.handleExamSummary(subject));
     }
   }
 
@@ -403,11 +440,15 @@ export class Alt2ObsidianSidebarView extends ItemView {
   private async executeImport(url: string, preview: ImportPreview): Promise<void> {
     this.updateProgress(0, "LLM 처리 시작...");
 
+    const periodValue = this.examPeriodSelect?.value as ExamPeriod | "" || undefined;
+    const examPeriod = periodValue || undefined;
+
     const result = await this.plugin.importNote(
       url,
       preview,
       Array.from(this.selectedSlides).sort((a, b) => a - b),
       this.subjectInput?.value?.trim() || undefined,
+      examPeriod,
       (stage, pct) => {
         this.updateProgress(pct, stage);
       }
@@ -418,6 +459,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
 
     if (this.urlInput) this.urlInput.value = "";
     if (this.subjectInput) this.subjectInput.value = "";
+    if (this.examPeriodSelect) this.examPeriodSelect.value = "";
     this.selectedSlides.clear();
     this.containerEl.querySelectorAll(".alt2obsidian-subject-chip").forEach(
       (c) => c.removeClass("is-active")
@@ -425,19 +467,42 @@ export class Alt2ObsidianSidebarView extends ItemView {
 
     this.refreshRecentList();
     this.refreshExamSection();
+
+    // Open note and PDF side by side
+    await this.openSideBySide(result.path, result.pdfPath);
   }
 
-  private async handleExamSummary(subject: string): Promise<void> {
+  private async openSideBySide(notePath: string, pdfPath?: string): Promise<void> {
+    const noteFile = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(noteFile instanceof TFile)) return;
+
+    const noteLeaf = this.app.workspace.getLeaf(false);
+    await noteLeaf.openFile(noteFile);
+
+    if (pdfPath) {
+      const pdfFile = this.app.vault.getAbstractFileByPath(pdfPath);
+      if (pdfFile instanceof TFile) {
+        // Split vertically: note on left, PDF on right
+        const pdfLeaf = (this.app.workspace as any).getLeaf("split", "vertical");
+        await pdfLeaf.openFile(pdfFile);
+        // Keep focus on the note
+        this.app.workspace.setActiveLeaf(noteLeaf, { focus: true });
+      }
+    }
+  }
+
+  private async handleExamSummary(subject: string, period?: ExamPeriod): Promise<void> {
     if (!this.plugin.data.settings.apiKey) {
       this.showError("API 키를 설정에서 입력해주세요");
       return;
     }
 
     this.clearMessage();
-    this.updateProgress(0, `${subject} 시험요약본 생성 중...`);
+    const label = period === "midterm" ? "중간고사" : period === "final" ? "기말고사" : "전체";
+    this.updateProgress(0, `${subject} ${label} 시험요약본 생성 중...`);
 
     try {
-      const path = await this.plugin.generateExamSummary(subject);
+      const path = await this.plugin.generateExamSummary(subject, period);
       this.showSuccess(`시험요약본 생성 완료!`);
       this.hideProgress();
 
