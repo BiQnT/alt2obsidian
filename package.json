@@ -1,22 +1,28 @@
 {
-  "name": "alt2obsidian",
-  "version": "1.0.0",
-  "description": "Import Alt lecture notes into Obsidian with LLM-powered concept extraction",
-  "main": "main.js",
-  "scripts": {
-    "dev": "node esbuild.config.mjs",
-    "build": "node esbuild.config.mjs production"
-  },
-  "keywords": ["obsidian", "plugin", "alt", "lecture-notes", "llm"],
-  "license": "MIT",
-  "devDependencies": {
-    "@types/node": "^18.0.0",
-    "esbuild": "^0.20.0",
-    "esbuild-plugin-copy": "^2.1.0",
-    "obsidian": "latest",
-    "typescript": "^5.0.0"
-  },
-  "dependencies": {
-    "pdfjs-dist": "4.10.38"
-  }
+	"name": "alt2obsidian",
+	"version": "1.0.3",
+	"description": "Import Alt lecture notes into Obsidian with LLM-powered concept extraction",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "node esbuild.config.mjs production"
+	},
+	"keywords": [
+		"obsidian",
+		"plugin",
+		"alt",
+		"lecture-notes",
+		"llm"
+	],
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^18.0.0",
+		"esbuild": "^0.20.0",
+		"esbuild-plugin-copy": "^2.1.0",
+		"obsidian": "latest",
+		"typescript": "^5.0.0"
+	},
+	"dependencies": {
+		"pdfjs-dist": "4.10.38"
+	}
 }
