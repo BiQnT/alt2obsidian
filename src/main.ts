@@ -8,6 +8,7 @@ import {
   ExamPeriod,
   ConceptData,
   ImportUpdateSummary,
+  LectureMaterialContext,
 } from "./types";
 import { AltScraper } from "./scraper/AltScraper";
 import { PdfProcessor } from "./pdf/PdfProcessor";
@@ -131,6 +132,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
     const altData = preview.altData;
     const pdfDataPromise = this.downloadPdfForImport(preview);
+    const materialContextPromise = this.extractLectureMaterialContext(
+      pdfDataPromise,
+      `${altData.title}\n\n${altData.summary}`,
+      onProgress
+    );
 
     // For partial quality, skip LLM processing
     if (altData.parseQuality === "partial") {
@@ -141,6 +147,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         url,
         llm,
         pdfDataPromise,
+        materialContextPromise,
         onProgress,
         onConfirmUpdate
       );
@@ -213,6 +220,16 @@ ${transcriptText}`,
       } else {
         onProgress?.("기존 요약이 충분해 보강 호출을 건너뜁니다...", 10);
       }
+    }
+
+    const materialContext = await materialContextPromise;
+    if (materialContext) {
+      onProgress?.("강의자료를 반영해 노트 보강 중...", 25);
+      altData.summary = await this.enhanceSummaryWithLectureMaterial(
+        llm,
+        altData.summary,
+        materialContext
+      );
     }
 
     onProgress?.("LLM으로 개념 추출 중...", 30);
@@ -328,10 +345,21 @@ ${transcriptText}`,
     url: string,
     llm: ILLMProvider,
     pdfDataPromise: Promise<ArrayBuffer | null>,
+    materialContextPromise: Promise<LectureMaterialContext | null>,
     onProgress?: (stage: string, percent: number) => void,
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>
   ): Promise<ImportRecord> {
     onProgress?.("부분 노트 생성 중...", 50);
+
+    const materialContext = await materialContextPromise;
+    if (materialContext) {
+      onProgress?.("강의자료에서 노트 초안 생성 중...", 55);
+      altData.summary = await this.generateSummaryFromLectureMaterial(
+        llm,
+        altData.summary,
+        materialContext
+      );
+    }
 
     const noteGenerator = new NoteGenerator(llm);
     const { lectureMarkdown } = await noteGenerator.generate(
@@ -421,6 +449,88 @@ Rules:
     } catch {
       return title.split(/[\s-_]/)[0];
     }
+  }
+
+  private async enhanceSummaryWithLectureMaterial(
+    llm: ILLMProvider,
+    summary: string,
+    materialContext: LectureMaterialContext
+  ): Promise<string> {
+    const prompt = `기존 강의 노트와 PDF 강의자료 발췌가 있습니다.
+기존 노트의 구조와 문체를 유지하되, 강의자료에만 있는 중요한 정의, 공식, 표기법, 예시, 순서를 필요한 위치에 짧게 보강해주세요.
+
+작성 규칙:
+- 결과는 완성된 마크다운 강의 노트 본문만 반환합니다.
+- 기존 노트 내용을 불필요하게 다시 쓰거나 장황하게 늘리지 않습니다.
+- 강의자료에서 보강한 내용은 가능하면 문장 끝에 (p.3)처럼 페이지를 짧게 표시합니다.
+- 슬라이드 원문을 통째로 복사하지 말고 시험/복습에 필요한 정보만 요약합니다.
+- 중복되는 항목은 합치고, 표나 목록은 간결한 불릿으로 정리합니다.
+- PDF 발췌가 노트와 무관하거나 불명확하면 기존 노트를 우선합니다.
+
+[기존 노트]
+${this.truncateForPrompt(summary, 18000)}
+
+[PDF 강의자료 발췌: 총 ${materialContext.pageCount}쪽 중 핵심 ${materialContext.pages.length}쪽, ${materialContext.truncated ? "일부 발췌" : "전체 발췌"}]
+${materialContext.text}`;
+
+    return llm.generateText(prompt, {
+      systemPrompt:
+        "You are a concise academic note editor. Improve Korean Obsidian lecture notes using compact lecture material excerpts without copying slides verbatim.",
+      maxOutputTokens: 8192,
+    });
+  }
+
+  private async generateSummaryFromLectureMaterial(
+    llm: ILLMProvider,
+    fallbackSummary: string,
+    materialContext: LectureMaterialContext
+  ): Promise<string> {
+    const memoContext = fallbackSummary
+      ? `\n[Alt에서 가져온 제한적 내용]\n${this.truncateForPrompt(fallbackSummary, 4000)}\n`
+      : "";
+    const prompt = `Alt 노트 파싱이 제한적이어서 PDF 강의자료 발췌를 바탕으로 강의 노트를 작성해야 합니다.
+
+작성 규칙:
+- 결과는 완성된 마크다운 강의 노트 본문만 반환합니다.
+- 섹션은 ## 헤더를 사용하고, 정의/공식/예시/주의점을 구분합니다.
+- 강의자료에서 온 핵심 내용은 가능하면 (p.3)처럼 페이지를 표시합니다.
+- 슬라이드 원문을 길게 복사하지 말고, 복습 가능한 설명으로 압축합니다.
+- 확실하지 않은 내용은 단정하지 않습니다.
+${memoContext}
+[PDF 강의자료 발췌: 총 ${materialContext.pageCount}쪽 중 핵심 ${materialContext.pages.length}쪽]
+${materialContext.text}`;
+
+    return llm.generateText(prompt, {
+      systemPrompt:
+        "You are a concise academic note-taking assistant. Build Korean Obsidian lecture notes from compact PDF lecture material excerpts.",
+      maxOutputTokens: 8192,
+    });
+  }
+
+  private async extractLectureMaterialContext(
+    pdfDataPromise: Promise<ArrayBuffer | null>,
+    seedText: string,
+    onProgress?: (stage: string, percent: number) => void
+  ): Promise<LectureMaterialContext | null> {
+    const pdfData = await pdfDataPromise;
+    if (!pdfData || !this.pdfProcessor) return null;
+
+    onProgress?.("강의자료 텍스트 추출 중...", 15);
+    return this.pdfProcessor.extractLectureMaterialContext(
+      pdfData,
+      seedText,
+      (page, total) => {
+        const pct = 15 + Math.floor((page / total) * 10);
+        onProgress?.(`강의자료 텍스트 추출 (${page}/${total})...`, pct);
+      }
+    );
+  }
+
+  private truncateForPrompt(text: string, maxChars: number): string {
+    if (text.length <= maxChars) return text;
+    const head = text.slice(0, Math.floor(maxChars * 0.7));
+    const tail = text.slice(text.length - Math.floor(maxChars * 0.3));
+    return `${head}\n\n[...중간 내용 생략...]\n\n${tail}`;
   }
 
   private normalizeConcepts(

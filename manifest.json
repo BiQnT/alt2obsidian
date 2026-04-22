@@ -1,7 +1,7 @@
 {
 	"id": "alt2obsidian",
 	"name": "Alt2Obsidian",
-	"version": "1.0.5",
+	"version": "1.0.6",
 	"minAppVersion": "0.15.0",
 	"description": "Import Alt (altalt.io) lecture notes into Obsidian with LLM-powered concept extraction, wikilinks, and exam summaries.",
 	"author": "BiQnT",

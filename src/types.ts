@@ -59,6 +59,20 @@ export interface ConceptNote {
   lectureContext?: string;
 }
 
+export interface LectureMaterialPage {
+  pageNum: number;
+  text: string;
+  score: number;
+}
+
+export interface LectureMaterialContext {
+  pageCount: number;
+  pages: LectureMaterialPage[];
+  text: string;
+  extractedCharCount: number;
+  truncated: boolean;
+}
+
 export interface ImportUpdateSummary {
   isUpdate: boolean;
   addedSections: string[];
