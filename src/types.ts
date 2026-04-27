@@ -16,6 +16,8 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   rateDelayMs: 4000,
 };
 
+export type ExamPeriod = "midterm" | "final";
+
 export interface AltNoteData {
   title: string;
   summary: string;
@@ -31,24 +33,20 @@ export interface AltNoteMetadata {
   visibility: string | null;
 }
 
-export interface SlideImage {
-  pageNum: number;
-  data: ArrayBuffer;
-  filename: string;
-}
-
 export interface LLMResult {
   processedSummary: string;
   concepts: ConceptData[];
   tags: string[];
   subjectSuggestion: string;
-  imagePlacements: ImagePlacement[];
 }
 
 export interface ConceptData {
   name: string;
   definition: string;
   relatedConcepts: string[];
+  example?: string;
+  caution?: string;
+  lectureContext?: string;
 }
 
 export interface ConceptNote {
@@ -56,11 +54,32 @@ export interface ConceptNote {
   definition: string;
   relatedLectures: string[];
   relatedConcepts: string[];
+  example?: string;
+  caution?: string;
+  lectureContext?: string;
 }
 
-export interface ImagePlacement {
-  imageIndex: number;
-  afterSection: string;
+export interface LectureMaterialPage {
+  pageNum: number;
+  text: string;
+  score: number;
+}
+
+export interface LectureMaterialContext {
+  pageCount: number;
+  pages: LectureMaterialPage[];
+  text: string;
+  extractedCharCount: number;
+  truncated: boolean;
+}
+
+export interface ImportUpdateSummary {
+  isUpdate: boolean;
+  addedSections: string[];
+  removedSections: string[];
+  addedConcepts: string[];
+  removedConcepts: string[];
+  changedLineCount: number;
 }
 
 export interface ImportRecord {
@@ -70,14 +89,18 @@ export interface ImportRecord {
   path: string;
   date: string;
   parseQuality: "full" | "partial";
+  altId?: string;
+  examPeriod?: ExamPeriod;
+  pdfPath?: string;
+  wasUpdate?: boolean;
+  updateSummary?: ImportUpdateSummary;
 }
 
 export interface ImportPreview {
   altData: AltNoteData;
   pdfData: ArrayBuffer | null;
-  slideThumbnails: string[]; // data URLs for thumbnails
+  pdfUrl?: string | null;
   suggestedSubject: string;
-  slideCount: number;
 }
 
 export interface PluginData {
@@ -104,3 +127,6 @@ export interface LLMProvider {
   ): Promise<T>;
   estimateTokens(text: string): number;
 }
+
+export const MANAGED_NOTE_START = "<!-- alt2obsidian:start -->";
+export const MANAGED_NOTE_END = "<!-- alt2obsidian:end -->";

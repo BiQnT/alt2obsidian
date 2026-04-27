@@ -1,42 +1,13 @@
 import { requestUrl } from "obsidian";
-import { SlideImage } from "../types";
-import { dataUrlToArrayBuffer } from "../utils/helpers";
-
-// pdf.js types
-declare const pdfjsLib: {
-  GlobalWorkerOptions: { workerSrc: string };
-  getDocument(params: { data: ArrayBuffer }): {
-    promise: Promise<PDFDocument>;
-  };
-};
-
-interface PDFDocument {
-  numPages: number;
-  getPage(pageNum: number): Promise<PDFPage>;
-}
-
-interface PDFPage {
-  getViewport(params: { scale: number }): {
-    width: number;
-    height: number;
-  };
-  render(params: {
-    canvasContext: CanvasRenderingContext2D;
-    viewport: { width: number; height: number };
-  }): { promise: Promise<void> };
-}
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import type { LectureMaterialContext, LectureMaterialPage } from "../types";
 
 export class PdfProcessor {
   private workerSrc: string;
 
   constructor(pluginDir: string, vaultBasePath: string) {
     this.workerSrc = `${vaultBasePath}/${pluginDir}/pdf.worker.min.mjs`;
-  }
-
-  initWorker(): void {
-    if (typeof pdfjsLib !== "undefined") {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = this.workerSrc;
-    }
+    pdfjsLib.GlobalWorkerOptions.workerSrc = this.workerSrc;
   }
 
   async downloadPdf(pdfUrl: string): Promise<ArrayBuffer> {
@@ -53,137 +24,148 @@ export class PdfProcessor {
     }
   }
 
-  /**
-   * Render small thumbnails of all pages (for slide selection UI).
-   * Returns data URLs (base64 PNG) at low resolution.
-   */
-  async renderThumbnails(
+  async extractLectureMaterialContext(
     pdfData: ArrayBuffer,
+    seedText: string,
     onProgress?: (page: number, total: number) => void
-  ): Promise<string[]> {
-    const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-    const thumbnails: string[] = [];
+  ): Promise<LectureMaterialContext | null> {
+    try {
+      const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
+      const pageCount = pdf.numPages;
+      const seedTerms = this.extractTerms(seedText);
+      const pages: LectureMaterialPage[] = [];
+      let extractedCharCount = 0;
 
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const scale = 0.4; // Small thumbnails
-      const viewport = page.getViewport({ scale });
+      for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const rawText = textContent.items
+          .map((item: unknown) => {
+            const textItem = item as { str?: string };
+            return textItem.str || "";
+          })
+          .join(" ");
+        const text = this.normalizePageText(rawText);
 
-      const canvas = document.createElement("canvas");
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) continue;
+        if (text.length > 0) {
+          extractedCharCount += text.length;
+          pages.push({
+            pageNum,
+            text,
+            score: this.scorePage(text, seedTerms, pageNum),
+          });
+        }
 
-      await page.render({ canvasContext: ctx, viewport }).promise;
-      thumbnails.push(canvas.toDataURL("image/png"));
+        onProgress?.(pageNum, pageCount);
 
-      onProgress?.(i, pdf.numPages);
-
-      if (i % 10 === 0 && i < pdf.numPages) {
-        await new Promise<void>((r) => setTimeout(r, 0));
+        if (pageNum % 10 === 0 && pageNum < pageCount) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
       }
-    }
 
-    return thumbnails;
+      await pdf.destroy();
+
+      if (pages.length === 0) return null;
+
+      return this.buildCompactContext(pages, pageCount, extractedCharCount);
+    } catch (e) {
+      console.warn("[Alt2Obsidian] PDF text extraction failed:", e);
+      return null;
+    }
   }
 
-  /**
-   * Render only selected pages at full resolution.
-   */
-  async renderSelectedPages(
-    pdfData: ArrayBuffer,
-    selectedIndices: number[], // 0-based
-    titleSlug: string,
-    onProgress?: (page: number, total: number) => void
-  ): Promise<SlideImage[]> {
-    const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-    const images: SlideImage[] = [];
-    const total = selectedIndices.length;
+  private buildCompactContext(
+    pages: LectureMaterialPage[],
+    pageCount: number,
+    extractedCharCount: number
+  ): LectureMaterialContext {
+    const maxPages = 14;
+    const maxChars = 12000;
+    const firstPages = pages.filter((page) => page.pageNum <= 3);
+    const scoredPages = [...pages]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxPages);
+    const selectedMap = new Map<number, LectureMaterialPage>();
 
-    for (let idx = 0; idx < total; idx++) {
-      const pageNum = selectedIndices[idx] + 1; // 1-based
-      if (pageNum < 1 || pageNum > pdf.numPages) continue;
-
-      const page = await pdf.getPage(pageNum);
-      const scale = 2.0;
-      const viewport = page.getViewport({ scale });
-
-      const canvas = document.createElement("canvas");
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) continue;
-
-      await page.render({ canvasContext: ctx, viewport }).promise;
-
-      const dataUrl = canvas.toDataURL("image/png");
-      const arrayBuffer = dataUrlToArrayBuffer(dataUrl);
-
-      const pageStr = String(pageNum).padStart(2, "0");
-      images.push({
-        pageNum,
-        data: arrayBuffer,
-        filename: `${titleSlug}_slide_${pageStr}.png`,
-      });
-
-      onProgress?.(idx + 1, total);
-
-      if ((idx + 1) % 10 === 0 && idx + 1 < total) {
-        await new Promise<void>((r) => setTimeout(r, 0));
-      }
+    for (const page of [...firstPages, ...scoredPages]) {
+      selectedMap.set(page.pageNum, page);
     }
 
-    return images;
+    const selectedPages = Array.from(selectedMap.values())
+      .sort((a, b) => a.pageNum - b.pageNum)
+      .slice(0, maxPages);
+    const lines: string[] = [];
+    let usedChars = 0;
+
+    for (const page of selectedPages) {
+      const remaining = maxChars - usedChars;
+      if (remaining <= 0) break;
+
+      const pageText = this.truncateAtSentence(page.text, Math.min(900, remaining));
+      if (!pageText) continue;
+
+      const line = `[p.${page.pageNum}] ${pageText}`;
+      lines.push(line);
+      usedChars += line.length;
+    }
+
+    return {
+      pageCount,
+      pages: selectedPages,
+      text: lines.join("\n"),
+      extractedCharCount,
+      truncated: extractedCharCount > usedChars,
+    };
   }
 
-  async renderPages(
-    pdfData: ArrayBuffer,
-    titleSlug: string,
-    onProgress?: (page: number, total: number) => void
-  ): Promise<SlideImage[]> {
-    const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-    const images: SlideImage[] = [];
-    const batchSize = 10;
+  private normalizePageText(text: string): string {
+    return text
+      .replace(/\s+/g, " ")
+      .replace(/([a-z])-\s+([a-z])/gi, "$1$2")
+      .trim();
+  }
 
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const scale = 2.0; // 2x for readability
-      const viewport = page.getViewport({ scale });
+  private scorePage(text: string, terms: string[], pageNum: number): number {
+    const lower = text.toLowerCase();
+    let score = Math.min(text.length / 80, 20);
 
-      const canvas = document.createElement("canvas");
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext("2d");
-
-      if (!ctx) {
-        throw new Error(`Canvas context 생성 실패 (page ${i})`);
-      }
-
-      await page.render({
-        canvasContext: ctx,
-        viewport,
-      }).promise;
-
-      // Convert canvas to ArrayBuffer via dataURL (synchronous, reliable in Electron)
-      const dataUrl = canvas.toDataURL("image/png");
-      const arrayBuffer = dataUrlToArrayBuffer(dataUrl);
-
-      const pageStr = String(i).padStart(2, "0");
-      images.push({
-        pageNum: i,
-        data: arrayBuffer,
-        filename: `${titleSlug}_slide_${pageStr}.png`,
-      });
-
-      onProgress?.(i, pdf.numPages);
-
-      // Yield to UI thread every batch
-      if (i % batchSize === 0 && i < pdf.numPages) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      }
+    for (const term of terms) {
+      if (lower.includes(term)) score += 4;
     }
 
-    return images;
+    if (/definition|theorem|algorithm|formula|example|정의|정리|알고리즘|공식|예시/.test(lower)) {
+      score += 8;
+    }
+
+    if (pageNum <= 3) score += 5;
+    return score;
+  }
+
+  private extractTerms(seedText: string): string[] {
+    const terms = new Set<string>();
+    const matches = seedText.match(/[A-Za-z][A-Za-z0-9-]{3,}|[가-힣]{3,}/g) || [];
+
+    for (const match of matches) {
+      const term = match.toLowerCase();
+      if (term.length >= 4) terms.add(term);
+      if (terms.size >= 40) break;
+    }
+
+    return Array.from(terms);
+  }
+
+  private truncateAtSentence(text: string, maxChars: number): string {
+    if (text.length <= maxChars) return text;
+    const sliced = text.slice(0, maxChars);
+    const sentenceEnd = Math.max(
+      sliced.lastIndexOf(". "),
+      sliced.lastIndexOf("? "),
+      sliced.lastIndexOf("! "),
+      sliced.lastIndexOf("다. ")
+    );
+    if (sentenceEnd > maxChars * 0.6) {
+      return sliced.slice(0, sentenceEnd + 1).trim();
+    }
+    return sliced.trim();
   }
 }

@@ -125,6 +125,19 @@
   border-radius: 3px;
 }
 
+.alt2obsidian-recent-item-date {
+  font-size: 0.75em;
+  color: var(--text-faint);
+}
+
+.alt2obsidian-recent-item-updated {
+  font-size: 0.75em;
+  color: var(--text-accent);
+  background: var(--background-modifier-border);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
 .alt2obsidian-recent-item-partial {
   font-size: 0.75em;
   color: var(--text-warning);
@@ -219,92 +232,71 @@
   border-color: var(--interactive-accent);
 }
 
-/* Slide Selection */
-.alt2obsidian-slide-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.alt2obsidian-slide-header h6 {
-  margin: 0;
-}
-
-.alt2obsidian-slide-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.alt2obsidian-slide-action-btn {
-  font-size: 0.75em;
-  color: var(--text-accent);
-  cursor: pointer;
-}
-
-.alt2obsidian-slide-action-btn:hover {
-  text-decoration: underline;
-}
-
-.alt2obsidian-slide-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
-  max-height: 400px;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-
-.alt2obsidian-slide-thumb {
-  position: relative;
-  border: 2px solid transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0.5;
-  transition: all 0.15s ease;
-  overflow: hidden;
-}
-
-.alt2obsidian-slide-thumb.is-selected {
-  border-color: var(--interactive-accent);
-  opacity: 1;
-}
-
-.alt2obsidian-slide-thumb:hover {
-  opacity: 0.85;
-}
-
-.alt2obsidian-slide-thumb.is-selected:hover {
-  opacity: 1;
-}
-
-.alt2obsidian-slide-img {
-  width: 100%;
-  height: auto;
-  display: block;
-}
-
-.alt2obsidian-slide-num {
-  position: absolute;
-  bottom: 2px;
-  right: 2px;
-  background: rgba(0, 0, 0, 0.6);
-  color: white;
-  font-size: 0.7em;
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-
-.alt2obsidian-slide-count {
-  text-align: center;
-  font-size: 0.85em;
-  color: var(--text-muted);
-  padding: 4px 0;
-}
-
 /* Empty State */
 .alt2obsidian-empty {
   text-align: center;
   color: var(--text-muted);
   font-size: 0.85em;
   padding: 16px 0;
+}
+
+
+/* Exam period select */
+.alt2obsidian-period-select {
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+}
+
+/* Exam section layout */
+.alt2obsidian-exam-subject-info {
+  margin-bottom: 4px;
+}
+
+.alt2obsidian-exam-btn-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.alt2obsidian-exam-btn-row .alt2obsidian-exam-btn {
+  flex: 1;
+  min-width: 50px;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.alt2obsidian-update-modal h2 {
+  margin-top: 0;
+}
+
+.alt2obsidian-update-section {
+  margin-top: 12px;
+}
+
+.alt2obsidian-update-section h3 {
+  font-size: 0.9em;
+  margin-bottom: 4px;
+}
+
+.alt2obsidian-update-section ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.alt2obsidian-update-empty {
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.alt2obsidian-update-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
 }
