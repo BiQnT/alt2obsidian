@@ -24,6 +24,11 @@ import {
   Alt2ObsidianSidebarView,
   VIEW_TYPE_SIDEBAR,
 } from "./ui/SidebarView";
+import {
+  SyncedViewerView,
+  VIEW_TYPE_SYNCED_VIEWER,
+} from "./ui/SyncedViewerView";
+import { TFile } from "obsidian";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
 
 export default class Alt2ObsidianPlugin extends Plugin {
@@ -52,6 +57,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
       return new Alt2ObsidianSidebarView(leaf, this);
     });
 
+    // Register Synced Viewer (Task 1.5 — A2 default)
+    this.registerView(VIEW_TYPE_SYNCED_VIEWER, (leaf) => {
+      return new SyncedViewerView(leaf);
+    });
+
     // Add ribbon icon
     this.addRibbonIcon("book-open", "Alt2Obsidian", () => {
       this.activateSidebarView();
@@ -70,12 +80,48 @@ export default class Alt2ObsidianPlugin extends Plugin {
       callback: () => this.activateSidebarView(),
     });
 
+    this.addCommand({
+      id: "open-synced-viewer",
+      name: "Open Synced Viewer (PDF + lecture .md)",
+      callback: () => this.openSyncedViewerForActiveNote(),
+    });
+
     // Register settings tab
     this.addSettingTab(new Alt2ObsidianSettingsTab(this.app, this));
   }
 
   onunload(): void {
     // Views are automatically cleaned up by Obsidian
+  }
+
+  /**
+   * Resolve the active note's sibling PDF and open both in the Synced
+   * Viewer (Task 1.5). PDF is expected at `{same-folder}/{same-stem}.pdf`
+   * (Task 1.4 sibling layout). If the active file isn't a markdown note or
+   * has no sibling PDF, surface a Notice and bail.
+   */
+  async openSyncedViewerForActiveNote(): Promise<void> {
+    const { Notice } = await import("obsidian");
+    const active = this.app.workspace.getActiveFile();
+    if (!active || active.extension !== "md") {
+      new Notice("강의 노트(.md)를 활성화한 뒤 다시 시도하세요.");
+      return;
+    }
+    const pdfPath = active.path.replace(/\.md$/, ".pdf");
+    const pdfFile = this.app.vault.getAbstractFileByPath(pdfPath);
+    if (!(pdfFile instanceof TFile)) {
+      new Notice(
+        `사이블링 PDF가 없습니다: ${pdfPath} — 강의를 import하면 PDF가 함께 저장됩니다.`
+      );
+      return;
+    }
+    const leaf = this.app.workspace.getLeaf(true);
+    await leaf.setViewState({
+      type: VIEW_TYPE_SYNCED_VIEWER,
+      active: true,
+      state: { mdPath: active.path, pdfPath },
+    });
+    this.app.workspace.revealLeaf(leaf);
   }
 
   updateBasePath(): void {
