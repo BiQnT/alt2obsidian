@@ -1,4 +1,4 @@
-import { Plugin } from "obsidian";
+import { Plugin, Notice } from "obsidian";
 import {
   PluginData,
   DEFAULT_PLUGIN_DATA,
@@ -47,10 +47,14 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.data.settings.baseFolderPath
     );
 
-    // Initialize PDF processor with worker path
-    const vaultBasePath =
-      (this.app.vault.adapter as any).getBasePath?.() || "";
-    this.pdfProcessor = new PdfProcessor(this.manifest.dir || "", vaultBasePath);
+    // Resolve the pdfjs worker via Obsidian's resource-path machinery so it
+    // becomes an `app://local/...` URL the renderer can actually fetch.
+    // Raw filesystem paths get prepended to `app://obsidian.md/` and fail.
+    const workerVaultPath = `${this.manifest.dir}/pdf.worker.min.mjs`;
+    const workerSrc =
+      (this.app.vault.adapter as any).getResourcePath?.(workerVaultPath) ||
+      workerVaultPath;
+    this.pdfProcessor = new PdfProcessor(workerSrc);
 
     // Register sidebar view
     this.registerView(VIEW_TYPE_SIDEBAR, (leaf) => {
@@ -101,7 +105,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * has no sibling PDF, surface a Notice and bail.
    */
   async openSyncedViewerForActiveNote(): Promise<void> {
-    const { Notice } = await import("obsidian");
     const active = this.app.workspace.getActiveFile();
     if (!active || active.extension !== "md") {
       new Notice("강의 노트(.md)를 활성화한 뒤 다시 시도하세요.");

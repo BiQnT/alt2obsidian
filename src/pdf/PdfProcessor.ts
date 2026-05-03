@@ -3,11 +3,15 @@ import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { LectureMaterialContext, LectureMaterialPage, VisionImageRef } from "../types";
 
 export class PdfProcessor {
-  private workerSrc: string;
-
-  constructor(pluginDir: string, vaultBasePath: string) {
-    this.workerSrc = `${vaultBasePath}/${pluginDir}/pdf.worker.min.mjs`;
-    pdfjsLib.GlobalWorkerOptions.workerSrc = this.workerSrc;
+  /**
+   * Worker URL must be resolved through Obsidian's resource-path machinery
+   * (e.g., `app://local/...`). Raw filesystem paths get incorrectly prepended
+   * to the `app://obsidian.md/` baseURI by pdfjs and fail to load. Caller
+   * (main.ts) is responsible for the conversion via
+   * `app.vault.adapter.getResourcePath(...)`.
+   */
+  constructor(workerSrc: string) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
   }
 
   async downloadPdf(pdfUrl: string): Promise<ArrayBuffer> {
