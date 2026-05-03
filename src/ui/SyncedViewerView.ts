@@ -1,15 +1,23 @@
-// Synced Viewer ItemView (plan Task 1.5, A2 default contract).
+// Synced Viewer ItemView (plan Task 1.5).
 //
-// Hosts a vertical-split view inside Obsidian:
-//   Left: pdfjs-dist PDFViewer instance (real text layer → text selection works)
-//   Right: rendered markdown of the lecture .md
+// Originally targeted A2 (pdfjs-dist `web/pdf_viewer.mjs` with EventBus +
+// PDFViewer + text-layer for native text selection). Pivoted to A4
+// (canvas-only) at first manual QA because pdfjs-dist@4.10.38 ships an
+// internal version skew between `web/pdf_viewer.mjs` (Viewer 4.10.38) and
+// the pdfjs runtime its viewer code is bundled against (API 5.3.34); the
+// Viewer's strict version check throws on every setDocument regardless of
+// which pdf.mjs build we import. See git log 2026-05-03 hotfix sequence.
 //
-// Page-change in PDF (eventBus.on("pagechanging")) drives the markdown to
-// scroll the matching `## 📚 슬라이드 N` heading into view. Two-way sync
-// (md scroll → PDF page) deferred to 1.1.1; one-way is the dominant
-// study flow.
-//
-// Spec criteria 6, 7. md→PDF (criterion 8) lands in 1.1.1.
+// A4 contract:
+// - Render each PDF page to a `<canvas>` stacked vertically in the left pane
+//   (uses legacy pdfjs that PdfProcessor already proves working).
+// - IntersectionObserver tracks which page is currently the most visible
+//   and emits a synthetic page-change → drives the right pane to scroll
+//   the matching `## 📚 슬라이드 N` heading into view.
+// - Page nav (◀/▶) scrolls the target canvas to the top of the pane.
+// - Zoom (− / +) re-renders all pages at the new DPI scale.
+// - "Obsidian native PDF" escape hatch button opens the file in Obsidian's
+//   native PDF view in a split pane (which has find/select/annotation).
 
 import {
   ItemView,
@@ -19,22 +27,7 @@ import {
   Notice,
   Component,
 } from "obsidian";
-// pdfjs-dist 4.10.38 ships an internal version mismatch: build/pdf.mjs is
-// API 5.3.34 while web/pdf_viewer.mjs is Viewer 4.10.38. setDocument's
-// strict version check throws "API version ... does not match Viewer
-// version ..." when those mix. The LEGACY build (legacy/build/pdf.mjs) is
-// pinned to 4.10.38 and is what PdfProcessor uses, so reusing legacy here
-// gives a single matched runtime. (CSS layout — the OTHER reason the pane
-// was empty earlier — is fixed below by removing position:absolute from
-// the inner .pdfViewer element.)
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-import {
-  PDFViewer,
-  EventBus,
-  PDFLinkService,
-} from "pdfjs-dist/web/pdf_viewer.mjs";
-// pdfjs-dist ships a viewer stylesheet; bundled as text via esbuild loader.
-import pdfViewerCssText from "pdfjs-dist/web/pdf_viewer.css";
 
 export const VIEW_TYPE_SYNCED_VIEWER = "alt2obsidian-synced-viewer";
 
@@ -43,7 +36,6 @@ interface SyncedViewerState {
   pdfPath: string | null;
 }
 
-const PDF_VIEWER_STYLE_ID = "alt2obs-pdfjs-viewer-style";
 const SYNCED_VIEWER_STYLE_ID = "alt2obs-synced-viewer-style";
 
 const SYNCED_VIEWER_CSS = `
@@ -77,16 +69,23 @@ const SYNCED_VIEWER_CSS = `
 }
 .alt2obs-pdf-pane {
   flex: 1;
-  overflow: auto;            /* the OUTER container scrolls — pdfjs PDFViewer reads scrollTop here */
+  overflow: auto;
   background: var(--background-primary-alt);
-  position: relative;        /* anchor for absolute children pdfjs may add */
-  min-width: 0;              /* allow flex shrink below content min-width (prevents 0-width race) */
+  position: relative;
+  min-width: 0;
+  padding: 12px;
 }
-.alt2obs-pdf-viewer-container {
-  /* The .pdfViewer element must be a regular block child — pages stack
-     into it with their natural heights. NO position:absolute, NO overflow,
-     otherwise pdfjs's lazy-render visible-page detection breaks and the
-     viewer initialises but draws nothing. */
+.alt2obs-pdf-page {
+  display: block;
+  margin: 0 auto 12px;
+  max-width: 100%;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.alt2obs-pdf-page-loading {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 16px;
 }
 .alt2obs-md-pane {
   flex: 1;
@@ -94,6 +93,7 @@ const SYNCED_VIEWER_CSS = `
   padding: 16px 22px;
   background: var(--background-primary);
   border-left: 1px solid var(--background-modifier-border);
+  min-width: 0;
 }
 .alt2obs-md-pane .markdown-rendered {
   max-width: 100%;
@@ -110,22 +110,19 @@ export class SyncedViewerView extends ItemView {
   private pdfPath: string | null = null;
   private currentPage = 1;
   private totalPages = 0;
+  private scale = 1.5; // page-render DPI multiplier; user can adjust via ± buttons
 
   private toolbarEl!: HTMLElement;
   private panesEl!: HTMLElement;
   private pdfPaneEl!: HTMLElement;
-  private pdfViewerContainerEl!: HTMLElement;
   private mdPaneEl!: HTMLElement;
   private pageInfoEl!: HTMLElement;
   private prevButtonEl!: HTMLButtonElement;
   private nextButtonEl!: HTMLButtonElement;
-  private nativeViewButtonEl!: HTMLButtonElement;
 
   private pdfDocument: any = null;
-  private pdfViewer: PDFViewer | null = null;
-  private eventBus: EventBus | null = null;
-  private linkService: PDFLinkService | null = null;
-
+  private pageCanvases: HTMLCanvasElement[] = [];
+  private intersectionObserver: IntersectionObserver | null = null;
   private mdRenderComponent: Component = new Component();
 
   constructor(leaf: WorkspaceLeaf) {
@@ -157,16 +154,8 @@ export class SyncedViewerView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.tearDownIntersectionObserver();
     this.mdRenderComponent.unload();
-    if (this.pdfViewer) {
-      try {
-        // PDFViewer doesn't expose a clean destroy; clearing the document is enough.
-        this.pdfViewer.setDocument(null as any);
-      } catch (_) {
-        // ignore
-      }
-      this.pdfViewer = null;
-    }
     if (this.pdfDocument) {
       try {
         await this.pdfDocument.destroy();
@@ -191,10 +180,6 @@ export class SyncedViewerView extends ItemView {
     return { mdPath: this.mdPath, pdfPath: this.pdfPath };
   }
 
-  /**
-   * Public entry — open the viewer for the given .md + .pdf pair. Triggered
-   * by the "Open Synced Viewer" command in main.ts.
-   */
   async openPair(mdPath: string, pdfPath: string): Promise<void> {
     this.mdPath = mdPath;
     this.pdfPath = pdfPath;
@@ -202,12 +187,6 @@ export class SyncedViewerView extends ItemView {
   }
 
   private injectGlobalStyles(): void {
-    if (!document.getElementById(PDF_VIEWER_STYLE_ID)) {
-      const s = document.createElement("style");
-      s.id = PDF_VIEWER_STYLE_ID;
-      s.textContent = pdfViewerCssText;
-      document.head.appendChild(s);
-    }
     if (!document.getElementById(SYNCED_VIEWER_STYLE_ID)) {
       const s = document.createElement("style");
       s.id = SYNCED_VIEWER_STYLE_ID;
@@ -226,15 +205,15 @@ export class SyncedViewerView extends ItemView {
     this.nextButtonEl.onclick = () => this.gotoPage(this.currentPage + 1);
 
     const zoomOutBtn = this.toolbarEl.createEl("button", { text: "−" });
-    zoomOutBtn.onclick = () => this.adjustScale(-0.1);
+    zoomOutBtn.onclick = () => this.adjustScale(-0.2);
 
     const zoomInBtn = this.toolbarEl.createEl("button", { text: "+" });
-    zoomInBtn.onclick = () => this.adjustScale(0.1);
+    zoomInBtn.onclick = () => this.adjustScale(0.2);
 
-    this.nativeViewButtonEl = this.toolbarEl.createEl("button", {
+    const nativeBtn = this.toolbarEl.createEl("button", {
       text: "Obsidian native PDF",
     });
-    this.nativeViewButtonEl.onclick = () => this.openInNativeView();
+    nativeBtn.onclick = () => this.openInNativeView();
 
     this.pageInfoEl = this.toolbarEl.createDiv({ cls: "alt2obs-page-info" });
     this.updatePageInfo();
@@ -243,16 +222,11 @@ export class SyncedViewerView extends ItemView {
   private buildPanes(root: HTMLElement): void {
     this.panesEl = root.createDiv({ cls: "alt2obs-synced-panes" });
     this.pdfPaneEl = this.panesEl.createDiv({ cls: "alt2obs-pdf-pane" });
-    this.pdfViewerContainerEl = this.pdfPaneEl.createDiv({
-      cls: "alt2obs-pdf-viewer-container pdfViewer",
-    });
-    // PDFViewer requires a wrapper with the .pdfViewer class for its layout.
-    // The wrapper container itself must scroll; pdfjs reads scroll from it.
     this.mdPaneEl = this.panesEl.createDiv({ cls: "alt2obs-md-pane" });
   }
 
   private renderEmptyState(): void {
-    this.pdfViewerContainerEl.empty();
+    this.pdfPaneEl.empty();
     this.mdPaneEl.empty();
     this.mdPaneEl.createDiv({
       cls: "alt2obs-empty-state",
@@ -320,8 +294,8 @@ export class SyncedViewerView extends ItemView {
   private async loadPdf(path: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
-      this.pdfViewerContainerEl.empty();
-      this.pdfViewerContainerEl.createDiv({
+      this.pdfPaneEl.empty();
+      this.pdfPaneEl.createDiv({
         cls: "alt2obs-empty-state",
         text: `PDF를 찾을 수 없습니다: ${path}`,
       });
@@ -331,14 +305,8 @@ export class SyncedViewerView extends ItemView {
     }
     const buffer = await this.app.vault.readBinary(file);
 
-    // Tear down previous instance.
-    if (this.pdfViewer) {
-      try {
-        this.pdfViewer.setDocument(null as any);
-      } catch (_) {
-        // ignore
-      }
-    }
+    // Tear down any previous document/observer/canvases.
+    this.tearDownIntersectionObserver();
     if (this.pdfDocument) {
       try {
         await this.pdfDocument.destroy();
@@ -346,54 +314,93 @@ export class SyncedViewerView extends ItemView {
         // ignore
       }
     }
-    this.pdfViewerContainerEl.empty();
-    this.pdfViewerContainerEl.addClass("pdfViewer");
-
-    // Build a fresh EventBus + LinkService + PDFViewer for this document.
-    this.eventBus = new EventBus();
-    this.linkService = new PDFLinkService({ eventBus: this.eventBus });
-
-    // PDFViewer expects its container to be scrollable. We use the OUTER
-    // pdfPaneEl as the scroll container (alt2obs-pdf-pane) and pass the
-    // INNER element (alt2obs-pdf-viewer-container) as `viewer`. The outer
-    // element is what scrolls; the inner holds the .page elements.
-    this.pdfViewer = new PDFViewer({
-      container: this.pdfPaneEl as HTMLDivElement,
-      viewer: this.pdfViewerContainerEl as HTMLDivElement,
-      eventBus: this.eventBus,
-      linkService: this.linkService,
-      textLayerMode: 1, // 1 = enabled (text selection works)
-      annotationMode: 0, // disable annotation layer for now
-    } as any);
-    this.linkService.setViewer(this.pdfViewer);
-
-    // Subscribe BEFORE setDocument so we don't miss the initial pagechanging.
-    this.eventBus.on("pagesinit", () => {
-      this.pdfViewer!.currentScaleValue = "page-width";
-    });
-    this.eventBus.on("pagechanging", (evt: { pageNumber: number }) => {
-      this.handlePdfPageChange(evt.pageNumber);
-    });
+    this.pageCanvases = [];
+    this.pdfPaneEl.empty();
 
     this.pdfDocument = await pdfjsLib.getDocument({ data: buffer.slice(0) }).promise;
     this.totalPages = this.pdfDocument.numPages;
-    this.pdfViewer.setDocument(this.pdfDocument);
-    this.linkService.setDocument(this.pdfDocument, null);
     this.currentPage = 1;
     this.updatePageInfo();
+
+    // Render each page to a canvas synchronously into the pane (in order).
+    // For very large decks this could be moved to lazy/visible-only rendering;
+    // typical lectures (~50 pages) are fine to render up-front.
+    for (let pageNum = 1; pageNum <= this.totalPages; pageNum++) {
+      const placeholder = this.pdfPaneEl.createDiv({
+        cls: "alt2obs-pdf-page-loading",
+        text: `슬라이드 ${pageNum} / ${this.totalPages} 렌더 중…`,
+      });
+      try {
+        const canvas = await this.renderPageToCanvas(pageNum);
+        canvas.classList.add("alt2obs-pdf-page");
+        canvas.dataset.pageNum = String(pageNum);
+        placeholder.replaceWith(canvas);
+        this.pageCanvases.push(canvas);
+      } catch (renderErr) {
+        placeholder.setText(`슬라이드 ${pageNum} 렌더 실패`);
+        console.warn(
+          `[Alt2Obsidian] SyncedViewer page ${pageNum} render failed:`,
+          renderErr
+        );
+      }
+    }
+
+    this.setUpIntersectionObserver();
   }
 
-  private handlePdfPageChange(pageNumber: number): void {
-    if (pageNumber === this.currentPage) return;
-    this.currentPage = pageNumber;
+  private async renderPageToCanvas(pageNum: number): Promise<HTMLCanvasElement> {
+    const page = await this.pdfDocument.getPage(pageNum);
+    const viewport = page.getViewport({ scale: this.scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("canvas 2d context unavailable");
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    return canvas;
+  }
+
+  private setUpIntersectionObserver(): void {
+    this.tearDownIntersectionObserver();
+    if (this.pageCanvases.length === 0) return;
+    this.intersectionObserver = new IntersectionObserver(
+      (entries) => {
+        // Pick the page with the largest visible intersection ratio.
+        let best: { pageNum: number; ratio: number } | null = null;
+        for (const entry of entries) {
+          const target = entry.target as HTMLCanvasElement;
+          const num = parseInt(target.dataset.pageNum ?? "0", 10);
+          if (num === 0) continue;
+          if (!best || entry.intersectionRatio > best.ratio) {
+            best = { pageNum: num, ratio: entry.intersectionRatio };
+          }
+        }
+        if (best && best.ratio > 0.3 && best.pageNum !== this.currentPage) {
+          this.handlePageChange(best.pageNum);
+        }
+      },
+      {
+        root: this.pdfPaneEl,
+        threshold: [0, 0.25, 0.5, 0.75, 1],
+      }
+    );
+    for (const c of this.pageCanvases) this.intersectionObserver.observe(c);
+  }
+
+  private tearDownIntersectionObserver(): void {
+    if (this.intersectionObserver) {
+      this.intersectionObserver.disconnect();
+      this.intersectionObserver = null;
+    }
+  }
+
+  private handlePageChange(pageNum: number): void {
+    this.currentPage = pageNum;
     this.updatePageInfo();
-    this.scrollMarkdownToSlide(pageNumber);
+    this.scrollMarkdownToSlide(pageNum);
   }
 
   private scrollMarkdownToSlide(slideNum: number): void {
-    // Find the H2 heading for `## 📚 슬라이드 {slideNum}` in the rendered
-    // markdown pane and scroll it into view. The rendered markdown puts H2
-    // text inside <h2> elements; emoji + text are concatenated.
     const targetText = `📚 슬라이드 ${slideNum}`;
     const headings = this.mdPaneEl.querySelectorAll("h2");
     for (const h of Array.from(headings)) {
@@ -406,14 +413,39 @@ export class SyncedViewerView extends ItemView {
   }
 
   private gotoPage(pageNum: number): void {
-    if (!this.pdfViewer || pageNum < 1 || pageNum > this.totalPages) return;
-    this.pdfViewer.currentPageNumber = pageNum;
+    if (pageNum < 1 || pageNum > this.totalPages) return;
+    const canvas = this.pageCanvases[pageNum - 1];
+    if (!canvas) return;
+    canvas.scrollIntoView({ behavior: "smooth", block: "start" });
+    // The IntersectionObserver will pick up the change as the scroll lands;
+    // optimistically update the toolbar now so the buttons feel responsive.
+    this.handlePageChange(pageNum);
   }
 
-  private adjustScale(delta: number): void {
-    if (!this.pdfViewer) return;
-    const next = (this.pdfViewer.currentScale || 1) + delta;
-    this.pdfViewer.currentScale = Math.max(0.5, Math.min(3.0, next));
+  private async adjustScale(delta: number): Promise<void> {
+    const next = Math.max(0.6, Math.min(3.0, this.scale + delta));
+    if (Math.abs(next - this.scale) < 0.01) return;
+    this.scale = next;
+    if (!this.pdfDocument) return;
+    // Re-render: replace each canvas in place with a higher-DPI version.
+    this.tearDownIntersectionObserver();
+    for (let i = 0; i < this.pageCanvases.length; i++) {
+      const oldCanvas = this.pageCanvases[i];
+      const pageNum = i + 1;
+      try {
+        const next = await this.renderPageToCanvas(pageNum);
+        next.classList.add("alt2obs-pdf-page");
+        next.dataset.pageNum = String(pageNum);
+        oldCanvas.replaceWith(next);
+        this.pageCanvases[i] = next;
+      } catch (e) {
+        console.warn(
+          `[Alt2Obsidian] SyncedViewer rescale page ${pageNum} failed:`,
+          e
+        );
+      }
+    }
+    this.setUpIntersectionObserver();
   }
 
   private async openInNativeView(): Promise<void> {

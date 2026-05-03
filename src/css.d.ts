@@ -14,29 +14,6 @@ declare module "pdfjs-dist/build/pdf.mjs" {
   export = content;
 }
 
-declare module "pdfjs-dist/web/pdf_viewer.mjs" {
-  // Subset we actually use; widen to `any` to avoid pinning the surface.
-  // Declare as both class (value + type) so they can be used as
-  // type annotations on fields.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export class PDFViewer {
-    constructor(options: any);
-    setDocument(doc: any): void;
-    currentPageNumber: number;
-    currentScale: number;
-    currentScaleValue: string;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export class EventBus {
-    on(event: string, handler: (...args: any[]) => void): void;
-    off(event: string, handler: (...args: any[]) => void): void;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  export class PDFLinkService {
-    constructor(options: any);
-    setDocument(doc: any, baseUrl: string | null): void;
-    setViewer(viewer: any): void;
-  }
-  const _default: any;
-  export default _default;
-}
+// Note: pdfjs-dist/web/pdf_viewer.mjs is no longer imported (Synced Viewer
+// pivoted from A2 to A4 canvas-only — see SyncedViewerView header). Kept
+// the modern build declaration above in case future code needs it.
