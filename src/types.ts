@@ -73,6 +73,37 @@ export interface LectureMaterialContext {
   truncated: boolean;
 }
 
+/**
+ * Reference to a single PDF page rendered to a base64 PNG, suitable for
+ * inline-data multimodal LLM calls (e.g., Gemini's `inlineData`).
+ * Produced by `PdfProcessor.renderPagesToImages`.
+ */
+export interface VisionImageRef {
+  pageNum: number;
+  base64Png: string;
+}
+
+/**
+ * Per-slide commentary produced by `PerSlideCommentaryGenerator`. The hash is
+ * the 8-hex SHA-1 of the rendered slide PNG and drives the page-anchored
+ * managed-block markers (plan §B Decision B). `commentary` is the LLM's
+ * markdown body for that slide — no headers, no markers; the assembler
+ * (Task 1.2) wraps it in `## 📚 슬라이드 N` + `<!-- alt2obs:slide:... -->`.
+ */
+export interface SlideSection {
+  slideNum: number;
+  hash: string;
+  commentary: string;
+  citedConcepts: string[];
+}
+
+export interface PerSlideGenerationResult {
+  slides: SlideSection[];
+  totalWallTimeMs: number;
+  perSlideWallTimeMs: number[];
+  errors: Array<{ slideNum: number; reason: string }>;
+}
+
 export interface ImportUpdateSummary {
   isUpdate: boolean;
   addedSections: string[];
@@ -125,6 +156,17 @@ export interface LLMProvider {
     validate: (raw: unknown) => T,
     options?: { systemPrompt?: string }
   ): Promise<T>;
+  /**
+   * Optional multimodal call (text prompt + 1+ inline images). Required for
+   * the per-slide commentary path (plan Task 1.1). GeminiProvider implements
+   * it via the `inlineData` field; OpenAI/Claude/Ollama providers without
+   * vision support throw or return a useful error.
+   */
+  generateMultimodal?(
+    prompt: string,
+    images: VisionImageRef[],
+    options?: { systemPrompt?: string; maxOutputTokens?: number }
+  ): Promise<string>;
   estimateTokens(text: string): number;
 }
 
