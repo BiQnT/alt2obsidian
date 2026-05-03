@@ -111,6 +111,22 @@ export interface ImportUpdateSummary {
   addedConcepts: string[];
   removedConcepts: string[];
   changedLineCount: number;
+  // Page-anchored (B1 multi-managed-block) merge details. Populated only when
+  // both the existing and the next file use B1 markers. The merge algorithm
+  // is the spike-validated 2-pass routine — see
+  // .omc/research/spike-1.0b-hash-algo.md §3.
+  slideReorders?: Array<{ from: number; to: number; hash: string }>;
+  slideInsertions?: number[];
+  slideDeletions?: Array<{ slideNum: number; hash: string }>;
+  slideDrifts?: Array<{ slideNum: number; oldHash: string; newHash: string }>;
+  /**
+   * True when more than half of existing sections orphaned — likely the user
+   * accidentally re-imported a different lecture onto this file. Caller should
+   * confirm before write (plan §B v1.1 deck-replacement modal touch-up).
+   */
+  confirmDeckReplacement?: boolean;
+  /** Free-text notes appended to the user-facing summary modal. */
+  notes?: string[];
 }
 
 export interface ImportRecord {
