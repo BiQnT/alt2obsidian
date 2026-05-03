@@ -17,6 +17,12 @@ import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { NoteGenerator } from "./generator/NoteGenerator";
 import { PerSlideCommentaryGenerator } from "./generator/PerSlideCommentaryGenerator";
 import type { PerSlideGenerationResult } from "./types";
+// Modern pdfjs build — the SAME build that backs pdfjs-dist/web/pdf_viewer.mjs
+// used by SyncedViewerView. Has its OWN GlobalWorkerOptions singleton,
+// independent of the legacy build PdfProcessor configures. Without this
+// the SyncedViewer's PDFViewer renders nothing because its internal
+// renderer can't find the worker.
+import * as pdfjsModern from "pdfjs-dist/build/pdf.mjs";
 import { ExamSummaryGenerator } from "./generator/ExamSummaryGenerator";
 import { VaultManager } from "./vault/VaultManager";
 import { Alt2ObsidianSettingsTab } from "./ui/SettingsTab";
@@ -55,6 +61,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
       (this.app.vault.adapter as any).getResourcePath?.(workerVaultPath) ||
       workerVaultPath;
     this.pdfProcessor = new PdfProcessor(workerSrc);
+    // Configure the modern pdfjs build's worker too, so the Synced Viewer's
+    // PDFViewer (also modern) can render pages.
+    pdfjsModern.GlobalWorkerOptions.workerSrc = workerSrc;
 
     // Register sidebar view
     this.registerView(VIEW_TYPE_SIDEBAR, (leaf) => {

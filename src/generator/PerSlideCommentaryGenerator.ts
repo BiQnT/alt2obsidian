@@ -110,6 +110,13 @@ export class PerSlideCommentaryGenerator {
     const maxWidth = options.maxPngWidth ?? 1024;
     const maxOutputTokens = options.maxOutputTokens ?? 2048;
 
+    // Circuit breaker: if we hit 3 rate-limit errors in a row even after the
+    // retry sleep, the free-tier window is exhausted for this run. Stop the
+    // remaining slides instead of burning ~30 minutes hammering the API.
+    const MAX_CONSECUTIVE_429S = 3;
+    let consecutive429s = 0;
+    let aborted = false;
+
     for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
       const slideStart = Date.now();
       try {
@@ -135,11 +142,14 @@ export class PerSlideCommentaryGenerator {
           transcriptChunks[pageNum - 1] ?? null,
           options.existingConceptNames
         );
-        const commentary = await this.llm.generateMultimodal!(prompt, [img], {
-          systemPrompt: SYSTEM_PROMPT,
-          maxOutputTokens,
-        });
+        const commentary = await this.callMultimodalWithRetry(
+          prompt,
+          img,
+          { systemPrompt: SYSTEM_PROMPT, maxOutputTokens },
+          pageNum
+        );
 
+        consecutive429s = 0; // reset breaker on any success
         slides.push({
           slideNum: pageNum,
           hash,
@@ -153,10 +163,21 @@ export class PerSlideCommentaryGenerator {
         const msg = e instanceof Error ? e.message : String(e);
         errors.push({ slideNum: pageNum, reason: msg });
         console.warn(`[Alt2Obsidian] slide ${pageNum} commentary failed: ${msg}`);
+        if (this.isRateLimitError(msg)) {
+          consecutive429s++;
+          if (consecutive429s >= MAX_CONSECUTIVE_429S) {
+            errors.push({
+              slideNum: 0,
+              reason: `${MAX_CONSECUTIVE_429S}회 연속 rate limit — 남은 슬라이드 처리 중단. 'API 요청 간격 (ms)'을 6000+ 로 올리거나 잠시 후 다시 import 해주세요.`,
+            });
+            aborted = true;
+          }
+        }
       } finally {
         perSlideWallTimeMs.push(Date.now() - slideStart);
         options.onProgress?.(pageNum, pageCount, "done");
       }
+      if (aborted) break;
     }
 
     return {
@@ -165,6 +186,57 @@ export class PerSlideCommentaryGenerator {
       perSlideWallTimeMs,
       errors,
     };
+  }
+
+  /**
+   * Call the LLM with one auto-retry on transient errors. 429 (free-tier
+   * window exhausted) sleeps long enough to clear the next minute window;
+   * 5xx (server overload) sleeps short. All other errors bubble up
+   * immediately so they appear in the slide-error list.
+   */
+  private async callMultimodalWithRetry(
+    prompt: string,
+    image: VisionImageRef,
+    options: { systemPrompt: string; maxOutputTokens: number },
+    slideNum: number
+  ): Promise<string> {
+    try {
+      return await this.llm.generateMultimodal!(prompt, [image], options);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (this.isRateLimitError(msg)) {
+        console.warn(
+          `[Alt2Obsidian] slide ${slideNum}: 429 hit, sleeping 65s then retrying once.`
+        );
+        await this.delay(65000);
+        return await this.llm.generateMultimodal!(prompt, [image], options);
+      }
+      if (this.isServerOverloadError(msg)) {
+        console.warn(
+          `[Alt2Obsidian] slide ${slideNum}: 5xx hit, sleeping 8s then retrying once.`
+        );
+        await this.delay(8000);
+        return await this.llm.generateMultimodal!(prompt, [image], options);
+      }
+      throw e;
+    }
+  }
+
+  private isRateLimitError(msg: string): boolean {
+    return msg.includes("429") || msg.includes("한도 초과");
+  }
+
+  private isServerOverloadError(msg: string): boolean {
+    return (
+      msg.includes("503") ||
+      msg.includes("502") ||
+      msg.includes("overload") ||
+      msg.includes("UNAVAILABLE")
+    );
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**

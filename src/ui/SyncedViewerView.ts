@@ -19,7 +19,13 @@ import {
   Notice,
   Component,
 } from "obsidian";
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+// IMPORTANT: must use the same pdfjs build the viewer was compiled against.
+// `pdfjs-dist/web/pdf_viewer.mjs` is built on top of the MODERN
+// `pdfjs-dist/build/pdf.mjs`, NOT the legacy build PdfProcessor uses.
+// Mixing them (legacy getDocument + modern PDFViewer.setDocument) results
+// in a viewer that initialises but renders no pages — the proxy is bound
+// to a different pdfjs runtime than the viewer expects.
+import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 // pdfjs PDFViewer + EventBus + LinkService — official A2 path.
 import {
   PDFViewer,
@@ -70,14 +76,16 @@ const SYNCED_VIEWER_CSS = `
 }
 .alt2obs-pdf-pane {
   flex: 1;
-  overflow: auto;
+  overflow: auto;            /* the OUTER container scrolls — pdfjs PDFViewer reads scrollTop here */
   background: var(--background-primary-alt);
-  position: relative;
+  position: relative;        /* anchor for absolute children pdfjs may add */
+  min-width: 0;              /* allow flex shrink below content min-width (prevents 0-width race) */
 }
 .alt2obs-pdf-viewer-container {
-  position: absolute;
-  inset: 0;
-  overflow: auto;
+  /* The .pdfViewer element must be a regular block child — pages stack
+     into it with their natural heights. NO position:absolute, NO overflow,
+     otherwise pdfjs's lazy-render visible-page detection breaks and the
+     viewer initialises but draws nothing. */
 }
 .alt2obs-md-pane {
   flex: 1;
