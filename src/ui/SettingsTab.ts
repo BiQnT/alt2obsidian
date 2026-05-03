@@ -79,7 +79,11 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("API 요청 간격 (ms)")
-      .setDesc("LLM API 호출 간 대기 시간 (rate limit 방지)")
+      .setDesc(
+        "LLM API 호출 간 대기 시간 (rate limit 방지). " +
+          "1.1.0부터 강의 1개당 슬라이드 수만큼 호출되므로 " +
+          "free-tier RPM 한계가 가까운 사용자는 4000ms 이상을 권장합니다."
+      )
       .addText((text) =>
         text
           .setPlaceholder("4000")
@@ -90,5 +94,21 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
             await this.plugin.savePluginData();
           })
       );
+
+    containerEl.createEl("h3", { text: "사용법" });
+    const usageEl = containerEl.createEl("div", {
+      cls: "setting-item-description",
+    });
+    usageEl.createEl("p", {
+      text:
+        "1.1.0부터 강의 노트는 PDF 슬라이드와 1:1로 페이지 별 섹션으로 생성됩니다. " +
+        "각 섹션 안의 `> [!note] 내 메모` 블록은 자유롭게 편집해도 다음 import 시 그대로 보존됩니다.",
+    });
+    usageEl.createEl("p", {
+      text:
+        "강의 노트(.md)를 열고 명령 팔레트에서 'Open Synced Viewer (PDF + lecture .md)'를 실행하면 " +
+        "PDF와 노트가 좌우로 동기 스크롤되는 전용 뷰가 열립니다. " +
+        "PDF 페이지를 넘기면 노트의 해당 슬라이드 섹션으로 자동 스크롤됩니다.",
+    });
   }
 }
