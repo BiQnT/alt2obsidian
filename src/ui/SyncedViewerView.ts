@@ -19,14 +19,15 @@ import {
   Notice,
   Component,
 } from "obsidian";
-// IMPORTANT: must use the same pdfjs build the viewer was compiled against.
-// `pdfjs-dist/web/pdf_viewer.mjs` is built on top of the MODERN
-// `pdfjs-dist/build/pdf.mjs`, NOT the legacy build PdfProcessor uses.
-// Mixing them (legacy getDocument + modern PDFViewer.setDocument) results
-// in a viewer that initialises but renders no pages — the proxy is bound
-// to a different pdfjs runtime than the viewer expects.
-import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
-// pdfjs PDFViewer + EventBus + LinkService — official A2 path.
+// pdfjs-dist 4.10.38 ships an internal version mismatch: build/pdf.mjs is
+// API 5.3.34 while web/pdf_viewer.mjs is Viewer 4.10.38. setDocument's
+// strict version check throws "API version ... does not match Viewer
+// version ..." when those mix. The LEGACY build (legacy/build/pdf.mjs) is
+// pinned to 4.10.38 and is what PdfProcessor uses, so reusing legacy here
+// gives a single matched runtime. (CSS layout — the OTHER reason the pane
+// was empty earlier — is fixed below by removing position:absolute from
+// the inner .pdfViewer element.)
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import {
   PDFViewer,
   EventBus,
