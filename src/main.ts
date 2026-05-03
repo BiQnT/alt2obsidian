@@ -15,6 +15,8 @@ import { PdfProcessor } from "./pdf/PdfProcessor";
 import { createProvider } from "./llm/index";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { NoteGenerator } from "./generator/NoteGenerator";
+import { PerSlideCommentaryGenerator } from "./generator/PerSlideCommentaryGenerator";
+import type { PerSlideGenerationResult } from "./types";
 import { ExamSummaryGenerator } from "./generator/ExamSummaryGenerator";
 import { VaultManager } from "./vault/VaultManager";
 import { Alt2ObsidianSettingsTab } from "./ui/SettingsTab";
@@ -252,6 +254,34 @@ ${transcriptText}`,
 
     onProgress?.("개념 추출 완료", 50);
 
+    // Per-slide commentary (page-anchored path) when PDF is available.
+    // If the PDF is missing OR per-slide generation fails entirely,
+    // slidesResult stays null and we fall back to the lecture-level
+    // single-block generator below.
+    const pdfData = await pdfDataPromise;
+    let slidesResult: PerSlideGenerationResult | null = null;
+    if (pdfData && this.pdfProcessor) {
+      onProgress?.("PDF 슬라이드 해설 생성 중...", 55);
+      const slideGen = new PerSlideCommentaryGenerator(llm, this.pdfProcessor);
+      try {
+        slidesResult = await slideGen.generate(pdfData, {
+          transcript: altData.transcript,
+          existingConceptNames: Array.from(existingConceptNames),
+          onProgress: (slideNum, total) => {
+            onProgress?.(
+              `슬라이드 ${slideNum}/${total} 해설 중...`,
+              55 + Math.round((slideNum / total) * 15)
+            );
+          },
+        });
+      } catch (e) {
+        console.warn(
+          "[Alt2Obsidian] per-slide gen failed, falling back to lecture-level:",
+          e
+        );
+      }
+    }
+
     // Generate markdown
     onProgress?.("마크다운 노트 생성 중...", 70);
 
@@ -263,11 +293,15 @@ ${transcriptText}`,
     };
 
     const noteGenerator = new NoteGenerator(llm);
-    const { lectureMarkdown, conceptNotes } = await noteGenerator.generate(
-      altData,
-      llmResult,
-      subject
-    );
+    const { lectureMarkdown, conceptNotes } =
+      slidesResult && slidesResult.slides.length > 0
+        ? await noteGenerator.generatePageAnchored(
+            altData,
+            slidesResult,
+            llmResult,
+            subject
+          )
+        : await noteGenerator.generate(altData, llmResult, subject);
 
     // Save everything to vault
     onProgress?.("Vault에 저장 중...", 90);
@@ -292,7 +326,6 @@ ${transcriptText}`,
 
     // Save raw PDF to vault for side-by-side view
     let pdfPath: string | undefined;
-    const pdfData = await pdfDataPromise;
     if (pdfData) {
       onProgress?.("PDF 저장 중...", 95);
       const pdfFilename = sanitizeFilename(altData.title);
