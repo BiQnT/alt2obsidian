@@ -273,7 +273,6 @@ ${transcriptText}`,
     onProgress?.("Vault에 저장 중...", 90);
 
     const subjectFolder = `${vm.getBasePath()}/${sanitizeFilename(subject)}`;
-    const assetsFolder = `${subjectFolder}/assets`;
 
     const noteFilename = sanitizeFilename(altData.title);
     const notePath = `${subjectFolder}/${noteFilename}.md`;
@@ -297,7 +296,7 @@ ${transcriptText}`,
     if (pdfData) {
       onProgress?.("PDF 저장 중...", 95);
       const pdfFilename = sanitizeFilename(altData.title);
-      const rawPdfPath = `${assetsFolder}/${pdfFilename}.pdf`;
+      const rawPdfPath = `${subjectFolder}/${pdfFilename}.pdf`;
       pdfPath = await vm.saveRawFile(pdfData, rawPdfPath);
     }
 
@@ -393,9 +392,8 @@ ${transcriptText}`,
     let pdfPath: string | undefined;
     const pdfData = await pdfDataPromise;
     if (pdfData) {
-      const assetsFolder = `${subjectFolder}/assets`;
       const pdfFilename = sanitizeFilename(altData.title);
-      const rawPdfPath = `${assetsFolder}/${pdfFilename}.pdf`;
+      const rawPdfPath = `${subjectFolder}/${pdfFilename}.pdf`;
       pdfPath = await vm.saveRawFile(pdfData, rawPdfPath);
     }
 
