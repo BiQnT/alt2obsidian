@@ -17,10 +17,11 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("LLM 제공자")
-      .setDesc("사용할 LLM 서비스를 선택하세요")
+      .setDesc("사용할 LLM 서비스를 선택하세요. Ollama는 로컬에서 무료·무제한 (GPU 권장).")
       .addDropdown((dropdown) =>
         dropdown
-          .addOption("gemini", "Google Gemini")
+          .addOption("gemini", "Google Gemini / Gemma")
+          .addOption("ollama", "Ollama (local)")
           .addOption("openai", "OpenAI (준비 중)")
           .addOption("claude", "Claude (준비 중)")
           .setValue(this.plugin.data.settings.provider)
@@ -28,10 +29,43 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
             this.plugin.data.settings.provider = value as
               | "gemini"
               | "openai"
-              | "claude";
+              | "claude"
+              | "ollama";
             await this.plugin.savePluginData();
+            this.display(); // re-render to show/hide provider-specific fields
           })
       );
+
+    if (this.plugin.data.settings.provider === "ollama") {
+      new Setting(containerEl)
+        .setName("Ollama endpoint")
+        .setDesc("로컬 Ollama 서버 URL")
+        .addText((text) =>
+          text
+            .setPlaceholder("http://localhost:11434")
+            .setValue(this.plugin.data.settings.ollamaEndpoint)
+            .onChange(async (value) => {
+              this.plugin.data.settings.ollamaEndpoint =
+                value || "http://localhost:11434";
+              await this.plugin.savePluginData();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("Ollama 모델")
+        .setDesc(
+          "텍스트만: gemma3:4b, gemma3:12b · 멀티모달(슬라이드 해설용): llama3.2-vision:11b. 'ollama pull <model>'로 먼저 다운로드 필요."
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("gemma3:4b")
+            .setValue(this.plugin.data.settings.ollamaModel)
+            .onChange(async (value) => {
+              this.plugin.data.settings.ollamaModel = value || "gemma3:4b";
+              await this.plugin.savePluginData();
+            })
+        );
+    }
 
     new Setting(containerEl)
       .setName("API 키")

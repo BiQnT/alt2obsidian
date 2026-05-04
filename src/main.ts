@@ -178,7 +178,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
       settings.provider,
       settings.apiKey,
       settings.geminiModel,
-      settings.rateDelayMs
+      settings.rateDelayMs,
+      {
+        ollamaEndpoint: settings.ollamaEndpoint,
+        ollamaModel: settings.ollamaModel,
+      }
     );
 
     const altData = preview.altData;
@@ -285,8 +289,11 @@ ${transcriptText}`,
 
     onProgress?.("LLM으로 개념 추출 중...", 30);
 
-    // LLM: Extract concepts + detect subject
-    const conceptExtractor = new ConceptExtractor(llm);
+    // LLM: Extract concepts + detect subject. Inject the user's `language`
+    // setting so Korean lectures don't get English concept fields (the older
+    // prompt didn't pass language, which surfaced English concepts in the
+    // user's CSED232 vault despite `language: "ko"`).
+    const conceptExtractor = new ConceptExtractor(llm, this.data.settings.language);
     const subject = subjectOverride || preview.suggestedSubject;
     const vm = this.vaultManager!;
     const existingConceptNames = await vm.getExistingConceptNames(subject);
@@ -413,7 +420,11 @@ ${transcriptText}`,
       settings.provider,
       settings.apiKey,
       settings.geminiModel,
-      settings.rateDelayMs
+      settings.rateDelayMs,
+      {
+        ollamaEndpoint: settings.ollamaEndpoint,
+        ollamaModel: settings.ollamaModel,
+      }
     );
 
     const generator = new ExamSummaryGenerator(llm, this.vaultManager!);

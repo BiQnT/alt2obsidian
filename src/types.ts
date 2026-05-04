@@ -1,7 +1,11 @@
 export interface Alt2ObsidianSettings {
   apiKey: string;
-  provider: "gemini" | "openai" | "claude";
+  provider: "gemini" | "openai" | "claude" | "ollama";
   geminiModel: string;
+  /** Ollama endpoint (http://localhost:11434 default). Used when provider="ollama". */
+  ollamaEndpoint: string;
+  /** Ollama model id, e.g. "gemma3:4b" (text), "llama3.2-vision:11b" (multimodal). */
+  ollamaModel: string;
   baseFolderPath: string;
   language: "ko" | "en";
   rateDelayMs: number;
@@ -11,6 +15,8 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   apiKey: "",
   provider: "gemini",
   geminiModel: "gemini-2.5-flash",
+  ollamaEndpoint: "http://localhost:11434",
+  ollamaModel: "gemma3:4b",
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
   rateDelayMs: 4000,
