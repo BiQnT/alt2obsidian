@@ -1,7 +1,7 @@
 {
 	"name": "alt2obsidian",
-	"version": "1.0.6",
-	"description": "Import Alt lecture notes into Obsidian with LLM-powered concept extraction",
+	"version": "1.1.0",
+	"description": "Import Alt lecture notes into Obsidian as page-anchored markdown with per-slide Gemini commentary and a built-in Synced PDF viewer",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",

@@ -1,4 +1,4 @@
-import { Plugin } from "obsidian";
+import { Plugin, Notice } from "obsidian";
 import {
   PluginData,
   DEFAULT_PLUGIN_DATA,
@@ -15,6 +15,8 @@ import { PdfProcessor } from "./pdf/PdfProcessor";
 import { createProvider } from "./llm/index";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { NoteGenerator } from "./generator/NoteGenerator";
+import { PerSlideCommentaryGenerator } from "./generator/PerSlideCommentaryGenerator";
+import type { PerSlideGenerationResult } from "./types";
 import { ExamSummaryGenerator } from "./generator/ExamSummaryGenerator";
 import { VaultManager } from "./vault/VaultManager";
 import { Alt2ObsidianSettingsTab } from "./ui/SettingsTab";
@@ -22,6 +24,11 @@ import {
   Alt2ObsidianSidebarView,
   VIEW_TYPE_SIDEBAR,
 } from "./ui/SidebarView";
+import {
+  SyncedViewerView,
+  VIEW_TYPE_SYNCED_VIEWER,
+} from "./ui/SyncedViewerView";
+import { TFile } from "obsidian";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
 
 export default class Alt2ObsidianPlugin extends Plugin {
@@ -40,14 +47,23 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.data.settings.baseFolderPath
     );
 
-    // Initialize PDF processor with worker path
-    const vaultBasePath =
-      (this.app.vault.adapter as any).getBasePath?.() || "";
-    this.pdfProcessor = new PdfProcessor(this.manifest.dir || "", vaultBasePath);
+    // Resolve the pdfjs worker via Obsidian's resource-path machinery so it
+    // becomes an `app://local/...` URL the renderer can actually fetch.
+    // Raw filesystem paths get prepended to `app://obsidian.md/` and fail.
+    const workerVaultPath = `${this.manifest.dir}/pdf.worker.min.mjs`;
+    const workerSrc =
+      (this.app.vault.adapter as any).getResourcePath?.(workerVaultPath) ||
+      workerVaultPath;
+    this.pdfProcessor = new PdfProcessor(workerSrc);
 
     // Register sidebar view
     this.registerView(VIEW_TYPE_SIDEBAR, (leaf) => {
       return new Alt2ObsidianSidebarView(leaf, this);
+    });
+
+    // Register Synced Viewer (Task 1.5 — A2 default)
+    this.registerView(VIEW_TYPE_SYNCED_VIEWER, (leaf) => {
+      return new SyncedViewerView(leaf);
     });
 
     // Add ribbon icon
@@ -68,12 +84,47 @@ export default class Alt2ObsidianPlugin extends Plugin {
       callback: () => this.activateSidebarView(),
     });
 
+    this.addCommand({
+      id: "open-synced-viewer",
+      name: "Open Synced Viewer (PDF + lecture .md)",
+      callback: () => this.openSyncedViewerForActiveNote(),
+    });
+
     // Register settings tab
     this.addSettingTab(new Alt2ObsidianSettingsTab(this.app, this));
   }
 
   onunload(): void {
     // Views are automatically cleaned up by Obsidian
+  }
+
+  /**
+   * Resolve the active note's sibling PDF and open both in the Synced
+   * Viewer (Task 1.5). PDF is expected at `{same-folder}/{same-stem}.pdf`
+   * (Task 1.4 sibling layout). If the active file isn't a markdown note or
+   * has no sibling PDF, surface a Notice and bail.
+   */
+  async openSyncedViewerForActiveNote(): Promise<void> {
+    const active = this.app.workspace.getActiveFile();
+    if (!active || active.extension !== "md") {
+      new Notice("강의 노트(.md)를 활성화한 뒤 다시 시도하세요.");
+      return;
+    }
+    const pdfPath = active.path.replace(/\.md$/, ".pdf");
+    const pdfFile = this.app.vault.getAbstractFileByPath(pdfPath);
+    if (!(pdfFile instanceof TFile)) {
+      new Notice(
+        `사이블링 PDF가 없습니다: ${pdfPath} — 강의를 import하면 PDF가 함께 저장됩니다.`
+      );
+      return;
+    }
+    const leaf = this.app.workspace.getLeaf(true);
+    await leaf.setViewState({
+      type: VIEW_TYPE_SYNCED_VIEWER,
+      active: true,
+      state: { mdPath: active.path, pdfPath },
+    });
+    this.app.workspace.revealLeaf(leaf);
   }
 
   updateBasePath(): void {
@@ -127,7 +178,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
       settings.provider,
       settings.apiKey,
       settings.geminiModel,
-      settings.rateDelayMs
+      settings.rateDelayMs,
+      {
+        ollamaEndpoint: settings.ollamaEndpoint,
+        ollamaModel: settings.ollamaModel,
+      }
     );
 
     const altData = preview.altData;
@@ -234,8 +289,11 @@ ${transcriptText}`,
 
     onProgress?.("LLM으로 개념 추출 중...", 30);
 
-    // LLM: Extract concepts + detect subject
-    const conceptExtractor = new ConceptExtractor(llm);
+    // LLM: Extract concepts + detect subject. Inject the user's `language`
+    // setting so Korean lectures don't get English concept fields (the older
+    // prompt didn't pass language, which surfaced English concepts in the
+    // user's CSED232 vault despite `language: "ko"`).
+    const conceptExtractor = new ConceptExtractor(llm, this.data.settings.language);
     const subject = subjectOverride || preview.suggestedSubject;
     const vm = this.vaultManager!;
     const existingConceptNames = await vm.getExistingConceptNames(subject);
@@ -252,6 +310,34 @@ ${transcriptText}`,
 
     onProgress?.("개념 추출 완료", 50);
 
+    // Per-slide commentary (page-anchored path) when PDF is available.
+    // If the PDF is missing OR per-slide generation fails entirely,
+    // slidesResult stays null and we fall back to the lecture-level
+    // single-block generator below.
+    const pdfData = await pdfDataPromise;
+    let slidesResult: PerSlideGenerationResult | null = null;
+    if (pdfData && this.pdfProcessor) {
+      onProgress?.("PDF 슬라이드 해설 생성 중...", 55);
+      const slideGen = new PerSlideCommentaryGenerator(llm, this.pdfProcessor);
+      try {
+        slidesResult = await slideGen.generate(pdfData, {
+          transcript: altData.transcript,
+          existingConceptNames: Array.from(existingConceptNames),
+          onProgress: (slideNum, total) => {
+            onProgress?.(
+              `슬라이드 ${slideNum}/${total} 해설 중...`,
+              55 + Math.round((slideNum / total) * 15)
+            );
+          },
+        });
+      } catch (e) {
+        console.warn(
+          "[Alt2Obsidian] per-slide gen failed, falling back to lecture-level:",
+          e
+        );
+      }
+    }
+
     // Generate markdown
     onProgress?.("마크다운 노트 생성 중...", 70);
 
@@ -263,17 +349,20 @@ ${transcriptText}`,
     };
 
     const noteGenerator = new NoteGenerator(llm);
-    const { lectureMarkdown, conceptNotes } = await noteGenerator.generate(
-      altData,
-      llmResult,
-      subject
-    );
+    const { lectureMarkdown, conceptNotes } =
+      slidesResult && slidesResult.slides.length > 0
+        ? await noteGenerator.generatePageAnchored(
+            altData,
+            slidesResult,
+            llmResult,
+            subject
+          )
+        : await noteGenerator.generate(altData, llmResult, subject);
 
     // Save everything to vault
     onProgress?.("Vault에 저장 중...", 90);
 
     const subjectFolder = `${vm.getBasePath()}/${sanitizeFilename(subject)}`;
-    const assetsFolder = `${subjectFolder}/assets`;
 
     const noteFilename = sanitizeFilename(altData.title);
     const notePath = `${subjectFolder}/${noteFilename}.md`;
@@ -293,11 +382,10 @@ ${transcriptText}`,
 
     // Save raw PDF to vault for side-by-side view
     let pdfPath: string | undefined;
-    const pdfData = await pdfDataPromise;
     if (pdfData) {
       onProgress?.("PDF 저장 중...", 95);
       const pdfFilename = sanitizeFilename(altData.title);
-      const rawPdfPath = `${assetsFolder}/${pdfFilename}.pdf`;
+      const rawPdfPath = `${subjectFolder}/${pdfFilename}.pdf`;
       pdfPath = await vm.saveRawFile(pdfData, rawPdfPath);
     }
 
@@ -332,7 +420,11 @@ ${transcriptText}`,
       settings.provider,
       settings.apiKey,
       settings.geminiModel,
-      settings.rateDelayMs
+      settings.rateDelayMs,
+      {
+        ollamaEndpoint: settings.ollamaEndpoint,
+        ollamaModel: settings.ollamaModel,
+      }
     );
 
     const generator = new ExamSummaryGenerator(llm, this.vaultManager!);
@@ -393,9 +485,8 @@ ${transcriptText}`,
     let pdfPath: string | undefined;
     const pdfData = await pdfDataPromise;
     if (pdfData) {
-      const assetsFolder = `${subjectFolder}/assets`;
       const pdfFilename = sanitizeFilename(altData.title);
-      const rawPdfPath = `${assetsFolder}/${pdfFilename}.pdf`;
+      const rawPdfPath = `${subjectFolder}/${pdfFilename}.pdf`;
       pdfPath = await vm.saveRawFile(pdfData, rawPdfPath);
     }
 

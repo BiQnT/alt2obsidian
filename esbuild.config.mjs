@@ -16,6 +16,7 @@ esbuild
     treeShaking: true,
     outfile: "main.js",
     minify: prod,
+    loader: { ".css": "text" },
     plugins: [
       copy({
         resolveFrom: "cwd",

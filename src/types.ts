@@ -1,7 +1,11 @@
 export interface Alt2ObsidianSettings {
   apiKey: string;
-  provider: "gemini" | "openai" | "claude";
+  provider: "gemini" | "openai" | "claude" | "ollama";
   geminiModel: string;
+  /** Ollama endpoint (http://localhost:11434 default). Used when provider="ollama". */
+  ollamaEndpoint: string;
+  /** Ollama model id, e.g. "gemma3:4b" (text), "llama3.2-vision:11b" (multimodal). */
+  ollamaModel: string;
   baseFolderPath: string;
   language: "ko" | "en";
   rateDelayMs: number;
@@ -11,6 +15,8 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   apiKey: "",
   provider: "gemini",
   geminiModel: "gemini-2.5-flash",
+  ollamaEndpoint: "http://localhost:11434",
+  ollamaModel: "gemma3:4b",
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
   rateDelayMs: 4000,
@@ -73,6 +79,37 @@ export interface LectureMaterialContext {
   truncated: boolean;
 }
 
+/**
+ * Reference to a single PDF page rendered to a base64 PNG, suitable for
+ * inline-data multimodal LLM calls (e.g., Gemini's `inlineData`).
+ * Produced by `PdfProcessor.renderPagesToImages`.
+ */
+export interface VisionImageRef {
+  pageNum: number;
+  base64Png: string;
+}
+
+/**
+ * Per-slide commentary produced by `PerSlideCommentaryGenerator`. The hash is
+ * the 8-hex SHA-1 of the rendered slide PNG and drives the page-anchored
+ * managed-block markers (plan §B Decision B). `commentary` is the LLM's
+ * markdown body for that slide — no headers, no markers; the assembler
+ * (Task 1.2) wraps it in `## 📚 슬라이드 N` + `<!-- alt2obs:slide:... -->`.
+ */
+export interface SlideSection {
+  slideNum: number;
+  hash: string;
+  commentary: string;
+  citedConcepts: string[];
+}
+
+export interface PerSlideGenerationResult {
+  slides: SlideSection[];
+  totalWallTimeMs: number;
+  perSlideWallTimeMs: number[];
+  errors: Array<{ slideNum: number; reason: string }>;
+}
+
 export interface ImportUpdateSummary {
   isUpdate: boolean;
   addedSections: string[];
@@ -80,6 +117,22 @@ export interface ImportUpdateSummary {
   addedConcepts: string[];
   removedConcepts: string[];
   changedLineCount: number;
+  // Page-anchored (B1 multi-managed-block) merge details. Populated only when
+  // both the existing and the next file use B1 markers. The merge algorithm
+  // is the spike-validated 2-pass routine — see
+  // .omc/research/spike-1.0b-hash-algo.md §3.
+  slideReorders?: Array<{ from: number; to: number; hash: string }>;
+  slideInsertions?: number[];
+  slideDeletions?: Array<{ slideNum: number; hash: string }>;
+  slideDrifts?: Array<{ slideNum: number; oldHash: string; newHash: string }>;
+  /**
+   * True when more than half of existing sections orphaned — likely the user
+   * accidentally re-imported a different lecture onto this file. Caller should
+   * confirm before write (plan §B v1.1 deck-replacement modal touch-up).
+   */
+  confirmDeckReplacement?: boolean;
+  /** Free-text notes appended to the user-facing summary modal. */
+  notes?: string[];
 }
 
 export interface ImportRecord {
@@ -125,6 +178,17 @@ export interface LLMProvider {
     validate: (raw: unknown) => T,
     options?: { systemPrompt?: string }
   ): Promise<T>;
+  /**
+   * Optional multimodal call (text prompt + 1+ inline images). Required for
+   * the per-slide commentary path (plan Task 1.1). GeminiProvider implements
+   * it via the `inlineData` field; OpenAI/Claude/Ollama providers without
+   * vision support throw or return a useful error.
+   */
+  generateMultimodal?(
+    prompt: string,
+    images: VisionImageRef[],
+    options?: { systemPrompt?: string; maxOutputTokens?: number }
+  ): Promise<string>;
   estimateTokens(text: string): number;
 }
 
