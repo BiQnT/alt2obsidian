@@ -183,6 +183,18 @@ export class SyncedViewerView extends ItemView {
     this.buildToolbar(root);
     this.buildPanes(root);
     this.renderEmptyState();
+    // When the user edits the .md elsewhere (e.g., via the "📝 노트 편집"
+    // split-pane editor), re-render the right pane so they see their changes
+    // without manually reopening the viewer. registerEvent ties the
+    // subscription to the view's lifecycle so it auto-cleans on close.
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (file instanceof TFile && file.path === this.mdPath) {
+          // Don't await — fire-and-forget refresh; observers will rewire.
+          void this.refreshMarkdownOnly();
+        }
+      })
+    );
   }
 
   async onClose(): Promise<void> {
@@ -243,6 +255,9 @@ export class SyncedViewerView extends ItemView {
     const zoomInBtn = this.toolbarEl.createEl("button", { text: "+" });
     zoomInBtn.onclick = () => this.adjustScale(0.2);
 
+    const editBtn = this.toolbarEl.createEl("button", { text: "📝 노트 편집" });
+    editBtn.onclick = () => this.openMdInEditor();
+
     const nativeBtn = this.toolbarEl.createEl("button", {
       text: "Obsidian native PDF",
     });
@@ -250,6 +265,24 @@ export class SyncedViewerView extends ItemView {
 
     this.pageInfoEl = this.toolbarEl.createDiv({ cls: "alt2obs-page-info" });
     this.updatePageInfo();
+  }
+
+  /**
+   * Open the lecture .md in a regular editable Obsidian leaf next to the
+   * Synced Viewer. The right markdown pane in this view is a static
+   * `MarkdownRenderer.render` snapshot — read-only by design — so editing
+   * happens in a normal editor leaf and the viewer auto-refreshes via
+   * the `vault.on("modify")` listener registered in onOpen.
+   */
+  private async openMdInEditor(): Promise<void> {
+    if (!this.mdPath) return;
+    const file = this.app.vault.getAbstractFileByPath(this.mdPath);
+    if (!(file instanceof TFile)) {
+      new Notice(`노트를 찾을 수 없습니다: ${this.mdPath}`);
+      return;
+    }
+    const leaf = this.app.workspace.getLeaf("split", "vertical");
+    await leaf.openFile(file);
   }
 
   private buildPanes(root: HTMLElement): void {
@@ -322,6 +355,67 @@ export class SyncedViewerView extends ItemView {
       file.path,
       this.mdRenderComponent
     );
+    this.attachInternalLinkHandlers(target, file.path);
+  }
+
+  /**
+   * Re-render only the markdown pane (used by the vault.on("modify")
+   * listener so the user sees their edits live without reopening the
+   * viewer). Must rebuild the md observer + link handlers since the
+   * H2 elements get replaced.
+   */
+  private async refreshMarkdownOnly(): Promise<void> {
+    if (!this.mdPath) return;
+    this.tearDownMdObserver();
+    try {
+      await this.loadMarkdown(this.mdPath);
+    } catch (e) {
+      console.warn("[Alt2Obsidian] SyncedViewer markdown refresh failed:", e);
+      return;
+    }
+    this.setUpMdObserver();
+  }
+
+  /**
+   * Wire click handlers for `.internal-link` (wikilinks) and `.tag` anchors
+   * inside the rendered markdown. Without this, links inside a custom
+   * ItemView don't navigate — Obsidian's default link handler only fires
+   * on the workspace's own MarkdownView path.
+   *
+   * Convention: data-href carries the unresolved link text (e.g.
+   * "Big-O 표기법"), Cmd/Ctrl-click opens in a new pane.
+   */
+  private attachInternalLinkHandlers(
+    target: HTMLElement,
+    sourcePath: string
+  ): void {
+    target.querySelectorAll("a.internal-link").forEach((node) => {
+      const a = node as HTMLAnchorElement;
+      a.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const href = a.getAttribute("data-href") || a.getAttribute("href") || "";
+        if (!href) return;
+        const newLeaf =
+          (event as MouseEvent).metaKey || (event as MouseEvent).ctrlKey;
+        this.app.workspace.openLinkText(href, sourcePath, newLeaf);
+      });
+    });
+    target.querySelectorAll("a.tag").forEach((node) => {
+      const a = node as HTMLAnchorElement;
+      a.addEventListener("click", (event) => {
+        event.preventDefault();
+        const href = a.getAttribute("href") || "";
+        if (!href) return;
+        // Tag clicks open the search panel — same as default Obsidian behavior.
+        const search = (this.app as any).internalPlugins?.getPluginById?.(
+          "global-search"
+        );
+        if (search?.instance?.openGlobalSearch) {
+          search.instance.openGlobalSearch(`tag:${href.replace(/^#/, "")}`);
+        }
+      });
+    });
   }
 
   private async loadPdf(path: string): Promise<void> {
