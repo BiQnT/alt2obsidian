@@ -594,7 +594,8 @@ function transitionCost(from, to, p, textBefore) {
     return p.nextCost + p.skipCost * (textBefore[to] - textBefore[from + 1]);
   return p.backCost + p.backPerSlide * (from - to);
 }
-function giveOffTalkToSkippedTextless(path, off, isText) {
+var MAX_MOVED_TALK_MS = 6e4;
+function giveOffTalkToSkippedTextless(path, off, isText, segments, maxCount) {
   for (let i = 1; i < path.length; i++) {
     const from = path[i - 1];
     const to = path[i];
@@ -607,7 +608,7 @@ function giveOffTalkToSkippedTextless(path, off, isText) {
     if (between.length === 0)
       continue;
     let k = i;
-    while (k > 0 && off[k - 1] && path[k - 1] === from)
+    while (k > 0 && off[k - 1] && path[k - 1] === from && i - (k - 1) <= maxCount && segments[i - 1].endMs - segments[k - 1].startMs <= MAX_MOVED_TALK_MS)
       k--;
     const len = i - k;
     for (let q = 0; q < len; q++)
@@ -715,9 +716,9 @@ function alignTranscript(slideTexts, segments, params = {}) {
   for (let i = n - 1; i > 0; i--)
     states[i - 1] = back[i][states[i]];
   const path = states.map((st) => st % m);
-  const slideTokens = slideTexts.map((t) => new Set(alignTokens(t)));
-  const unmatched = states.map((st, i) => st >= m || !alignTokens(segments[i].text).some((t) => slideTokens[st % m].has(t)));
-  giveOffTalkToSkippedTextless(path, unmatched, isText);
+  const visited = new Set(path).size;
+  const perSlide = Math.max(1, Math.round(n / Math.max(1, visited)));
+  giveOffTalkToSkippedTextless(path, states.map((st) => st >= m), isText, segments, perSlide);
   spreadTextless(path, isText);
   const spans = [];
   let start = 0;

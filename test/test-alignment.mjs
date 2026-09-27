@@ -144,16 +144,21 @@ const segments = spoken.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 50
   assert.equal(m.alignLecture(["Page Tables page table entry", "", "", "", "", "Replacement LRU FIFO clock"], timed), null, "under half of the slides have text");
   // Textless slides inside a text deck share the talk that matches no slide text.
   const deck = [slides[0], slides[1], "", "   ", slides[4], slides[5]];
+  // Lecture pace: about a minute per slide (5 s segments), a minute on the image slides.
   const pics = [
     [1, "welcome to lecture five about virtual memory"],
+    [1, "today virtual memory is the whole topic"],
     [2, "a page table maps virtual pages to physical frames"],
     [2, "each page table entry has a valid bit"],
-    ...Array.from({ length: 8 }, (_, i) => [3, `look at this picture, the arrows go from here to there, number ${i}`]),
+    ...Array.from({ length: 4 }, (_, i) => [3, `look at this picture, the arrows go from here to there, number ${i}`]),
     [5, "for replacement we can use LRU or FIFO"],
     [5, "the clock algorithm approximates LRU cheaply"],
     [6, "to wrap up, the key takeaways are on homework five"],
+    [6, "next week we start file systems"],
   ];
-  const picSegs = pace(pics).map(([, text], i) => ({ startMs: i * 5000, endMs: i * 5000 + 4800, text, speaker: "" }));
+  const picSegs = pics
+    .flatMap((t) => new Array(t[0] === 3 ? 3 : 6).fill(t))
+    .map(([, text], i) => ({ startMs: i * 5000, endMs: i * 5000 + 4800, text, speaker: "" }));
   const al = m.alignLecture(deck, picSegs);
   assert.ok(al, "a text deck with a few textless slides is aligned");
   assert.ok(al.chunks[2] && al.chunks[3], `both textless slides get talk: ${JSON.stringify(al.chunks.map((c) => (c ? c.slice(0, 20) : null)))}`);
@@ -161,32 +166,132 @@ const segments = spoken.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 50
   const onSlide2 = (al.chunks[1].match(/picture/g) ?? []).length;
   assert.ok(onSlide2 <= 3, `most unmatched talk goes to the textless slides, not the neighbour (${onSlide2} on slide 2)`);
   console.log("PASS: textless slides: scanned or mostly image-only decks fall back to the even split; textless slides in a text deck share the unmatched talk");
-  // Chatter while a text slide is up stays on it (off topic); talk just
-  // before the lecture moves past an image slide goes to the image slide.
+  // Minute-per-slide pace (5 s segments). A deck with an image slide (3).
   const deck2 = [slides[0], slides[1], "", slides[4], slides[5]];
-  const talk2 = [
-    [1, "welcome to lecture five about virtual memory"],
-    [2, "a page table maps virtual pages to physical frames"],
-    [0, "by the way the homework deadline moved to friday"],
-    [0, "and the midterm room is posted on the website"],
-    [2, "each page table entry has a valid bit and a frame number"],
-    [3, "now look at this picture, the arrows go from here to there"],
-    [3, "and this box in the middle feeds that one on the right"],
-    [4, "for replacement we can use LRU or FIFO"],
-    [4, "the clock algorithm approximates LRU cheaply"],
-    [5, "to wrap up, the key takeaways are on homework five"],
+  const run = (lines) => lines.flatMap(([t, text, times]) => new Array(times).fill([t, text]));
+  const segsOf = (spoken) => spoken.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 5000 + 4800, text, speaker: "" }));
+  const head = [
+    [1, "welcome to lecture five about virtual memory", 6],
+    [2, "a page table maps virtual pages to physical frames", 6],
+    [2, "each page table entry has a valid bit and a frame number", 6],
   ];
-  const spoken2 = pace(talk2);
-  const segs2 = spoken2.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 5000 + 4800, text, speaker: "" }));
-  const r2 = m.alignLecture(deck2, segs2).result.segmentSlides;
-  spoken2.forEach(([t, text], i) => {
-    if (t === 0) assert.equal(r2[i], 2, `chatter stays on slide 2: "${text}" got ${r2[i]} (${r2.join(",")})`);
+  const tail = [
+    [4, "for replacement we can use LRU or FIFO", 6],
+    [4, "the clock algorithm approximates LRU cheaply", 6],
+    [5, "to wrap up, the key takeaways are on homework five", 6],
+  ];
+  // (a) Short chatter at the end of slide 2, then straight on to slide 4:
+  // the image slide is skipped and the chatter stays on slide 2.
+  const spokenA = run([...head, [0, "by the way the homework deadline moved to friday", 1], [0, "and the midterm room is posted", 1], ...tail]);
+  const rA = m.alignLecture(deck2, segsOf(spokenA)).result.segmentSlides;
+  spokenA.forEach(([t, text], i) => {
+    if (t === 0) assert.equal(rA[i], 2, `chatter at the end of slide 2 stays there: "${text}" got ${rA[i]} (${rA.join(",")})`);
   });
-  const imageTalk = spoken2.map(([t], i) => [t, r2[i]]).filter(([t]) => t === 3);
-  // The 15 s scoring window lets the next slide pull the last lines; at least half stay.
-  assert.ok(imageTalk.filter(([, p]) => p === 3).length * 2 >= imageTalk.length, `talk during the image slide goes to it (${r2.join(",")})`);
-  assert.ok(imageTalk.every(([, p]) => p !== 2), "none of it is left on the previous text slide");
-  console.log("PASS: chatter before an image slide stays on the text slide; talk during an image slide goes to the image slide");
+  // (b) A minute of talk about the image slide: most of it goes to the image slide.
+  const spokenB = run([...head, ...Array.from({ length: 4 }, (_, i) => [3, `now look at this picture, the arrows go from here to there, part ${i}`, 3]), ...tail]);
+  const rB = m.alignLecture(deck2, segsOf(spokenB)).result.segmentSlides;
+  const imageTalk = spokenB.map(([t], i) => [t, rB[i]]).filter(([t]) => t === 3);
+  // The 15 s scoring window lets both neighbours pull the edge lines; at least half go to the image slide.
+  assert.ok(imageTalk.filter(([, p]) => p === 3).length * 2 >= imageTalk.length, `talk during the image slide goes to it (${rB.join(",")})`);
+  console.log("PASS: short chatter at the end of a slide before a skipped image slide stays on that slide; a minute of talk during an image slide goes to it");
+}
+
+// ---- Korean talk over English slides (sparse overlap) ----
+{
+  // Most segments share no token with their slide. Text-slide accuracy must
+  // not drop below the aligner before image-slide handling (commit 5ebb1ea's
+  // parent measured 52.5% here; 5ebb1ea itself dropped to 50.0%).
+  const koDeck = [
+  "Lecture 6 Indexing\nDatabase Systems, Department of Computer Science",
+  "B+ Tree Structure\nroot node, internal node, leaf node, fanout, balanced height",
+  "B+ Tree Search\nsearch key, traverse from root to leaf, logarithmic cost",
+  "",
+  "B+ Tree Insertion\nsplit a full leaf, push up the separator key, root split",
+  "B+ Tree Deletion\nmerge underfull nodes, redistribute entries, occupancy",
+  "Hash Index\nhash function, bucket, overflow chain, static hashing",
+  "Extendible Hashing\ndirectory, global depth, local depth, bucket split",
+  "Summary\nindex choice, range query, equality query",
+];
+  const koTalk = [
+  [1, "자 오늘은 인덱싱 얘기를 해볼게요"],
+  [1, "지난 시간에 이어서 계속 가겠습니다"],
+  [2, "비플러스 트리는 root 부터 시작하는 구조예요"],
+  [2, "중간에 있는 노드들은 이렇게 연결돼 있고요"],
+  [2, "leaf 에는 실제 데이터 포인터가 들어갑니다"],
+  [2, "그래서 높이가 항상 균형이 맞아요"],
+  [3, "검색할 때는 위에서부터 내려갑니다"],
+  [3, "search key 를 비교하면서 한 칸씩 가요"],
+  [3, "비용은 로그 스케일이라 빠르죠"],
+  [4, "이 그림을 보시면 화살표가 이렇게 가요"],
+  [4, "여기서 저기로 넘어가는 거 보이시죠"],
+  [5, "삽입할 때 꽉 차 있으면 쪼개야 돼요"],
+  [5, "split 하고 나서 가운데 값을 위로 올립니다"],
+  [5, "루트까지 올라가면 높이가 하나 늘어나요"],
+  [6, "삭제는 반대로 합치는 거예요"],
+  [6, "merge 가 안 되면 옆에서 빌려옵니다"],
+  [7, "해시 인덱스는 좀 다른 방식이에요"],
+  [7, "hash function 으로 bucket 을 찾아요"],
+  [7, "넘치면 overflow 로 이어 붙이고요"],
+  [8, "확장 해싱은 디렉터리를 두 배로 늘려요"],
+  [8, "global depth 랑 local depth 를 비교합니다"],
+  [9, "정리하면 상황에 맞게 고르시면 됩니다"],
+];
+  const spokenKo = koTalk.flatMap((t) => new Array(6).fill(t));
+  const segsKo = spokenKo.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 5000 + 4800, text }));
+  const pKo = m.alignTranscript(koDeck, segsKo).segmentSlides;
+  const onText = spokenKo.map(([t], i) => [t, pKo[i]]).filter(([t]) => koDeck[t - 1].trim());
+  const accKo = onText.filter(([t, p]) => t === p).length / onText.length;
+  assert.ok(accKo >= 0.525, );
+  console.log();
+}
+
+// ---- Korean talk over English slides (sparse overlap) ----
+{
+  // Most segments share no token with their slide. Text-slide accuracy must
+  // not drop below the aligner before image-slide handling (commit 5ebb1ea's
+  // parent measured 52.5% here; 5ebb1ea itself dropped to 50.0%).
+  const koDeck = [
+    "Lecture 6 Indexing\nDatabase Systems, Department of Computer Science",
+    "B+ Tree Structure\nroot node, internal node, leaf node, fanout, balanced height",
+    "B+ Tree Search\nsearch key, traverse from root to leaf, logarithmic cost",
+    "",
+    "B+ Tree Insertion\nsplit a full leaf, push up the separator key, root split",
+    "B+ Tree Deletion\nmerge underfull nodes, redistribute entries, occupancy",
+    "Hash Index\nhash function, bucket, overflow chain, static hashing",
+    "Extendible Hashing\ndirectory, global depth, local depth, bucket split",
+    "Summary\nindex choice, range query, equality query",
+  ];
+  const koTalk = [
+    [1, "자 오늘은 인덱싱 얘기를 해볼게요"],
+    [1, "지난 시간에 이어서 계속 가겠습니다"],
+    [2, "비플러스 트리는 root 부터 시작하는 구조예요"],
+    [2, "중간에 있는 노드들은 이렇게 연결돼 있고요"],
+    [2, "leaf 에는 실제 데이터 포인터가 들어갑니다"],
+    [2, "그래서 높이가 항상 균형이 맞아요"],
+    [3, "검색할 때는 위에서부터 내려갑니다"],
+    [3, "search key 를 비교하면서 한 칸씩 가요"],
+    [3, "비용은 로그 스케일이라 빠르죠"],
+    [4, "이 그림을 보시면 화살표가 이렇게 가요"],
+    [4, "여기서 저기로 넘어가는 거 보이시죠"],
+    [5, "삽입할 때 꽉 차 있으면 쪼개야 돼요"],
+    [5, "split 하고 나서 가운데 값을 위로 올립니다"],
+    [5, "루트까지 올라가면 높이가 하나 늘어나요"],
+    [6, "삭제는 반대로 합치는 거예요"],
+    [6, "merge 가 안 되면 옆에서 빌려옵니다"],
+    [7, "해시 인덱스는 좀 다른 방식이에요"],
+    [7, "hash function 으로 bucket 을 찾아요"],
+    [7, "넘치면 overflow 로 이어 붙이고요"],
+    [8, "확장 해싱은 디렉터리를 두 배로 늘려요"],
+    [8, "global depth 랑 local depth 를 비교합니다"],
+    [9, "정리하면 상황에 맞게 고르시면 됩니다"],
+  ];
+  const spokenKo = koTalk.flatMap((t) => new Array(6).fill(t));
+  const segsKo = spokenKo.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 5000 + 4800, text }));
+  const pKo = m.alignTranscript(koDeck, segsKo).segmentSlides;
+  const onText = spokenKo.map(([t], i) => [t, pKo[i]]).filter(([t]) => koDeck[t - 1].trim());
+  const accKo = onText.filter(([t, p]) => t === p).length / onText.length;
+  assert.ok(accKo >= 0.525, `text-slide accuracy ${(accKo * 100).toFixed(1)}% (${pKo.join(",")})`);
+  console.log(`PASS: Korean talk over English slides: text-slide accuracy ${(accKo * 100).toFixed(1)}% (not below the pre-5ebb1ea 52.5%)`);
 }
 
 // ---- alignLecture: timestamps required ----

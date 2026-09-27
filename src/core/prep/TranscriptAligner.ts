@@ -247,13 +247,18 @@ function transitionCost(from: number, to: number, p: AlignerParams, textBefore: 
   return p.backCost + p.backPerSlide * (from - to);
 }
 
+/** At most this much off-topic talk before a jump moves to the skipped image slides. */
+export const MAX_MOVED_TALK_MS = 60000;
+
 /**
- * Talk that shares no word with its slide right before the path jumps over
- * textless slides (A, unmatched talk, then B with image slides between) was
- * most likely about those slides: it moves to them. Unmatched talk followed
- * by more talk on the same slide (chatter) stays where it is.
+ * Off-topic talk (the Viterbi "off" state) right before the path jumps over
+ * textless slides (A, off-topic talk, then B with image slides between) was
+ * most likely about those slides: it moves to them. Only off-state segments
+ * move, never on-topic talk that merely shares no word with its slide (Korean
+ * talk over English slides does that all the time), and the moved run is
+ * capped at MAX_MOVED_TALK_MS and at the typical number of segments per slide.
  */
-function giveOffTalkToSkippedTextless(path: number[], off: boolean[], isText: boolean[]): void {
+function giveOffTalkToSkippedTextless(path: number[], off: boolean[], isText: boolean[], segments: TimedSegment[], maxCount: number): void {
   for (let i = 1; i < path.length; i++) {
     const from = path[i - 1];
     const to = path[i];
@@ -262,7 +267,7 @@ function giveOffTalkToSkippedTextless(path: number[], off: boolean[], isText: bo
     for (let j = from + 1; j < to; j++) if (!isText[j]) between.push(j);
     if (between.length === 0) continue;
     let k = i;
-    while (k > 0 && off[k - 1] && path[k - 1] === from) k--;
+    while (k > 0 && off[k - 1] && path[k - 1] === from && i - (k - 1) <= maxCount && segments[i - 1].endMs - segments[k - 1].startMs <= MAX_MOVED_TALK_MS) k--;
     const len = i - k;
     for (let q = 0; q < len; q++) path[k + q] = between[Math.min(between.length - 1, Math.floor((q * between.length) / len))];
   }
@@ -378,9 +383,9 @@ export function alignTranscript(
   states[n - 1] = lastState;
   for (let i = n - 1; i > 0; i--) states[i - 1] = back[i][states[i]];
   const path = states.map((st) => st % m);
-  const slideTokens = slideTexts.map((t) => new Set(alignTokens(t)));
-  const unmatched = states.map((st, i) => st >= m || !alignTokens(segments[i].text).some((t) => slideTokens[st % m].has(t)));
-  giveOffTalkToSkippedTextless(path, unmatched, isText);
+  const visited = new Set(path).size;
+  const perSlide = Math.max(1, Math.round(n / Math.max(1, visited)));
+  giveOffTalkToSkippedTextless(path, states.map((st) => st >= m), isText, segments, perSlide);
   spreadTextless(path, isText);
 
   const spans: AlignedSpan[] = [];
