@@ -28,7 +28,7 @@ import {
   Component,
 } from "obsidian";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-import { parseAlignment, spansForSlide, StoredSpan } from "../core/prep/TranscriptAligner";
+import { parseAlignment, segmentInSpan, spansForSlide, StoredSpan } from "../core/prep/TranscriptAligner";
 
 /** Timestamped transcript of a local note (plugin cache, else Alt). */
 export type TranscriptLoader = (altLocalId: string) => Promise<Array<{ startMs: number; endMs: number; text: string }> | null>;
@@ -441,7 +441,7 @@ export class SyncedViewerView extends ItemView {
       body.createDiv({ cls: "alt2obs-empty-state", text: "전사를 찾지 못했습니다. Alt를 실행하거나 노트를 다시 가져오세요." });
       return;
     }
-    const segs = this.transcript.filter((seg) => spans.some((s) => seg.startMs >= s.startMs && seg.startMs < s.endMs));
+    const segs = this.transcript.filter((seg) => spans.some((s) => segmentInSpan(seg.startMs, s)));
     if (segs.length === 0) {
       body.createDiv({ cls: "alt2obs-empty-state", text: "이 슬라이드에 정렬된 전사가 없습니다." });
       return;

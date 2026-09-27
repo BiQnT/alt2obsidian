@@ -404,17 +404,28 @@ export function chunksFromAlignment(
   });
 }
 
+/** Seconds with one decimal, trailing ".0" dropped ("120.4", "181"). */
+function tenths(ms: number): string {
+  return (ms / 1000).toFixed(1).replace(/\.0$/, "");
+}
+
+/** A time floored to the tenth of a second the alignment stores. */
+export function toTenth(ms: number): number {
+  return Math.floor(ms / 100) * 100;
+}
+
 /**
- * Compact frontmatter form, spans in time order: "3:120-181 4:181-260? 3:260-300"
- * (slide:startSec-endSec, "?" marks a low-confidence span). A span ends
- * where the next one starts, so every second belongs to one span.
+ * Compact frontmatter form, spans in time order: "3:120.4-181 4:181-260.2? 3:260.2-300"
+ * (slide:startSec-endSec with tenths, "?" marks a low-confidence span). A
+ * span ends where the next one starts, so every moment belongs to one span;
+ * a segment belongs to the span that holds its start floored to a tenth.
  */
 export function formatAlignment(spans: AlignedSpan[]): string {
   return spans
     .map((s, i) => {
-      const start = Math.floor(s.startMs / 1000);
-      const end = i + 1 < spans.length ? Math.floor(spans[i + 1].startMs / 1000) : Math.ceil(s.endMs / 1000);
-      return `${s.slide}:${start}-${Math.max(start, end)}${s.confidence < LOW_CONFIDENCE ? "?" : ""}`;
+      const start = toTenth(s.startMs);
+      const end = i + 1 < spans.length ? toTenth(spans[i + 1].startMs) : Math.ceil(s.endMs / 100) * 100;
+      return `${s.slide}:${tenths(start)}-${tenths(Math.max(start, end))}${s.confidence < LOW_CONFIDENCE ? "?" : ""}`;
     })
     .join(" ");
 }
@@ -431,14 +442,20 @@ export function parseAlignment(value: unknown): StoredSpan[] {
   if (typeof value !== "string") return [];
   const out: StoredSpan[] = [];
   for (const part of value.trim().split(/\s+/)) {
-    const m = part.match(/^(\d+):(\d+)-(\d+)(\?)?$/);
+    const m = part.match(/^(\d+):(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)(\?)?$/);
     if (!m) continue;
-    const startMs = Number(m[2]) * 1000;
-    const endMs = Number(m[3]) * 1000;
+    const startMs = Math.round(Number(m[2]) * 1000);
+    const endMs = Math.round(Number(m[3]) * 1000);
     if (endMs < startMs) continue;
     out.push({ slide: Number(m[1]), startMs, endMs, low: m[4] === "?" });
   }
   return out;
+}
+
+/** Whether a segment starting at `startMs` belongs to a stored span. */
+export function segmentInSpan(startMs: number, span: StoredSpan): boolean {
+  const t = toTenth(startMs);
+  return t >= span.startMs && t < span.endMs;
 }
 
 /** Spans of one slide (a revisited slide has several). */

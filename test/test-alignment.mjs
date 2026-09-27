@@ -106,10 +106,23 @@ const segments = spoken.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 50
     if (i > 0) assert.equal(p.startMs, parsed[i - 1].endMs, "a span ends where the next starts");
     assert.equal(p.low, back.spans[i].confidence < m.LOW_CONFIDENCE);
   });
-  assert.deepEqual(m.parseAlignment("1:0-10 bad 2:10-5 3:10-20?"), [
+  assert.deepEqual(m.parseAlignment("1:0-10 bad 2:10-5 3:10-20.5?"), [
     { slide: 1, startMs: 0, endMs: 10000, low: false },
-    { slide: 3, startMs: 10000, endMs: 20000, low: true },
+    { slide: 3, startMs: 10000, endMs: 20500, low: true },
   ]);
+  // Same-second boundaries: every segment lands in exactly one span, none is lost.
+  const fine = [
+    { slide: 1, startMs: 0, endMs: 1200, fromSegment: 0, toSegment: 2, confidence: 0.9 },
+    { slide: 2, startMs: 1300, endMs: 1900, fromSegment: 2, toSegment: 3, confidence: 0.9 },
+    { slide: 3, startMs: 1950, endMs: 3000, fromSegment: 3, toSegment: 4, confidence: 0.2 },
+  ];
+  const fineValue = m.formatAlignment(fine);
+  assert.equal(fineValue, "1:0-1.3 2:1.3-1.9 3:1.9-3?");
+  const stored = m.parseAlignment(fineValue);
+  for (const [start, slide] of [[0, 1], [700, 1], [1300, 2], [1950, 3]]) {
+    const owners = stored.filter((sp) => m.segmentInSpan(start, sp)).map((sp) => sp.slide);
+    assert.deepEqual(owners, [slide], `segment at ${start} ms`);
+  }
   assert.deepEqual(m.parseAlignment(undefined), []);
   assert.equal(m.spansForSlide(parsed, 3).length, 2);
   console.log(`PASS: alt_alignment format round trip ("${value}")`);
