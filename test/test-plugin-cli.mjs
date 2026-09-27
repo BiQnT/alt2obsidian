@@ -48,6 +48,7 @@ function makeApp() {
       read: async (f) => files.get(f.path),
       modify: async (f, c) => void files.set(f.path, c),
       cachedRead: async (f) => files.get(f.path),
+      readBinary: async () => new ArrayBuffer(8),
       getMarkdownFiles: () => [...files.keys()].filter((p) => p.endsWith(".md")).map(tfile),
       createBinary: async (p) => void files.set(p, "<binary>"),
       modifyBinary: async (f) => void files.set(f.path, "<binary>"),
@@ -113,6 +114,7 @@ const pdfStub = {
   renderPageJpeg: async (_d, page) => ({ pageNum: page, mimeType: "image/png", base64: PNG_1PX }),
   extractLectureMaterialContext: async () => null,
   getPageTexts: async () => TEXTS,
+  getPageLayouts: async () => TEXTS.map((text) => ({ text, boxes: [] })),
   getPageCount: async () => TEXTS.length,
 };
 const preview = () => ({
@@ -307,6 +309,45 @@ try {
     const vault = plugin.vaultLectureNotes();
     assert.deepEqual(plugin.localNoteStatus({ id: "local-1", title: "Lec7 Caches", lectureDate: "2026-04-21" }, vault), { kind: "imported", path: rec.path, changed: null });
     console.log("PASS: local import: aligned chunks, alt_local_id and alt_alignment frontmatter, no merge into a same-titled URL note, transcript cached");
+
+    // Note verification of a user note against this lecture (spec 4.6).
+    {
+      plugin.data.settings.tasks.verification = { provider: "claude-cli", model: "sonnet", effort: "medium" };
+      const src = "노션/7강 정리.md";
+      const mine = "# 7강 정리\n- slide 3 cache topic 3 details 23757 (거짓)\n- cache topic 5 details 39595\n- 양자 얽힘은 이 강의와 무관하다\n\n## 내 생각\n- cache topic 6 details 47514 잡음\n";
+      files.set(src, mine);
+      assert.ok(plugin.verifySourceFiles().includes(src));
+      assert.ok(!plugin.verifySourceFiles().includes(rec.path), "lecture notes are targets, not sources");
+      assert.ok(plugin.verifyTargets().some((t) => t.path === rec.path));
+      await assert.rejects(plugin.prepareVerification({ targetPath: rec.path, markdown: local, source: "x", sourcePath: rec.path }), /고를 수 없습니다/);
+      const n0 = s.calls().length;
+      const pv = await plugin.prepareVerification({ targetPath: rec.path, markdown: mine, source: `[[노션/7강 정리]]`, sourcePath: src });
+      assert.equal(s.calls().length, n0, "prepare spends no tokens");
+      assert.equal(pv.outPath, "Alt2Obsidian/CSED311/Verification/Lec7 Caches (2026-04-21) verification.md");
+      assert.equal(pv.estimate.claims, 4);
+      assert.equal(pv.estimate.scriptOnly, 1);
+      assert.ok(pv.plan.hasTranscript, "the cached timestamped transcript and alt_alignment are used");
+      const totalsBefore = { ...plugin.data.usageTotals };
+      const vr = await plugin.runVerification(pv);
+      assert.equal(s.calls().length - n0, pv.estimate.calls, "estimated call count");
+      assert.equal(vr.path, pv.outPath);
+      assert.equal(files.get(src), mine, "the checked note is never modified");
+      assert.equal(vr.counts["틀림"], 1);
+      assert.equal(vr.counts["전사 불확실"], 1);
+      assert.equal(vr.counts["근거 없음"], 1);
+      const out = files.get(pv.outPath);
+      assert.match(out, /verified_source: "\[\[노션\/7강 정리\]\]"/);
+      assert.match(out, /\[\[Lec7 Caches \(2026-04-21\)#📚 슬라이드 3\]\]/);
+      assert.match(out, /근거: .*\[\d\d:\d\d\] \(슬라이드 \d\)/);
+      assert.equal(plugin.data.usageTotals.lectures, totalsBefore.lectures, "a verification is not counted as a lecture");
+      assert.ok(plugin.data.usageTotals.calls > totalsBefore.calls);
+      // Re-run: the user's section below the block is kept.
+      files.set(pv.outPath, out.replace("## 내 메모\n", "## 내 메모\n다시 볼 것\n"));
+      await plugin.runVerification(await plugin.prepareVerification({ targetPath: rec.path, markdown: mine, source: `[[노션/7강 정리]]`, sourcePath: src }));
+      assert.ok(files.get(pv.outPath).includes("다시 볼 것"));
+      files.delete(src);
+      console.log("PASS: verification: sources and targets, estimate without tokens, Verification/<lecture> verification.md written, source untouched, re-run keeps the user's section");
+    }
 
     // Another Alt local note with the URL note's title: offered as a link, linked on confirmation.
     const st = plugin.localNoteStatus({ id: "local-2", title: "Lec7 Caches", lectureDate: "2026-04-21" }, vault);

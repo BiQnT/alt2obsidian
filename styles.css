@@ -640,3 +640,47 @@
   justify-content: space-between;
   gap: 8px;
 }
+
+/* Note verification tab (spec 4.6) */
+.alt2obsidian-verify-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.alt2obsidian-field-label {
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.alt2obsidian-verify-input input,
+.alt2obsidian-verify-input textarea,
+.alt2obsidian-verify-target {
+  width: 100%;
+}
+.alt2obsidian-verify-input textarea {
+  resize: vertical;
+  font-size: var(--font-ui-smaller);
+}
+.alt2obsidian-verify-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.alt2obsidian-chip.is-ok {
+  background: rgba(var(--color-green-rgb), 0.18);
+  color: var(--color-green);
+}
+.alt2obsidian-chip.is-bad {
+  background: rgba(var(--color-red-rgb), 0.18);
+  color: var(--color-red);
+}
+.alt2obsidian-chip.is-unsure {
+  background: rgba(var(--color-yellow-rgb), 0.18);
+  color: var(--color-yellow);
+}
+.alt2obsidian-chip.is-missing {
+  background: rgba(var(--color-purple-rgb), 0.18);
+  color: var(--color-purple);
+}

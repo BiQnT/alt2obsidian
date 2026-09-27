@@ -83,6 +83,7 @@ export function migrateSettings(saved: unknown): { settings: Alt2ObsidianSetting
     recentModels: { ...(raw.recentModels ?? {}) },
     tasks: cloneTasks(DEFAULT_SETTINGS.tasks),
     settingsVersion: 2,
+    notionFetchTool: typeof raw.notionFetchTool === "string" ? raw.notionFetchTool.trim() : "",
   };
   const hadTasks = !!raw.tasks && typeof raw.tasks === "object";
   if (hadTasks) {

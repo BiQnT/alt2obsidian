@@ -8,8 +8,9 @@ import { AltNoteDetails, AltNoteSummary, inferSubject } from "../sources";
 import { AltApiError } from "../sources/AltLocalApiSource";
 import { LocalNoteStatus, statusChip, VaultNoteInfo } from "../core/noteStatus";
 import { alignmentStatus } from "../pipeline/alignment";
+import { VerifyPanel } from "./VerifyPanel";
 
-type Tab = "local" | "url";
+type Tab = "local" | "url" | "verify";
 
 /** Per-note list state: details and slide comparison load in the background. */
 interface LocalItem {
@@ -48,6 +49,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
   private statusDetailEl: HTMLElement | null = null;
   private localPane: HTMLElement | null = null;
   private urlPane: HTMLElement | null = null;
+  private verifyPane: HTMLElement | null = null;
+  private verifyPanel: VerifyPanel | null = null;
   private tabButtons = new Map<Tab, HTMLButtonElement>();
   private searchInput: HTMLInputElement | null = null;
   private listEl: HTMLElement | null = null;
@@ -91,6 +94,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
     this.renderLocalPane(this.localPane);
     this.urlPane = container.createDiv({ cls: "alt2obsidian-url-pane" });
     this.renderInputSection(this.urlPane);
+    this.verifyPane = container.createDiv({ cls: "alt2obsidian-verify-pane" });
+    this.verifyPanel = new VerifyPanel(this.app, this.plugin, this.verifyPane);
+    this.verifyPanel.render();
     this.renderProgressSection(container);
     this.cliPanel = container.createDiv({ cls: "alt2obsidian-cli-panel" });
     this.cliPanel.hide();
@@ -112,7 +118,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
     this.statusDetailEl = head.createDiv({ cls: "alt2obsidian-muted alt2obsidian-status-detail" });
     this.statusDetailEl.hide();
     const tabs = head.createDiv({ cls: "alt2obsidian-tabs" });
-    for (const [id, label] of [["local", "Alt 노트 목록"], ["url", "URL 붙여넣기"]] as Array<[Tab, string]>) {
+    for (const [id, label] of [["local", "Alt 노트 목록"], ["url", "URL 붙여넣기"], ["verify", "노트 검증"]] as Array<[Tab, string]>) {
       const b = tabs.createEl("button", { text: label, cls: "alt2obsidian-tab" });
       b.addEventListener("click", () => this.switchTab(id));
       this.tabButtons.set(id, b);
@@ -124,6 +130,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
     for (const [id, b] of this.tabButtons) b.toggleClass("is-active", id === tab);
     this.localPane?.toggle(tab === "local");
     this.urlPane?.toggle(tab === "url");
+    this.verifyPane?.toggle(tab === "verify");
+    // Lists of notes and lectures may have changed since the tab was built.
+    if (tab === "verify" && !this.verifyPanel?.isBusy()) this.verifyPanel?.render();
   }
 
   private setConnection(label: string, kind: "api" | "db" | "none" | "busy", detail: string): void {
@@ -931,6 +940,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
   async onClose(): Promise<void> {
     // Closing the view stops a running CLI import; its temp folder is removed.
     this.runController?.abort();
+    this.verifyPanel?.abort();
   }
 }
 

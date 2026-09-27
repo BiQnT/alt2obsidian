@@ -6,7 +6,7 @@ export type ProviderId = "claude-cli" | "codex-cli" | "gemini" | "ollama";
 /**
  * Tasks with their own provider, model and effort (spec 4.2). `alignment`
  * is the optional LLM check of low-confidence transcript alignment (off =
- * "none", the default); `verification` lands in Phase 3.
+ * "none", the default); `verification` judges the user's notes (spec 4.6).
  */
 export type TaskId = "commentary" | "concepts" | "alignment" | "verification";
 
@@ -33,7 +33,7 @@ export interface GenerationOptions {
   transcriptCapChars: number;
   /** Estimated input + output tokens per lecture. 0 = no cap. */
   tokenCapPerLecture: number;
-  /** Stored now, used when diagram embedding lands (Phase 3, spec 4.8). */
+  /** Save image-heavy slides to Attachments/ and embed them in the note (spec 4.8). */
   saveKeyDiagrams: boolean;
   /** Re-import: reuse slides whose text hash and image signal are unchanged. */
   onlyChangedSlides: boolean;
@@ -68,6 +68,11 @@ export interface Alt2ObsidianSettings {
   generation: GenerationOptions;
   /** Alt's data folder override (read only). "" = the platform default. */
   altDataDir: string;
+  /**
+   * Notion MCP fetch tool for the note verifier, e.g.
+   * "mcp__notion__notion-fetch". "" = found with `claude mcp list`.
+   */
+  notionFetchTool: string;
 }
 
 export const DEFAULT_GENERATION: GenerationOptions = {
@@ -110,6 +115,7 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   recentModels: {},
   generation: DEFAULT_GENERATION,
   altDataDir: "",
+  notionFetchTool: "",
 };
 
 /** 1.x exam period tag. Exam summaries are gone (spec G5); old records may still carry it. */

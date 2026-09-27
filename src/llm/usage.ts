@@ -50,15 +50,15 @@ export class UsageTracker {
   }
 }
 
-/** Adds one lecture's usage to the plugin-wide totals. */
-export function accumulateTotals(totals: UsageTotals, tracker: UsageTracker, today: string): UsageTotals {
+/** Adds one lecture's usage (or, `countLecture` false, a verification run's) to the plugin-wide totals. */
+export function accumulateTotals(totals: UsageTotals, tracker: UsageTracker, today: string, countLecture = true): UsageTotals {
   const byProvider = { ...totals.byProvider };
   for (const [p, u] of Object.entries(tracker.byProvider()) as Array<[ProviderId, LLMUsage]>) {
     byProvider[p] = addUsage(byProvider[p] ?? { ...EMPTY_USAGE }, u);
   }
   return {
     ...addUsage(totals, tracker.total()),
-    lectures: totals.lectures + 1,
+    lectures: totals.lectures + (countLecture ? 1 : 0),
     byProvider,
     since: totals.since || today,
   };

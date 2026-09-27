@@ -237,6 +237,24 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     for (const h of ["작업", "프로바이더", "모델", "effort"]) head.createEl("th", { text: h });
     const body = table.createEl("tbody");
     for (const id of TASK_IDS) this.renderTaskRow(body, id);
+
+    new Setting(containerEl)
+      .setName("Notion MCP 조회 도구")
+      .setDesc(
+        "노트 검증에서 노션 URL을 넣으면 Claude CLI가 이 도구 하나만 써서 페이지 원문을 가져옵니다. 비우면 `claude mcp list`에서 Notion 서버를 찾아 " +
+          "mcp__<서버>__notion-fetch를 씁니다. Notion MCP가 없으면 터미널에서 `claude mcp add --transport http notion https://mcp.notion.com/mcp` 후 `/mcp`로 로그인하세요."
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("자동 (claude mcp list)")
+          .setValue(this.settings.notionFetchTool)
+          .onChange(async (value) => {
+            const v = value.trim();
+            if (v && !/^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/.test(v)) return;
+            this.settings.notionFetchTool = v;
+            await this.save();
+          })
+      );
   }
 
   private renderTaskRow(body: HTMLElement, id: TaskId): void {
@@ -244,9 +262,8 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     const row = body.createEl("tr");
     const nameCell = row.createEl("td");
     nameCell.createDiv({ text: TASK_LABELS[id] });
-    const reserved = id === "verification";
     if (id === "alignment") nameCell.createDiv({ cls: "alt2obsidian-muted", text: "정렬은 스크립트로 항상 함. 고르면 불확실한 구간만 한 번에 확인 (기본 끔)" });
-    if (id === "verification") nameCell.createDiv({ cls: "alt2obsidian-muted", text: "노트 검증 기능과 함께 제공 예정" });
+    if (id === "verification") nameCell.createDiv({ cls: "alt2obsidian-muted", text: "사이드바 '노트 검증' 탭. 주장 20개씩 판정" });
 
     const markCustom = () => {
       this.settings.preset = "custom";
@@ -259,7 +276,6 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       opt.value = p;
     }
     providerSelect.value = task.provider;
-    providerSelect.disabled = reserved;
     providerSelect.addEventListener("change", async () => {
       task.provider = providerSelect.value as TaskLLMSetting["provider"];
       if (!isCliProvider(task.provider)) task.effort = "";
@@ -275,7 +291,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       attr: { list: listId, placeholder: this.modelPlaceholder(task.provider) },
     });
     input.value = task.model;
-    input.disabled = reserved || task.provider === "none";
+    input.disabled = task.provider === "none";
     const datalist = modelCell.createEl("datalist", { attr: { id: listId } });
     for (const m of this.modelSuggestions(task.provider)) datalist.createEl("option", { attr: { value: m } });
     const modelError = modelCell.createDiv({ cls: "alt2obsidian-field-error" });
@@ -305,7 +321,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       opt.value = level;
     }
     effortSelect.value = task.effort;
-    effortSelect.disabled = reserved || !isCliProvider(task.provider);
+    effortSelect.disabled = !isCliProvider(task.provider);
     effortSelect.addEventListener("change", async () => {
       task.effort = effortSelect.value as EffortLevel;
       markCustom();
@@ -386,7 +402,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName("핵심 다이어그램 이미지 저장")
-      .setDesc("이미지 비중이 높은 슬라이드를 Attachments에 저장하고 노트에 넣습니다. 설정만 먼저 저장되며, 삽입 기능은 다음 베타에서 켜집니다.")
+      .setDesc("도표·그림 위주 슬라이드(강의당 최대 8장)를 과목 폴더의 Attachments/에 PNG로 저장하고 해당 슬라이드 해설 안에 넣습니다. 스크립트로 고르므로 토큰이 들지 않습니다.")
       .addToggle((t) =>
         t.setValue(g.saveKeyDiagrams).onChange(async (value) => {
           g.saveKeyDiagrams = value;

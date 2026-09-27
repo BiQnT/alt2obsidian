@@ -69,7 +69,21 @@ import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
 import { pluginCacheDir } from "./sources/altPaths";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
-import { lecturePath } from "./vault/layout";
+import { lecturePath, verificationPathForNote } from "./vault/layout";
+import {
+  estimateVerification,
+  mergeVerificationNote,
+  planVerification,
+  renderVerificationNote,
+  runVerification as runNoteVerification,
+  verdictCounts,
+  VerifyEstimate,
+  VerifyInput,
+  VerifyPlan,
+  VerifyProgress,
+} from "./verify/NoteVerifier";
+import { fetchNotionPage, NotionFetchProvider, NotionFetchResult } from "./verify/notionFetch";
+import { parseAlignment } from "./core/prep/TranscriptAligner";
 import { applyLayoutMigration, MigrationPlan, MigrationResult, planLayoutMigration, VaultFileEntry } from "./vault/layoutMigration";
 import { MigrationModal } from "./ui/MigrationModal";
 import { renderPrompt } from "./prompts/render";
@@ -100,6 +114,24 @@ export interface PreparedImport {
   alignment: LectureAlignment | null;
   /** Page texts the alignment used (alignment check prompt). */
   slideTexts: string[];
+}
+
+/** A verification after claims, evidence and estimate, before any LLM call. */
+export interface PreparedVerification {
+  targetPath: string;
+  /** Verification/<lecture> verification.md */
+  outPath: string;
+  /** How the checked note is named in the result ("[[path]]", a Notion URL, "붙여넣기"). */
+  source: string;
+  plan: VerifyPlan;
+  estimate: VerifyEstimate;
+  overCap: boolean;
+}
+
+export interface VerifyRunResult {
+  path: string;
+  counts: ReturnType<typeof verdictCounts>;
+  warnings: string[];
 }
 
 export interface CliImportHooks {
@@ -562,12 +594,17 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * subfolder per vault.
    */
   private transcriptCacheDir(): string {
+    return joinPath(this.vaultCacheDir(), "transcripts");
+  }
+
+  /** This vault's folder in the OS cache (transcripts, Notion pages): never inside the vault. */
+  private vaultCacheDir(): string {
     const adapter = this.app.vault.adapter as { getBasePath?: () => string };
     const vaultKey = createHash("sha1")
       .update(adapter.getBasePath?.() ?? this.app.vault.getName?.() ?? "vault")
       .digest("hex")
       .slice(0, 12);
-    return joinPath(this.cacheRoot ?? pluginCacheDir(), vaultKey, "transcripts");
+    return joinPath(this.cacheRoot ?? pluginCacheDir(), vaultKey);
   }
 
   private transcriptCachePath(localId: string): string {
@@ -1202,13 +1239,149 @@ export default class Alt2ObsidianPlugin extends Plugin {
   }
 
   /** Cumulative usage and recently used models (spec 5.5, 4.2). */
-  private async recordUsage(usage: UsageTracker): Promise<void> {
-    this.data.usageTotals = accumulateTotals(this.data.usageTotals, usage, formatDate());
-    for (const task of ["commentary", "concepts"] as TaskId[]) {
+  private async recordUsage(usage: UsageTracker, tasks: TaskId[] = ["commentary", "concepts"], countLecture = true): Promise<void> {
+    this.data.usageTotals = accumulateTotals(this.data.usageTotals, usage, formatDate(), countLecture);
+    for (const task of tasks) {
       const t = this.data.settings.tasks[task];
       if (t.provider !== "none") rememberModel(this.data.settings, t.provider, t.model);
     }
     await this.savePluginData();
+  }
+
+  // ---- note verification (spec 4.6) ----
+
+  /** Lecture notes the verifier can check against: the vault's Alt lecture notes. */
+  verifyTargets(): VaultNoteInfo[] {
+    return this.vaultLectureNotes().sort((a, b) => a.path.localeCompare(b.path, "ko", { numeric: true }));
+  }
+
+  /** Markdown files that can be the checked note (not lecture or verification notes). */
+  verifySourceFiles(): string[] {
+    const lectures = new Set(this.vaultLectureNotes().map((v) => v.path));
+    return this.app.vault
+      .getMarkdownFiles()
+      .filter((f) => !lectures.has(f.path) && this.app.metadataCache.getFileCache(f)?.frontmatter?.source !== "alt2obsidian-verify")
+      .map((f) => f.path)
+      .sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
+  }
+
+  /**
+   * Raw markdown of a Notion page through the user's Notion MCP (one Claude
+   * CLI call with only the Notion fetch tool), cached outside the vault. The
+   * copy runs on the light concept model when that task is on the Claude
+   * CLI (it only copies text), else the CLI default model, low effort.
+   */
+  async fetchNotionMarkdown(url: string, signal?: AbortSignal): Promise<NotionFetchResult> {
+    const settings = this.data.settings;
+    const bin = await this.resolveBin("claude");
+    const job = createJobDir();
+    const usage = new UsageTracker();
+    try {
+      const concepts = settings.tasks.concepts;
+      const provider = new NotionFetchProvider({
+        bin,
+        model: concepts.provider === "claude-cli" ? concepts.model.trim() : "",
+        effort: "low",
+        timeoutMs: Math.max(30, settings.cliTimeoutSec || 300) * 1000,
+        workDir: job,
+        usage,
+        task: "notion-fetch",
+        signal,
+        ownsWorkDir: false,
+      });
+      return await fetchNotionPage(provider, {
+        bin,
+        url,
+        cacheDir: joinPath(this.vaultCacheDir(), "notion"),
+        workDir: job,
+        toolName: settings.notionFetchTool,
+        signal,
+      });
+    } finally {
+      removeJobDir(job);
+      if (usage.total().calls > 0) await this.recordUsage(usage, [], false).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
+    }
+  }
+
+  /**
+   * Claims, evidence and the estimate (no tokens): the lecture's slide texts
+   * from its sibling PDF, its timestamped transcript and stored alignment
+   * when it is an Alt local note.
+   */
+  async prepareVerification(input: { targetPath: string; markdown: string; source: string; sourcePath?: string }): Promise<PreparedVerification> {
+    const target = this.app.vault.getAbstractFileByPath(input.targetPath);
+    if (!(target instanceof TFile)) throw new Error(`강의 노트를 찾지 못했습니다: ${input.targetPath}`);
+    if (!input.markdown.trim()) throw new Error("검증할 노트 내용이 비어 있습니다.");
+    const outPath = verificationPathForNote(input.targetPath);
+    if (input.sourcePath && (input.sourcePath === input.targetPath || input.sourcePath === outPath)) {
+      throw new Error("강의 노트나 검증 결과 노트는 검증할 노트로 고를 수 없습니다.");
+    }
+    const pdfPath = input.targetPath.replace(/\.md$/, ".pdf");
+    const pdf = this.app.vault.getAbstractFileByPath(pdfPath);
+    if (!(pdf instanceof TFile) || !this.pdfProcessor) throw new Error(`강의 PDF가 없어 슬라이드와 대조할 수 없습니다: ${pdfPath}`);
+    const layouts = await this.pdfProcessor.getPageLayouts(await this.app.vault.readBinary(pdf));
+    const slideTexts = layouts.map(layoutAlignmentText);
+    const fm = this.app.metadataCache.getFileCache(target)?.frontmatter;
+    let transcript: VerifyInput["transcript"] = null;
+    if (typeof fm?.alt_local_id === "string" && fm.alt_local_id) {
+      const segments = await this.loadTranscript(fm.alt_local_id);
+      if (segments && segments.length > 0) {
+        const spans = parseAlignment(fm.alt_alignment);
+        transcript = { segments, spans: spans.length > 0 ? spans : null };
+      }
+    }
+    const plan = planVerification({ lecture: target.basename, noteMarkdown: input.markdown, slideTexts, transcript });
+    const task = this.data.settings.tasks.verification;
+    const estimate = estimateVerification(plan, task.provider === "none" ? "claude-cli" : task.provider);
+    return {
+      targetPath: input.targetPath,
+      outPath,
+      source: input.source,
+      plan,
+      estimate,
+      overCap: exceedsCap(estimate, this.data.settings.generation.tokenCapPerLecture),
+    };
+  }
+
+  /**
+   * Judge the claims and write Verification/<lecture> verification.md. Only
+   * that note is written (its section after the managed block is kept); the
+   * checked note is never modified. Usage is recorded even on failure.
+   */
+  async runVerification(prepared: PreparedVerification, hooks: { signal?: AbortSignal; onProgress?: (p: VerifyProgress) => void; onUsage?: (u: LLMUsage) => void } = {}): Promise<VerifyRunResult> {
+    const settings = this.data.settings;
+    const task = settings.tasks.verification;
+    if (task.provider === "none") throw new Error("노트 검증에 쓸 LLM이 설정되어 있지 않습니다.");
+    const job = createJobDir();
+    const usage = new UsageTracker();
+    usage.onChange((total) => hooks.onUsage?.(total));
+    const controller = new AbortController();
+    const forward = () => controller.abort();
+    if (hooks.signal?.aborted) controller.abort();
+    hooks.signal?.addEventListener("abort", forward, { once: true });
+    this.activeJobs.add(controller);
+    try {
+      const llm = await this.providerFor("verification", job, usage, controller.signal);
+      const result = await runNoteVerification(prepared.plan, llm, { signal: controller.signal, onProgress: hooks.onProgress });
+      if (controller.signal.aborted) throw new CliRunError("aborted", "취소되었습니다");
+      const label = `${PROVIDER_LABELS[task.provider]}${task.model ? " " + task.model : ""}`;
+      const next = renderVerificationNote(result, {
+        source: prepared.source,
+        date: formatDate(),
+        usageLine: usage.total().calls > 0 ? formatUsageFrontmatter(usage.total(), label) : null,
+        model: label,
+      });
+      const existing = await this.vaultManager!.readNoteIfExists(prepared.outPath);
+      const path = await this.vaultManager!.saveNote(mergeVerificationNote(existing, next), prepared.outPath);
+      return { path, counts: verdictCounts(result), warnings: result.warnings };
+    } finally {
+      hooks.signal?.removeEventListener("abort", forward);
+      this.activeJobs.delete(controller);
+      removeJobDir(job);
+      if (usage.total().calls > 0) {
+        await this.recordUsage(usage, ["verification"], false).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
+      }
+    }
   }
 
   // ---- CLI binaries (spec 4.2 rule 1) ----
