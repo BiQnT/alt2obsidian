@@ -72,6 +72,8 @@ import { join as joinPath } from "node:path";
 import { pluginCacheDir } from "./sources/altPaths";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
 import { lecturePath } from "./vault/layout";
+import { applyLayoutMigration, MigrationPlan, MigrationResult, planLayoutMigration, VaultFileEntry } from "./vault/layoutMigration";
+import { MigrationModal } from "./ui/MigrationModal";
 import { renderPrompt } from "./prompts/render";
 import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
 import summaryFromTranscriptSystemTemplate from "../prompts/summary-from-transcript.system.md";
@@ -171,6 +173,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "migrate-vault-layout",
+      name: "Migrate 1.x vault layout",
+      callback: () => new MigrationModal(this.app, this.planVaultMigration(), (plan) => this.applyVaultMigration(plan)).open(),
+    });
+
+    this.addCommand({
       id: "open-synced-viewer",
       name: "Open Synced Viewer (PDF + lecture .md)",
       callback: () => this.openSyncedViewerForActiveNote(),
@@ -232,6 +240,43 @@ export default class Alt2ObsidianPlugin extends Plugin {
       state: { mdPath: active.path, pdfPath },
     });
     this.app.workspace.revealLeaf(leaf);
+  }
+
+  // ---- 1.x layout migration (spec 4.5) ----
+
+  /** Dry run: every move the migration would make, nothing changed. */
+  planVaultMigration(): MigrationPlan {
+    const files: VaultFileEntry[] = this.app.vault.getFiles().map((file) => {
+      if (file.extension !== "md") return { path: file.path };
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      const source = typeof fm?.source === "string" ? fm.source : "";
+      const isLectureNote = !!fm && (!!fm.alt_id || !!fm.alt_local_id || source === "alt2obsidian" || source === "alt2obsidian-cc-skill");
+      return { path: file.path, isLectureNote };
+    });
+    return planLayoutMigration(this.data.settings.baseFolderPath, files);
+  }
+
+  /** Moves through app.fileManager.renameFile, so Obsidian rewrites links to the moved files. */
+  async applyVaultMigration(plan: MigrationPlan): Promise<MigrationResult> {
+    const result = await applyLayoutMigration(plan, {
+      exists: (path) => !!this.app.vault.getAbstractFileByPath(path),
+      ensureFolder: (path) => this.vaultManager!.ensureFolder(path),
+      rename: async (from, to) => {
+        const file = this.app.vault.getAbstractFileByPath(from);
+        if (!(file instanceof TFile)) throw new Error("파일이 아님");
+        await this.app.fileManager.renameFile(file, to);
+      },
+    });
+    // Recent imports point at the moved files.
+    const moved = new Map(result.moved.map((m) => [m.from, m.to]));
+    if (moved.size > 0) {
+      for (const r of this.data.recentImports) {
+        r.path = moved.get(r.path) ?? r.path;
+        if (r.pdfPath) r.pdfPath = moved.get(r.pdfPath) ?? r.pdfPath;
+      }
+      await this.savePluginData();
+    }
+    return result;
   }
 
   updateBasePath(): void {
