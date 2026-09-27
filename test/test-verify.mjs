@@ -191,6 +191,35 @@ console.log(`PASS: evidence (slides top 2, aligned transcript top 2), unmatched 
     m.removeJobDir(kjob);
     ks.cleanup();
   }
+  // A weak claim (one shared term, "TLB") keeps its own top slide first and fills the rest from context.
+  const tlbSlides = [
+    "Virtual memory\nPage tables map virtual pages to physical frames",
+    "Address translation\nEvery load and store needs a virtual to physical address translation through the page table",
+    "TLB\nA small cache of recent translations",
+    "Page faults\nThe OS loads the missing page from disk",
+  ];
+  const tlbNote = ["# 가상 메모리", "- 가상 주소를 물리 주소로 변환하는 과정을 주소 변환이라 한다", "- TLB는 자주 쓰는 결과를 기억해서 거짓 없이 빠르게 한다"].join("\n");
+  const tlbPlan = m.planVerification({ lecture: "OS", noteMarkdown: tlbNote, slideTexts: tlbSlides, transcript: null });
+  const tlb = tlbPlan.claims.find((c) => c.claim.text.startsWith("TLB"));
+  const trans = tlbPlan.claims.find((c) => c.claim.text.includes("주소 변환"));
+  assert.equal(trans.source, "direct");
+  assert.equal(tlb.source, "weak");
+  assert.equal(tlb.slides[0].slide, 3, "its own TLB slide first");
+  assert.ok(tlb.slides.length === 2 && tlb.slides[1].slide === trans.slides[0].slide, "then the neighbour's slide");
+  assert.match(m.buildJudgePrompt("OS", [tlb]), /근거 \(겹치는 용어 1개: 첫 슬라이드는 그 용어로, 나머지는 같은 절의 문맥으로 찾은 후보\):\n- 슬라이드 3: /);
+  {
+    const ts = fakeSession("ok");
+    const tjob = m.createJobDir();
+    try {
+      const tres = await m.runVerification(tlbPlan, new m.ClaudeCliProvider({ bin: FAKE_CLAUDE, model: "sonnet", effort: "low", timeoutMs: 20000, workDir: tjob, ownsWorkDir: false }));
+      const tmd = m.renderVerificationNote(tres, { source: "x", date: "2026-09-28", usageLine: null, model: "fake" });
+      assert.match(tmd, /> \[!failure\] 틀림 \(겹치는 용어 1개, 확인 필요\)\n> "TLB는/, "labelled apart from context evidence");
+    } finally {
+      m.removeJobDir(tjob);
+      ts.cleanup();
+    }
+  }
+
   // A filler sentence with one generic hit never lends slides to its neighbours
   // (a physics deck: "exam" is on the schedule slide only).
   const thermo = [

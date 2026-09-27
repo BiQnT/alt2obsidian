@@ -298,10 +298,14 @@ export function withContextEvidence(evidence: ClaimEvidence[], index: EvidenceIn
     const slides = pages.slice(0, TOP_SLIDES).map((n) => ({ slide: n, score: 0, shared: 0, coverage: 0, excerpt: slideExcerpt(index.slideTexts[n - 1] ?? "", terms) }));
     return { ...e, slides, transcript: e.transcript.length > 0 ? e.transcript : transcriptFor(slides.map((h) => h.slide)), source, likelyTrue: false, unmatched: false };
   };
-  for (let i = 0; i < out.length; i++) {
-    const e = out[i];
-    if (e.slides.length > 0 && e.source === "direct") continue;
-    // 1. Neighbours in the same section.
+  const strongPages = (text: string): number[] => {
+    const t = retrievalTerms(text);
+    const hits = slideHits(bm25(t, index.slides), new Set(t), index);
+    return strongHit(hits[0]) ? hits.map((h) => h.slide) : [];
+  };
+  /** Context slides for claim i: neighbours, then heading, then section; null when none. */
+  const contextFor = (i: number): { pages: number[]; source: EvidenceSource } | null => {
+    const e = evidence[i];
     const weight = new Map<number, number>();
     for (let d = 1; d <= NEIGHBOUR_WINDOW; d++) {
       for (const j of [i - d, i + d]) {
@@ -309,28 +313,29 @@ export function withContextEvidence(evidence: ClaimEvidence[], index: EvidenceIn
         evidence[j].slides.forEach((h, rank) => weight.set(h.slide, (weight.get(h.slide) ?? 0) + (NEIGHBOUR_WINDOW + 1 - d) / (rank + 1)));
       }
     }
-    if (weight.size > 0) {
-      out[i] = fromSlides(e, [...weight.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([n]) => n), "neighbour");
-      continue;
-    }
-    // 2. The section heading.
-    const strongPages = (text: string): number[] => {
-      const t = retrievalTerms(text);
-      const hits = slideHits(bm25(t, index.slides), new Set(t), index);
-      return strongHit(hits[0]) ? hits.map((h) => h.slide) : [];
-    };
+    if (weight.size > 0) return { pages: [...weight.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([n]) => n), source: "neighbour" };
     if (e.claim.section) {
       const heading = strongPages(e.claim.section);
-      if (heading.length > 0) {
-        out[i] = fromSlides(e, heading, "heading");
-        continue;
-      }
+      if (heading.length > 0) return { pages: heading, source: "heading" };
     }
-    // 3. The whole section (its strong matches only).
     const sectionText = evidence.filter((x) => x.claim.sectionIndex === e.claim.sectionIndex).map((x) => x.claim.text).join(" ");
     const section = strongPages(sectionText);
-    if (section.length > 0) out[i] = fromSlides(e, section, "section");
-    // Otherwise a weak claim keeps its own weak hits.
+    return section.length > 0 ? { pages: section, source: "section" } : null;
+  };
+  for (let i = 0; i < out.length; i++) {
+    const e = out[i];
+    if (e.slides.length > 0 && e.source === "direct") continue;
+    const ctx = contextFor(i);
+    if (e.source === "weak" && e.slides.length > 0) {
+      // A weak match keeps its own top slide first (its one shared term is
+      // still a lead) and fills the rest from the context.
+      if (!ctx) continue;
+      const own = e.slides[0];
+      const rest = fromSlides(e, ctx.pages.filter((n) => n !== own.slide), ctx.source).slides;
+      out[i] = { ...e, slides: [own, ...rest].slice(0, TOP_SLIDES), source: "weak", likelyTrue: false };
+      continue;
+    }
+    if (ctx) out[i] = fromSlides(e, ctx.pages, ctx.source);
   }
   return out;
 }

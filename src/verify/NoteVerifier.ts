@@ -102,7 +102,12 @@ function claimBlock(e: ClaimEvidence): string {
     ...e.slides.map((h) => `- 슬라이드 ${h.slide}: ${h.excerpt}`),
     ...e.transcript.map((h) => `- 전사 [${formatTimestamp(h.startMs)}]${h.slide ? ` (슬라이드 ${h.slide} 구간)` : ""}: ${h.excerpt}`),
   ];
-  const evidenceNote = e.source === "direct" ? "" : " (주장과 겹치는 용어가 없어 같은 절의 문맥으로 찾은 후보)";
+  const evidenceNote =
+    e.source === "direct"
+      ? ""
+      : e.source === "weak"
+        ? " (겹치는 용어 1개: 첫 슬라이드는 그 용어로, 나머지는 같은 절의 문맥으로 찾은 후보)"
+        : " (주장과 겹치는 용어가 없어 같은 절의 문맥으로 찾은 후보)";
   return renderPrompt(claimTemplate, { id: e.claim.id, claim: e.claim.text, evidenceNote, evidence: lines.join("\n") || "- (없음)" });
 }
 
@@ -443,7 +448,8 @@ function evidenceLinks(ref: LectureRef, e: ClaimEvidence): string {
 /** Label suffix for a verdict made on context evidence: a 틀림 there needs a look. */
 function contextNote(it: VerifiedClaim): string {
   if (it.evidence.source === "direct") return "";
-  return it.verdict === "틀림" ? " (문맥 근거, 확인 필요)" : " (문맥 근거)";
+  const what = it.evidence.source === "weak" ? "겹치는 용어 1개" : "문맥 근거";
+  return it.verdict === "틀림" ? ` (${what}, 확인 필요)` : ` (${what})`;
 }
 
 /** Quote safe inside a callout: one line, no leading callout syntax. */
