@@ -21,6 +21,7 @@ import { createTaskProvider } from "./llm/index";
 import {
   cliNotFoundMessage,
   createJobDir,
+  isExecutable,
   readCliVersion,
   removeJobDir,
   resolveCliBinary,
@@ -712,7 +713,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
   }
 
+  /** Path of the CLI for a call: the cached lookup when still valid, else a new lookup. */
   async resolveBin(name: CliName): Promise<string> {
+    const configured = (name === "claude" ? this.data.settings.claudePath : this.data.settings.codexPath).trim();
+    const cached = this.data.cliDetection[name];
+    if (cached && (!configured || configured === cached.path) && isExecutable(cached.path)) return cached.path;
     const found = await this.detectCli(name);
     if (!found) throw new Error(this.cliErrors[name] || cliNotFoundMessage(name));
     return found.path;

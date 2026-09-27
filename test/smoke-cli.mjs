@@ -1,14 +1,16 @@
 /**
  * Opt-in smoke test against the REAL claude and codex CLIs. Spends a few
- * hundred to a few thousand tokens of your subscription: one call per CLI,
- * a tiny text prompt plus an 8x8 image, cheapest model, low effort. It
- * checks that the command lines the providers build are accepted, that the
- * schema answer and usage come back, and that the image path works.
+ * thousand tokens of your subscription, cheapest model, low effort:
+ *   claude  one text-only schema call (the batch path: no tools) and one
+ *           schema call with an 8x8 image (the Read path)
+ *   codex   one schema call with the image
+ * It checks that the command lines the providers build are accepted, that
+ * the schema answer and usage come back, and that images get through.
  *
  * Run: ALT2OBS_SMOKE=1 node test/smoke-cli.mjs
  * Options (env): ALT2OBS_SMOKE_CLAUDE_MODEL (default haiku),
  *                ALT2OBS_SMOKE_CODEX_MODEL (default gpt-5.6-luna),
- *                ALT2OBS_SMOKE_ONLY=claude|codex
+ *                ALT2OBS_SMOKE_ONLY=claude|claude-text|claude-image|codex
  */
 
 import assert from "node:assert/strict";
@@ -58,6 +60,34 @@ const SCHEMA = {
 };
 const SYSTEM = "You are a test responder. Answer only with the requested JSON.";
 const PROMPT = 'Set "word" to "pong". Set "color" to the main color of the attached image, one lowercase English word.';
+
+async function smokeClaudeText() {
+  const bin = (await m.resolveCliBinary("claude", { configuredPath: "" })).path;
+  const job = m.createJobDir();
+  try {
+    const args = m.buildClaudeArgs({
+      model: process.env.ALT2OBS_SMOKE_CLAUDE_MODEL ?? "haiku",
+      effort: "low",
+      systemPrompt: SYSTEM,
+      schema: SCHEMA,
+      withImages: false,
+      workDir: job,
+    });
+    const started = Date.now();
+    const out = await m.runCli({ bin, args, input: 'Set "word" to "pong" and "color" to "blue".', cwd: job, timeoutMs: 180000 });
+    const raw = JSON.parse(out.stdout);
+    const parsed = m.parseClaudeOutput(out.stdout);
+    console.log(`claude (no tools) args: ${JSON.stringify(args)}`);
+    console.log(`  num_turns: ${raw.num_turns}, duration: ${Date.now() - started} ms`);
+    console.log(`  structured_output: ${JSON.stringify(parsed.structured)}  result text: ${JSON.stringify(parsed.text).slice(0, 120)}`);
+    console.log(`  usage: ${JSON.stringify(parsed.usage)}`);
+    const answer = parsed.structured ?? JSON.parse(parsed.text);
+    assert.equal(answer.word, "pong");
+    return parsed.usage;
+  } finally {
+    m.removeJobDir(job);
+  }
+}
 
 async function smokeClaude() {
   const bin = (await m.resolveCliBinary("claude", { configuredPath: "" })).path;
@@ -130,11 +160,15 @@ async function smokeCodex() {
   }
 }
 
-if (only !== "codex") {
+if (!only || only === "claude" || only === "claude-text") {
+  await smokeClaudeText();
+  console.log("PASS: claude CLI with tools disabled still returns schema output");
+}
+if (!only || only === "claude" || only === "claude-image") {
   await smokeClaude();
   console.log("PASS: claude CLI flags, schema output, Read of an image in the job folder, usage");
 }
-if (only !== "claude") {
+if (!only || only === "codex") {
   await smokeCodex();
   console.log("PASS: codex CLI flags, output schema, -i image, JSONL usage");
 }

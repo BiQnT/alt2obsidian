@@ -23,7 +23,8 @@ export function estimateTextTokens(text: string): number {
  * Per provider, measured with test/smoke-cli.mjs (2026-09-27, claude 2.1.283
  * haiku, codex 0.155.1):
  * - fixedPerTurn: tokens the CLI adds to every model turn (its own
- *   instructions and tool definitions). Claude with our flags: about 2.2k.
+ *   instructions and tool definitions). Claude with our flags: about 0.55k
+ *   with tools off, about 2.15k when the Read tool is on for images.
  *   Codex: about 18k, most of it Codex's base instructions plus the user's
  *   global ~/.codex/AGENTS.md, which `codex exec` always loads.
  * - schemaTurns / imageTurns: extra model turns per call, each re-sending
@@ -34,12 +35,12 @@ export function estimateTextTokens(text: string): number {
  */
 export const PROVIDER_COSTS: Record<
   ProviderId,
-  { fixedPerTurn: number; schemaTurns: number; imageTurns: number; perImage: number }
+  { fixedPerTurn: number; fixedPerTurnWithImages: number; schemaTurns: number; imageTurns: number; perImage: number }
 > = {
-  "claude-cli": { fixedPerTurn: 2200, schemaTurns: 1, imageTurns: 1, perImage: 1100 },
-  "codex-cli": { fixedPerTurn: 18000, schemaTurns: 0, imageTurns: 0, perImage: 800 },
-  gemini: { fixedPerTurn: 0, schemaTurns: 0, imageTurns: 0, perImage: 260 },
-  ollama: { fixedPerTurn: 0, schemaTurns: 0, imageTurns: 0, perImage: 600 },
+  "claude-cli": { fixedPerTurn: 550, fixedPerTurnWithImages: 2150, schemaTurns: 1, imageTurns: 1, perImage: 1100 },
+  "codex-cli": { fixedPerTurn: 18000, fixedPerTurnWithImages: 18000, schemaTurns: 0, imageTurns: 0, perImage: 800 },
+  gemini: { fixedPerTurn: 0, fixedPerTurnWithImages: 0, schemaTurns: 0, imageTurns: 0, perImage: 260 },
+  ollama: { fixedPerTurn: 0, fixedPerTurnWithImages: 0, schemaTurns: 0, imageTurns: 0, perImage: 600 },
 };
 
 /** Expected output per generated slide: commentary + gist + JSON keys. */
@@ -77,7 +78,8 @@ export function estimateCalls(
   let images = 0;
   for (const c of calls) {
     const turns = 1 + (c.schema ? cost.schemaTurns : 0) + (c.images > 0 ? cost.imageTurns : 0);
-    input += turns * (cost.fixedPerTurn + estimateTextTokens(c.promptText)) + c.images * cost.perImage;
+    const fixed = c.images > 0 ? cost.fixedPerTurnWithImages : cost.fixedPerTurn;
+    input += turns * (fixed + estimateTextTokens(c.promptText)) + c.images * cost.perImage;
     output += c.outputTokens;
     images += c.images;
   }
