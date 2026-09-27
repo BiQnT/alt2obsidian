@@ -96,6 +96,14 @@ This is **deterministic but different from the plugin's hash** (the plugin hashe
 
 ### 6. Assemble the markdown
 
+Compose a `## 📋 전체 요약` block that sits between `# <title>` and the first `## 📚 슬라이드 1`. Source: the `summary` field returned by `alt-scrape.mjs`, **enriched with the transcript when the summary is thin or missing detail**:
+
+- `summary.length < 500` 한글: 트랜스크립트(있으면)를 기반으로 직접 강의 노트형 요약을 새로 작성. 마크다운 섹션 헤더(`## …`) 없이 본문만, 핵심 정의는 `> [!definition]`, 예시는 `> [!example]`, 시험 포인트는 `> [!important]` callout 사용.
+- `500 ≤ summary.length < 2500`: 기존 summary를 골격으로 두고 트랜스크립트의 부연/예시/교수님 코멘트를 보강. 기존 구조와 문체는 유지.
+- `summary.length ≥ 2500`: 그대로 사용 (이미 충분히 자세함).
+- 핵심 개념은 `[[개념명]]` wikilink로 wrap (step 6.5에서 추출하는 concept 이름 목록과 일치시키기 위해 step 6.5 결과를 알고 있다면 그 이름을 사용; 아니면 본문에서 자명한 핵심어를 wrap).
+- 분량은 800–1500 한글 문자 권장. 슬라이드별 해설을 압도하지 않게.
+
 ```markdown
 ---
 title: "<title>"
@@ -109,6 +117,12 @@ alt_created: "<createdAt>"
 ---
 
 # <title>
+
+## 📋 전체 요약
+
+<!-- alt2obs:overview start -->
+<lecture-level overview built from alt summary + transcript per the rules above>
+<!-- alt2obs:overview end -->
 
 ## 📚 슬라이드 1
 
@@ -131,7 +145,10 @@ alt_created: "<createdAt>"
 … (repeat for all N slides) …
 ```
 
-Marker format must match exactly: `<!-- alt2obs:slide:N hash:HHHHHHHH start -->` (with single spaces) — this is what `VaultManager.splitMultiManagedNote` parses.
+Marker format must match exactly:
+
+- 슬라이드: `<!-- alt2obs:slide:N hash:HHHHHHHH start -->` (single spaces) — parsed by `VaultManager.splitMultiManagedNote`.
+- Overview: `<!-- alt2obs:overview start -->` / `<!-- alt2obs:overview end -->` — sits in the preamble (before the first slide marker), gets fully replaced on every plugin re-import (via `mergeMultiManagedNote` `next.preamble`). Users editing inside this block will see edits overwritten on re-import — note this if the user asks.
 
 ### 6.5 Extract concepts (NEW — required for parity with the plugin)
 

@@ -5,6 +5,8 @@ import {
   LLMProvider,
   MANAGED_NOTE_START,
   MANAGED_NOTE_END,
+  OVERVIEW_BLOCK_START,
+  OVERVIEW_BLOCK_END,
   PerSlideGenerationResult,
   SlideSection,
 } from "../types";
@@ -77,6 +79,10 @@ export class NoteGenerator {
     // running the regex pass once per section over all concepts[]". This
     // matches: every section is rewritten with all known concept names.
     const conceptNames = llmResult.concepts.map((c) => c.name);
+    const overviewSection = this.buildOverviewSection(
+      llmResult.processedSummary || altData.summary,
+      conceptNames
+    );
     const sections = slidesResult.slides
       .map((slide) => this.buildSlideSection(slide, conceptNames))
       .join("\n\n");
@@ -93,6 +99,7 @@ export class NoteGenerator {
     const lectureMarkdown =
       frontmatter +
       `# ${altData.title}\n\n` +
+      overviewSection +
       sections +
       orphanFooter +
       "\n";
@@ -108,6 +115,45 @@ export class NoteGenerator {
     }));
 
     return { lectureMarkdown, conceptNotes };
+  }
+
+  /**
+   * Build the lecture-level overview section that sits above the per-slide
+   * sections. Source is `altData.summary` after transcript + lecture-material
+   * enrichment (see `main.ts` importNote pipeline). Without this section, the
+   * page-anchored output silently dropped the transcript-enhanced summary —
+   * only per-slide commentary survived.
+   *
+   * Wrapped in overview managed-block markers so future merges can replace
+   * just the body without touching surrounding user notes. preamble is still
+   * regenerated wholesale by `mergeMultiManagedNote`, so users editing inside
+   * the overview block will see their changes overwritten on re-import.
+   */
+  private buildOverviewSection(
+    summary: string,
+    conceptNames: string[]
+  ): string {
+    const trimmed = (summary || "").trim();
+    if (trimmed.length === 0) return "";
+
+    let body = trimmed;
+    for (const name of conceptNames) {
+      const regex = new RegExp(
+        `(?<!\\[\\[)${this.escapeRegex(name)}(?!\\]\\])`,
+        "gi"
+      );
+      body = body.replace(regex, `[[${name}]]`);
+    }
+
+    return [
+      "## 📋 전체 요약",
+      "",
+      OVERVIEW_BLOCK_START,
+      body,
+      OVERVIEW_BLOCK_END,
+      "",
+      "",
+    ].join("\n");
   }
 
   /**

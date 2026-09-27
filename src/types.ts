@@ -194,3 +194,6 @@ export interface LLMProvider {
 
 export const MANAGED_NOTE_START = "<!-- alt2obsidian:start -->";
 export const MANAGED_NOTE_END = "<!-- alt2obsidian:end -->";
+
+export const OVERVIEW_BLOCK_START = "<!-- alt2obs:overview start -->";
+export const OVERVIEW_BLOCK_END = "<!-- alt2obs:overview end -->";
