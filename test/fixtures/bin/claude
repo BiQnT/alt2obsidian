@@ -1,0 +1,2 @@
+#!/usr/bin/env node
+require("./fake-cli-common.cjs").runClaude();

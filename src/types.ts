@@ -1,5 +1,48 @@
+/** LLM backends. The CLI providers run the user's installed `claude` / `codex`. */
+export type ProviderId = "claude-cli" | "codex-cli" | "gemini" | "ollama";
+
+/**
+ * Tasks with their own provider, model and effort (spec 4.2). `alignment` is
+ * script-only in 2.0.0-beta.1 and `verification` lands in Phase 3; their
+ * fields are stored so the settings shape does not change later.
+ */
+export type TaskId = "commentary" | "concepts" | "alignment" | "verification";
+
+/** "" = the CLI's own default. Mapped per CLI (Claude `--effort`, Codex `model_reasoning_effort`). */
+export type EffortLevel = "" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface TaskLLMSetting {
+  provider: ProviderId | "none";
+  /** Free text. "" = the provider's default model. */
+  model: string;
+  effort: EffortLevel;
+}
+
+export type PresetId = "saving" | "quality" | "custom";
+
+/** "auto": images only for visual slides or PDFs without a text layer (spec 5.2). */
+export type ImageRule = "auto" | "text-only";
+
+export interface GenerationOptions {
+  /** Slides per CLI call (spec 5.3). Batches with images use half. */
+  batchSize: number;
+  imageRule: ImageRule;
+  /** Per-slide transcript cap after compression (spec 5.1). */
+  transcriptCapChars: number;
+  /** Estimated input + output tokens per lecture. 0 = no cap. */
+  tokenCapPerLecture: number;
+  /** Stored now, used when diagram embedding lands (Phase 3, spec 4.8). */
+  saveKeyDiagrams: boolean;
+  /** Re-import: reuse slides whose text hash and image signal are unchanged. */
+  onlyChangedSlides: boolean;
+}
+
 export interface Alt2ObsidianSettings {
   apiKey: string;
+  /**
+   * 1.x single provider. Kept for Gemini/Ollama users and as the migration
+   * source for `tasks`; 2.0 code reads `tasks` instead.
+   */
   provider: "gemini" | "openai" | "claude" | "ollama";
   geminiModel: string;
   /** Ollama endpoint (http://localhost:11434 default). Used when provider="ollama". */
@@ -9,7 +52,36 @@ export interface Alt2ObsidianSettings {
   baseFolderPath: string;
   language: "ko" | "en";
   rateDelayMs: number;
+  /** 2 since 2.0.0-beta.1. Missing = 1.x data. */
+  settingsVersion: number;
+  /** Absolute path overrides. "" = auto-detect (spec 4.2 rule 1). */
+  claudePath: string;
+  codexPath: string;
+  /** Per-call timeout for CLI providers (spec 4.2 rule 5). */
+  cliTimeoutSec: number;
+  tasks: Record<TaskId, TaskLLMSetting>;
+  preset: PresetId;
+  /** Recently used model names per provider, newest first. */
+  recentModels: Partial<Record<ProviderId, string[]>>;
+  generation: GenerationOptions;
 }
+
+export const DEFAULT_GENERATION: GenerationOptions = {
+  batchSize: 8,
+  imageRule: "auto",
+  transcriptCapChars: 600,
+  tokenCapPerLecture: 0,
+  saveKeyDiagrams: true,
+  onlyChangedSlides: true,
+};
+
+/** Spec 4.2 default table, used when a Claude CLI is available. */
+export const CLAUDE_TASK_DEFAULTS: Record<TaskId, TaskLLMSetting> = {
+  commentary: { provider: "claude-cli", model: "", effort: "medium" },
+  concepts: { provider: "claude-cli", model: "haiku", effort: "low" },
+  alignment: { provider: "none", model: "", effort: "" },
+  verification: { provider: "claude-cli", model: "", effort: "medium" },
+};
 
 export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   apiKey: "",
@@ -20,6 +92,19 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
   rateDelayMs: 4000,
+  settingsVersion: 2,
+  claudePath: "",
+  codexPath: "",
+  cliTimeoutSec: 300,
+  tasks: {
+    commentary: { provider: "gemini", model: "", effort: "" },
+    concepts: { provider: "gemini", model: "", effort: "" },
+    alignment: { provider: "none", model: "", effort: "" },
+    verification: { provider: "gemini", model: "", effort: "" },
+  },
+  preset: "custom",
+  recentModels: {},
+  generation: DEFAULT_GENERATION,
 };
 
 export type ExamPeriod = "midterm" | "final";
@@ -101,6 +186,8 @@ export interface SlideSection {
   hash: string;
   commentary: string;
   citedConcepts: string[];
+  /** 2.0 metadata comment (src/core/slideMeta.ts), appended after concept linking. */
+  meta?: string;
 }
 
 export interface PerSlideGenerationResult {
@@ -156,27 +243,92 @@ export interface ImportPreview {
   suggestedSubject: string;
 }
 
+/** Token usage of LLM calls, as reported by the CLI JSON output (spec 5.5). */
+export interface LLMUsage {
+  calls: number;
+  inputTokens: number;
+  /** Part of `inputTokens` served from the prompt cache. */
+  cachedInputTokens: number;
+  outputTokens: number;
+  imagesSent: number;
+  /** Claude CLI reports an API-equivalent cost; 0 when unknown. */
+  costUsd: number;
+}
+
+export const EMPTY_USAGE: LLMUsage = {
+  calls: 0,
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  outputTokens: 0,
+  imagesSent: 0,
+  costUsd: 0,
+};
+
+export interface UsageTotals extends LLMUsage {
+  lectures: number;
+  byProvider: Partial<Record<ProviderId, LLMUsage>>;
+  since: string;
+}
+
+export type CliName = "claude" | "codex";
+
+/** Result of the one-time binary lookup, cached in plugin data (spec 4.2 rule 1). */
+export interface CliDetection {
+  path: string;
+  version: string;
+  detectedAt: string;
+}
+
 export interface PluginData {
   settings: Alt2ObsidianSettings;
   recentImports: ImportRecord[];
+  cliDetection: Partial<Record<CliName, CliDetection>>;
+  usageTotals: UsageTotals;
+  /** Set by the 1.x migration until the Claude CLI lookup has run once. */
+  pendingCliDefault?: boolean;
 }
 
 export const DEFAULT_PLUGIN_DATA: PluginData = {
   settings: DEFAULT_SETTINGS,
   recentImports: [],
+  cliDetection: {},
+  usageTotals: { ...EMPTY_USAGE, lectures: 0, byProvider: {}, since: "" },
 };
+
+/** An image handed to a CLI provider as a file (spec 5.2: JPEG, long edge 1024). */
+export interface ImageInput {
+  pageNum: number;
+  mimeType: "image/jpeg" | "image/png";
+  base64: string;
+}
+
+export interface TextCallOptions {
+  systemPrompt?: string;
+  maxOutputTokens?: number;
+  /** Cancels the call (CLI providers kill the process group). */
+  signal?: AbortSignal;
+}
+
+export interface JsonCallOptions {
+  systemPrompt?: string;
+  /** JSON Schema the CLI enforces (Claude `--json-schema`, Codex `--output-schema`). */
+  schema?: Record<string, unknown>;
+  images?: ImageInput[];
+  signal?: AbortSignal;
+  /** Calls made when the answer does not parse or validate. Default 2 (one retry). */
+  attempts?: number;
+}
 
 export interface LLMProvider {
   name: string;
   maxInputTokens: number;
-  generateText(
-    prompt: string,
-    options?: { systemPrompt?: string; maxOutputTokens?: number }
-  ): Promise<string>;
+  /** True for providers that take a multi-slide JSON batch (the CLI providers). */
+  supportsBatch?: boolean;
+  generateText(prompt: string, options?: TextCallOptions): Promise<string>;
   generateJSON<T>(
     prompt: string,
     validate: (raw: unknown) => T,
-    options?: { systemPrompt?: string }
+    options?: JsonCallOptions
   ): Promise<T>;
   /**
    * Optional multimodal call (text prompt + 1+ inline images). Required for
@@ -190,6 +342,8 @@ export interface LLMProvider {
     options?: { systemPrompt?: string; maxOutputTokens?: number }
   ): Promise<string>;
   estimateTokens(text: string): number;
+  /** Releases temp files (CLI providers). */
+  dispose?(): void;
 }
 
 export const MANAGED_NOTE_START = "<!-- alt2obsidian:start -->";

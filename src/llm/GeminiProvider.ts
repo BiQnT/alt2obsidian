@@ -1,6 +1,7 @@
 import { requestUrl } from "obsidian";
 import { LLMProvider, VisionImageRef } from "../types";
 import { delay } from "../utils/helpers";
+import { UsageTracker } from "./usage";
 
 export class GeminiProvider implements LLMProvider {
   name = "Gemini";
@@ -14,6 +15,30 @@ export class GeminiProvider implements LLMProvider {
   // so we want each key to enforce its own delay independently. Keying by
   // the trimmed key string is fine — apiKeys are unique by definition.
   private lastCallByKey: Map<string, number> = new Map();
+  private usage: UsageTracker | null = null;
+  private usageTask = "";
+
+  /** Record `usageMetadata` of every response (benchmark and sidebar). Requests are unchanged. */
+  setUsageTracker(tracker: UsageTracker, task: string): void {
+    this.usage = tracker;
+    this.usageTask = task;
+  }
+
+  private recordUsage(data: any, images: number): void {
+    if (!this.usage) return;
+    const meta = data?.usageMetadata ?? {};
+    this.usage.record({
+      provider: "gemini",
+      model: this.model,
+      task: this.usageTask,
+      calls: 1,
+      inputTokens: Number(meta.promptTokenCount ?? 0),
+      cachedInputTokens: Number(meta.cachedContentTokenCount ?? 0),
+      outputTokens: Number(meta.candidatesTokenCount ?? 0) + Number(meta.thoughtsTokenCount ?? 0),
+      imagesSent: images,
+      costUsd: 0,
+    });
+  }
 
   constructor(apiKey: string, model: string, rateDelayMs: number) {
     // Multi-key rotation: comma-separated list of API keys is split and
@@ -103,6 +128,7 @@ export class GeminiProvider implements LLMProvider {
           body: JSON.stringify(body),
         });
         const data = response.json;
+        this.recordUsage(data, 0);
         const candidate = data?.candidates?.[0];
         if (!candidate?.content?.parts?.[0]?.text) {
           console.error("[Alt2Obsidian] Gemini response:", JSON.stringify(data).slice(0, 500));
@@ -153,6 +179,7 @@ export class GeminiProvider implements LLMProvider {
           body: JSON.stringify(body),
         });
         const data = response.json;
+        this.recordUsage(data, images.length);
         const candidate = data?.candidates?.[0];
         if (!candidate?.content?.parts?.[0]?.text) {
           console.error(
