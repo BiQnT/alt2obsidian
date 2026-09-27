@@ -77,6 +77,17 @@ function answer(stdin, schema) {
       ],
       tags: ["cache", "memory"],
     };
+  } else if (schema && schema.properties && schema.properties.parts) {
+    // Alignment check: move every part to its first candidate that is not the current guess.
+    const parts = [];
+    for (const block of stdin.split(/\n(?=\[part \d+\])/)) {
+      const head = block.match(/^\[part (\d+)\] current guess: slide (\d+)/m);
+      if (!head) continue;
+      const cands = [...block.matchAll(/^  - 슬라이드 (\d+):/gm)].map((x) => Number(x[1]));
+      const other = cands.find((c) => c !== Number(head[2]));
+      parts.push({ id: Number(head[1]), slide: other ?? Number(head[2]) });
+    }
+    result = { parts };
   } else if (schema) {
     result = { ok: true };
   } else {

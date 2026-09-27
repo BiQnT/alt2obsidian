@@ -69,6 +69,11 @@ export interface PlanInput {
   layouts: PageLayout[];
   scanned: boolean;
   transcript: string | null;
+  /**
+   * Transcript per slide from the aligner (spec 4.3), index 0 = slide 1.
+   * When given it replaces the even split of `transcript`.
+   */
+  transcriptChunks?: Array<string | null>;
   transcriptCapChars: number;
   batchSize: number;
   deckTitle: string;
@@ -76,19 +81,26 @@ export interface PlanInput {
   existing?: ExistingSlide[];
 }
 
-export function planDeck(input: PlanInput): DeckPlan {
-  const n = input.slides.length;
-  const chunks = splitTranscriptEvenly(input.transcript, n);
-  // A near-duplicate run is explained once, on its last page: that page gets
-  // the whole run's transcript.
-  const runChunks: string[] = chunks.map((c) => c ?? "");
+/**
+ * Per-slide transcript before compression. A near-duplicate run is
+ * explained once, on its last page: that page gets the whole run's chunks.
+ */
+export function slideChunks(slides: SlideInfo[], chunks: Array<string | null>): string[] {
+  const runChunks: string[] = slides.map((_, i) => chunks[i] ?? "");
   // Walk backwards so the run's chunks stay in deck order.
-  for (const s of [...input.slides].reverse()) {
+  for (const s of [...slides].reverse()) {
     if (s.dupOf !== null && runChunks[s.page - 1]) {
       runChunks[s.dupOf - 1] = `${runChunks[s.page - 1]} ${runChunks[s.dupOf - 1]}`.trim();
       runChunks[s.page - 1] = "";
     }
   }
+  return runChunks;
+}
+
+export function planDeck(input: PlanInput): DeckPlan {
+  const n = input.slides.length;
+  const chunks = input.transcriptChunks ?? splitTranscriptEvenly(input.transcript, n);
+  const runChunks = slideChunks(input.slides, chunks);
 
   // Pair with previous slides by hash in deck order (merge pass 1).
   const pool = new Map<string, ExistingSlide[]>();
@@ -131,6 +143,21 @@ export function planDeck(input: PlanInput): DeckPlan {
     scanned: input.scanned,
     transcriptChars: { before, after },
   };
+}
+
+/** Same plan with new per-slide transcript chunks (after the alignment check). */
+export function withTranscriptChunks(plan: DeckPlan, chunks: Array<string | null>, capChars: number): DeckPlan {
+  const runChunks = slideChunks(plan.slides, chunks);
+  let before = 0;
+  let after = 0;
+  const slides = plan.slides.map((s, i) => {
+    if (s.mode !== "llm") return s;
+    const compressed = compressTranscript(runChunks[i] || null, s.text, capChars);
+    before += compressed.originalChars;
+    after += compressed.text.length;
+    return { ...s, transcript: compressed.text };
+  });
+  return { ...plan, slides, transcriptChars: { before, after } };
 }
 
 /**

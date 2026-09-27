@@ -27,6 +27,7 @@ Single source for every LLM prompt used by the Alt2Obsidian plugin and the alt2o
 | `summary-enhance-material.md` (+ `.system.md`) | overview enrichment from PDF excerpts | `summary`, `pageCount`, `excerptPageCount`, `excerptScope`, `materialText` |
 | `summary-from-material.md` (+ `.system.md`) | overview from PDF excerpts when Alt parsing is partial | `memoContext`, `pageCount`, `excerptPageCount`, `materialText` |
 | `subject-detection.md` | subject code fallback | `title` |
+| `alignment-check.md` | optional LLM check of low-confidence transcript alignment spans (task "전사 정렬 확인", off by default) | `title`, `parts` |
 
 ## Batched prompt order (CLI path, spec 5.3)
 

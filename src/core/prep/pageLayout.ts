@@ -112,3 +112,8 @@ export function rgbaToGray(rgba: Uint8ClampedArray | Uint8Array, width: number, 
 
 /** Long edge of the analysis render (plugin canvas and pdftoppm `-scale-to`). */
 export const ANALYSIS_LONG_EDGE = 160;
+
+/** Page text with line breaks between lines, the aligner's input (spec 4.3). */
+export function layoutAlignmentText(layout: PageLayout): string {
+  return layout.lines && layout.lines.length > 0 ? layout.lines.join("\n") : layout.text ?? "";
+}
