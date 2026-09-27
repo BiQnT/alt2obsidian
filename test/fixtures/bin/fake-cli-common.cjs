@@ -150,6 +150,7 @@ function runClaudeMcpList() {
   if (state === "connected") process.stdout.write("notion: https://mcp.notion.com/mcp (HTTP) - ✔ Connected\n");
   if (state === "connector") process.stdout.write("claude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected\n");
   if (state === "failed") process.stdout.write("notion: https://mcp.notion.com/mcp (HTTP) - ✘ Failed to connect\n");
+  if (state === "plugin") process.stdout.write("plugin:notion-tools:notion: https://mcp.notion.com/mcp (HTTP) - ✔ Connected\n");
 }
 
 function runClaudeMcpGet(name) {
@@ -165,7 +166,9 @@ function checkNotionFlags(flags) {
   if (flags["--permission-mode"] !== "dontAsk") fail("--permission-mode dontAsk expected");
   const tool = flags["--allowedTools"];
   if (!/^mcp__[A-Za-z0-9_-]+__notion-fetch$/.test(tool)) fail(`only the Notion fetch tool may be allowed, got ${tool}`);
-  if (flags["--setting-sources"] !== "") fail("--setting-sources must be empty");
+  const pluginTool = /^mcp__plugin_/.test(tool);
+  // User settings only for a plugin's server that could not be restated (they enable the plugin).
+  if (!(flags["--setting-sources"] === "" || (pluginTool && !flags["--strict-mcp-config"] && flags["--setting-sources"] === "user"))) fail(`--setting-sources ${JSON.stringify(flags["--setting-sources"])} not allowed here`);
   let settings;
   try {
     settings = JSON.parse(flags["--settings"] || "");
@@ -180,20 +183,30 @@ function checkNotionFlags(flags) {
   if (flags["--strict-mcp-config"]) {
     const cfg = JSON.parse(flags["--mcp-config"] || "{}");
     const names = Object.keys(cfg.mcpServers || {});
-    if (names.length !== 1 || names[0] !== "notion" || cfg.mcpServers.notion.url !== "https://mcp.notion.com/mcp") fail(`strict config must hold only the notion server: ${flags["--mcp-config"]}`);
+    if (names.length !== 1 || !/notion/.test(names[0]) || cfg.mcpServers[names[0]].url !== "https://mcp.notion.com/mcp") fail(`strict config must hold only the notion server: ${flags["--mcp-config"]}`);
   } else if (!denied.includes("mcp__claude_ai_Gmail")) fail("without a strict config every other MCP server must be denied");
 }
 
 /** stream-json events of a Notion fetch: the tool call and its result, then DONE. */
-function notionEvents(tool) {
+function notionEvents(tool, stdin) {
+  const pageUrl = (stdin.match(/as its id: (\S+)/) || [])[1] || "";
   const edited = process.env.FAKE_NOTION_EDITED || "2026-09-20T10:00:00.000Z";
   const page = process.env.FAKE_NOTION_PAGE || "# 13강 노트\n\n- 캐시는 SRAM으로 만든다\n- DRAM은 SRAM보다 빠르다 (거짓)";
   const events = [];
   if (process.env.FAKE_NOTION_NO_TOOL !== "1") {
-    events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu_1", name: tool, input: { id: "x" } }], stop_reason: "tool_use" } });
+    if (process.env.FAKE_NOTION_WRONG_FIRST === "1") {
+      // Another page first (a linked page, say): its result must not be used.
+      events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu_0", name: tool, input: { id: "ffffffffffffffffffffffffffffffff" } }] } });
+      events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_0", content: [{ type: "text", text: JSON.stringify({ text: "다른 페이지", page_last_edited_at: "2020-01-01T00:00:00Z" }) }] }] } });
+    }
+    events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu_1", name: tool, input: { id: process.env.FAKE_NOTION_ID || pageUrl } }], stop_reason: "tool_use" } });
+    const json = JSON.stringify({ title: "13강 노트", page_last_edited_at: edited, text: page, truncated: process.env.FAKE_NOTION_TRUNC === "1" });
     const body = process.env.FAKE_NOTION_ERROR
       ? process.env.FAKE_NOTION_ERROR
-      : JSON.stringify({ title: "13강 노트", page_last_edited_at: edited, text: page, truncated: process.env.FAKE_NOTION_TRUNC === "1" });
+      : process.env.FAKE_NOTION_PERSISTED
+        ? (fs.writeFileSync(process.env.FAKE_NOTION_PERSISTED, json),
+          `<persisted-output>\nOutput too large (61.8KB). Full output saved to: ${process.env.FAKE_NOTION_PERSISTED}\n\nPreview (first 2KB):\n${json.slice(0, 40)}\n...\n</persisted-output>`)
+        : json;
     events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_1", is_error: !!process.env.FAKE_NOTION_ERROR, content: [{ type: "text", text: body }] }] } });
   }
   // The model's own text is never the page: a summary here must not reach the result.
@@ -287,7 +300,7 @@ function runClaude() {
     process.exit(3);
   }
   const a = answer(stdin, schema);
-  if (notion) for (const ev of notionEvents(flags["--allowedTools"])) emit(ev);
+  if (notion) for (const ev of notionEvents(flags["--allowedTools"], stdin)) emit(ev);
   const text = notion
     ? "DONE"
     : ms.includes("badjson")

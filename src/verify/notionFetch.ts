@@ -22,11 +22,20 @@
 // URL without headers) is passed alone with --strict-mcp-config and
 // --mcp-config under the same name, which reuses its stored OAuth login:
 // checked on 2026-09-28, the init event listed only notion-fetch and the
-// server as "connected", about 2k input tokens per call. A claude.ai
-// connector or a server with headers cannot be restated that way: those
-// run without --strict-mcp-config (connectors are account level, not a
-// settings file), with the deny list above. No --safe-mode: it switches
-// MCP servers off.
+// server as "connected", about 2k input tokens per call. A plugin's server
+// is restated the same way from the plugin's own .mcp.json when it has an
+// http or sse URL without headers (not checked with a real call). A
+// claude.ai connector, or a server that cannot be restated, runs without
+// --strict-mcp-config with every other MCP server denied; a plugin's
+// server then needs --setting-sources user (the user settings enable the
+// plugin), still with hooks off. No --safe-mode: it switches MCP servers
+// off.
+//
+// Only fetch calls for the requested page count (the tool input's id or
+// URL names it); the first successful one is the page, and more than one
+// fetch is warned about. A result Claude Code saved to a file for being
+// too large is read from that file when it is under
+// ~/.claude/projects/**/tool-results/, else flagged as truncated.
 //
 // The markdown is cached outside the vault (the transcript cache folder,
 // 0600) with the page's last edited time, for a reproducible record of
@@ -34,7 +43,8 @@
 
 import { createHash } from "crypto";
 import { promises as fsp } from "fs";
-import { join } from "path";
+import { homedir } from "os";
+import { isAbsolute, join, relative, sep } from "path";
 import { renderPrompt } from "../prompts/render";
 import { CliCall, CliCallResult, CliProviderBase } from "../llm/cli/CliProviderBase";
 import { buildClaudeInput, findClaudeResult, parseClaudeOutput } from "../llm/cli/ClaudeCliProvider";
@@ -169,6 +179,8 @@ export function strictMcpConfig(server: string, details: McpServerDetails | null
 
 export interface NotionCallPlan {
   toolName: string;
+  /** --setting-sources: "" (none), or "user" when the server comes from a plugin the user settings enable. */
+  settingSources: "" | "user";
   /** --mcp-config JSON (with --strict-mcp-config), or null for the user's own set. */
   strictConfig: string | null;
   /** --disallowedTools entries. */
@@ -195,7 +207,7 @@ export function buildNotionFetchArgs(input: { model: string; effort: string; pla
     "--verbose",
     "--no-session-persistence",
     "--setting-sources",
-    "",
+    plan.settingSources,
     "--settings",
     JSON.stringify({ disableAllHooks: true }),
     "--disable-slash-commands",
@@ -237,9 +249,13 @@ export function buildNotionFetchPrompt(url: string): string {
 // ---- the tool result in stream-json ----
 
 export interface NotionToolOutput {
-  /** A tool_use of the fetch tool happened. */
+  /** Any call of the fetch tool happened. */
   toolUsed: boolean;
-  /** Text of its (last) tool_result, null when there was none. */
+  /** Calls of the fetch tool (any page). More than one is warned about. */
+  fetchCount: number;
+  /** A call for the requested page happened. */
+  matched: boolean;
+  /** Text of the first successful result for the requested page, else of its last failed one; null when none. */
   resultText: string | null;
   isError: boolean;
   /** The run ended on the output limit. */
@@ -252,10 +268,26 @@ function blockText(content: unknown): string {
   return "";
 }
 
-/** The fetch tool's call and result from `claude -p --output-format stream-json` stdout. */
-export function parseNotionStream(stdout: string, toolName: string): NotionToolOutput {
-  const ids = new Set<string>();
-  const out: NotionToolOutput = { toolUsed: false, resultText: null, isError: false, stopReason: null };
+/** The fetch tool's input names the requested page (its id, or the same URL). */
+export function fetchInputMatches(input: unknown, url: string): boolean {
+  const i = input as { id?: unknown; url?: unknown } | null;
+  const given = typeof i?.id === "string" ? i.id : typeof i?.url === "string" ? i.url : "";
+  if (!given) return false;
+  if (given.trim() === url.trim()) return true;
+  const want = notionPageId(url);
+  const got = notionPageId(given) ?? (/^[0-9a-f-]{32,36}$/i.test(given.trim()) ? given.replace(/-/g, "").toLowerCase() : null);
+  return !!want && want === got;
+}
+
+/**
+ * The fetch tool's calls and results from `claude -p --output-format
+ * stream-json` stdout. Only calls for the requested page count, and the
+ * first successful result of those is the page.
+ */
+export function parseNotionStream(stdout: string, toolName: string, url: string): NotionToolOutput {
+  const matching = new Set<string>();
+  const out: NotionToolOutput = { toolUsed: false, fetchCount: 0, matched: false, resultText: null, isError: false, stopReason: null };
+  let done = false;
   for (const line of stdout.split("\n")) {
     const t = line.trim();
     if (!t.startsWith("{")) continue;
@@ -268,24 +300,51 @@ export function parseNotionStream(stdout: string, toolName: string): NotionToolO
     const content = Array.isArray(ev.message?.content) ? (ev.message!.content as Array<Record<string, unknown>>) : [];
     if (ev.type === "assistant") {
       for (const c of content) {
-        if (c.type === "tool_use" && c.name === toolName && typeof c.id === "string") {
-          ids.add(c.id);
-          out.toolUsed = true;
+        if (c.type !== "tool_use" || c.name !== toolName) continue;
+        out.toolUsed = true;
+        out.fetchCount++;
+        if (typeof c.id === "string" && fetchInputMatches(c.input, url)) {
+          matching.add(c.id);
+          out.matched = true;
         }
       }
       if (ev.message?.stop_reason) out.stopReason = ev.message.stop_reason;
     } else if (ev.type === "user") {
       for (const c of content) {
-        if (c.type === "tool_result" && typeof c.tool_use_id === "string" && ids.has(c.tool_use_id)) {
-          out.resultText = blockText(c.content);
-          out.isError = c.is_error === true;
-        }
+        if (done || c.type !== "tool_result" || typeof c.tool_use_id !== "string" || !matching.has(c.tool_use_id)) continue;
+        out.resultText = blockText(c.content);
+        out.isError = c.is_error === true;
+        if (!out.isError) done = true;
       }
     } else if (ev.type === "result" && ev.stop_reason) {
       out.stopReason = ev.stop_reason;
     }
   }
   return out;
+}
+
+/** Claude Code's note that a large tool output was saved to a file instead. */
+const PERSISTED = /persisted-output|Output too large|Full output saved to/i;
+
+/**
+ * When Claude Code saved a large tool result to a file, the full text from
+ * that file. Only a file under `<home>/.claude/projects/<...>/tool-results/`
+ * is read (checked on the resolved path); otherwise the result is marked
+ * truncated.
+ */
+export async function resolvePersistedOutput(text: string, home: string): Promise<{ text: string; persisted: boolean; truncated: boolean }> {
+  if (!PERSISTED.test(text)) return { text, persisted: false, truncated: false };
+  const path = text.match(/Full output saved to:?\s*(\S+)/i)?.[1]?.replace(/[)"'>.,]+$/, "");
+  if (!path) return { text, persisted: true, truncated: true };
+  try {
+    const root = await fsp.realpath(join(home, ".claude", "projects"));
+    const real = await fsp.realpath(path);
+    const rel = relative(root, real);
+    if (rel.startsWith("..") || isAbsolute(rel) || !rel.split(sep).includes("tool-results")) return { text, persisted: true, truncated: true };
+    return { text: await fsp.readFile(real, "utf8"), persisted: true, truncated: false };
+  } catch {
+    return { text, persisted: true, truncated: true };
+  }
 }
 
 export interface NotionPage {
@@ -316,8 +375,8 @@ export function pageFromToolResult(text: string): NotionPage {
     lastEdited = text.match(/"?(?:page_last_edited_at|last_edited_time)"?\s*[:=]\s*"?([0-9][0-9T:.+\-Z]+)/)?.[1] ?? null;
     truncated = /"?truncated"?\s*[:=]\s*true/.test(text);
   }
-  // Claude Code cuts very large tool outputs and says so.
-  if (/\[truncated\]|output (?:was )?truncated|exceeds maximum allowed tokens|too large to include/i.test(text.slice(-2000))) truncated = true;
+  // Claude Code cuts or saves very large tool outputs and says so.
+  if (/\[truncated\]|output (?:was )?truncated|exceeds maximum allowed tokens|too large to include/i.test(text.slice(-2000)) || PERSISTED.test(text)) truncated = true;
   return { markdown: markdown.trimEnd() + "\n", lastEdited, truncated };
 }
 
@@ -360,7 +419,9 @@ export class NotionFetchProvider extends CliProviderBase {
   maxInputTokens = 200000;
   readonly providerId = "claude-cli" as const;
   protected usesFiles = false;
-  plan: NotionCallPlan = { toolName: "", strictConfig: null, deny: [] };
+  plan: NotionCallPlan = { toolName: "", settingSources: "", strictConfig: null, deny: [] };
+  /** The requested page: only its fetch results count. */
+  pageUrl = "";
 
   protected async invoke(call: CliCall): Promise<CliCallResult> {
     const args = buildNotionFetchArgs({ model: this.config.model, effort: this.config.effort, plan: this.plan });
@@ -373,7 +434,7 @@ export class NotionFetchProvider extends CliProviderBase {
         timeoutMs: this.config.timeoutMs,
         signal: call.signal,
       });
-      return { ...parseClaudeOutput(out.stdout), structured: parseNotionStream(out.stdout, this.plan.toolName) };
+      return { ...parseClaudeOutput(out.stdout), structured: parseNotionStream(out.stdout, this.plan.toolName, this.pageUrl) };
     } catch (e) {
       const tooOld = e instanceof CliRunError && e.kind === "exit" ? unknownOptionMessage("claude", e.stderr) : null;
       if (tooOld) throw new CliRunError("spawn", tooOld, e instanceof CliRunError ? e.stderr : "");
@@ -425,16 +486,74 @@ export async function detectNotionServer(bin: string, workDir: string, signal?: 
  * cached with its last edited time. `toolName` overrides the detected
  * fetch tool (settings).
  */
+/** "plugin:<plugin>:<server>" parts, or null. */
+export function pluginServerParts(name: string): { plugin: string; server: string } | null {
+  const m = name.match(/^plugin:([^:]+):(.+)$/);
+  return m ? { plugin: m[1], server: m[2] } : null;
+}
+
+/** Server entry of a plugin's .mcp.json (`{"mcpServers":{...}}` or the map itself) as McpServerDetails. */
+export function detailsFromMcpJson(json: unknown, server: string): McpServerDetails | null {
+  const root = json as { mcpServers?: Record<string, unknown> } & Record<string, unknown>;
+  const entry = (root?.mcpServers?.[server] ?? root?.[server]) as { type?: unknown; url?: unknown; headers?: unknown } | undefined;
+  if (!entry || typeof entry !== "object") return null;
+  const type = typeof entry.type === "string" ? entry.type.toLowerCase() : typeof entry.url === "string" ? "http" : "";
+  if (!type) return null;
+  const headers = entry.headers && typeof entry.headers === "object" && Object.keys(entry.headers).length > 0;
+  return { scope: "plugin", type, url: typeof entry.url === "string" ? entry.url : null, hasHeaders: !!headers };
+}
+
+/** The server entry of a plugin's .mcp.json under <home>/.claude/plugins (the plugin's own folder), or null. */
+export async function findPluginMcpServer(home: string, plugin: string, server: string): Promise<McpServerDetails | null> {
+  const root = join(home, ".claude", "plugins");
+  const found: string[] = [];
+  const walk = async (dir: string, depth: number) => {
+    if (depth > 6 || found.length > 20) return;
+    let entries;
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory() && e.name !== "node_modules" && !e.name.startsWith(".git")) await walk(p, depth + 1);
+      else if (e.isFile() && e.name === ".mcp.json" && p.split(sep).includes(plugin)) found.push(p);
+    }
+  };
+  await walk(root, 0);
+  for (const f of found.sort().reverse()) {
+    try {
+      const d = detailsFromMcpJson(JSON.parse(await fsp.readFile(f, "utf8")), server);
+      if (d) return d;
+    } catch {
+      // unreadable: the next one
+    }
+  }
+  return null;
+}
+
+/**
+ * Raw markdown of a Notion page, taken from the fetch tool's result for
+ * that page, and cached with its last edited time. `toolName` overrides
+ * the detected fetch tool (settings); `home` is the user's home folder
+ * (tests).
+ */
 export async function fetchNotionPage(
   provider: NotionFetchProvider,
-  opts: { bin: string; url: string; cacheDir: string; workDir: string; toolName?: string; signal?: AbortSignal }
+  opts: { bin: string; url: string; cacheDir: string; workDir: string; toolName?: string; signal?: AbortSignal; home?: string }
 ): Promise<NotionFetchResult> {
   if (!isNotionUrl(opts.url)) throw new Error("노션 페이지 URL(https://www.notion.so/...)을 넣어 주세요.");
+  const home = opts.home ?? homedir();
   const { server, all } = await detectNotionServer(opts.bin, opts.workDir, opts.signal);
   const toolName = opts.toolName?.trim() || mcpToolName(server.name);
   let details: McpServerDetails | null = null;
-  // A claude.ai connector or a plugin server cannot be restated in --mcp-config.
-  if (!/^claude\.ai /.test(server.name) && !/^plugin:/.test(server.name)) {
+  const pluginParts = pluginServerParts(server.name);
+  if (pluginParts) {
+    // A plugin's server: restated from its own .mcp.json when that is possible.
+    details = await findPluginMcpServer(home, pluginParts.plugin, pluginParts.server);
+  } else if (!/^claude\.ai /.test(server.name)) {
+    // A claude.ai connector cannot be restated; a server the user added can.
     try {
       details = parseMcpGet(await runQuiet(opts.bin, ["mcp", "get", server.name], opts.workDir, opts.signal));
     } catch (e) {
@@ -444,17 +563,23 @@ export async function fetchNotionPage(
   }
   const strictConfig = strictMcpConfig(server.name, details);
   const others = all.map((s) => s.name).filter((n) => n !== server.name);
-  provider.plan = { toolName, strictConfig, deny: notionDenyList(toolName, others, !!strictConfig) };
+  // A plugin's server without a strict config loads only with the user settings (they enable the plugin).
+  const settingSources: "" | "user" = pluginParts && !strictConfig ? "user" : "";
+  provider.plan = { toolName, settingSources, strictConfig, deny: notionDenyList(toolName, others, !!strictConfig) };
+  provider.pageUrl = opts.url;
 
   const res = await provider.call({ prompt: buildNotionFetchPrompt(opts.url), signal: opts.signal });
   const tool = res.structured as NotionToolOutput;
-  if (!tool.toolUsed) throw new NotionMcpMissingError(`모델이 ${toolName}을(를) 호출하지 않았습니다: ${res.text.slice(0, 200)}`);
+  if (!tool.toolUsed) throw new Error(`Notion 조회 도구(${toolName})가 이번 호출에서 쓰이지 않았습니다. 서버: ${server.name}. 모델 답: ${res.text.slice(0, 200)}`);
+  if (!tool.matched) throw new Error(`Notion 조회 도구가 요청한 페이지가 아닌 다른 페이지만 조회했습니다 (서버: ${server.name}).`);
   if (tool.resultText === null) throw new Error("노션 조회 도구의 결과가 출력에 없습니다.");
   if (tool.isError) throw new Error(`노션 페이지를 가져오지 못했습니다: ${tool.resultText.slice(0, 300)}`);
-  const page = pageFromToolResult(tool.resultText);
+  const full = await resolvePersistedOutput(tool.resultText, home);
+  const page = pageFromToolResult(full.text);
   if (!page.markdown.trim()) throw new Error("노션 페이지 내용이 비어 있습니다.");
   const warnings: string[] = [];
-  if (page.truncated) warnings.push("노션 페이지가 길어 도구 결과가 잘렸습니다. 뒷부분은 검증되지 않습니다. 페이지를 마크다운으로 내보내 '보관함 파일'로 검증하세요.");
+  if (page.truncated || full.truncated) warnings.push("노션 페이지가 길어 도구 결과가 잘렸습니다. 뒷부분은 검증되지 않습니다. 페이지를 마크다운으로 내보내 '보관함 파일'로 검증하세요.");
+  if (tool.fetchCount > 1) warnings.push(`Notion 조회가 ${tool.fetchCount}번 일어났습니다. 요청한 페이지의 첫 결과만 썼습니다.`);
   if (tool.stopReason === "max_tokens") warnings.push("모델 출력 한도에 걸려 호출이 끝났습니다.");
   const cached = await readNotionCache(opts.cacheDir, opts.url);
   const unchanged = !!cached && !!page.lastEdited && cached.lastEdited === page.lastEdited;
