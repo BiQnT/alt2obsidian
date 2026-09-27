@@ -1,8 +1,8 @@
 // Per-slide LLM commentary generator (plan Task 1.1).
 //
-// Renders each PDF page to a PNG, hashes it with the spike-validated 8-hex
-// SHA-1, and calls the LLM's multimodal endpoint with [prompt, image,
-// transcript-chunk]. Returns SlideSection[] for the assembler (Task 1.2) to
+// Hashes each page's text layer (src/core/slideHash.ts, shared with the
+// Skill CLI), renders the page to a PNG, and calls the LLM's multimodal
+// endpoint with [prompt, image, transcript-chunk]. Returns SlideSection[] for the assembler (Task 1.2) to
 // wrap in `## 📚 슬라이드 N` + `<!-- alt2obs:slide:N hash:H -->` markers.
 //
 // Pattern mirrors junnnnnw00/autonotes' `_process_slide`: one LLM call per
@@ -17,7 +17,7 @@ import {
   VisionImageRef,
 } from "../types";
 import { PdfProcessor } from "../pdf/PdfProcessor";
-import { hashSlidePngBase64 } from "../vault/slideHash";
+import { computeSlideHash } from "../core/slideHash";
 import { renderPrompt } from "../prompts/render";
 import slideCommentarySystemTemplate from "../../prompts/slide-commentary.system.md";
 import slideCommentaryUserTemplate from "../../prompts/slide-commentary.user.md";
@@ -40,6 +40,11 @@ export interface PerSlideGenerationOptions {
    * separate concept notes.
    */
   existingConceptNames: string[];
+  /**
+   * Alt note id. Seeds the slide hash of pages without a text layer
+   * (image-only slides), see `computeSlideHash`.
+   */
+  sourceId: string;
   /** Max render width in px. Default 1024 (matches PdfProcessor default). */
   maxPngWidth?: number;
   /** Override per-slide max output tokens. Default 2048. */
@@ -101,6 +106,7 @@ export class PerSlideCommentaryGenerator {
       };
     }
 
+    const pageTexts = await this.pdfProcessor.getPageTexts(pdfData);
     const transcriptChunks = this.splitTranscriptEvenly(options.transcript, pageCount);
     const slides: SlideSection[] = [];
     const errors: PerSlideGenerationResult["errors"] = [];
@@ -131,7 +137,11 @@ export class PerSlideCommentaryGenerator {
         const img: VisionImageRef = images[0];
 
         options.onProgress?.(pageNum, pageCount, "hashing");
-        const hash = await hashSlidePngBase64(img.base64Png);
+        const hash = await computeSlideHash(
+          pageTexts[pageNum - 1] ?? "",
+          pageNum,
+          options.sourceId
+        );
 
         options.onProgress?.(pageNum, pageCount, "calling");
         const prompt = buildSlidePrompt(

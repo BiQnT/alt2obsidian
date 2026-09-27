@@ -304,6 +304,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         slidesResult = await slideGen.generate(pdfData, {
           transcript: altData.transcript,
           existingConceptNames: Array.from(existingConceptNames),
+          sourceId: altData.metadata.noteId,
           onProgress: (slideNum, total) => {
             onProgress?.(
               `슬라이드 ${slideNum}/${total} 해설 중...`,

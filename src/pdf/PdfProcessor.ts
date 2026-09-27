@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import { extractPageTexts } from "../core/slideHash";
 import type { LectureMaterialContext, LectureMaterialPage, VisionImageRef } from "../types";
 
 export class PdfProcessor {
@@ -95,6 +96,19 @@ export class PdfProcessor {
   }
 
   /**
+   * Text layer of every page (index 0 = page 1), used for the slide hash.
+   * Throws if the PDF cannot be opened so callers never hash partial input.
+   */
+  async getPageTexts(pdfData: ArrayBuffer): Promise<string[]> {
+    const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
+    try {
+      return await extractPageTexts(pdf);
+    } finally {
+      await pdf.destroy();
+    }
+  }
+
+  /**
    * Render the requested PDF pages to base64 PNG images, scaled to fit
    * `maxWidth` while preserving aspect ratio (capped at scale=2 to avoid
    * gigantic outputs on already-large slides). Failures on individual pages
@@ -102,8 +116,7 @@ export class PdfProcessor {
    * setup failure (returns []).
    *
    * Reused by `PerSlideCommentaryGenerator` for per-slide multimodal LLM
-   * input and by the spike-validated hash function (which hashes the same
-   * PNG bytes that go to the LLM, ensuring hash and vision input match).
+   * input.
    */
   async renderPagesToImages(
     pdfData: ArrayBuffer,
