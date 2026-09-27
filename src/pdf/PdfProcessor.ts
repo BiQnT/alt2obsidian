@@ -122,6 +122,9 @@ export class PdfProcessor {
           canvas.height = Math.ceil(viewport.height);
           const ctx = canvas.getContext("2d");
           if (!ctx) continue;
+          // Opaque white page: a transparent PNG is unreadable on a dark theme.
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
 
           await page.render({ canvasContext: ctx, viewport }).promise;
           const dataUrl = canvas.toDataURL("image/png");

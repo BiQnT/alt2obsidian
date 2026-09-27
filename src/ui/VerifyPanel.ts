@@ -27,6 +27,7 @@ export class VerifyPanel {
   private notionStatus: HTMLElement | null = null;
   private pasteInput: HTMLTextAreaElement | null = null;
   private targetSelect: HTMLSelectElement | null = null;
+  private fileList: HTMLElement | null = null;
   private inputBoxes = new Map<InputKind, HTMLElement>();
   private kindButtons = new Map<InputKind, HTMLButtonElement>();
   private estimateEl: HTMLElement | null = null;
@@ -56,8 +57,7 @@ export class VerifyPanel {
     // Vault markdown file (default: a Notion page exported as markdown).
     const fileBox = root.createDiv({ cls: "alt2obsidian-verify-input" });
     this.fileInput = fileBox.createEl("input", { type: "text", attr: { list: "alt2obsidian-verify-files", placeholder: "노트 파일 경로 (예: 노션/13강 정리.md)" } });
-    const list = fileBox.createEl("datalist", { attr: { id: "alt2obsidian-verify-files" } });
-    for (const p of this.plugin.verifySourceFiles()) list.createEl("option", { attr: { value: p } });
+    this.fileList = fileBox.createEl("datalist", { attr: { id: "alt2obsidian-verify-files" } });
     this.fileInput.addEventListener("change", () => this.guessTarget(this.fileInput?.value ?? ""));
     this.inputBoxes.set("file", fileBox);
 
@@ -77,9 +77,7 @@ export class VerifyPanel {
 
     root.createEl("label", { cls: "alt2obsidian-field-label", text: "대상 강의" });
     this.targetSelect = root.createEl("select", { cls: "dropdown alt2obsidian-verify-target" });
-    const targets = this.plugin.verifyTargets();
-    if (targets.length === 0) this.targetSelect.createEl("option", { text: "가져온 강의 노트가 없습니다", attr: { value: "" } });
-    for (const t of targets) this.targetSelect.createEl("option", { text: `${t.subject ? t.subject + " · " : ""}${t.title}`, attr: { value: t.path } });
+    this.refreshLists();
 
     const actions = root.createDiv({ cls: "alt2obsidian-estimate-actions" });
     const estimateBtn = actions.createEl("button", { text: "예상 사용량 보기", cls: "mod-cta" });
@@ -87,6 +85,22 @@ export class VerifyPanel {
     this.estimateEl = root.createDiv({ cls: "alt2obsidian-cli-panel" });
     this.estimateEl.hide();
     this.setKind(this.kind);
+  }
+
+  /** Vault files and lecture notes may change while the tab is hidden: rebuild the choices, keep the inputs. */
+  refreshLists(): void {
+    if (this.fileList) {
+      this.fileList.empty();
+      for (const p of this.plugin.verifySourceFiles()) this.fileList.createEl("option", { attr: { value: p } });
+    }
+    const select = this.targetSelect;
+    if (!select) return;
+    const current = select.value;
+    select.empty();
+    const targets = this.plugin.verifyTargets();
+    if (targets.length === 0) select.createEl("option", { text: "가져온 강의 노트가 없습니다", attr: { value: "" } });
+    for (const t of targets) select.createEl("option", { text: `${t.subject ? t.subject + " · " : ""}${t.title}`, attr: { value: t.path } });
+    if (targets.some((t) => t.path === current)) select.value = current;
   }
 
   private setKind(kind: InputKind): void {
@@ -252,10 +266,6 @@ export class VerifyPanel {
       this.busy = false;
       this.controller = null;
     }
-  }
-
-  isBusy(): boolean {
-    return this.busy;
   }
 
   abort(): void {

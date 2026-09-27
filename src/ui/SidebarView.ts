@@ -132,7 +132,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
     this.urlPane?.toggle(tab === "url");
     this.verifyPane?.toggle(tab === "verify");
     // Lists of notes and lectures may have changed since the tab was built.
-    if (tab === "verify" && !this.verifyPanel?.isBusy()) this.verifyPanel?.render();
+    if (tab === "verify") this.verifyPanel?.refreshLists();
   }
 
   private setConnection(label: string, kind: "api" | "db" | "none" | "busy", detail: string): void {
