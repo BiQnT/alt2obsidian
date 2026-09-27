@@ -68,26 +68,70 @@ curl -sSL -o "/tmp/alt-deck-<noteId>.pdf" "<pdfUrl>"
 
 Quote the URL (it has `&` query params). Verify the file is non-empty (`ls -l`).
 
-### 3. Read each slide and compose commentary
+The steps follow the plugin's import pipeline (`importNote` in `$REPO/src/main.ts`) in the same order, with the same prompt files and the same deterministic helpers, so a Skill import and a plugin import of the same lecture have the same structure. The prompt files in `$REPO/prompts/` are the single source for every generation rule; `$REPO/prompts/README.md` explains the `{{variable}}` rules. Keep scratch files under `/tmp/alt2obs-<noteId>/`.
 
-Use `Read` with the `pages` parameter to walk through the deck, **20 pages at a time** (the tool's max). Example:
+### 3. Build the lecture summary (overview source)
 
-```
-Read(file_path="/tmp/alt-deck-<noteId>.pdf", pages="1-20")
-Read(file_path="/tmp/alt-deck-<noteId>.pdf", pages="21-40")
-…
-```
+Start from the scraped `summary` (call it `S`) and `transcript` (use only its first 15000 characters, `T`). Whenever a variable below says "`X` truncated", apply the plugin's `truncateForPrompt(X, 18000)`: if `X` is longer than 18000 characters, use its first 12600 characters + `\n\n[...중간 내용 생략...]\n\n` + its last 5400 characters.
 
-Reading a PDF returns the page contents as images you can see directly. For each page N, write the Korean commentary exactly as the plugin's per-slide prompt asks. The prompt files are the single source for these rules, shared with the plugin:
+a. **Transcript pass** (only if `T` is non-empty):
+   - `S.length < 500`: generate with `$REPO/prompts/summary-from-transcript.system.md` + `summary-from-transcript.md`, `{{memoContext}}` = `\n\n[학생 메모]\n` + `S` when `S` is non-empty (else empty), `{{transcript}}` = `T`. The result replaces `S`.
+   - `500 <= S.length < 2500`: generate with `summary-enhance-transcript.system.md` + `summary-enhance-transcript.md`, `{{summary}}` = `S`, `{{transcript}}` = `T`. The result replaces `S`.
+   - `S.length >= 2500`: keep `S`.
 
-- Read `$REPO/prompts/slide-commentary.system.md` and follow it.
-- Read `$REPO/prompts/slide-commentary.user.md` and follow it for every page, with `{{slideNum}}` = N, `{{totalSlides}}` = page count, `{{conceptList}}` = the existing concept names from `<vault>/Alt2Obsidian/<subject>/Concepts/*.md` (empty if none), `{{transcriptBlock}}` = the page's transcript chunk from step 4 (empty if none). Both fragments are formatted as in `buildSlidePrompt` in `$REPO/src/generator/PerSlideCommentaryGenerator.ts`. See `$REPO/prompts/README.md` for the template rules.
+b. **Lecture-material pass** (always attempted): write the seed text `<title>\n\n<summary as scraped, before step a>` to `/tmp/alt2obs-<noteId>/seed.txt`, then
 
-Output format for this Skill: the commentary is the section body only, placed between the slide markers in step 6.
+   ```bash
+   node "$REPO/scripts/phase2/lecture-material.mjs" "/tmp/alt-deck-<noteId>.pdf" "/tmp/alt2obs-<noteId>/seed.txt"
+   ```
 
-### 4. (optional) Curate transcript per slide
+   If it prints `{"material":null}`, keep `S`. Otherwise generate with `summary-enhance-material.system.md` + `summary-enhance-material.md`, `{{summary}}` = `S` truncated, and `{{pageCount}}`, `{{excerptPageCount}}`, `{{excerptScope}}`, `{{materialText}}` taken verbatim from the JSON. The result replaces `S`.
 
-If `transcript` is non-empty, split it evenly by character count across the slide count and pass the chunk that corresponds to slide N as additional context for the commentary. The transcript is from Alt's audio capture; lecturers' verbal asides go here. Even-split is the same heuristic the plugin uses — segment timestamps are dropped by Alt's RSC payload.
+`S` is now the enhanced summary. Save it to `/tmp/alt2obs-<noteId>/summary.md`.
+
+### 4. Extract concepts
+
+Concepts are extracted from the enhanced summary `S` (not from the slide commentary), exactly like the plugin's `ConceptExtractor`. The concept notes are what the lecture's `[[wikilinks]]` resolve to; without this step the wikilinks dangle.
+
+1. List existing concept names by globbing `<vault>/Alt2Obsidian/<subject>/Concepts/*.md` (use `Bash` `ls`). These are reuse candidates.
+2. Generate with `$REPO/prompts/concept-extraction.system.ko.md` + `concept-extraction.md`: `{{subject}}` = subject, `{{langInstruction}}` = the Korean (`ko`) branch of `langInstruction` in `$REPO/src/generator/ConceptExtractor.ts`, `{{existingConceptHint}}` = empty if there are no existing names, else `\nExisting concept notes in this course (REUSE these exact names when the same concept appears):\n` + one `- <name>` line per name + `\n`, `{{summary}}` = `S`. The prompt defines the JSON shape (`concepts[]` with `name`, `definition`, `lectureContext`, `example`, `caution`, `relatedConcepts`, plus `tags[]`).
+3. Save the concept names as a JSON array to `/tmp/alt2obs-<noteId>/concepts.json`.
+
+**Concept note files:**
+
+2. For each concept, generate a markdown file at `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` using the **plugin's exact template** (mirror `src/vault/VaultManager.ts:250-277`):
+
+   ```markdown
+   ---
+   tags: [concept]
+   ---
+
+   # {name}
+
+   **정의:** {definition}
+
+   **강의 맥락:** {lectureContext}
+
+   **예시:** {example}
+
+   **주의:** {caution}
+
+   **관련 강의:** [[{lectureTitle}]]
+
+   **관련 개념:** [[{relatedConcept1}]], [[{relatedConcept2}]]
+   ```
+
+   Skip the `**예시:**` line entirely if `example` is empty; same for `**주의:**` and `**관련 개념:**`. Do NOT emit empty-value lines; match how the plugin elides them.
+
+3. **Skip-if-exists with append behaviour**: if `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` already exists from a prior import:
+   - Read it.
+   - If `**관련 강의:**` already contains `[[{lectureTitle}]]`, leave the file untouched.
+   - Otherwise append `, [[{lectureTitle}]]` to the existing `**관련 강의:**` line. This matches `VaultManager.appendLectureReference` (`src/vault/VaultManager.ts:295-310`), same lecture cross-linking semantics.
+   - Optionally enrich missing fields (e.g., the prior concept note has no `**예시:**` and the new lecture has a good one) by appending the new field above the `**관련 강의:**` line. Mirrors `VaultManager.appendMissingConceptField` (`:312-324`).
+
+4. **Filename sanitization**: replace `/`, `\`, `:`, `?`, `*`, `"`, `<`, `>`, `|` with `_` (mirrors `src/utils/helpers.ts:sanitizeFilename`). Korean characters and parentheses are valid in vault filenames.
+
+5. After writing all concept notes, append a brief summary in the completion message: "{N} concept notes written to Concepts/: {a few names}".
 
 ### 5. Compute the slide hashes
 
@@ -97,23 +141,33 @@ Run the hash CLI once for the whole deck. It uses the same code as the plugin (`
 node "$REPO/scripts/phase2/slide-hashes.mjs" "/tmp/alt-deck-<noteId>.pdf" "<noteId>"
 ```
 
-Stdout is `{"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}`. Use `pages[N-1].hash` in the markers for slide N. Do not compute hashes any other way. `textChars` is the normalized text length; `0` means an image-only page (its hash is derived from `noteId`).
+Stdout is `{"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}`. Use `pages[N-1].hash` in the markers for slide N. Do not compute hashes any other way. `textChars` is the normalized text length; `0` means an image-only page (its hash is derived from `noteId` and the page number).
 
-If the command fails because `scripts/phase2/slide-hashes.mjs` is missing, run `npm run build:scripts` in `$REPO` and retry.
+### 6. Read each slide and compose commentary
 
-### 6. Assemble the markdown
+If `transcript` is non-empty, split the full transcript evenly by character count across the slide count (chunk size = ceil(length / slideCount), each chunk trimmed, empty chunk = none), exactly like `splitTranscriptEvenly` in `$REPO/src/generator/PerSlideCommentaryGenerator.ts`. Chunk N is slide N's transcript context.
 
-Compose a `## 📋 전체 요약` block that sits between `# <title>` and the first `## 📚 슬라이드 1`. Source: the `summary` field returned by `alt-scrape.mjs`, enriched with the transcript the same way the plugin does it (`transcript` = its first 15000 characters):
+Use `Read` with the `pages` parameter to walk through the deck, **20 pages at a time** (the tool's max). Example:
 
-- `summary.length < 500` and a transcript exists: follow `$REPO/prompts/summary-from-transcript.system.md` and `$REPO/prompts/summary-from-transcript.md` (`{{memoContext}}` = `\n\n[학생 메모]\n<summary>` when the summary is non-empty, else empty).
-- `500 <= summary.length < 2500` and a transcript exists: follow `$REPO/prompts/summary-enhance-transcript.system.md` and `$REPO/prompts/summary-enhance-transcript.md`.
-- Otherwise use the summary as is.
+```
+Read(file_path="/tmp/alt-deck-<noteId>.pdf", pages="1-20")
+Read(file_path="/tmp/alt-deck-<noteId>.pdf", pages="21-40")
+…
+```
 
-Output format for this Skill (overrides the prompt files where they differ):
+Reading a PDF returns the page contents as images you can see directly. For each page N, generate the commentary with `$REPO/prompts/slide-commentary.system.md` + `slide-commentary.user.md`: `{{slideNum}}` = N, `{{totalSlides}}` = page count, `{{conceptList}}` = the existing concept names from step 4.1 (not the newly extracted ones), `{{transcriptBlock}}` = slide N's transcript chunk. Both fragments are empty when there is nothing to show and are otherwise formatted as in `buildSlidePrompt` in `PerSlideCommentaryGenerator.ts`.
 
-- No `## ...` section headers inside the overview block, body only.
-- Wrap key concepts in `[[개념명]]` wikilinks, using the concept names from step 6.5 when known.
-- Aim for 800 to 1500 Korean characters so the overview does not overwhelm the per-slide commentary.
+Then link concept names in each commentary the way the plugin does (`linkConceptNames` in `$REPO/src/core/markdown.ts`): wrap every occurrence of an extracted concept name (step 4) in `[[...]]`, case-insensitive, written with the concept's exact name, longest names first, never inside an existing `[[...]]`.
+
+### 7. Assemble the markdown
+
+Build the overview section with the plugin's own code (headings in the summary are demoted one level and concept names are linked):
+
+```bash
+node "$REPO/scripts/phase2/overview-block.mjs" "/tmp/alt2obs-<noteId>/summary.md" "/tmp/alt2obs-<noteId>/concepts.json" > "/tmp/alt2obs-<noteId>/overview.md"
+```
+
+Insert `overview.md` verbatim between `# <title>` and the first slide section (it is empty when the summary is empty). Do not edit it.
 
 ```markdown
 ---
@@ -129,12 +183,7 @@ alt_created: "<createdAt>"
 
 # <title>
 
-## 📋 전체 요약
-
-<!-- alt2obs:overview start -->
-<lecture-level overview built from alt summary + transcript per the rules above>
-<!-- alt2obs:overview end -->
-
+<overview section printed by overview-block.mjs, verbatim>
 ## 📚 슬라이드 1
 
 <!-- alt2obs:slide:1 hash:<8-hex> start -->
@@ -158,54 +207,10 @@ alt_created: "<createdAt>"
 
 Marker format must match exactly:
 
-- 슬라이드: `<!-- alt2obs:slide:N hash:HHHHHHHH start -->` (single spaces) — parsed by `VaultManager.splitMultiManagedNote`.
-- Overview: `<!-- alt2obs:overview start -->` / `<!-- alt2obs:overview end -->` — sits in the preamble (before the first slide marker), gets fully replaced on every plugin re-import (via `mergeMultiManagedNote` `next.preamble`). Users editing inside this block will see edits overwritten on re-import — note this if the user asks.
+- 슬라이드: `<!-- alt2obs:slide:N hash:HHHHHHHH start -->` (single spaces), parsed by `VaultManager.splitMultiManagedNote`. No `dup:` suffix.
+- Overview: `<!-- alt2obs:overview start -->` / `<!-- alt2obs:overview end -->` (printed by `overview-block.mjs`). On re-import only the text between these markers is replaced; text the user writes above or below the block is kept. Tell the user edits inside the block are overwritten if they ask.
 
-### 6.5 Extract concepts (NEW — required for parity with the plugin)
-
-After all per-slide commentary is written and the assembled lecture markdown is in your buffer, run a final pass to extract academic concepts from the whole lecture. This produces separate `Concepts/<name>.md` files that the lecture's `[[wikilinks]]` resolve to — without this step the wikilinks dangle.
-
-**Concept extraction prompt:** read `$REPO/prompts/concept-extraction.system.ko.md` and `$REPO/prompts/concept-extraction.md` and follow them (same quality bar as the plugin's `ConceptExtractor`). Variables: `{{subject}}` = subject, `{{langInstruction}}` = the Korean (`ko`) branch of `langInstruction` in `$REPO/src/generator/ConceptExtractor.ts`, `{{existingConceptHint}}` = the existing concept names from step 1 below as a `- name` list, `{{summary}}` = the assembled lecture markdown.
-
-**Workflow:**
-
-1. List existing concept names by globbing `<vault>/Alt2Obsidian/<subject>/Concepts/*.md` (use `Bash` `ls`). These are reuse candidates.
-2. Apply the prompt above to the assembled lecture content. It defines the JSON shape (`concepts[]` with `name`, `definition`, `lectureContext`, `example`, `caution`, `relatedConcepts`, plus `tags[]`).
-3. For each concept, generate a markdown file at `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` using the **plugin's exact template** (mirror `src/vault/VaultManager.ts:250-277`):
-
-   ```markdown
-   ---
-   tags: [concept]
-   ---
-
-   # {name}
-
-   **정의:** {definition}
-
-   **강의 맥락:** {lectureContext}
-
-   **예시:** {example}
-
-   **주의:** {caution}
-
-   **관련 강의:** [[{lectureTitle}]]
-
-   **관련 개념:** [[{relatedConcept1}]], [[{relatedConcept2}]]
-   ```
-
-   Skip the `**예시:**` line entirely if `example` is empty; same for `**주의:**` and `**관련 개념:**`. Do NOT emit empty-value lines — match how the plugin elides them.
-
-4. **Skip-if-exists with append behaviour**: if `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` already exists from a prior import:
-   - Read it.
-   - If `**관련 강의:**` already contains `[[{lectureTitle}]]`, leave the file untouched.
-   - Otherwise append `, [[{lectureTitle}]]` to the existing `**관련 강의:**` line. This matches `VaultManager.appendLectureReference` (`src/vault/VaultManager.ts:295-310`) — same lecture cross-linking semantics.
-   - Optionally enrich missing fields (e.g., the prior concept note has no `**예시:**` and the new lecture has a good one) by appending the new field above the `**관련 강의:**` line. Mirrors `VaultManager.appendMissingConceptField` (`:312-324`).
-
-5. **Filename sanitization**: replace `/`, `\`, `:`, `?`, `*`, `"`, `<`, `>`, `|` with `_` (mirrors `src/utils/helpers.ts:sanitizeFilename`). Korean characters and parentheses are valid in vault filenames.
-
-6. After writing all concept notes, append a brief summary in the completion message: "{N} concept notes written to Concepts/ — {a few names}".
-
-### 7. Write to the vault
+### 8. Write to the vault
 
 ```
 mkdir -p "<vault>/Alt2Obsidian/<subject>"
@@ -223,13 +228,13 @@ And copy the PDF to its sibling location (Task 1.4 layout):
 cp "/tmp/alt-deck-<noteId>.pdf" "<vault>/Alt2Obsidian/<subject>/<title>.pdf"
 ```
 
-### 8. Report completion
+### 9. Report completion
 
-Tell the user: file path written, slide count, any slides where you found the content was unusually thin (e.g. a totally blank slide), and a one-line note that the Synced Viewer can be opened from Obsidian's command palette.
+Tell the user: file path written, slide count, the concept notes written, any slides where you found the content was unusually thin (e.g. a totally blank slide), and a one-line note that the Synced Viewer can be opened from Obsidian's command palette.
 
 ## Hash compat caveat (always include in completion message)
 
-The plugin and this Skill now produce identical slide hashes: both run `src/core/slideHash.ts` (`sha1(normalized page text + ":" + page)`, first 8 hex; image-only pages use `sha1(noteId + ":" + page)`). Re-importing the same lecture with either tool matches slides by hash and keeps `> [!note] 내 메모` callouts in place.
+The plugin and this Skill produce identical slide hashes: both run `src/core/slideHash.ts` (`sha1(normalized page text)`, first 8 hex, no page number; pages without text use `sha1(noteId + ":" + page)`). Because the hash does not depend on the page number, inserting or deleting slides keeps every `> [!note] 내 메모` callout on its own slide when the lecture is re-imported with either tool.
 
 Notes written by 1.x (plugin PNG hash, or the old Skill `sha1(noteId:page)` hash) will show every slide as `slideDrift` once on their first re-import with this version. Memos are still preserved through the N-match-with-drift branch, and the new hashes are stable after that.
 
@@ -248,7 +253,7 @@ Or just re-run the Skill against the same Alt URL with `period=final` (or `midte
 ## Error handling
 
 - `alt-scrape.mjs` exits 1 with stderr message → relay to user, stop.
-- `slide-hashes.mjs` exits non-zero → relay its stderr to the user and stop. Do not invent hashes.
+- `slide-hashes.mjs`, `lecture-material.mjs` or `overview-block.mjs` exits non-zero → relay its stderr to the user and stop. Do not recreate their output by hand. If a `scripts/phase2/*.mjs` file is missing, run `npm run build:scripts` in `$REPO` first.
 - `parseQuality: "partial"` or `pdfUrl: null` → tell user the Alt note isn't a full lecture and stop.
 - `Read` of a PDF page fails → log the slide as `## ⚠️ 처리 실패 슬라이드 N` footer at the end of the markdown (matches the plugin's failure-footer convention), continue with the rest.
 - Vault path doesn't exist → ask the user; do NOT create it without consent.

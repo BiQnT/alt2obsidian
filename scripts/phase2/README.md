@@ -6,6 +6,8 @@ Skill that imports an Alt lecture into the Obsidian vault using Claude Code Max'
 
 - `alt-scrape.mjs` — pure Node Alt URL scraper. Port of `src/scraper/{AltScraper,RscParser}.ts` with no Obsidian deps. Reads an `https://altalt.io/note/<id>` URL, prints metadata JSON to stdout: `{title, summary, pdfUrl, transcript, noteId, createdAt, parseQuality}`.
 - `slide-hashes.mjs`: per-page slide hashes for a PDF, `node scripts/phase2/slide-hashes.mjs <pdfPath> <sourceId>` prints `{"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}`. Generated from `scripts/src/slide-hashes.ts` by `npm run build:scripts` (also part of `npm run build`); it imports the plugin's `src/core/slideHash.ts`, so hashes are identical to the plugin's. `pdfjs-dist` is loaded from the repo's `node_modules`, so run `npm install` once.
+- `lecture-material.mjs`: the PDF excerpt for `prompts/summary-enhance-material.md`, computed by the plugin's `src/core/lectureMaterial.ts`. `node scripts/phase2/lecture-material.mjs <pdfPath> <seedTextFile>` prints `{"material":{...}}` or `{"material":null}`.
+- `overview-block.mjs`: the `## 📋 전체 요약` section built by the plugin's `src/core/markdown.ts` (headings demoted one level, concept names linked). `node scripts/phase2/overview-block.mjs <summaryFile> [conceptNamesJsonFile]`.
 - `SKILL.md` — orchestration. Drives Claude Code through scrape → download PDF → read each slide via `Read(pages: "N-N")` → write Korean commentary → assemble page-anchored markdown → write to vault.
 
 ## Install
@@ -18,7 +20,7 @@ mkdir -p ~/.claude/skills/alt2obs
 ln -sf "$(pwd)/scripts/phase2/SKILL.md" ~/.claude/skills/alt2obs/SKILL.md
 ```
 
-Use a symlink, not a copy: the Skill finds the repo (prompts, scripts, `node_modules`) by resolving the link target, and it reads its commentary, overview and concept rules from `prompts/*.md` so the plugin and the Skill share one source. If `scripts/phase2/slide-hashes.mjs` is missing, run `npm run build:scripts`. The Skill is then available globally to Claude Code; project-local discovery would need `.claude/skills/alt2obs/SKILL.md` inside the target project (`.claude/` is git-ignored in this repo).
+Use a symlink, not a copy: the Skill finds the repo (prompts, scripts, `node_modules`) by resolving the link target, and it reads its commentary, overview and concept rules from `prompts/*.md` so the plugin and the Skill share one source. The CLIs in `scripts/phase2/*.mjs` are committed; after changing `scripts/src` or `src/core`, run `npm run build:scripts`. The Skill is then available globally to Claude Code; project-local discovery would need `.claude/skills/alt2obs/SKILL.md` inside the target project (`.claude/` is git-ignored in this repo).
 
 ## Use
 
@@ -34,8 +36,8 @@ The full plan (`.omc/plans/alt2obsidian-page-anchored-redesign.md`) calls for `p
 
 ## Hash compatibility
 
-The plugin and the Skill compute the same slide hash, `sha1(normalized page text + ":" + page)` truncated to 8 hex (image-only pages: `sha1(noteId + ":" + page)`), from the same code in `src/core/slideHash.ts`. A lecture imported with one tool and re-imported with the other matches every slide by hash.
+The plugin and the Skill compute the same slide hash from the same code in `src/core/slideHash.ts`: `sha1(normalized page text)` truncated to 8 hex, with no page number, so inserting or deleting a slide does not change any other slide's hash and memos follow their slides on re-import. Pages without a text layer use `sha1(noteId + ":" + page)`. A lecture imported with one tool and re-imported with the other matches every slide by hash.
 
 Notes written by 1.x (plugin PNG-byte hash or the old Skill `sha1(noteId:page)` hash) show every slide as `slideDrift` once on their first re-import. Memos are preserved through the N-match-with-drift branch, and hashes are stable afterwards.
 
-`node test/test-slide-hash.mjs [pdfPath]` checks that the CLI output is deterministic and matches the hash rule.
+`node test/test-slide-hash.mjs [pdfPath]` checks that the committed CLI bundles are fresh and that the hash output is deterministic and follows the rule; `node test/test-skill-clis.mjs [pdfPath]` checks that the other two CLIs match the plugin code.
