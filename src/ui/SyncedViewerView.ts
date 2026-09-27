@@ -223,6 +223,10 @@ export class SyncedViewerView extends ItemView {
   private altLocalId: string | null = null;
   private transcript: Array<{ startMs: number; endMs: number; text: string }> | null = null;
   private transcriptOpen = false;
+  /** One transcript load at a time (page changes re-render while it loads). */
+  private transcriptLoading: Promise<void> | null = null;
+  /** The note id a load was attempted for (a missing transcript is not retried on every page). */
+  private transcriptTried: string | null = null;
   private transcriptPanelEl: HTMLElement | null = null;
   private transcriptBtnEl: HTMLButtonElement | null = null;
   private syncModeEl: HTMLElement | null = null;
@@ -380,7 +384,10 @@ export class SyncedViewerView extends ItemView {
     const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
     this.alignment = parseAlignment(fm?.alt_alignment);
     const id = typeof fm?.alt_local_id === "string" ? fm.alt_local_id : null;
-    if (id !== this.altLocalId) this.transcript = null;
+    if (id !== this.altLocalId) {
+      this.transcript = null;
+      this.transcriptTried = null;
+    }
     this.altLocalId = id;
     const aligned = this.alignment.length > 0;
     this.syncModeEl?.toggle(aligned);
@@ -402,10 +409,23 @@ export class SyncedViewerView extends ItemView {
   private async renderTranscript(): Promise<void> {
     const panel = this.transcriptPanelEl;
     if (!panel || !this.transcriptOpen) return;
-    if (!this.transcript && this.altLocalId && this.loadTranscript) {
-      panel.empty();
-      panel.createDiv({ cls: "alt2obs-empty-state", text: "전사를 불러오는 중..." });
-      this.transcript = await this.loadTranscript(this.altLocalId);
+    if (!this.transcript && this.altLocalId && this.loadTranscript && (this.transcriptLoading || this.transcriptTried !== this.altLocalId)) {
+      if (!this.transcriptLoading) {
+        this.transcriptTried = this.altLocalId;
+        panel.empty();
+        panel.createDiv({ cls: "alt2obs-empty-state", text: "전사를 불러오는 중..." });
+        const id = this.altLocalId;
+        const load = this.loadTranscript;
+        this.transcriptLoading = load(id)
+          .then((t) => {
+            if (id === this.altLocalId) this.transcript = t;
+          })
+          .finally(() => {
+            this.transcriptLoading = null;
+          });
+      }
+      await this.transcriptLoading;
+      if (!this.transcriptOpen) return;
     }
     panel.empty();
     const slide = this.currentPage;
