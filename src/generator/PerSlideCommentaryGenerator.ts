@@ -22,8 +22,6 @@ import { renderPrompt } from "../prompts/render";
 import slideCommentarySystemTemplate from "../../prompts/slide-commentary.system.md";
 import slideCommentaryUserTemplate from "../../prompts/slide-commentary.user.md";
 
-const SYSTEM_PROMPT = renderPrompt(slideCommentarySystemTemplate, {});
-
 export interface PerSlideGenerationOptions {
   /**
    * Lecture audio transcript (concatenated segments from `RscParser`). Passed
@@ -113,6 +111,7 @@ export class PerSlideCommentaryGenerator {
     const perSlideWallTimeMs: number[] = [];
     const maxWidth = options.maxPngWidth ?? 1024;
     const maxOutputTokens = options.maxOutputTokens ?? 2048;
+    const systemPrompt = renderPrompt(slideCommentarySystemTemplate, {});
 
     // Circuit breaker: if we hit 3 rate-limit errors in a row even after the
     // retry sleep, the free-tier window is exhausted for this run. Stop the
@@ -138,7 +137,7 @@ export class PerSlideCommentaryGenerator {
 
         options.onProgress?.(pageNum, pageCount, "hashing");
         const hash = await computeSlideHash(
-          pageTexts[pageNum - 1] ?? "",
+          pageTexts[pageNum - 1] ?? null,
           pageNum,
           options.sourceId
         );
@@ -153,7 +152,7 @@ export class PerSlideCommentaryGenerator {
         const commentary = await this.callMultimodalWithRetry(
           prompt,
           img,
-          { systemPrompt: SYSTEM_PROMPT, maxOutputTokens },
+          { systemPrompt, maxOutputTokens },
           pageNum
         );
 

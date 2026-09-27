@@ -3,18 +3,18 @@
 //
 // Usage: node scripts/phase2/slide-hashes.mjs <pdfPath> <sourceId>
 // Prints {"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}
-// where textChars is the length of the normalized page text.
+// where textChars is the length of the normalized page text (0 for an
+// image-only page or one whose text could not be read).
 //
 // Built by `npm run build:scripts`. pdfjs-dist stays external, so the repo's
 // node_modules must be installed.
 
-import { readFile } from "node:fs/promises";
-import { webcrypto } from "node:crypto";
 import {
   computeSlideHash,
   extractPageTexts,
   normalizePageText,
 } from "../../src/core/slideHash";
+import { fail, openPdf } from "./node-pdf";
 
 async function main(): Promise<void> {
   const [pdfPath, sourceId] = process.argv.slice(2);
@@ -23,16 +23,7 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  // Node 18 has no global Web Crypto; 19+ does.
-  if (!globalThis.crypto) {
-    (globalThis as { crypto: unknown }).crypto = webcrypto;
-  }
-  // pdfjs prints warnings with console.log. Keep stdout for the JSON result.
-  console.log = (...args: unknown[]) => console.error(...args);
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-
-  const data = new Uint8Array(await readFile(pdfPath));
-  const pdf = await pdfjs.getDocument({ data, verbosity: 0 }).promise;
+  const pdf = await openPdf(pdfPath);
   try {
     const texts = await extractPageTexts(pdf);
     const pages = [];
@@ -40,7 +31,7 @@ async function main(): Promise<void> {
       pages.push({
         page: i + 1,
         hash: await computeSlideHash(texts[i], i + 1, sourceId),
-        textChars: normalizePageText(texts[i]).length,
+        textChars: normalizePageText(texts[i] ?? "").length,
       });
     }
     process.stdout.write(JSON.stringify({ pages }) + "\n");
@@ -49,7 +40,4 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e: unknown) => {
-  process.stderr.write(`slide-hashes: ${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(1);
-});
+main().catch((e: unknown) => fail(e, "slide-hashes"));

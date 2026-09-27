@@ -1,10 +1,12 @@
-import { App, TFolder, normalizePath } from "obsidian";
+import { App, Notice, TFolder, normalizePath } from "obsidian";
 import {
   ConceptNote,
   ExamPeriod,
   ImportUpdateSummary,
   MANAGED_NOTE_START,
   MANAGED_NOTE_END,
+  OVERVIEW_BLOCK_START,
+  OVERVIEW_BLOCK_END,
 } from "../types";
 import { sanitizeFilename } from "../utils/helpers";
 import { ConceptRegistry } from "./ConceptRegistry";
@@ -68,6 +70,7 @@ export class VaultManager {
     }
 
     const currentContent = await this.app.vault.read(existing as any);
+    this.assertNoPageAnchoredDowngrade(currentContent, content);
     // Dispatch: B1 multi-managed merge if either side uses the new format,
     // legacy single-block merge otherwise. The legacy path retains its
     // "## 이전 노트 백업" behavior for the original 1.0.x → managed-block
@@ -102,6 +105,7 @@ export class VaultManager {
     }
 
     const currentContent = await this.app.vault.read(existing as any);
+    this.assertNoPageAnchoredDowngrade(currentContent, nextContent);
     const nextHasMulti = this.hasMultiManagedMarkers(nextContent);
     const currentHasMulti = this.hasMultiManagedMarkers(currentContent);
 
@@ -375,6 +379,24 @@ export class VaultManager {
 
     const nextRefs = current ? `${current}, ${additions.join(", ")}` : additions.join(", ");
     return content.replace(existingLine[0], `**관련 개념:** ${nextRefs}`);
+  }
+
+  /**
+   * A page-anchored note must never be overwritten by a single-block note
+   * (per-slide generation failed or no PDF): the multi-managed merge would
+   * orphan every slide section. Shows a Notice and throws so the import
+   * aborts before anything is written.
+   */
+  private assertNoPageAnchoredDowngrade(currentContent: string, nextContent: string): void {
+    if (
+      this.hasMultiManagedMarkers(currentContent) &&
+      !this.hasMultiManagedMarkers(nextContent)
+    ) {
+      const msg =
+        "기존 노트는 슬라이드별 형식인데 이번 결과에는 슬라이드별 해설이 없습니다. 기존 노트를 덮어쓰지 않고 가져오기를 중단했습니다. PDF와 LLM 설정을 확인한 뒤 다시 시도해주세요.";
+      new Notice(msg, 10000);
+      throw new Error(msg);
+    }
   }
 
   private mergeManagedNote(currentContent: string, nextContent: string): string {
@@ -707,14 +729,48 @@ export class VaultManager {
       orphanFooter = `\n\n## 🗑️ 삭제된 슬라이드 (orphan)\n\n${orphanBlocks}\n`;
     }
 
-    const merged = next.frontmatter + next.preamble + sectionMarkdown + orphanFooter;
+    const preamble = this.mergeOverviewPreamble(existing.preamble, next.preamble);
+    const merged = next.frontmatter + preamble + sectionMarkdown + orphanFooter;
 
     return { merged, reorders, insertions, deletions, drifts, confirmDeckReplacement };
   }
 
+  /**
+   * Preamble for a merged note. When both preambles carry an overview block,
+   * only the overview body is replaced and everything outside the markers in
+   * the existing preamble (title, user text above slide 1) is kept. When the
+   * existing note has no overview block, the new preamble is used as is; when
+   * the new one has none, the existing preamble is kept unchanged.
+   */
+  private mergeOverviewPreamble(existingPreamble: string, nextPreamble: string): string {
+    const existingBlock = this.findOverviewBlock(existingPreamble);
+    if (!existingBlock) return nextPreamble;
+    const nextBlock = this.findOverviewBlock(nextPreamble);
+    if (!nextBlock) return existingPreamble;
+    return (
+      existingPreamble.slice(0, existingBlock.bodyStart) +
+      nextPreamble.slice(nextBlock.bodyStart, nextBlock.bodyEnd) +
+      existingPreamble.slice(existingBlock.bodyEnd)
+    );
+  }
+
+  private findOverviewBlock(text: string): { bodyStart: number; bodyEnd: number } | null {
+    const start = text.indexOf(OVERVIEW_BLOCK_START);
+    if (start < 0) return null;
+    const bodyStart = start + OVERVIEW_BLOCK_START.length;
+    const bodyEnd = text.indexOf(OVERVIEW_BLOCK_END, bodyStart);
+    if (bodyEnd < 0) return null;
+    return { bodyStart, bodyEnd };
+  }
+
+  /** Headings outside the overview block (its body is regenerated LLM text). */
   private extractHeadings(content: string): Set<string> {
     const headings = new Set<string>();
-    for (const line of content.split("\n")) {
+    const overview = this.findOverviewBlock(content);
+    const scanned = overview
+      ? content.slice(0, overview.bodyStart) + content.slice(overview.bodyEnd)
+      : content;
+    for (const line of scanned.split("\n")) {
       const match = line.match(/^#{1,6}\s+(.+)$/);
       if (match) headings.add(match[1].trim());
     }

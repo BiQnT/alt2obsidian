@@ -1,6 +1,7 @@
 /**
- * Test: slide-hashes CLI is deterministic and follows the spec 4.7 hash rule.
- * Run: npm run build:scripts && node test/test-slide-hash.mjs [pdfPath]
+ * Test: slide-hashes CLI is deterministic and follows the spec 4.7 hash rule,
+ * and the committed scripts/phase2/*.mjs match a fresh build of scripts/src.
+ * Run: node test/test-slide-hash.mjs [pdfPath]
  *
  * Without an argument, the first PDF in Alt's local slide storage is copied
  * to a temp dir (the storage folder is never modified) and used.
@@ -13,6 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+import { importTs } from "./helpers/bundle-ts.mjs";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = join(repo, "scripts/phase2/slide-hashes.mjs");
@@ -41,6 +43,26 @@ function run(pdf, sourceId) {
   return { raw: stdout, json: JSON.parse(stdout) };
 }
 
+// Committed CLI bundles must equal a fresh `build:scripts` output.
+{
+  const dir = mkdtempSync(join(tmpdir(), "slide-hash-build-"));
+  try {
+    execFileSync("node", [join(repo, "scripts/build-scripts.mjs"), dir], { cwd: repo, stdio: "ignore" });
+    const built = readdirSync(dir).filter((f) => f.endsWith(".mjs")).sort();
+    assert.ok(built.length > 0);
+    for (const f of built) {
+      assert.equal(
+        readFileSync(join(repo, "scripts/phase2", f), "utf8"),
+        readFileSync(join(dir, f), "utf8"),
+        `scripts/phase2/${f} is stale: run npm run build:scripts`
+      );
+    }
+    console.log(`PASS: committed CLI bundles are fresh (${built.join(", ")})`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 const sha1_8 = (s) => createHash("sha1").update(s, "utf8").digest("hex").slice(0, 8);
 
 // Independent text extraction (same pdfjs build as the CLI) to recompute hashes.
@@ -54,6 +76,28 @@ async function pageTexts(pdf) {
   }
   await doc.destroy();
   return texts;
+}
+
+// A page whose text layer throws yields null and gets the positional hash.
+{
+  const { extractPageTexts, computeSlideHash } = await importTs("src/core/slideHash.ts");
+  const fakePdf = {
+    numPages: 2,
+    getPage: async (n) => ({
+      getTextContent: async () => {
+        if (n === 2) throw new Error("broken page");
+        return { items: [{ str: "Hello " }, {}, { str: "World" }] };
+      },
+    }),
+  };
+  const warn = console.warn;
+  console.warn = () => {};
+  const texts = await extractPageTexts(fakePdf);
+  console.warn = warn;
+  assert.deepEqual(texts, ["Hello World", null]);
+  assert.equal(await computeSlideHash(texts[0], 1, "s"), sha1_8("helloworld"));
+  assert.equal(await computeSlideHash(texts[1], 2, "s"), sha1_8("s:2"));
+  console.log("PASS: unreadable page yields null and the positional fallback hash");
 }
 
 // Two-page PDF: page 1 has the text "Hello  World", page 2 has no text layer.
@@ -87,7 +131,7 @@ function writeSyntheticPdf(path) {
     writeSyntheticPdf(synth);
     const pages = run(synth, "source-a").json.pages;
     assert.deepEqual(pages, [
-      { page: 1, hash: sha1_8("helloworld:1"), textChars: 10 },
+      { page: 1, hash: sha1_8("helloworld"), textChars: 10 },
       { page: 2, hash: sha1_8("source-a:2"), textChars: 0 },
     ]);
     console.log(`PASS: synthetic PDF, text page and image-only fallback page: ${JSON.stringify(pages)}`);
@@ -115,7 +159,7 @@ try {
   texts.forEach((t, i) => {
     const norm = t.normalize("NFC").toLowerCase().replace(/\s+/g, "");
     assert.equal(pages[i].textChars, norm.length, `page ${i + 1} textChars`);
-    const expected = sha1_8(`${norm.length > 0 ? norm : "source-a"}:${i + 1}`);
+    const expected = sha1_8(norm.length > 0 ? norm : `source-a:${i + 1}`);
     assert.equal(pages[i].hash, expected, `page ${i + 1} hash`);
   });
 

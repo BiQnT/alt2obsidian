@@ -5,12 +5,11 @@ import {
   LLMProvider,
   MANAGED_NOTE_START,
   MANAGED_NOTE_END,
-  OVERVIEW_BLOCK_START,
-  OVERVIEW_BLOCK_END,
   PerSlideGenerationResult,
   SlideSection,
 } from "../types";
 import { sanitizeFilename, formatDate } from "../utils/helpers";
+import { buildOverviewSection, linkConceptNames } from "../core/markdown";
 
 export class NoteGenerator {
   constructor(private llm: LLMProvider) {}
@@ -79,7 +78,11 @@ export class NoteGenerator {
     // running the regex pass once per section over all concepts[]". This
     // matches: every section is rewritten with all known concept names.
     const conceptNames = llmResult.concepts.map((c) => c.name);
-    const overviewSection = this.buildOverviewSection(
+    // Overview body: summary headings demoted one level, concept names
+    // linked (src/core/markdown.ts, shared with the Skill). The overview
+    // block is replaced on re-import; text outside it is kept
+    // (VaultManager.mergeOverviewPreamble).
+    const overviewSection = buildOverviewSection(
       llmResult.processedSummary || altData.summary,
       conceptNames
     );
@@ -118,59 +121,13 @@ export class NoteGenerator {
   }
 
   /**
-   * Build the lecture-level overview section that sits above the per-slide
-   * sections. Source is `altData.summary` after transcript + lecture-material
-   * enrichment (see `main.ts` importNote pipeline). Without this section, the
-   * page-anchored output silently dropped the transcript-enhanced summary —
-   * only per-slide commentary survived.
-   *
-   * Wrapped in overview managed-block markers so future merges can replace
-   * just the body without touching surrounding user notes. preamble is still
-   * regenerated wholesale by `mergeMultiManagedNote`, so users editing inside
-   * the overview block will see their changes overwritten on re-import.
-   */
-  private buildOverviewSection(
-    summary: string,
-    conceptNames: string[]
-  ): string {
-    const trimmed = (summary || "").trim();
-    if (trimmed.length === 0) return "";
-
-    let body = trimmed;
-    for (const name of conceptNames) {
-      const regex = new RegExp(
-        `(?<!\\[\\[)${this.escapeRegex(name)}(?!\\]\\])`,
-        "gi"
-      );
-      body = body.replace(regex, `[[${name}]]`);
-    }
-
-    return [
-      "## 📋 전체 요약",
-      "",
-      OVERVIEW_BLOCK_START,
-      body,
-      OVERVIEW_BLOCK_END,
-      "",
-      "",
-    ].join("\n");
-  }
-
-  /**
    * Build a single slide section. The managed-block markers (start/end)
    * sandwich only the LLM commentary. The `> [!note] 내 메모` callout below
    * the end marker is the user's free-space anchor — preserved on regen by
    * the multi-managed merge algorithm (Task 1.3).
    */
   private buildSlideSection(slide: SlideSection, conceptNames: string[]): string {
-    let body = slide.commentary;
-    for (const name of conceptNames) {
-      const regex = new RegExp(
-        `(?<!\\[\\[)${this.escapeRegex(name)}(?!\\]\\])`,
-        "gi"
-      );
-      body = body.replace(regex, `[[${name}]]`);
-    }
+    const body = linkConceptNames(slide.commentary, conceptNames);
     const startMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} start -->`;
     const endMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} end -->`;
     return [
@@ -220,10 +177,10 @@ export class NoteGenerator {
     let content = llmResult.processedSummary || altData.summary;
 
     // Insert concept wikilinks
-    for (const concept of llmResult.concepts) {
-      const regex = new RegExp(`(?<!\\[\\[)${this.escapeRegex(concept.name)}(?!\\]\\])`, "gi");
-      content = content.replace(regex, `[[${concept.name}]]`);
-    }
+    content = linkConceptNames(
+      content,
+      llmResult.concepts.map((c) => c.name)
+    );
 
     const lectureMarkdown =
       frontmatter +
@@ -274,9 +231,5 @@ export class NoteGenerator {
       "## 내 메모\n";
 
     return { lectureMarkdown, conceptNotes: [] };
-  }
-
-  private escapeRegex(str: string): string {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 }
