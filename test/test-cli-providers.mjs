@@ -105,6 +105,8 @@ const quiet = async (fn) => {
     assert.deepEqual(await m.resolveCliBinary("claude", { configuredPath: "", shell: FAKE_SHELL, extraDirs: [dir, fakeBin] }), { path: exe, source: "common-path" });
     await assert.rejects(m.resolveCliBinary("codex", { configuredPath: "", ...none }), /codex CLI를 찾지 못했습니다/);
     assert.equal(await m.readCliVersion(FAKE_CLAUDE), "2.1.283 (Claude Code)");
+    assert.equal(await m.probeCliLogin("codex", FAKE_CODEX), true, "codex login status: exit 0 and a line starting with Logged in");
+    assert.equal(await m.probeCliLogin("codex", exe), false, "a line that does not start with Logged in");
     // The child PATH starts with the binary's folder (nvm node for #!/usr/bin/env node).
     assert.ok(m.childPath("/x/nvm/bin/claude", "/usr/bin").startsWith("/x/nvm/bin:"));
     console.log("PASS: binary lookup order (settings, cache, login shell, common folders, error) and version");
@@ -205,6 +207,20 @@ for (const [label, Provider, bin] of [
     })
   );
   assert.deepEqual([mu.usage.inputTokens, mu.usage.cachedInputTokens, mu.usage.outputTokens], [1070, 900, 45]);
+  // Robust JSON extraction (review N2).
+  assert.deepEqual(m.parseJsonText('{"a":1}'), { a: 1 });
+  assert.deepEqual(m.parseJsonText('```json\n{"a":1}\n```'), { a: 1 });
+  assert.deepEqual(m.parseJsonText('Here you go:\n{"a":{"b":2}}\nHope this helps.'), { a: { b: 2 } });
+  assert.deepEqual(m.parseJsonText('First try:\n```json\n{"a":1,\n```\nFixed:\n```json\n{"a":2}\n```\nDone.'), { a: 2 }, "last fenced block");
+  assert.throws(() => m.parseJsonText("no json here"));
+  // Login failure only from the CLI's error field, never stderr noise (review N6).
+  const noisy = new m.CliRunError("exit", "x", "warn: GET /v1/oauth token refresh 401 from a plugin");
+  assert.equal(m.isAuthError(noisy), false);
+  assert.equal(m.isFatalCliError(noisy), false);
+  const auth = new m.CliRunError("exit", "x");
+  auth.cliError = "Not logged in. Please run /login";
+  assert.ok(m.isAuthError(auth) && m.isFatalCliError(auth));
+  assert.equal(m.isFatalCliError(new m.CliRunError("timeout", "t")), false, "a timeout is not fatal (review N1)");
   // A model answer that mentions a limit is not a usage-limit error (review L2).
   const modelText = new Error("응답 JSON 형식 오류: I hit a usage limit, sorry");
   assert.equal(m.isUsageLimitError(modelText), false);

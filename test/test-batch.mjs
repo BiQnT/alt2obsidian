@@ -125,17 +125,33 @@ assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "�
   }
 }
 
-// ---- timeout is fatal: no retry, the run stops (review M3) ----
+// ---- timeout: the batch is retried once in halves; it counts toward the stop (review N1) ----
 {
+  const pagesOf = (c) => [...c.stdin.matchAll(/^### 슬라이드 (\d+)/gm)].map((x) => Number(x[1]));
+  // Only 4-slide batches hang: the halves succeed.
+  const s1 = fakeSession("hangbig:2");
+  const job1 = m.createJobDir();
+  try {
+    const one = { ...plan, batches: plan.batches.slice(0, 1) };
+    const res = await new m.BatchCommentaryGenerator(provider(m.ClaudeCliProvider, FAKE_CLAUDE, job1, new m.UsageTracker(), { timeoutMs: 800 })).generate({ plan: one, context, renderImage });
+    assert.deepEqual(s1.calls().map(pagesOf), [[2, 3, 4, 5], [2, 3], [4, 5]]);
+    assert.equal(res.generatedCount, 4);
+    assert.equal(res.errors.filter((e) => e.slideNum <= 5).length, 0);
+    console.log("PASS: a timed-out batch is retried once in two halves, which succeed");
+  } finally {
+    m.removeJobDir(job1);
+    s1.cleanup();
+  }
+  // Everything hangs: batch, then its first half time out, which is 2 failures in a row: stop.
   const s = fakeSession("hang");
   const job = m.createJobDir();
   try {
     const res = await new m.BatchCommentaryGenerator(provider(m.ClaudeCliProvider, FAKE_CLAUDE, job, new m.UsageTracker(), { timeoutMs: 800 })).generate({ plan, context, renderImage });
-    assert.equal(s.calls().length, 1, "no retry, no further batch after a timeout");
+    assert.deepEqual(s.calls().map(pagesOf), [[2, 3, 4, 5], [2, 3]]);
     assert.equal(res.errors.length, 12);
-    assert.ok(res.errors.slice(0, 4).every((e) => /응답이 없어 중단/.test(e.reason)));
-    assert.ok(res.errors.slice(4).every((e) => /중단했습니다/.test(e.reason)));
-    console.log("PASS: a timeout stops the run after one call, every remaining slide reported");
+    assert.ok(res.errors.slice(0, 2).every((e) => /응답이 없어 중단/.test(e.reason)));
+    assert.ok(res.errors.slice(2).every((e) => /2번 연속 실패/.test(e.reason)));
+    console.log("PASS: repeated timeouts count as consecutive failures and stop the run");
   } finally {
     m.removeJobDir(job);
     s.cleanup();
@@ -185,7 +201,7 @@ assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "�
     gist: withMeta ? `이전 요지 ${page}` : "",
     meta: withMeta ? m.formatSlideMeta("0".repeat(128), `이전 요지 ${page}`) : "",
   });
-  const existing = [previous(2, plan.slides[1].hash, true), previous(3, "ffffffff", false)];
+  const existing = [previous(2, plan.slides[1].hash, true), previous(3, "ffffffff", true)];
   const withPrev = m.planDeck({ ...d, transcript: null, transcriptCapChars: 200, batchSize: 8, deckTitle: "L7", existing });
   assert.equal(withPrev.slides[1].previous.commentary, "이전 해설 2", "hash match");
   assert.equal(withPrev.slides[2].previous.commentary, "이전 해설 3", "same-number fallback");
@@ -198,7 +214,8 @@ assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "�
     assert.equal(byNum.get(2).commentary, "이전 해설 2");
     assert.equal(m.parseSlideMeta(byNum.get(2).meta).gist, "이전 요지 2", "old meta kept");
     assert.equal(byNum.get(3).commentary, "이전 해설 3");
-    assert.equal(byNum.get(3).meta, undefined);
+    assert.equal(byNum.get(3).meta, undefined, "number match (other content): no reusable meta (review N3)");
+    assert.ok(!res.gists.has(3), "and no stale gist");
     assert.ok(!byNum.has(4), "no previous section: listed as failed");
     assert.deepEqual(res.keptPrevious, [2, 3]);
     assert.equal(res.generatedCount, 1, "slide 5 was generated");

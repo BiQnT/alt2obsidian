@@ -24,7 +24,8 @@ import * as path from "path";
 import type { CliName } from "../../types";
 
 export const DEFAULT_CLI_TIMEOUT_MS = 300_000;
-const KILL_GRACE_MS = 3000;
+/** Wait after SIGTERM before SIGKILL; twice this, the run is rejected even without `close`. */
+export const KILL_GRACE_MS = 3000;
 const STDERR_KEEP = 64 * 1024;
 const STDOUT_MAX = 64 * 1024 * 1024;
 
@@ -163,13 +164,30 @@ export function resolveSpawnTarget(bin: string, platform: NodeJS.Platform = proc
   throw new CliRunError("spawn", `지원하지 않는 실행 파일 형식입니다: ${bin}`);
 }
 
-function killTree(pid: number | undefined, platform: NodeJS.Platform, spawnFn: SpawnFn, signal: NodeJS.Signals): void {
+/**
+ * Kill the CLI and its children. Windows: `taskkill /T /F`; when taskkill
+ * cannot start or exits non-zero, `child.kill()` ends at least the direct
+ * child. POSIX: signal to the process group.
+ */
+function killTree(child: { pid?: number; kill(signal?: NodeJS.Signals): boolean }, platform: NodeJS.Platform, spawnFn: SpawnFn, signal: NodeJS.Signals): void {
+  const pid = child.pid;
   if (pid === undefined) return;
   if (platform === "win32") {
+    const fallback = () => {
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+    };
     try {
-      spawnFn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }).on("error", () => undefined);
+      const tk = spawnFn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      tk.on("error", fallback);
+      tk.on("close", (code: number | null) => {
+        if (code !== 0) fallback();
+      });
     } catch {
-      // taskkill missing: nothing else to do
+      fallback();
     }
     return;
   }
@@ -222,11 +240,21 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
     });
 
     let killTimer: ReturnType<typeof setTimeout> | null = null;
+    let giveUpTimer: ReturnType<typeof setTimeout> | null = null;
     const terminate = (err: CliRunError) => {
       if (failure || settled) return;
       failure = err;
-      killTree(child.pid, platform, spawnFn, "SIGTERM");
-      if (platform !== "win32") killTimer = setTimeout(() => killTree(child.pid, platform, spawnFn, "SIGKILL"), KILL_GRACE_MS);
+      killTree(child, platform, spawnFn, "SIGTERM");
+      if (platform !== "win32") killTimer = setTimeout(() => killTree(child, platform, spawnFn, "SIGKILL"), KILL_GRACE_MS);
+      // Reject even if the process never reports `close` (a stuck kill).
+      giveUpTimer = setTimeout(() => {
+        const f = failure!;
+        finish(() => {
+          f.stdout = stdout;
+          f.stderr = stderr;
+          reject(f);
+        });
+      }, KILL_GRACE_MS * 2);
     };
     const timer = setTimeout(
       () => terminate(new CliRunError("timeout", `${Math.round(timeoutMs / 1000)}초 안에 응답이 없어 중단했습니다`, stderr, stdout)),
@@ -240,6 +268,7 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
       settled = true;
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      if (giveUpTimer) clearTimeout(giveUpTimer);
       req.signal?.removeEventListener("abort", onAbort);
       fn();
     };
@@ -398,7 +427,14 @@ export async function lookupInLoginShell(name: CliName, shell: string, timeoutMs
   return null;
 }
 
-/** `where <name>` on Windows: `.exe` hits first, then `.cmd` shims. */
+/**
+ * `where <name>` on Windows: `.exe` hits first, then `.cmd` shims.
+ * Limitation: where.exe prints paths in the console code page, and Node
+ * reads them as UTF-8, so a path with non-ASCII characters (a Korean user
+ * name) can come back garbled. Such hits fail `existsSync` and are skipped;
+ * the folder scan below builds the same paths from environment variables,
+ * which Node decodes correctly. No shell or `chcp` is used to change this.
+ */
 export async function lookupWithWhere(name: CliName, timeoutMs: number, spawnFn?: SpawnFn): Promise<string | null> {
   if (!/^[a-z]+$/.test(name)) return null;
   try {
@@ -454,8 +490,9 @@ export async function probeCliLogin(name: CliName, bin: string, timeoutMs = 20_0
       const out = await runCli({ bin, args: ["auth", "status", "--json"], timeoutMs });
       return JSON.parse(out.stdout).loggedIn === true;
     }
+    // runCli resolves only on exit code 0; the message must also start a line with "Logged in".
     const out = await runCli({ bin, args: ["login", "status"], timeoutMs });
-    return /logged in/i.test(out.stdout + out.stderr);
+    return /^Logged in\b/m.test(`${out.stdout}\n${out.stderr}`);
   } catch {
     return false;
   }

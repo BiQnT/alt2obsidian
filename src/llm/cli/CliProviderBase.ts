@@ -35,6 +35,8 @@ export interface CliProviderConfig {
 
 export interface CliCall {
   prompt: string;
+  /** Multiplies config.timeoutMs for this call. */
+  timeoutScale?: number;
   systemPrompt?: string;
   schema?: Record<string, unknown>;
   images?: ImageInput[];
@@ -57,19 +59,26 @@ function cliErrorText(e: unknown): string {
   return e instanceof CliRunError ? `${e.cliError}\n${e.stderr}` : "";
 }
 
+/** Login failure, read only from the CLI's structured error field (stderr can hold unrelated noise). */
+export function isAuthError(e: unknown): boolean {
+  return e instanceof CliRunError && AUTH_FAILURE.test(e.cliError);
+}
+
 /** A subscription or rate limit: retrying now will not help. */
 export function isUsageLimitError(e: unknown): boolean {
   return USAGE_LIMIT.test(cliErrorText(e));
 }
 
 /**
- * Errors that make the rest of the run pointless (spec 4.2 rule 5, review
- * M3): timeout, missing binary, spawn failure, not logged in, usage limit.
+ * Errors that make the rest of the run pointless (spec 4.2 rule 5): missing
+ * binary, spawn failure, not logged in, usage limit. A timeout is not fatal:
+ * the batch is retried in halves and counts toward the consecutive-failure
+ * stop.
  */
 export function isFatalCliError(e: unknown): boolean {
   if (!(e instanceof CliRunError)) return false;
-  if (e.kind === "timeout" || e.kind === "not-found" || e.kind === "spawn" || e.kind === "aborted") return true;
-  return AUTH_FAILURE.test(cliErrorText(e)) || isUsageLimitError(e);
+  if (e.kind === "not-found" || e.kind === "spawn" || e.kind === "aborted") return true;
+  return isAuthError(e) || isUsageLimitError(e);
 }
 
 /** Signal that fires when either input fires. `dispose` removes the listeners. */
@@ -89,14 +98,30 @@ export function anySignal(a?: AbortSignal, b?: AbortSignal): { signal?: AbortSig
   };
 }
 
-/** Parse a model's JSON answer, tolerating a ```json fence around it. */
+/**
+ * Parse a model's JSON answer: the text as is (a ```json fence around it
+ * allowed), else the last fenced block, else the span from the first "{" to
+ * the last "}" (prose before or after the JSON).
+ */
 export function parseJsonText(text: string): unknown {
-  const cleaned = text
-    .trim()
-    .replace(/^```(?:json)?\s*\n?/, "")
-    .replace(/\n?```\s*$/, "")
-    .trim();
-  return JSON.parse(cleaned);
+  const trimmed = text.trim();
+  const unfenced = trimmed.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+  try {
+    return JSON.parse(unfenced);
+  } catch (first) {
+    const fences = [...trimmed.matchAll(/```(?:json)?\s*\n([\s\S]*?)\n?```/g)];
+    if (fences.length > 0) {
+      try {
+        return JSON.parse(fences[fences.length - 1][1].trim());
+      } catch {
+        // fall through to the brace span
+      }
+    }
+    const a = trimmed.indexOf("{");
+    const b = trimmed.lastIndexOf("}");
+    if (a >= 0 && b > a) return JSON.parse(trimmed.slice(a, b + 1));
+    throw first;
+  }
 }
 
 let fileCounter = 0;
@@ -155,6 +180,7 @@ export abstract class CliProviderBase implements LLMProvider {
         schema: options?.schema,
         images: options?.images,
         signal: options?.signal,
+        timeoutScale: options?.timeoutScale,
       });
       try {
         const raw = res.structured !== undefined ? res.structured : parseJsonText(res.text);

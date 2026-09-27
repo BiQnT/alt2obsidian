@@ -434,3 +434,12 @@
   width: 100%;
   min-width: 120px;
 }
+
+.alt2obsidian-task-table input.is-invalid {
+  border-color: var(--text-error);
+}
+
+.alt2obsidian-field-error {
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+}

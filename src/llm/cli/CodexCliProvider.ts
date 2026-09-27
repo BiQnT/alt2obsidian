@@ -165,7 +165,7 @@ export class CodexCliProvider extends CliProviderBase {
         args,
         input: codexPrompt(call.prompt, call.systemPrompt),
         cwd: this.config.workDir,
-        timeoutMs: this.config.timeoutMs,
+        timeoutMs: Math.round(this.config.timeoutMs * Math.max(1, call.timeoutScale ?? 1)),
         signal: call.signal,
       });
       return parseCodexEvents(out.stdout, readIfExists(lastMessagePath));

@@ -122,6 +122,20 @@ try {
     await assert.rejects(p2, (e) => m.isAbortError(e));
     assert.ok(s2.calls.some((c) => c.command === "taskkill" && c.args.includes("/T")));
     console.log("PASS: timeout and cancel run taskkill /pid N /T /F");
+
+    // taskkill fails and the process never closes: child.kill() is used and the run still ends (review N4).
+    const s3 = stubSpawn((child, call) => {
+      if (call.command === "taskkill") return exitWith(child, 1);
+      child.kill = () => {
+        s3.killed = true;
+        return true;
+      };
+    });
+    const started = Date.now();
+    await assert.rejects(m.runCli({ bin: exe, args: [], platform: "win32", spawnFn: s3.fn, timeoutMs: 50 }), (e) => e.kind === "timeout");
+    assert.equal(s3.killed, true, "fallback child.kill() after taskkill failed");
+    assert.ok(Date.now() - started >= 2 * m.KILL_GRACE_MS - 100, "rejected by the give-up timer, not a close event");
+    console.log("PASS: taskkill failure falls back to child.kill(); a process that never closes is given up on");
   }
 
   // Lookup: `where` first (.exe preferred), then %APPDATA%\npm.

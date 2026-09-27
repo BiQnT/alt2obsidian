@@ -5,6 +5,7 @@ import {
   applyPreset,
   EFFORT_LEVELS,
   isCliProvider,
+  isSafeModelName,
   PRESET_LABELS,
   PROVIDER_LABELS,
   TASK_IDS,
@@ -277,8 +278,23 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     input.disabled = reserved || task.provider === "none";
     const datalist = modelCell.createEl("datalist", { attr: { id: listId } });
     for (const m of this.modelSuggestions(task.provider)) datalist.createEl("option", { attr: { value: m } });
+    const modelError = modelCell.createDiv({ cls: "alt2obsidian-field-error" });
+    modelError.hide();
+    input.addEventListener("input", () => {
+      // Checked while typing: a model name is passed as one CLI argument (review N8).
+      const ok = isSafeModelName(input.value.trim());
+      input.toggleClass("is-invalid", !ok);
+      modelError.setText(ok ? "" : "영문, 숫자와 . _ : / @ [ ] - 만 쓸 수 있고 '-'로 시작할 수 없습니다.");
+      if (ok) modelError.hide();
+      else modelError.show();
+    });
     input.addEventListener("change", async () => {
-      task.model = input.value.trim();
+      const value = input.value.trim();
+      if (!isSafeModelName(value)) {
+        new Notice(`모델 이름을 저장하지 않았습니다: ${value}`);
+        return;
+      }
+      task.model = value;
       markCustom();
       await this.save();
     });

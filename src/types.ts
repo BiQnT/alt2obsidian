@@ -319,6 +319,8 @@ export interface JsonCallOptions {
   signal?: AbortSignal;
   /** Calls made when the answer does not parse or validate. Default 2 (one retry). */
   attempts?: number;
+  /** Multiplies the provider's per-call timeout (bigger batches, images). Default 1. */
+  timeoutScale?: number;
 }
 
 export interface LLMProvider {

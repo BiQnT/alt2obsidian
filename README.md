@@ -53,7 +53,7 @@ codex login
 
 Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니다. 플러그인은 처음 한 번 로그인 셸에서 `command -v claude`로 경로를 찾아 저장하고, 못 찾으면 흔한 설치 폴더를 살펴봅니다. 그래도 못 찾으면 **설정 → Alt2Obsidian → LLM 연결**에 `command -v claude` 결과(절대 경로)를 넣고 '다시 찾기'를 누르세요.
 
-**Windows**: 경로는 `where claude`로 찾고, 못 찾으면 `%APPDATA%\npm`, `%USERPROFILE%\.local\bin` 등을 살펴봅니다. npm으로 설치한 `claude.cmd` / `codex.cmd`는 셸 없이 실행하기 위해 스크립트 안의 JavaScript 파일을 찾아 `node.exe`로 직접 실행하고(`node.exe`가 PATH나 같은 폴더에 있어야 함), 네이티브 설치본(`claude.exe`)은 그대로 실행합니다. 취소하면 `taskkill /T /F`로 프로세스 트리를 종료합니다. Windows 경로는 단위 테스트로만 확인했고 실제 Windows PC에서는 아직 확인하지 않았습니다.
+**Windows**: 경로는 `where claude`로 찾고, 못 찾으면 `%APPDATA%\npm`, `%USERPROFILE%\.local\bin` 등을 살펴봅니다. npm으로 설치한 `claude.cmd` / `codex.cmd`는 셸 없이 실행하기 위해 스크립트 안의 JavaScript 파일을 찾아 `node.exe`로 직접 실행하고(`node.exe`가 PATH나 같은 폴더에 있어야 함), 네이티브 설치본(`claude.exe`)은 그대로 실행합니다. 취소하면 `taskkill /T /F`로 프로세스 트리를 종료하고, taskkill이 실패하면 직접 실행한 프로세스라도 종료합니다. `where`는 콘솔 코드 페이지로 경로를 출력하므로 사용자 이름에 한글 같은 비ASCII 문자가 있으면 결과가 깨질 수 있는데, 이때는 환경 변수로 만든 설치 폴더 탐색이 대신 찾습니다. Windows 경로는 단위 테스트로만 확인했고 실제 Windows PC에서는 아직 확인하지 않았습니다.
 
 ### 방법 1: 수동 설치 (지금 바로 사용)
 

@@ -8,8 +8,9 @@
 // The answer is JSON (Codex: --output-schema; Claude: schema stated at the
 // end of the prompt), validated here. Slides missing from the answer or
 // failing the checks are asked for once more, alone (spec 4.2 rule 4). A
-// failed call is not retried; a fatal error (timeout, missing CLI, not
-// logged in, usage limit) or two failed calls in a row stop the run. Slides
+// failed call is not retried as is (a timed-out one is tried once in two
+// halves); a fatal error (missing CLI, not logged in, usage limit) or two
+// failed calls in a row stop the run. Slides
 // still failing keep their previous commentary when the note had one, and
 // are listed under "⚠️ 처리 실패 슬라이드" like 1.x.
 
@@ -193,10 +194,12 @@ export class BatchCommentaryGenerator {
     let consecutiveCallFailures = 0;
 
     /**
-     * One call. Returns the slides whose answer was missing or invalid (to be
-     * asked for again), or null when the call itself failed (not retried).
+     * One call. `invalid`: slides whose answer was missing or invalid (asked
+     * for again once). `failed`: the call itself failed and is not repeated
+     * as is; a timed-out call is split in half once by the caller.
      */
-    const runCall = async (slides: PlannedSlide[]): Promise<Map<number, string> | null> => {
+    type CallResult = { kind: "ok"; invalid: Map<number, string> } | { kind: "failed"; timeout: boolean };
+    const runCall = async (slides: PlannedSlide[]): Promise<CallResult> => {
       calls.push(slides.map((s) => s.page));
       const images: ImageInput[] = [];
       for (const s of slides) {
@@ -213,6 +216,9 @@ export class BatchCommentaryGenerator {
           signal: opts.signal,
           // Retries are per failed slide, below.
           attempts: 1,
+          // The per-call timeout is for an 8-slide text batch; bigger
+          // batches (Codex uses 16) and images get proportionally longer.
+          timeoutScale: Math.max(1, slides.length / 8) + 0.1 * images.length,
         });
       } catch (e) {
         if (isAbortError(e) || opts.signal?.aborted) throw e;
@@ -220,7 +226,7 @@ export class BatchCommentaryGenerator {
         if (!(e instanceof CliRunError)) {
           // The CLI answered but not with parsable JSON: every slide is invalid.
           consecutiveCallFailures = 0;
-          return new Map(slides.map((s) => [s.page, `응답 JSON 형식 오류: ${msg.slice(0, 120)}`]));
+          return { kind: "ok", invalid: new Map(slides.map((s) => [s.page, `응답 JSON 형식 오류: ${msg.slice(0, 120)}`])) };
         }
         for (const s of slides) failures.set(s.page, msg);
         consecutiveCallFailures++;
@@ -229,12 +235,15 @@ export class BatchCommentaryGenerator {
         } else if (consecutiveCallFailures >= MAX_CONSECUTIVE_CALL_FAILURES) {
           stopReason = `호출이 ${MAX_CONSECUTIVE_CALL_FAILURES}번 연속 실패해 남은 슬라이드를 중단했습니다: ${msg}`;
         }
-        return null;
+        return { kind: "failed", timeout: e.kind === "timeout" };
       }
       consecutiveCallFailures = 0;
       const { ok, failed } = checkBatchAnswer(raw, slides);
       for (const [page, item] of ok) done.set(page, item);
-      return failed;
+      return { kind: "ok", invalid: failed };
+    };
+    const record = (invalid: Map<number, string>) => {
+      for (const [page, reason] of invalid) failures.set(page, reason);
     };
 
     for (let b = 0; b < plan.batches.length; b++) {
@@ -244,13 +253,27 @@ export class BatchCommentaryGenerator {
         continue;
       }
       opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: false });
-      const invalid = await runCall(slides);
-      if (invalid && invalid.size > 0 && !stopReason) {
+      const first = await runCall(slides);
+      if (first.kind === "ok") {
+        if (first.invalid.size > 0 && !stopReason) {
+          opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: true });
+          const retry = await runCall(slides.filter((s) => first.invalid.has(s.page)));
+          if (retry.kind === "ok") record(retry.invalid);
+        } else {
+          record(first.invalid);
+        }
+      } else if (first.timeout && slides.length > 1 && !stopReason) {
+        // A timed-out batch is tried once more in two halves.
         opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: true });
-        const retry = await runCall(slides.filter((s) => invalid.has(s.page)));
-        for (const [page, reason] of retry ?? new Map<number, string>()) failures.set(page, reason);
-      } else if (invalid) {
-        for (const [page, reason] of invalid) failures.set(page, reason);
+        const mid = Math.ceil(slides.length / 2);
+        for (const half of [slides.slice(0, mid), slides.slice(mid)]) {
+          if (stopReason) {
+            for (const s of half) failures.set(s.page, stopReason);
+            continue;
+          }
+          const r = await runCall(half);
+          if (r.kind === "ok") record(r.invalid);
+        }
       }
     }
     opts.onProgress?.({ batch: plan.batches.length, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: false });
@@ -288,15 +311,18 @@ export class BatchCommentaryGenerator {
         }
         const reason = failures.get(s.page) ?? "응답에 이 슬라이드가 없음";
         if (s.previous && s.previous.commentary.trim()) {
-          // Keep the old commentary (and its old meta, so the next import tries again).
+          // Keep the old commentary. Its meta (image signal, gist) only on a
+          // hash match: a same-number match describes other content, so it
+          // gets no reusable meta and the next import regenerates it.
+          const sameContent = s.previous.hash === s.hash;
           sections.push({
             slideNum: s.page,
             hash: s.hash,
             commentary: s.previous.commentary,
             citedConcepts: [],
-            meta: s.previous.meta || undefined,
+            meta: sameContent ? s.previous.meta || undefined : undefined,
           });
-          if (s.previous.gist) gists.set(s.page, s.previous.gist);
+          if (sameContent && s.previous.gist) gists.set(s.page, s.previous.gist);
           keptPrevious.push(s.page);
           errors.push({ slideNum: s.page, reason: `새 해설 생성 실패, 이전 해설을 유지했습니다 (${reason})` });
         } else {

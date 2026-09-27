@@ -177,7 +177,7 @@ export class ClaudeCliProvider extends CliProviderBase {
         args,
         input: buildClaudeInput(call),
         cwd: this.config.workDir,
-        timeoutMs: this.config.timeoutMs,
+        timeoutMs: Math.round(this.config.timeoutMs * Math.max(1, call.timeoutScale ?? 1)),
         signal: call.signal,
       });
       return parseClaudeOutput(out.stdout);

@@ -8,7 +8,7 @@
 //   FAKE_CLI_STATE    JSON file for per-test counters (retry scenarios)
 //   FAKE_CLI_MODE     comma-separated: ok | drop:<page> | dropalways:<page> |
 //                     short:<page> | hang | limit | badjson | textlimit |
-//                     crash | loggedout
+//                     crash | loggedout | hangbig:<n> (hang when the batch has more than n slides)
 //   FAKE_CLI_PIDFILE  (hang) the fake and its child write their pids here
 
 "use strict";
@@ -91,6 +91,14 @@ function answer(stdin, schema) {
   };
 }
 
+/** hangbig:<n>: true when this prompt carries more than n slides. */
+function hangsForBatch(stdin) {
+  const m = modes().find((x) => x.startsWith("hangbig:"));
+  if (!m) return false;
+  const n = (stdin.match(/^### 슬라이드 \d+/gm) || []).length;
+  return n > Number(m.split(":")[1]);
+}
+
 function hang() {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   if (process.env.FAKE_CLI_PIDFILE) fs.writeFileSync(process.env.FAKE_CLI_PIDFILE, `${process.pid} ${child.pid}`);
@@ -161,7 +169,7 @@ function runClaude() {
   log({ cli: "claude", argv, cwd, stdin, images: images.map((i) => i.source.media_type) });
 
   const ms = modes();
-  if (ms.includes("hang")) return hang();
+  if (ms.includes("hang") || hangsForBatch(stdin)) return hang();
   const emit = (ev) => process.stdout.write(JSON.stringify(ev) + "\n");
   emit({ type: "system", subtype: "init", model: flags["--model"] ?? "default" });
   if (ms.includes("limit")) {
