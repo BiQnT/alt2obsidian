@@ -112,6 +112,7 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   altDataDir: "",
 };
 
+/** 1.x exam period tag. Exam summaries are gone (spec G5); old records may still carry it. */
 export type ExamPeriod = "midterm" | "final";
 
 export interface AltNoteData {
@@ -240,6 +241,7 @@ export interface ImportRecord {
   altId?: string;
   /** Alt local UUID (local sources). */
   altLocalId?: string;
+  /** 1.x only (exam summaries were removed in 2.0); kept so old records load. */
   examPeriod?: ExamPeriod;
   pdfPath?: string;
   wasUpdate?: boolean;

@@ -143,36 +143,6 @@
   color: var(--text-warning);
 }
 
-/* Exam Summary Section */
-.alt2obsidian-exam-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.alt2obsidian-exam-subject {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px;
-  border-radius: 4px;
-  background: var(--background-secondary);
-}
-
-.alt2obsidian-exam-subject-name {
-  font-weight: 500;
-}
-
-.alt2obsidian-exam-subject-count {
-  font-size: 0.8em;
-  color: var(--text-muted);
-}
-
-.alt2obsidian-exam-btn {
-  font-size: 0.85em;
-  cursor: pointer;
-}
-
 /* Error Messages */
 .alt2obsidian-error {
   padding: 8px;
@@ -240,36 +210,6 @@
   padding: 16px 0;
 }
 
-
-/* Exam period select */
-.alt2obsidian-period-select {
-  width: 100%;
-  margin-top: 4px;
-  padding: 4px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--background-modifier-border);
-  background: var(--background-primary);
-  color: var(--text-normal);
-  font-size: 13px;
-}
-
-/* Exam section layout */
-.alt2obsidian-exam-subject-info {
-  margin-bottom: 4px;
-}
-
-.alt2obsidian-exam-btn-row {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.alt2obsidian-exam-btn-row .alt2obsidian-exam-btn {
-  flex: 1;
-  min-width: 50px;
-  font-size: 12px;
-  padding: 4px 8px;
-}
 
 .alt2obsidian-update-modal h2 {
   margin-top: 0;

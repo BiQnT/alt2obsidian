@@ -165,10 +165,13 @@ try {
   // 1.x data with a Gemini key: kept, the switch is only offered (review H2).
   const { plugin, files, config, stored } = await makePlugin({
     settings: { apiKey: "old-key", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Alt2Obsidian", language: "ko", rateDelayMs: 5000 },
-    recentImports: [],
+    // 1.x record of a lecture imported with an exam period (exam summaries are gone in 2.0).
+    recentImports: [{ url: "u", title: "old", subject: "CSED311", path: "Alt2Obsidian/CSED311/old.md", date: "2026-03-01", parseQuality: "full", examPeriod: "midterm" }],
   });
   plugin.cacheRoot = cacheRoot;
   assert.equal(plugin.data.pendingCliDefault, true);
+  assert.equal(plugin.data.recentImports[0].examPeriod, "midterm", "1.x record with an exam period loads as is");
+  assert.equal(typeof plugin.generateExamSummary, "undefined", "exam summary generation removed (spec G5)");
   plugin.data.settings.claudePath = FAKE_CLAUDE;
   await plugin.applyCliDefaultOnce();
   assert.equal(plugin.data.settings.tasks.commentary.provider, "gemini", "working Gemini setup kept");
@@ -185,7 +188,7 @@ try {
   console.log("PASS: CLI default only without a working setup and after a free login check; 1.x Gemini users get an offer");
 
   // Prepare: no CLI call, estimate matches the plan.
-  const prepared = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311", "midterm");
+  const prepared = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");
   assert.equal(s.calls().length, 0, "prepare spends no tokens");
   assert.equal(prepared.estimate.slidesTotal, 8);
   assert.equal(prepared.estimate.slidesGenerated, 6);
@@ -203,7 +206,7 @@ try {
   assert.equal(record.path, "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.md", "2.0 layout: Lectures/ (spec 4.5)");
   assert.ok(note.startsWith("---\n"));
   assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
-  assert.match(note, /tags: \[csed311, cache, memory, midterm\]/);
+  assert.match(note, /tags: \[csed311, cache, memory\]/, "no exam period tag (spec G5)");
   assert.equal((note.match(/<!-- alt2obs:meta img:/g) ?? []).length, 6);
   assert.ok(files.has("Alt2Obsidian/CSED311/Concepts/캐시.md"));
   assert.ok(files.has("Alt2Obsidian/CSED311/Lectures/Lec7 Caches.pdf"));
@@ -215,7 +218,7 @@ try {
 
   // Re-import of the same deck: every generated slide reused, memo kept.
   files.set(record.path, note.replace("> [!note] 내 메모\n> \n\n## 📚 슬라이드 3", "> [!note] 내 메모\n> 내 메모 유지\n\n## 📚 슬라이드 3"));
-  const again = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311", "midterm");
+  const again = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");
   assert.equal(again.estimate.slidesReused, 6);
   assert.equal(again.estimate.calls, 2, "only overview and concepts");
   const before = s.calls().length;

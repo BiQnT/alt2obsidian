@@ -1,7 +1,6 @@
 import { App, TFile, TFolder, normalizePath } from "obsidian";
 import {
   ConceptNote,
-  ExamPeriod,
   ImportUpdateSummary,
 } from "../types";
 import { sanitizeFilename } from "../utils/helpers";
@@ -240,34 +239,6 @@ export class VaultManager {
 
     this.conceptNameCache.set(cacheKey, new Set(names));
     return names;
-  }
-
-  async readNotesForSubject(
-    subject: string,
-    period?: ExamPeriod
-  ): Promise<{ title: string; content: string }[]> {
-    const subjectFolder = normalizePath(`${this.basePath}/${sanitizeFilename(subject)}`);
-    const folder = this.app.vault.getAbstractFileByPath(subjectFolder);
-
-    if (!(folder instanceof TFolder)) return [];
-
-    const notes: { title: string; content: string }[] = [];
-    for (const child of folder.children) {
-      if (!child.name.endsWith(".md")) continue;
-      const content = await this.app.vault.read(child as any);
-
-      if (period) {
-        const tagsMatch = content.match(/^tags:\s*\[([^\]]+)\]/m);
-        const tags = tagsMatch
-          ? tagsMatch[1].split(",").map((t) => t.trim())
-          : [];
-        if (!tags.includes(period)) continue;
-      }
-
-      notes.push({ title: child.name.replace(/\.md$/, ""), content });
-    }
-
-    return notes;
   }
 
   async saveRawFile(data: ArrayBuffer, path: string): Promise<string> {

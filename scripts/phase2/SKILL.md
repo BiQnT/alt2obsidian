@@ -26,17 +26,8 @@ Parse from the user's message (or ask if missing):
 | `vault` | absolute path, e.g. `/Users/biqnt/Documents/lecture-vault` | yes — read from `~/Library/Application Support/obsidian/obsidian.json` if a single vault, else ask |
 | `subject` | folder under `Alt2Obsidian/`, e.g. `CSED232` | local notes: the `subject` guessed from the Alt folder (confirm with the user); URL: ask if not in user's message |
 | `title` | filename stem, e.g. `8강` | optional — falls back to scraped Alt note title |
-| `period` | `midterm` / `final` (or Korean equivalents — see mapping below) | optional — required if the user wants this lecture to appear in the plugin's "시험대비 요약" extraction |
 
-**Exam-period tag mapping (CRITICAL — the plugin's `VaultManager.readNotesForSubject` filters with strict English match):**
-
-| User says | Map to tag |
-|---|---|
-| `midterm`, `중간`, `중간고사`, `중간고사범위` | `midterm` |
-| `final`, `기말`, `기말고사`, `기말고사범위` | `final` |
-| (omitted) | no period tag — note will not appear in exam-summary extraction |
-
-The plugin checks `tags.includes("midterm")` or `tags.includes("final")` literally. Writing the Korean phrase verbatim (e.g., `기말고사범위`) breaks the filter. Always normalize to the English value before adding to the frontmatter `tags:` array.
+Exam periods are obsolete: 2.0 removed the plugin's exam summary (spec G5), so the Skill no longer asks for a `midterm` / `final` period and adds no period tag. Existing `Exam/` notes and period tags in old notes are left as they are.
 
 ## Workflow
 
@@ -207,7 +198,7 @@ Insert `overview.md` verbatim between `# <title>` and the first slide section (i
 ---
 title: "<title>"
 subject: "<subject>"
-tags: [<subject lowercased>, <englishPeriodIfSpecified>, <conceptTag1>, <conceptTag2>, ...]
+tags: [<subject lowercased>, <conceptTag1>, <conceptTag2>, ...]
 date: "<YYYY-MM-DD>"
 source: "alt2obsidian-cc-skill"
 slide_count: <N>
@@ -310,18 +301,6 @@ Tell the user: file path written, whether it was a new note or a merge (with the
 The plugin and this Skill produce identical slide hashes: both run `src/core/slideHash.ts` (`sha1(normalized page text)`, first 8 hex, no page number; pages without text use `sha1(noteId + ":" + page)`). Because the hash does not depend on the page number, and both tools merge re-imports with the same code (`src/core/merge.ts`, run by `merge-note.mjs` in step 8), inserting or deleting slides keeps every `> [!note] 내 메모` callout on its own slide when the lecture is re-imported with either tool.
 
 Notes written by 1.x (plugin PNG hash, or the old Skill `sha1(noteId:page)` hash) will show every slide as `slideDrift` once on their first re-import with this version. Memos are still preserved through the N-match-with-drift branch, and the new hashes are stable after that.
-
-## Retroactive fix for existing Skill-generated notes
-
-If you already imported a lecture via the Skill before this exam-period fix, the note's `tags:` line may contain Korean strings like `기말고사범위` instead of the English `final`. The plugin's exam-summary extractor will skip those notes. To fix, run:
-
-```bash
-# Replace Korean period strings with English equivalents in a single note's frontmatter.
-# Adjust path. Backup first if you've manually edited the file.
-sed -i '' 's/기말고사범위/final/g; s/기말고사/final/g; s/중간고사범위/midterm/g; s/중간고사/midterm/g' "<vault>/Alt2Obsidian/<subject>/<title>.md"
-```
-
-Or re-run the Skill against the same Alt URL with `period=final` (or `midterm`). Step 8 merges the re-import with `merge-note.mjs`, which preserves your `> [!note] 내 메모` callouts via the hash-match path, and the corrected tag gets written.
 
 ## Error handling
 

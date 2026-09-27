@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf, TFile, Modal, setIcon } from "obsidian";
 import type Alt2ObsidianPlugin from "../main";
 import type { PreparedImport } from "../main";
-import { ImportPreview, ExamPeriod, ImportUpdateSummary, LLMUsage } from "../types";
+import { ImportPreview, ImportUpdateSummary, LLMUsage } from "../types";
 import { compactTokens } from "../llm/usage";
 import { PROVIDER_LABELS } from "../settings/llmSettings";
 import { AltNoteDetails, AltNoteSummary, inferSubject } from "../sources";
@@ -37,8 +37,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
   private progressText: HTMLElement | null = null;
   private messageContainer: HTMLElement | null = null;
   private recentListContainer: HTMLElement | null = null;
-  private examContainer: HTMLElement | null = null;
-  private examPeriodSelect: HTMLSelectElement | null = null;
   /** Estimate panel and run panel of the CLI path (spec 5.5). */
   private cliPanel: HTMLElement | null = null;
   /** The running CLI import, aborted when the view closes (review M2). */
@@ -59,10 +57,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
   private expanded = new Set<string>();
   private selectedId: string | null = null;
   private localSubjectInput: HTMLInputElement | null = null;
-  private localPeriodSelect: HTMLSelectElement | null = null;
   private localImportBtn: HTMLButtonElement | null = null;
-  /** Subject and exam period typed for a note, kept while its panel re-renders. */
-  private drafts = new Map<string, { subject?: string; period?: string }>();
+  /** Subject typed for a note, kept while its panel re-renders. */
+  private drafts = new Map<string, { subject?: string }>();
   /** Bumped on every refresh so a stale background loop stops. */
   private loadGeneration = 0;
   private busy = false;
@@ -99,7 +96,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
     this.cliPanel.hide();
     this.renderMessageSection(container);
     this.renderRecentSection(container);
-    this.renderExamSection(container);
     this.switchTab(this.tab);
     void this.refreshLocal();
   }
@@ -360,18 +356,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
     });
     subjectRow.createSpan({ cls: "alt2obsidian-muted", text: own?.subject ? "기존 노트" : it.note.folderPath.length > 0 ? "Alt 폴더에서 추정" : "제목에서 추정" });
 
-    const periodRow = footer.createDiv({ cls: "alt2obsidian-footer-row" });
-    periodRow.createEl("label", { text: "시험" });
-    this.localPeriodSelect = periodRow.createEl("select", { cls: "alt2obsidian-period-select" }) as HTMLSelectElement;
-    for (const [value, text] of [["", "없음"], ["midterm", "중간고사"], ["final", "기말고사"]]) {
-      const opt = this.localPeriodSelect.createEl("option", { text });
-      opt.value = value;
-    }
-    this.localPeriodSelect.value = draft.period ?? "";
-    this.localPeriodSelect.addEventListener("change", () => {
-      this.drafts.set(it.note.id, { ...this.drafts.get(it.note.id), period: this.localPeriodSelect?.value ?? "" });
-    });
-
     const align = footer.createDiv({ cls: "alt2obsidian-align-line" });
     const d = it.details;
     if (!d) {
@@ -430,7 +414,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
       return;
     }
     const subject = this.localSubjectInput?.value.trim() || inferSubject(it.note.folderPath, it.note.title);
-    const period = ((this.localPeriodSelect?.value as ExamPeriod | "") || undefined) as ExamPeriod | undefined;
     this.setLoading(true);
     this.clearMessage();
     try {
@@ -438,9 +421,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
       const preview = await this.plugin.previewLocal(it.note.id);
       for (const w of preview.bundle?.warnings ?? []) this.showNotice(w);
       if (this.plugin.isCliCommentary()) {
-        await this.executeCliImport("", preview, subject, period);
+        await this.executeCliImport("", preview, subject);
       } else {
-        await this.executeImport("", preview, subject, period);
+        await this.executeImport("", preview, subject);
       }
       this.drafts.delete(it.note.id);
     } catch (e) {
@@ -509,21 +492,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
         ? "위에서 선택하거나 새 과목명 입력..."
         : "과목명 입력 (예: CSED311)",
     });
-
-    // Exam period selection
-    const periodRow = section.createDiv({ cls: "alt2obsidian-subject-input" });
-    periodRow.createEl("label", { text: "시험 범위" });
-    this.examPeriodSelect = periodRow.createEl("select", {
-      cls: "alt2obsidian-period-select",
-    }) as HTMLSelectElement;
-    [
-      { value: "", text: "없음" },
-      { value: "midterm", text: "중간고사" },
-      { value: "final", text: "기말고사" },
-    ].forEach(({ value, text }) => {
-      const opt = this.examPeriodSelect!.createEl("option", { text });
-      opt.value = value;
-    });
   }
 
   private renderProgressSection(container: Element): void {
@@ -557,18 +525,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
       cls: "alt2obsidian-recent-list",
     });
     this.refreshRecentList();
-  }
-
-  private renderExamSection(container: Element): void {
-    container.createEl("h6", {
-      text: "시험요약본",
-      cls: "alt2obsidian-section-header",
-    });
-
-    this.examContainer = container.createDiv({
-      cls: "alt2obsidian-exam-section",
-    });
-    this.refreshExamSection();
   }
 
   refreshRecentList(): void {
@@ -633,72 +589,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
     }
   }
 
-  refreshExamSection(): void {
-    if (!this.examContainer) return;
-    this.examContainer.empty();
-
-    // Group recent imports by subject (only valid/existing files)
-    const subjectMap = new Map<string, { midterm: number; final: number; none: number }>();
-    for (const record of this.plugin.data.recentImports) {
-      if (!this.app.vault.getAbstractFileByPath(record.path)) continue;
-      const counts = subjectMap.get(record.subject) || { midterm: 0, final: 0, none: 0 };
-      if (record.examPeriod === "midterm") counts.midterm++;
-      else if (record.examPeriod === "final") counts.final++;
-      else counts.none++;
-      subjectMap.set(record.subject, counts);
-    }
-
-    if (subjectMap.size === 0) {
-      this.examContainer.createDiv({
-        text: "노트를 가져온 후 시험요약본을 생성할 수 있습니다",
-        cls: "alt2obsidian-empty",
-      });
-      return;
-    }
-
-    for (const [subject, counts] of subjectMap) {
-      const row = this.examContainer.createDiv({
-        cls: "alt2obsidian-exam-subject",
-      });
-
-      const info = row.createDiv({ cls: "alt2obsidian-exam-subject-info" });
-      info.createSpan({ text: subject, cls: "alt2obsidian-exam-subject-name" });
-
-      const countParts: string[] = [];
-      if (counts.midterm > 0) countParts.push(`중간 ${counts.midterm}`);
-      if (counts.final > 0) countParts.push(`기말 ${counts.final}`);
-      if (counts.none > 0) countParts.push(`미분류 ${counts.none}`);
-      info.createSpan({
-        text: ` (${countParts.join(" / ")})`,
-        cls: "alt2obsidian-exam-subject-count",
-      });
-
-      const btnRow = row.createDiv({ cls: "alt2obsidian-exam-btn-row" });
-
-      if (counts.midterm > 0) {
-        const btn = btnRow.createEl("button", {
-          text: "중간",
-          cls: "alt2obsidian-exam-btn",
-        });
-        btn.addEventListener("click", () => this.handleExamSummary(subject, "midterm"));
-      }
-
-      if (counts.final > 0) {
-        const btn = btnRow.createEl("button", {
-          text: "기말",
-          cls: "alt2obsidian-exam-btn",
-        });
-        btn.addEventListener("click", () => this.handleExamSummary(subject, "final"));
-      }
-
-      const allBtn = btnRow.createEl("button", {
-        text: "전체",
-        cls: "alt2obsidian-exam-btn",
-      });
-      allBtn.addEventListener("click", () => this.handleExamSummary(subject));
-    }
-  }
-
   private async handleImport(): Promise<void> {
     const url = this.urlInput?.value?.trim();
     if (!url) {
@@ -729,11 +619,10 @@ export class Alt2ObsidianSidebarView extends ItemView {
       }
 
       const subject = this.subjectInput?.value?.trim() || undefined;
-      const period = ((this.examPeriodSelect?.value as ExamPeriod | "") || undefined) as ExamPeriod | undefined;
       if (this.plugin.isCliCommentary()) {
-        await this.executeCliImport(url, preview, subject, period);
+        await this.executeCliImport(url, preview, subject);
       } else {
-        await this.executeImport(url, preview, subject, period);
+        await this.executeImport(url, preview, subject);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "알 수 없는 오류";
@@ -745,8 +634,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
 
   // ---- CLI path: estimate, confirm, run with live progress ----
 
-  private async executeCliImport(url: string, preview: ImportPreview, subject: string | undefined, period: ExamPeriod | undefined): Promise<void> {
-    let prepared = await this.plugin.prepareCliImport(url, preview, subject, period, (stage, pct) => this.updateProgress(pct, stage));
+  private async executeCliImport(url: string, preview: ImportPreview, subject: string | undefined): Promise<void> {
+    let prepared = await this.plugin.prepareCliImport(url, preview, subject, (stage, pct) => this.updateProgress(pct, stage));
     this.hideProgress();
 
     for (;;) {
@@ -918,14 +807,13 @@ export class Alt2ObsidianSidebarView extends ItemView {
     };
   }
 
-  private async executeImport(url: string, preview: ImportPreview, subject: string | undefined, examPeriod: ExamPeriod | undefined): Promise<void> {
+  private async executeImport(url: string, preview: ImportPreview, subject: string | undefined): Promise<void> {
     this.updateProgress(0, "LLM 처리 시작...");
 
     const result = await this.plugin.importNote(
       url,
       preview,
       subject,
-      examPeriod,
       (stage, pct) => {
         this.updateProgress(pct, stage);
       },
@@ -942,13 +830,11 @@ export class Alt2ObsidianSidebarView extends ItemView {
 
     if (this.urlInput) this.urlInput.value = "";
     if (this.subjectInput) this.subjectInput.value = "";
-    if (this.examPeriodSelect) this.examPeriodSelect.value = "";
     this.containerEl.querySelectorAll(".alt2obsidian-subject-chip").forEach(
       (c) => c.removeClass("is-active")
     );
 
     this.refreshRecentList();
-    this.refreshExamSection();
     this.refreshStatuses();
 
     // Open note and PDF side by side
@@ -971,31 +857,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
         // Keep focus on the note
         this.app.workspace.setActiveLeaf(noteLeaf, { focus: true });
       }
-    }
-  }
-
-  private async handleExamSummary(subject: string, period?: ExamPeriod): Promise<void> {
-    const settings = this.plugin.data.settings;
-    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
-      this.showError("API 키를 설정에서 입력해주세요");
-      return;
-    }
-
-    this.clearMessage();
-    const label = period === "midterm" ? "중간고사" : period === "final" ? "기말고사" : "전체";
-    this.updateProgress(0, `${subject} ${label} 시험요약본 생성 중...`);
-
-    try {
-      const path = await this.plugin.generateExamSummary(subject, period);
-      this.showSuccess(`시험요약본 생성 완료!`);
-      this.hideProgress();
-
-      // Open the generated file
-      this.app.workspace.openLinkText(path, "", false);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "알 수 없는 오류";
-      this.showError(msg);
-      this.hideProgress();
     }
   }
 

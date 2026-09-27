@@ -5,7 +5,6 @@ import {
   ImportRecord,
   ImportPreview,
   LLMProvider as ILLMProvider,
-  ExamPeriod,
   ConceptData,
   ImportUpdateSummary,
   LectureMaterialContext,
@@ -54,7 +53,6 @@ import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { insertFrontmatterLine, NoteGenerator } from "./generator/NoteGenerator";
 import { PerSlideCommentaryGenerator } from "./generator/PerSlideCommentaryGenerator";
 import type { PerSlideGenerationResult } from "./types";
-import { ExamSummaryGenerator } from "./generator/ExamSummaryGenerator";
 import { VaultManager } from "./vault/VaultManager";
 import { Alt2ObsidianSettingsTab } from "./ui/SettingsTab";
 import {
@@ -90,7 +88,6 @@ export interface PreparedImport {
   url: string;
   preview: ImportPreview;
   subject: string;
-  examPeriod?: ExamPeriod;
   notePath: string;
   pdfData: ArrayBuffer | null;
   /** null: no PDF, the lecture-level flow runs instead. */
@@ -654,7 +651,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
     url: string,
     preview: ImportPreview,
     subjectOverride?: string,
-    examPeriod?: ExamPeriod,
     onProgress?: (stage: string, percent: number) => void,
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>
   ): Promise<ImportRecord> {
@@ -667,7 +663,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     try {
       const llm = await this.providerFor("commentary", job, usage);
       const conceptLlm = await this.providerFor("concepts", job, usage);
-      return await this.runLegacyImport(url, preview, subjectOverride, examPeriod, llm, conceptLlm, onProgress, onConfirmUpdate);
+      return await this.runLegacyImport(url, preview, subjectOverride, llm, conceptLlm, onProgress, onConfirmUpdate);
     } finally {
       removeJobDir(job);
     }
@@ -693,7 +689,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
     url: string,
     preview: ImportPreview,
     subjectOverride: string | undefined,
-    examPeriod: ExamPeriod | undefined,
     llm: ILLMProvider,
     conceptLlm: ILLMProvider,
     onProgress?: (stage: string, percent: number) => void,
@@ -845,7 +840,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const llmResult = {
       processedSummary: altData.summary,
       concepts: conceptResult.concepts,
-      tags: examPeriod ? [...conceptResult.tags, examPeriod] : conceptResult.tags,
+      tags: conceptResult.tags,
       subjectSuggestion: subject,
     };
 
@@ -867,7 +862,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
       url,
       altData,
       subject,
-      examPeriod,
       lectureMarkdown,
       conceptNotes,
       pdfData,
@@ -884,7 +878,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
     url: string;
     altData: import("./types").AltNoteData;
     subject: string;
-    examPeriod?: ExamPeriod;
     lectureMarkdown: string;
     conceptNotes: import("./types").ConceptNote[];
     pdfData: ArrayBuffer | null;
@@ -897,7 +890,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     /** A cancelled import must not write anything. */
     signal?: AbortSignal;
   }): Promise<ImportRecord> {
-    const { url, altData, subject, examPeriod, lectureMarkdown, conceptNotes, pdfData, onProgress, onConfirmUpdate, signal } = args;
+    const { url, altData, subject, lectureMarkdown, conceptNotes, pdfData, onProgress, onConfirmUpdate, signal } = args;
     const vm = this.vaultManager!;
     // Save everything to vault
     onProgress?.("Vault에 저장 중...", 90);
@@ -942,7 +935,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
       parseQuality: "full",
       altId: local ? undefined : altData.metadata.noteId || undefined,
       altLocalId: local ? altData.metadata.noteId : undefined,
-      examPeriod,
       pdfPath,
       wasUpdate: saveResult.wasUpdate,
       updateSummary,
@@ -963,7 +955,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
     url: string,
     preview: ImportPreview,
     subjectOverride: string | undefined,
-    examPeriod: ExamPeriod | undefined,
     onProgress?: (stage: string, percent: number) => void
   ): Promise<PreparedImport> {
     const settings = this.data.settings;
@@ -1016,7 +1007,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       }
     }
     onProgress?.("예산 산정 완료", 100);
-    return this.withEstimate({ url, preview, subject, examPeriod, notePath, pdfData, plan, context, fewerImages: false, alignment, slideTexts });
+    return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, context, fewerImages: false, alignment, slideTexts });
   }
 
   /** Same plan with visual slides sent as text only (spec 5.5 "fewer images"). */
@@ -1104,14 +1095,14 @@ export default class Alt2ObsidianPlugin extends Plugin {
     try {
       const commentaryLlm = await this.providerFor("commentary", job, usage, signal);
       const conceptLlm = await this.providerFor("concepts", job, usage, signal);
-      const { preview, subject, examPeriod, url, pdfData } = prepared;
+      const { preview, subject, url, pdfData } = prepared;
       let { plan, alignment } = prepared;
       const altData = preview.altData;
 
       if (!plan || !pdfData) {
         // No PDF: 1.x lecture-level note, generated by the CLI provider.
         hooks.onStep?.("overview");
-        return await this.runLegacyImport(url, preview, subject, examPeriod, commentaryLlm, conceptLlm, hooks.onProgress, hooks.onConfirmUpdate, signal, prepared.notePath);
+        return await this.runLegacyImport(url, preview, subject, commentaryLlm, conceptLlm, hooks.onProgress, hooks.onConfirmUpdate, signal, prepared.notePath);
       }
 
       // Optional LLM check of the uncertain alignment spans (spec 4.3 step 3).
@@ -1146,7 +1137,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       hooks.onStep?.("save");
       const existingConceptNames = new Set(prepared.context.knownConcepts);
       const concepts = this.normalizeConcepts(run.concepts, existingConceptNames);
-      const tags = examPeriod ? [...run.tags, examPeriod] : run.tags;
+      const tags = run.tags;
       const commentaryTask = settings.tasks.commentary;
       const providerLabel = `${PROVIDER_LABELS[commentaryTask.provider]}${commentaryTask.model ? " " + commentaryTask.model : ""}`;
       const errors = [
@@ -1167,7 +1158,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
         url,
         altData,
         subject,
-        examPeriod,
         lectureMarkdown,
         conceptNotes,
         pdfData,
@@ -1301,21 +1291,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
     applyClaudeDefaults(this.data.settings);
     delete this.data.cliSwitchOffered;
     await this.savePluginData();
-  }
-
-  async generateExamSummary(subject: string, period?: ExamPeriod): Promise<string> {
-    const settings = this.data.settings;
-    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
-      throw new Error("API 키를 설정에서 입력해주세요");
-    }
-    const job = createJobDir();
-    try {
-      const llm = await this.providerFor("commentary", job, new UsageTracker());
-      const generator = new ExamSummaryGenerator(llm, this.vaultManager!);
-      return await generator.generate(subject, period);
-    } finally {
-      removeJobDir(job);
-    }
   }
 
   private async savePartialNote(
