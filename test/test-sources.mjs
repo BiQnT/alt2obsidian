@@ -1,0 +1,402 @@
+/**
+ * Test: Alt local sources (spec 4.1) against fakes only: a fake Alt HTTP
+ * server with a fake token, and synthetic SQLite stores built here (schema
+ * shaped like Alt's v40 store, synthetic text). Also the plate-json
+ * converter, transcript parsing, subject inference, the note status used by
+ * the sidebar, and the alt-local.mjs Skill CLI. The real Alt app, its token
+ * and its data are never touched.
+ * Run: node test/test-sources.mjs
+ */
+
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import * as http from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { importTs, repo } from "./helpers/bundle-ts.mjs";
+import { FIXTURE_PATH } from "./helpers/synthetic-pdf.mjs";
+
+const m = await importTs("test/helpers/sources-entry.ts");
+const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
+const root = mkdtempSync(join(tmpdir(), "alt2obs-sources-"));
+const FAKE_TOKEN = "fake-token-for-tests-0123456789";
+
+// ---- plate-json to markdown ----
+{
+  const doc = [
+    { type: "h1", children: [{ text: "캐시 개요" }] },
+    { type: "p", children: [{ text: "캐시는 " }, { text: "빠른", bold: true }, { text: " 메모리이고 " }, { text: "SRAM", code: true }, { text: "으로 만든다." }] },
+    { type: "p", listStyleType: "disc", indent: 1, children: [{ text: "시간 지역성", italic: true }] },
+    { type: "p", listStyleType: "disc", indent: 2, children: [{ text: "반복문 변수" }] },
+    { type: "p", listStyleType: "decimal", indent: 1, listStart: 1, children: [{ text: "첫째" }] },
+    { type: "p", listStyleType: "decimal", indent: 1, children: [{ text: "둘째" }] },
+    { type: "p", children: [{ text: "링크: " }, { type: "a", url: "https://example.com", children: [{ text: "예시" }] }, { text: " 참고" }] },
+    { type: "blockquote", children: [{ text: "인용문" }] },
+    { type: "code_block", lang: "c", children: [{ type: "code_line", children: [{ text: "int x = 1;" }] }, { type: "code_line", children: [{ text: "x++;" }] }] },
+    { type: "hr", children: [{ text: "" }] },
+    { type: "table", children: [
+      { type: "tr", children: [{ type: "th", children: [{ type: "p", children: [{ text: "항목" }] }] }, { type: "th", children: [{ type: "p", children: [{ text: "값|값" }] }] }] },
+      { type: "tr", children: [{ type: "td", children: [{ type: "p", children: [{ text: "hit" }] }] }, { type: "td", children: [{ type: "p", children: [{ text: "1 cycle" }] }] }] },
+    ] },
+    { type: "p", children: [{ text: "수식 " }, { type: "inline_equation", texExpression: "a^2", children: [{ text: "" }] }, { text: " 시각 " }, { type: "recording_timestamp", ms: 125000, children: [{ text: "" }] }] },
+    { type: "equation", texExpression: "E=mc^2", children: [{ text: "" }] },
+    { type: "strange_block", children: [{ text: "알 수 없는 블록의 글" }] },
+  ];
+  const md = m.plateToMarkdown(doc);
+  assert.equal(
+    md,
+    [
+      "# 캐시 개요",
+      "",
+      "캐시는 **빠른** 메모리이고 `SRAM`으로 만든다.",
+      "",
+      "- *시간 지역성*",
+      "  - 반복문 변수",
+      "1. 첫째",
+      "2. 둘째",
+      "",
+      "링크: [예시](https://example.com) 참고",
+      "",
+      "> 인용문",
+      "",
+      "```c",
+      "int x = 1;",
+      "x++;",
+      "```",
+      "",
+      "---",
+      "",
+      "| 항목 | 값\\|값 |",
+      "| --- | --- |",
+      "| hit | 1 cycle |",
+      "",
+      "수식 $a^2$ 시각 [02:05]",
+      "",
+      "$$",
+      "E=mc^2",
+      "$$",
+      "",
+      "알 수 없는 블록의 글",
+    ].join("\n")
+  );
+  assert.equal(m.componentTextToMarkdown(JSON.stringify([{ type: "p", children: [{ text: "a*b" }] }]), '{"contentFormat":"plate-json"}'), "a\\*b");
+  assert.equal(m.componentTextToMarkdown("plain memo", null), "plain memo");
+  assert.equal(m.componentTextToMarkdown("[{broken", '{"contentFormat":"plate-json"}'), "[{broken");
+  assert.equal(m.componentTextToMarkdown(null, null), "");
+  console.log("PASS: plate-json to markdown (headings, marks, indent lists, links, quote, code, hr, table, equations, timestamps, unknown blocks)");
+}
+
+// ---- transcript parsing and subject inference ----
+{
+  const raw = JSON.stringify([
+    { createdAt: 1, relativeStart: 0, segments: [{ start: 0, end: 4000, text: " hello ", speaker: "" }, { start: 4000, end: 9000, text: "", speaker: "" }] },
+    { createdAt: 2, relativeStart: 9000, segments: [{ start: 9000, end: 12000, text: "world", speaker: "A" }] },
+    { createdAt: 3, relativeStart: 20000, originalText: "entry without segments" },
+    { createdAt: 4, relativeStart: 26000, segments: [{ start: 26000, end: 30000, text: "last" }] },
+  ]);
+  assert.deepEqual(m.parseTranscript(raw), [
+    { startMs: 0, endMs: 4000, text: "hello", speaker: "" },
+    { startMs: 9000, endMs: 12000, text: "world", speaker: "A" },
+    { startMs: 20000, endMs: 26000, text: "entry without segments", speaker: "" },
+    { startMs: 26000, endMs: 30000, text: "last", speaker: "" },
+  ]);
+  assert.deepEqual(m.parseTranscript("not json"), []);
+  assert.deepEqual(m.parseTranscript('{"a":1}'), []);
+  assert.equal(m.inferSubject(["CSED311 컴퓨터구조"], "lec13"), "CSED311");
+  assert.equal(m.inferSubject(["CSED 341"], "x"), "CSED341");
+  assert.equal(m.inferSubject(["CSED312:OS", "Lectures"], "x"), "CSED312");
+  assert.equal(m.inferSubject(["CSED5: 고급확률이론"], "x"), "CSED5");
+  assert.equal(m.inferSubject(["데이터베이스"], "4강"), "데이터베이스");
+  assert.equal(m.inferSubject([], "EECS 482 Lecture 3"), "EECS482");
+  assert.equal(m.inferSubject([], "6강"), "미분류");
+  assert.deepEqual(m.untimedSegments("a\n\n b \nc"), [
+    { startMs: null, endMs: null, text: "a", speaker: "" },
+    { startMs: null, endMs: null, text: "b", speaker: "" },
+    { startMs: null, endMs: null, text: "c", speaker: "" },
+  ]);
+  console.log("PASS: transcript JSON to timed segments (segment times are recording-relative), subject from the Alt folder");
+}
+
+// ---- note status (sidebar chips, link candidates) ----
+{
+  assert.equal(m.slideChangeCount(["a", "b", "c"], ["a", "b", "c"]), 0);
+  assert.equal(m.slideChangeCount(["a", "x", "c"], ["a", "b", "c"]), 1, "one changed slide");
+  assert.equal(m.slideChangeCount(["a", "b", "c", "d"], ["a", "b", "c"]), 1, "one new slide");
+  assert.equal(m.slideChangeCount(["a", "c"], ["a", "b", "c"]), 1, "one deleted slide");
+  assert.equal(m.slideChangeCount(["d", "d"], ["d"]), 1, "duplicates are counted per copy");
+  const note = { title: "CSED311 Lec13 MemoryHierarchy", lectureDate: "2026-04-21" };
+  const v1 = { path: "A/CSED311/CSED311 Lec13 MemoryHierarchy.md", title: "CSED311 Lec13 MemoryHierarchy", altId: "pub1", altCreated: "2026-04-21T23:30:00Z" };
+  assert.equal(m.isLinkCandidate(v1, note), true);
+  assert.equal(m.isLinkCandidate({ ...v1, altCreated: "2026-05-02T00:00:00Z" }, note), false, "different date");
+  assert.equal(m.isLinkCandidate({ ...v1, altCreated: undefined }, note), true, "no date: title decides");
+  assert.equal(m.isLinkCandidate({ ...v1, altLocalId: "x" }, note), false, "already linked");
+  assert.equal(m.isLinkCandidate({ ...v1, altId: undefined }, note), false, "not an Alt import");
+  assert.equal(m.isLinkCandidate({ ...v1, title: "csed311 lec13-memoryhierarchy" }, { title: "lec13", lectureDate: "2026-04-21" }, "CSED311 Lec13-MemoryHierarchy.pdf"), true, "slides file name matches");
+  assert.deepEqual(m.statusChip({ kind: "new" }), { text: "새 노트", cls: "is-new" });
+  assert.deepEqual(m.statusChip({ kind: "imported", path: "p", changed: 3 }), { text: "슬라이드 3장 변경", cls: "is-changed" });
+  assert.deepEqual(m.statusChip({ kind: "imported", path: "p", changed: 0 }), { text: "가져옴", cls: "is-imported" });
+  assert.deepEqual(m.statusChip({ kind: "imported", path: "p", changed: null }), { text: "가져옴", cls: "is-imported" });
+  assert.equal(m.statusChip({ kind: "link", candidates: [] }).text, "기존 노트와 연결?");
+  console.log("PASS: note status: slide change count by text hash, link candidates by title and date, chips");
+}
+
+// ---- synthetic Alt store ----
+const SCHEMA = `
+CREATE TABLE folders (id TEXT PRIMARY KEY, user_id TEXT, channel_id TEXT, name TEXT, parent_id TEXT, path TEXT, color_hue INTEGER, created_at DATETIME, updated_at DATETIME, updated_hlc TEXT, deleted_at TEXT, schema_version INTEGER);
+CREATE TABLE lecture_notes (id TEXT PRIMARY KEY, user_id TEXT, channel_id TEXT, folder_id TEXT, title TEXT, lecture_date DATE, status TEXT, type TEXT, is_favorite INTEGER, calendar_event_id TEXT, calendar_event_start TEXT, calendar_event_end TEXT, created_at DATETIME, updated_at DATETIME, updated_hlc TEXT, deleted_at TEXT, schema_version INTEGER);
+CREATE TABLE note_components (id TEXT PRIMARY KEY, user_id TEXT, channel_id TEXT, note_id TEXT, component_type TEXT, title TEXT, file_inode BIGINT, content_text TEXT, metadata TEXT, display_order INTEGER, file_ref_id TEXT, created_at DATETIME, updated_at DATETIME, updated_hlc TEXT, deleted_at TEXT, schema_version INTEGER);
+CREATE TABLE file_metadata (inode BIGINT PRIMARY KEY, file_path TEXT, file_name TEXT, file_size BIGINT, mime_type TEXT, hash_sha256 TEXT, created_at DATETIME, last_verified DATETIME);
+CREATE TABLE file_ref_local_files (file_ref_id TEXT PRIMARY KEY, file_inode BIGINT, local_cache_path TEXT, created_at DATETIME, updated_at DATETIME);
+CREATE TABLE migrations (version INTEGER PRIMARY KEY, applied_at DATETIME);
+`;
+const TRANSCRIPT = JSON.stringify([
+  { createdAt: 1, relativeStart: 0, segments: [
+    { start: 0, end: 5000, text: "today we start with an introduction to caches", speaker: "" },
+    { start: 5000, end: 10000, text: "alpha is the first topic, caches are small and fast", speaker: "" },
+  ] },
+  { createdAt: 2, relativeStart: 10000, segments: [
+    { start: 10000, end: 15000, text: "cache coherence keeps copies consistent", speaker: "" },
+    { start: 15000, end: 20000, text: "the MESI protocol has four states for coherence", speaker: "" },
+    { start: 20000, end: 25000, text: "beta slide shows MESI again", speaker: "" },
+  ] },
+  { createdAt: 3, relativeStart: 25000, segments: [
+    { start: 25000, end: 30000, text: "in summary gamma, any questions about the summary", speaker: "" },
+  ] },
+]);
+const plate = (text) => JSON.stringify([{ type: "h2", children: [{ text: "요약" }] }, { type: "p", children: [{ text }] }]);
+const PLATE_META = '{"contentFormat":"plate-json","plateSchemaVersion":1}';
+
+function buildStore(path, { version = 40, dropColumn = null, pdfPath, extraNote = null } = {}) {
+  const db = new DatabaseSync(path);
+  let schema = SCHEMA;
+  if (dropColumn) schema = schema.replace(`, ${dropColumn} TEXT`, "");
+  db.exec(schema);
+  db.prepare("INSERT INTO migrations VALUES (?, '2026-09-14')").run(version);
+  const f = db.prepare("INSERT INTO folders (id, name, parent_id, path) VALUES (?, ?, ?, ?)");
+  f.run("f1", "CSED311 컴퓨터구조", null, "/");
+  f.run("f2", "Lectures", "f1", "/CSED311 컴퓨터구조");
+  const n = db.prepare("INSERT INTO lecture_notes (id, folder_id, title, lecture_date, type, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  n.run("n1", "f2", "Lec13 Caches", "2026-04-21", "slide", "2026-04-21 10:00:00", null);
+  n.run("n2", null, "6강", "2026-09-23", "note", "2026-09-23 10:00:00", null);
+  n.run("n3", "f1", "deleted note", "2026-01-01", "slide", null, "2026-02-01T00:00:00Z");
+  n.run("n4", "f1", "Synced deck", "2026-05-01", "slide", null, null);
+  if (extraNote) n.run(extraNote, "f1", "extra", "2026-06-01", "slide", null, null);
+  if (!dropColumn) {
+    const c = db.prepare("INSERT INTO note_components (id, note_id, component_type, title, file_inode, content_text, metadata, display_order, file_ref_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    c.run("c1", "n1", "slides", "Lec13-Caches", 101, "Alpha Introduction to Caches", null, 0, null, null);
+    c.run("c2", "n1", "transcript", "Transcript", null, TRANSCRIPT, '{"recordingSessionId":"s"}', 1, null, null);
+    c.run("c3", "n1", "summary", "Summary", null, plate("캐시와 일관성"), PLATE_META, 2, null, null);
+    c.run("c4", "n1", "slide_memo", "Slide 2", null, plate("MESI 외우기"), '{"slideIndex":2,"contentFormat":"plate-json"}', 3, null, null);
+    c.run("c5", "n1", "memo", "메모", null, JSON.stringify([{ type: "p", children: [{ text: "" }] }]), PLATE_META, 4, null, null);
+    c.run("c6", "n1", "summary", "old", null, plate("삭제된 요약"), PLATE_META, 5, null, "2026-05-01T00:00:00Z");
+    c.run("c7", "n2", "transcript", "Transcript", null, JSON.stringify([{ createdAt: 1, relativeStart: 0, segments: [{ start: 0, end: 61000, text: "memo only lecture", speaker: "" }] }]), null, 0, null, null);
+    c.run("c8", "n4", "slides", "Synced", null, null, null, 0, "ref-1", null);
+    db.prepare("INSERT INTO file_metadata (inode, file_path, file_name) VALUES (101, ?, 'deck.pdf')").run(pdfPath);
+    db.prepare("INSERT INTO file_ref_local_files (file_ref_id, local_cache_path) VALUES ('ref-1', ?)").run(pdfPath);
+  }
+  return db;
+}
+
+function makeUserData(name, opts = {}) {
+  const ud = join(root, name);
+  const dbDir = join(ud, "data", "database");
+  mkdirSync(dbDir, { recursive: true });
+  const pdfPath = join(ud, "deck.pdf");
+  copyFileSync(FIXTURE_PATH, pdfPath);
+  const userId = "user-123";
+  writeFileSync(join(ud, "storage-desktopSync.json"), JSON.stringify({ activeProfileUserId: userId, claim: {} }));
+  const digest = createHash("sha256").update(userId).digest("hex").slice(0, 16);
+  const store = join(dbDir, `powersync-store.account-${digest}.db`);
+  const db = buildStore(store, { ...opts, pdfPath });
+  db.close();
+  // A stale pre-sync store with other content: must not be preferred.
+  const legacy = new DatabaseSync(join(dbDir, "lecture_notes.db"));
+  legacy.exec(SCHEMA);
+  legacy.prepare("INSERT INTO lecture_notes (id, title, type) VALUES ('old', 'stale', 'legacy')").run();
+  legacy.close();
+  return { ud, store, pdfPath };
+}
+
+const fileHash = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
+
+try {
+  // ---- database source ----
+  {
+    const { ud, store, pdfPath } = makeUserData("db-ok");
+    // A write still in the WAL (Alt running and not checkpointed yet).
+    const writer = new DatabaseSync(store);
+    writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+    writer.prepare("INSERT INTO lecture_notes (id, folder_id, title, lecture_date, type) VALUES ('n5', 'f1', 'only in the WAL', '2026-06-02', 'slide')").run();
+    const before = { db: fileHash(store), wal: fileHash(`${store}-wal`), mtime: statSync(store).mtimeMs };
+    assert.deepEqual(m.dbCandidates(ud).map((p) => p.split("/").pop()), [store.split("/").pop(), "lecture_notes.db"]);
+
+    const src = m.AltLocalDbSource.open({ userData: ud, tmpRoot: root });
+    assert.equal(src.mode, "db");
+    assert.equal(src.label, "Alt 꺼짐 · DB 읽기");
+    assert.deepEqual(src.schema, { version: 40, known: true });
+    const notes = await src.listNotes();
+    assert.deepEqual(notes.map((n) => n.id).sort(), ["n1", "n2", "n4", "n5"], "deleted note hidden, WAL row visible, account store used");
+    const n1 = notes.find((n) => n.id === "n1");
+    assert.deepEqual(n1.folderPath, ["CSED311 컴퓨터구조", "Lectures"]);
+    assert.equal(n1.lectureDate, "2026-04-21");
+    assert.deepEqual(await src.noteDetails("n1"), { hasSlides: true, slidesTitle: "Lec13-Caches", pdfPath, transcriptMinutes: 1, timestamps: true });
+    assert.equal((await src.noteDetails("n4")).pdfPath, pdfPath, "synced file path via file_ref_local_files");
+    assert.equal((await src.noteDetails("n2")).hasSlides, false);
+
+    const b = await src.getBundle("n1");
+    assert.equal(b.sourceKind, "alt-local");
+    assert.equal(b.sourceId, "n1");
+    assert.equal(b.pdf.byteLength, statSync(FIXTURE_PATH).size);
+    assert.equal(b.pdfPath, pdfPath);
+    assert.equal(b.transcript.length, 6);
+    assert.deepEqual(b.transcript[2], { startMs: 10000, endMs: 15000, text: "cache coherence keeps copies consistent", speaker: "" });
+    assert.equal(b.summaryMarkdown, "## 요약\n\n캐시와 일관성", "deleted component skipped");
+    assert.equal(b.memoMarkdown, "### 슬라이드 2 메모\n\n## 요약\n\nMESI 외우기", "empty memo skipped, slide memo kept");
+    assert.deepEqual(b.warnings, []);
+    await assert.rejects(src.getBundle("n3"), /찾지 못했습니다/);
+
+    // The live files were only read.
+    assert.deepEqual({ db: fileHash(store), wal: fileHash(`${store}-wal`), mtime: statSync(store).mtimeMs }, before, "store and WAL unchanged");
+    src.close();
+    writer.close();
+
+    // Missing PDF file: the bundle says so and has no PDF.
+    rmSync(pdfPath);
+    const src2 = m.AltLocalDbSource.open({ userData: ud, tmpRoot: root });
+    const b2 = await src2.getBundle("n1");
+    assert.equal(b2.pdf, null);
+    assert.match(b2.warnings[0], /슬라이드 PDF를 읽지 못했습니다/);
+    src2.close();
+    console.log("PASS: DB source: private copy with WAL replay, account store first, deleted rows hidden, folders, bundle, live files untouched");
+  }
+  {
+    const { ud } = makeUserData("db-bad", { dropColumn: "content_text" });
+    assert.throws(() => m.AltLocalDbSource.open({ userData: ud, tmpRoot: root }), (e) => e instanceof m.AltDbError && /알 수 없는 Alt 데이터베이스 스키마/.test(e.message) && /note_components\.content_text/.test(e.message));
+    const { ud: ud2 } = makeUserData("db-newer", { version: 41 });
+    const src = m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root });
+    assert.equal(src.label, "Alt 꺼짐 · DB 읽기 (확인되지 않은 스키마 v41)");
+    assert.equal((await src.listNotes()).length, 3);
+    src.close();
+    assert.throws(() => m.AltLocalDbSource.open({ userData: join(root, "nothing"), tmpRoot: root }), /찾지 못했습니다/);
+    assert.throws(() => m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root, sqlite: { DatabaseSync: class { constructor() { throw new Error("boom"); } } } }), /열지 못했습니다: boom/);
+    console.log("PASS: DB source fails clearly on an unknown schema, labels an unverified schema version");
+  }
+
+  // ---- HTTP API source (fake Alt) ----
+  const { ud: apiUd, pdfPath: apiPdf } = makeUserData("api");
+  const requests = [];
+  const folderTree = [{ id: "f1", name: "CSED311 컴퓨터구조", parent_id: null, children: [{ id: "f2", name: "Lectures", parent_id: "f1", children: [] }] }];
+  const noteRows = [
+    { id: "n1", title: "Lec13 Caches", type: "slide", lecture_date: "2026-04-21", folder_id: "f2", updated_at: "x", folder_name: "Lectures", folder_path: "/CSED311 컴퓨터구조" },
+    { id: "n2", title: "6강", type: "note", lecture_date: "2026-09-23", folder_id: null, updated_at: "y", folder_name: "루트", folder_path: "/" },
+  ];
+  const components = [
+    { id: "c1", note_id: "n1", component_type: "slides", title: "Lec13-Caches", file_inode: 101, content_text: "Alpha", metadata: null, display_order: 0, file: { inode: 101, file_path: apiPdf } },
+    { id: "c2", note_id: "n1", component_type: "transcript", title: "Transcript", file_inode: null, content_text: TRANSCRIPT, metadata: null, display_order: 1 },
+    { id: "c3", note_id: "n1", component_type: "summary", title: "Summary", file_inode: null, content_text: plate("캐시와 일관성"), metadata: PLATE_META, display_order: 2 },
+  ];
+  const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, url: req.url, auth: req.headers.authorization ?? null });
+    const send = (code, body) => {
+      res.writeHead(code, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (req.url === "/api/status") return send(200, { ok: true, data: { ok: true, version: "0.12.0", platform: "darwin", uptime: 1 } });
+    if (req.headers.authorization !== `Bearer ${FAKE_TOKEN}`) return send(401, { ok: false, error: "Unauthorized" });
+    if (req.url === "/api/lectureNotes") return send(200, { ok: true, data: noteRows });
+    if (req.url === "/api/folders/tree") return send(200, { ok: true, data: folderTree });
+    if (req.url === "/api/lectureNotes/n1") return send(200, { ok: true, data: noteRows[0] });
+    if (req.url === "/api/lectureNotes/nope") return send(200, { ok: true, data: null });
+    if (req.url === "/api/noteComponents/note/n1") return send(200, { ok: true, data: components });
+    if (req.url === "/api/noteComponents/note/n2") return send(200, { ok: true, data: [] });
+    return send(404, { ok: false, error: `Not found: ${req.method} ${req.url}` });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const port = server.address().port;
+  // Alt keeps the token in this file too; only port and enabled are read from it.
+  writeFileSync(join(apiUd, "storage-httpServer.json"), JSON.stringify({ enabled: true, port, token: "not-the-file-token" }));
+  writeFileSync(m.tokenFilePath(apiUd), FAKE_TOKEN + "\n", { mode: 0o600 });
+  try {
+    assert.deepEqual(m.readHttpServerConfig(apiUd), { port, enabled: true });
+    const det = await m.AltLocalApiSource.detect(apiUd);
+    assert.ok(det.source, det.reason);
+    const api = det.source;
+    assert.equal(api.label, "Alt 연결됨 · 로컬 API (v0.12.0)");
+    const notes = await api.listNotes();
+    assert.deepEqual(notes.map((n) => [n.id, n.folderPath.join("/")]), [["n1", "CSED311 컴퓨터구조/Lectures"], ["n2", ""]]);
+    assert.equal((await api.noteDetails("n1")).pdfPath, apiPdf);
+    const b = await api.getBundle("n1");
+    assert.equal(b.title, "Lec13 Caches");
+    assert.equal(b.pdf.byteLength, statSync(FIXTURE_PATH).size);
+    assert.equal(b.transcript.length, 6);
+    assert.equal(b.summaryMarkdown, "## 요약\n\n캐시와 일관성");
+    await assert.rejects(api.getBundle("nope"), /찾지 못했습니다/);
+    assert.ok(requests.every((r) => r.method === "GET"), "GET only");
+    assert.ok(requests.filter((r) => r.url !== "/api/status").every((r) => r.auth === `Bearer ${FAKE_TOKEN}`), "token from the token file");
+    assert.ok(requests.filter((r) => r.url === "/api/status").every((r) => r.auth === null), "status without a token");
+
+    // Wrong token: a clear error that does not contain any token.
+    const bad = new m.AltLocalApiSource({ port, token: "wrong-token" });
+    await assert.rejects(bad.listNotes(), (e) => /토큰을 거부했습니다/.test(e.message) && !e.message.includes("wrong-token") && !e.message.includes(FAKE_TOKEN));
+
+    // connectAltLocal prefers the API.
+    const c = await m.connectAltLocal(apiUd, { tmpRoot: root });
+    assert.equal(c.source.mode, "api");
+    assert.equal(c.label, "Alt 연결됨 · 로컬 API (v0.12.0)");
+    console.log("PASS: API source: status probe, Bearer token from the token file, folders tree, components with file paths, GET only, token never in errors");
+
+    // Skill CLI parity (alt-local.mjs uses the same src/sources code). Run
+    // asynchronously: the fake server lives in this process.
+    const run = async (args) => (await promisify(execFile)("node", [join(repo, "scripts/phase2/alt-local.mjs"), ...args, "--alt-dir", apiUd], { encoding: "utf8" })).stdout;
+    const cli = async (args) => JSON.parse(await run(args));
+    assert.deepEqual(await cli(["status"]), { mode: "api", label: "Alt 연결됨 · 로컬 API (v0.12.0)", detail: "" });
+    const listed = await cli(["list"]);
+    assert.deepEqual(listed.notes.map((n) => [n.id, n.subject]), [["n1", "CSED311"], ["n2", "미분류"]]);
+    const out = join(root, "export");
+    const exp = await cli(["export", "n1", out]);
+    assert.equal(exp.pdfPath, apiPdf);
+    assert.equal(exp.segments, 6);
+    assert.equal(exp.timestamps, true);
+    const bundleJson = JSON.parse(readFileSync(exp.bundle, "utf8"));
+    assert.equal(bundleJson.subject, "CSED311");
+    assert.equal(bundleJson.pdf, undefined, "no PDF bytes in bundle.json");
+    assert.equal(bundleJson.transcript[3].startMs, 15000);
+    assert.equal(readFileSync(join(out, "transcript.txt"), "utf8").split("\n").length, 6);
+    const dbList = await cli(["list", "--source", "db"]);
+    assert.equal(dbList.mode, "db");
+    const allOut = (await run(["status"])) + (await run(["list"])) + readFileSync(exp.bundle, "utf8");
+    assert.ok(!allOut.includes(FAKE_TOKEN), "the CLI never prints the token");
+    console.log("PASS: alt-local.mjs status / list / export match the plugin sources, token never printed");
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+
+  // Alt not running: the database copy is used; neither: "연결 안 됨".
+  {
+    const free = await new Promise((r) => {
+      const s = http.createServer();
+      s.listen(0, "127.0.0.1", () => {
+        const p = s.address().port;
+        s.close(() => r(p));
+      });
+    });
+    writeFileSync(join(apiUd, "storage-httpServer.json"), JSON.stringify({ enabled: true, port: free }));
+    const c = await m.connectAltLocal(apiUd, { tmpRoot: root, probeTimeoutMs: 300 });
+    assert.equal(c.source.mode, "db");
+    assert.equal(c.label, "Alt 꺼짐 · DB 읽기");
+    assert.match(c.detail, /실행 중이 아니거나/);
+    c.source.close();
+    writeFileSync(join(apiUd, "storage-httpServer.json"), JSON.stringify({ enabled: false, port: free }));
+    const none = await m.connectAltLocal(join(root, "empty"), { tmpRoot: root, probeTimeoutMs: 300 });
+    assert.equal(none.source, null);
+    assert.equal(none.label, "연결 안 됨");
+    const off = await m.AltLocalApiSource.detect(apiUd, 300);
+    assert.match(off.reason, /로컬 HTTP 서버가 꺼져/);
+    console.log("PASS: source selection: API, else database copy, else none, with the reason");
+  }
+} finally {
+  rmSync(root, { recursive: true, force: true });
+}
