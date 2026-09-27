@@ -718,8 +718,8 @@ var AltLocalApiSource = class _AltLocalApiSource {
       if (!status)
         continue;
       const owner = await verify(p);
-      if (!owner.ok) {
-        refused = refused || owner.reason;
+      if (!owner.ok || owner.pid === void 0) {
+        refused = refused || owner.reason || "\uD3EC\uD2B8\uC758 \uD504\uB85C\uC138\uC2A4\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4";
         continue;
       }
       let token;
@@ -731,7 +731,7 @@ var AltLocalApiSource = class _AltLocalApiSource {
       if (!token)
         return { source: null, reason: "Alt \uB85C\uCEEC API \uD1A0\uD070 \uD30C\uC77C\uC774 \uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4." };
       return {
-        source: new _AltLocalApiSource({ port: p, token, version: status.version, openPathDb: opts.openPathDb, verifyOwner: verify, ownerPid: owner.pid ?? null, now: opts.now }),
+        source: new _AltLocalApiSource({ port: p, token, version: status.version, openPathDb: opts.openPathDb, verifyOwner: verify, ownerPid: owner.pid, now: opts.now }),
         reason: ""
       };
     }
@@ -753,7 +753,7 @@ var AltLocalApiSource = class _AltLocalApiSource {
     if (!this.verifyOwner || this.now() - this.lastOwnerCheck < maxAgeMs)
       return;
     const check = await this.verifyOwner(this.port);
-    const samePid = this.ownerPid === null || check.pid === void 0 || check.pid === this.ownerPid;
+    const samePid = check.pid !== void 0 && (this.ownerPid === null || check.pid === this.ownerPid);
     if (!check.ok || !samePid) {
       this.failed = true;
       throw new AltApiError(`\uB85C\uCEEC API \uD3EC\uD2B8\uC758 \uD504\uB85C\uADF8\uB7A8\uC774 \uBC14\uB00C\uC5B4 \uD1A0\uD070\uC744 \uBCF4\uB0B4\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4${check.ok ? "" : `: ${check.reason}`}`, null);

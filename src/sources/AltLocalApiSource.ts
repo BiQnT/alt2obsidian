@@ -161,8 +161,9 @@ export class AltLocalApiSource implements AltLocalSource {
       const status = await probeAltStatus(p, opts.probeTimeoutMs ?? 800);
       if (!status) continue;
       const owner = await verify(p);
-      if (!owner.ok) {
-        refused = refused || owner.reason;
+      // A check that names no process is not a verification.
+      if (!owner.ok || owner.pid === undefined) {
+        refused = refused || owner.reason || "포트의 프로세스를 확인하지 못했습니다";
         continue;
       }
       let token: string;
@@ -173,7 +174,7 @@ export class AltLocalApiSource implements AltLocalSource {
       }
       if (!token) return { source: null, reason: "Alt 로컬 API 토큰 파일이 비어 있습니다." };
       return {
-        source: new AltLocalApiSource({ port: p, token, version: status.version, openPathDb: opts.openPathDb, verifyOwner: verify, ownerPid: owner.pid ?? null, now: opts.now }),
+        source: new AltLocalApiSource({ port: p, token, version: status.version, openPathDb: opts.openPathDb, verifyOwner: verify, ownerPid: owner.pid, now: opts.now }),
         reason: "",
       };
     }
@@ -193,7 +194,8 @@ export class AltLocalApiSource implements AltLocalSource {
     if (this.failed) throw new AltApiError("Alt 로컬 API 연결이 끊겼습니다. 다시 연결하세요.", null);
     if (!this.verifyOwner || this.now() - this.lastOwnerCheck < maxAgeMs) return;
     const check = await this.verifyOwner(this.port);
-    const samePid = this.ownerPid === null || check.pid === undefined || check.pid === this.ownerPid;
+    // No pid in the check means it verified nothing: treated as a failed check.
+    const samePid = check.pid !== undefined && (this.ownerPid === null || check.pid === this.ownerPid);
     if (!check.ok || !samePid) {
       this.failed = true;
       throw new AltApiError(`로컬 API 포트의 프로그램이 바뀌어 토큰을 보내지 않았습니다${check.ok ? "" : `: ${check.reason}`}`, null);

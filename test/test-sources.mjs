@@ -338,7 +338,7 @@ try {
     const src3 = m.AltLocalDbSource.open({ userData: ud3, tmpRoot: root });
     assert.match(src3.storeDetail, /로그인 계정을 알 수 없어 가장 최근 저장소를 읽었습니다: powersync-store\.account-/);
     src3.close();
-    const c3 = await m.connectAltLocal(ud3, { tmpRoot: root, probeTimeoutMs: 200, verifyOwner: async () => ({ ok: true, reason: "" }) });
+    const c3 = await m.connectAltLocal(ud3, { tmpRoot: root, probeTimeoutMs: 200, verifyOwner: async () => ({ ok: true, reason: "", pid: 4242 }) });
     assert.match(c3.detail, /가장 최근 저장소/);
     c3.source?.close();
 
@@ -425,7 +425,7 @@ try {
     assert.ok(requests.length > 0 && requests.every((r) => r.auth === null && r.url === "/api/status"), "only the unauthenticated status probe reached it");
 
     // A verified owner gets the token.
-    const alt = async () => ({ ok: true, reason: "" });
+    const alt = async () => ({ ok: true, reason: "", pid: 4242 });
     const det = await m.AltLocalApiSource.detect(apiUd, { verifyOwner: alt });
     assert.ok(det.source, det.reason);
     const api = det.source;
@@ -484,6 +484,15 @@ try {
     assert.equal(guarded.failed, true);
     await assert.rejects(guarded.listNotes(), /다시 연결하세요/);
     assert.equal(requests.filter((r) => r.auth).length, sentBefore);
+    // A check that names no process verifies nothing: no source, and a later pid-less check fails the source.
+    const pidless = await m.AltLocalApiSource.detect(apiUd, { verifyOwner: async () => ({ ok: true, reason: "" }) });
+    assert.equal(pidless.source, null);
+    let withPid = true;
+    const flaky = (await m.AltLocalApiSource.detect(apiUd, { verifyOwner: async () => (withPid ? { ok: true, reason: "", pid: 7 } : { ok: true, reason: "" }), now: () => clock })).source;
+    withPid = false;
+    const sentBefore2 = requests.filter((r) => r.auth).length;
+    await assert.rejects(flaky.listNotes(), /프로그램이 바뀌어 토큰을 보내지 않았습니다/);
+    assert.equal(requests.filter((r) => r.auth).length, sentBefore2, "no token after a pid-less check");
     assert.equal(c.label, "Alt 연결됨 · 로컬 API (v0.12.0)");
     console.log("PASS: API source: token only to a listener verified as Alt (impostor refused), status probe, folders tree, one DB copy for synced paths, owner re-check per list/bundle and every 3 s for details (changed pid: no token), GET only, token never in errors");
 
