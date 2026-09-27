@@ -51,7 +51,7 @@ import type { BatchProgress, LectureContext } from "./generator/BatchCommentaryG
 import { BudgetEstimate, CallShape, estimateCalls, exceedsCap } from "./core/budget/estimate";
 import conceptExtractionTemplateText from "../prompts/concept-extraction.md";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
-import { NoteGenerator } from "./generator/NoteGenerator";
+import { insertFrontmatterLine, NoteGenerator } from "./generator/NoteGenerator";
 import { PerSlideCommentaryGenerator } from "./generator/PerSlideCommentaryGenerator";
 import type { PerSlideGenerationResult } from "./types";
 import { ExamSummaryGenerator } from "./generator/ExamSummaryGenerator";
@@ -66,7 +66,10 @@ import {
   VIEW_TYPE_SYNCED_VIEWER,
 } from "./ui/SyncedViewerView";
 import { TFile } from "obsidian";
-import { readFileSync, statSync } from "node:fs";
+import { promises as fsp } from "node:fs";
+import { createHash } from "node:crypto";
+import { join as joinPath } from "node:path";
+import { pluginCacheDir } from "./sources/altPaths";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
 import { renderPrompt } from "./prompts/render";
 import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
@@ -117,7 +120,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
   /** Current Alt local source (API or database copy); see `connectLocal`. */
   private localSource: AltLocalSource | null = null;
   /** Slide hashes of local PDFs by path + size + mtime (sidebar status). */
-  private hashCache = new Map<string, string[]>();
+  private textCache = new Map<string, Array<string | null>>();
+  private pageCountCache = new Map<string, number>();
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -177,15 +181,18 @@ export default class Alt2ObsidianPlugin extends Plugin {
     // The login-shell lookup can take a moment: run it after startup.
     this.app.workspace.onLayoutReady(() => {
       this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obsidian] CLI default check failed:", e));
+      this.pruneTranscriptCache().catch((e) => console.warn("[Alt2Obsidian] transcript cache prune failed:", e));
     });
   }
 
   onunload(): void {
     // Kill running CLI processes; their finally blocks remove the temp folders.
     this.abortAllJobs();
+    this.unloaded = true;
     this.localSource?.close?.();
     this.localSource = null;
   }
+  private unloaded = false;
 
   /**
    * Resolve the active note's sibling PDF and open both in the Synced
@@ -267,6 +274,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.localSource?.close?.();
       this.localSource = null;
       const result = await connectAltLocal(this.altUserData());
+      // Unloaded while connecting: close the source (and its DB copy) now.
+      if (this.unloaded) {
+        result.source?.close?.();
+        return { ...result, source: null };
+      }
       this.localSource = result.source;
       return result;
     })().finally(() => {
@@ -346,40 +358,72 @@ export default class Alt2ObsidianPlugin extends Plugin {
     if (!(noteFile instanceof TFile) || !this.pdfProcessor) return null;
     const sections = splitMultiManagedNote(await this.app.vault.cachedRead(noteFile)).sections;
     if (sections.length === 0) return null;
-    const hashes = await this.pdfSlideHashes(pdfPath, sourceId);
-    return hashes ? slideChangeCount(hashes, sections.map((s) => s.hash)) : null;
+    const pdf = await this.pdfPageTexts(pdfPath);
+    if (!pdf) return null;
+    // Textless pages hash their position with the note's id (spec 4.7). A
+    // linked 1.x or URL note used its public id: compare those pages by
+    // position against either id, so they do not count as changed.
+    const fm = this.app.metadataCache.getFileCache(noteFile)?.frontmatter;
+    const ids = [sourceId, typeof fm?.alt_id === "string" ? fm.alt_id : null].filter((x): x is string => !!x);
+    const byNum = new Map(sections.map((s) => [s.slideNum, s.hash]));
+    const hashes: string[] = [];
+    for (let i = 0; i < pdf.length; i++) {
+      const own = await computeSlideHash(pdf[i], i + 1, sourceId);
+      const textless = !pdf[i] || !pdf[i]!.replace(/\s+/g, "");
+      let h = own;
+      if (textless) {
+        for (const id of ids) {
+          const alt = await computeSlideHash(pdf[i], i + 1, id);
+          if (byNum.get(i + 1) === alt) h = alt;
+        }
+      }
+      hashes.push(h);
+    }
+    return slideChangeCount(hashes, sections.map((s) => s.hash));
   }
 
-  private async pdfSlideHashes(pdfPath: string, sourceId: string): Promise<string[] | null> {
-    let key: string;
+  /** Cache key of a local file: path, size and mtime; null when it cannot be read. */
+  private async fileKey(path: string): Promise<string | null> {
     try {
-      const st = statSync(pdfPath);
-      key = `${pdfPath}:${st.size}:${st.mtimeMs}:${sourceId}`;
+      const st = await fsp.stat(path);
+      return `${path}:${st.size}:${st.mtimeMs}`;
     } catch {
       return null;
     }
-    const cached = this.hashCache.get(key);
+  }
+
+  private async readLocalPdf(path: string): Promise<ArrayBuffer> {
+    const buf = await fsp.readFile(path);
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+  }
+
+  /** Page texts of a local PDF, cached by path, size and mtime. */
+  private async pdfPageTexts(pdfPath: string): Promise<Array<string | null> | null> {
+    const key = await this.fileKey(pdfPath);
+    if (!key) return null;
+    const cached = this.textCache.get(key);
     if (cached) return cached;
     try {
-      const buf = readFileSync(pdfPath);
-      const data = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
-      const texts = await this.pdfProcessor!.getPageTexts(data);
-      const hashes: string[] = [];
-      for (let i = 0; i < texts.length; i++) hashes.push(await computeSlideHash(texts[i], i + 1, sourceId));
-      this.hashCache.set(key, hashes);
-      return hashes;
+      const texts = await this.pdfProcessor!.getPageTexts(await this.readLocalPdf(pdfPath));
+      this.textCache.set(key, texts);
+      this.pageCountCache.set(key, texts.length);
+      return texts;
     } catch (e) {
-      console.warn("[Alt2Obsidian] slide hash check failed:", e);
+      console.warn("[Alt2Obsidian] slide text check failed:", e);
       return null;
     }
   }
 
-  /** Page count of a local PDF (sidebar meta line); null when unreadable. */
+  /** Page count of a local PDF (sidebar meta line), cached; null when unreadable. */
   async localPdfPageCount(pdfPath: string): Promise<number | null> {
     if (!this.pdfProcessor) return null;
+    const key = await this.fileKey(pdfPath);
+    if (!key) return null;
+    const cached = this.pageCountCache.get(key);
+    if (cached !== undefined) return cached;
     try {
-      const buf = readFileSync(pdfPath);
-      const n = await this.pdfProcessor.getPageCount(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer);
+      const n = await this.pdfProcessor.getPageCount(await this.readLocalPdf(pdfPath));
+      if (n > 0) this.pageCountCache.set(key, n);
       return n > 0 ? n : null;
     } catch {
       return null;
@@ -394,9 +438,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
   async linkLocalNote(path: string, localId: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) throw new Error(`노트를 찾지 못했습니다: ${path}`);
-    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
-      fm.alt_local_id = localId;
-    });
+    // One line inserted as text (processFrontMatter would reformat the YAML).
+    const content = await this.app.vault.read(file);
+    await this.app.vault.modify(file, insertFrontmatterLine(content, `alt_local_id: ${JSON.stringify(localId)}`));
   }
 
   /**
@@ -420,45 +464,97 @@ export default class Alt2ObsidianPlugin extends Plugin {
     return path;
   }
 
-  /** Frontmatter kept or added on a local import: alignment, and a linked note's public id. */
-  private localFrontmatter(notePath: string, alignment: LectureAlignment | null): string[] {
+  /**
+   * Frontmatter carried over or added on an import, so both identities
+   * survive a re-import from either source (merge replaces the frontmatter):
+   * - local import: a linked note's public `alt_id`, and the new alignment;
+   * - URL import: an existing `alt_local_id` / `alt_source` and `alt_alignment`.
+   */
+  private preservedFrontmatter(notePath: string, sourceKind: "alt-local" | "alt-url" | undefined, alignment: LectureAlignment | null): string[] {
     const lines: string[] = [];
     const file = this.app.vault.getAbstractFileByPath(notePath);
     const fm = file instanceof TFile ? this.app.metadataCache.getFileCache(file)?.frontmatter : undefined;
-    if (typeof fm?.alt_id === "string" && fm.alt_id) lines.push(`alt_id: "${fm.alt_id}"`);
-    if (alignment && alignment.value) lines.push(`alt_alignment: "${alignment.value}"`);
+    const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+    if (sourceKind === "alt-local") {
+      if (str(fm?.alt_id)) lines.push(`alt_id: ${JSON.stringify(fm!.alt_id)}`);
+      if (alignment && alignment.value) lines.push(`alt_alignment: ${JSON.stringify(alignment.value)}`);
+    } else {
+      if (str(fm?.alt_local_id)) lines.push(`alt_local_id: ${JSON.stringify(fm!.alt_local_id)}`);
+      if (str(fm?.alt_source)) lines.push(`alt_source: ${JSON.stringify(fm!.alt_source)}`);
+      if (str(fm?.alt_alignment)) lines.push(`alt_alignment: ${JSON.stringify(fm!.alt_alignment)}`);
+    }
     return lines;
   }
 
-  /** Folder (inside the plugin folder) with cached timestamped transcripts for the viewer panel. */
+  /** Test hook: where the transcript cache lives (default: the OS cache folder). */
+  cacheRoot: string | null = null;
+
+  /**
+   * Timestamped transcripts for the viewer panel, outside the vault (so
+   * vault sync never carries lecture text): the OS cache folder, one
+   * subfolder per vault.
+   */
+  private transcriptCacheDir(): string {
+    const adapter = this.app.vault.adapter as { getBasePath?: () => string };
+    const vaultKey = createHash("sha1")
+      .update(adapter.getBasePath?.() ?? this.app.vault.getName?.() ?? "vault")
+      .digest("hex")
+      .slice(0, 12);
+    return joinPath(this.cacheRoot ?? pluginCacheDir(), vaultKey, "transcripts");
+  }
+
   private transcriptCachePath(localId: string): string {
-    return `${this.manifest.dir}/transcripts/${localId.replace(/[^0-9A-Za-z-]/g, "")}.json`;
+    return joinPath(this.transcriptCacheDir(), `${localId.replace(/[^0-9A-Za-z-]/g, "")}.json`);
   }
 
   private async cacheTranscript(bundle: LectureBundle | undefined): Promise<void> {
     if (!bundle || bundle.sourceKind !== "alt-local") return;
     const timed = bundle.transcript.filter((s) => s.startMs !== null);
     if (timed.length === 0) return;
-    const adapter = this.app.vault.adapter;
-    const dir = `${this.manifest.dir}/transcripts`;
-    if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
+    await fsp.mkdir(this.transcriptCacheDir(), { recursive: true, mode: 0o700 });
     const body = JSON.stringify({ v: 1, id: bundle.sourceId, segments: timed.map((s) => [s.startMs, s.endMs, s.text]) });
-    await adapter.write(this.transcriptCachePath(bundle.sourceId), body);
+    await fsp.writeFile(this.transcriptCachePath(bundle.sourceId), body, { mode: 0o600 });
+  }
+
+  /**
+   * Drops cached transcripts of notes no longer in the vault. `keep` is
+   * spared (a note just written may not be indexed yet), and so is anything
+   * written in the last hour.
+   */
+  async pruneTranscriptCache(keep: string[] = []): Promise<number> {
+    const dir = this.transcriptCacheDir();
+    let names: string[];
+    try {
+      names = await fsp.readdir(dir);
+    } catch {
+      return 0;
+    }
+    const live = new Set([...keep, ...this.vaultLectureNotes().map((v) => v.altLocalId).filter((x): x is string => !!x)]);
+    let removed = 0;
+    for (const name of names) {
+      const id = name.replace(/\.json$/, "");
+      if (live.has(id)) continue;
+      const p = joinPath(dir, name);
+      try {
+        if (Date.now() - (await fsp.stat(p)).mtimeMs < 3600 * 1000) continue;
+        await fsp.rm(p, { force: true });
+        removed++;
+      } catch {
+        // already gone
+      }
+    }
+    return removed;
   }
 
   /** Timestamped transcript of a local note for the Synced Viewer panel; null when unknown. */
   async loadTranscript(localId: string): Promise<Array<{ startMs: number; endMs: number; text: string }> | null> {
-    const adapter = this.app.vault.adapter;
-    const path = this.transcriptCachePath(localId);
     try {
-      if (await adapter.exists(path)) {
-        const json = JSON.parse(await adapter.read(path));
-        if (Array.isArray(json?.segments)) {
-          return (json.segments as Array<[number, number, string]>).map(([startMs, endMs, text]) => ({ startMs, endMs, text }));
-        }
+      const json = JSON.parse(await fsp.readFile(this.transcriptCachePath(localId), "utf8"));
+      if (Array.isArray(json?.segments)) {
+        return (json.segments as Array<[number, number, string]>).map(([startMs, endMs, text]) => ({ startMs, endMs, text }));
       }
     } catch (e) {
-      console.warn("[Alt2Obsidian] transcript cache unreadable:", e);
+      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") console.warn("[Alt2Obsidian] transcript cache unreadable:", e);
     }
     // Not cached (imported elsewhere, or cache cleared): ask Alt.
     try {
@@ -685,7 +781,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
     const noteGenerator = new NoteGenerator(llm);
     const withSlides = !!slidesResult && slidesResult.slides.length > 0;
-    const extraFrontmatter = altData.metadata.sourceKind === "alt-local" ? this.localFrontmatter(notePath, withSlides ? alignment : null) : [];
+    const extraFrontmatter = this.preservedFrontmatter(notePath, altData.metadata.sourceKind, withSlides ? alignment : null);
     const { lectureMarkdown, conceptNotes } =
       slidesResult && withSlides
         ? await noteGenerator.generatePageAnchored(
@@ -762,6 +858,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       pdfPath = await vm.saveRawFile(pdfData, `${noteStem}.pdf`);
     }
     await this.cacheTranscript(args.bundle).catch((e) => console.warn("[Alt2Obsidian] transcript cache write failed:", e));
+    void this.pruneTranscriptCache(args.bundle ? [args.bundle.sourceId] : []).catch(() => undefined);
 
     onProgress?.("완료!", 100);
 
@@ -993,7 +1090,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         subject,
         [
           formatUsageFrontmatter(usage.total(), providerLabel),
-          ...(altData.metadata.sourceKind === "alt-local" ? this.localFrontmatter(prepared.notePath, alignment) : []),
+          ...this.preservedFrontmatter(prepared.notePath, altData.metadata.sourceKind, alignment),
         ]
       );
       return await this.saveLecture({
@@ -1175,6 +1272,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
       );
     }
 
+    const vm = this.vaultManager!;
+    notePath = notePath ?? `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(altData.title)}.md`;
     const noteGenerator = new NoteGenerator(llm);
     const { lectureMarkdown } = await noteGenerator.generate(
       altData,
@@ -1184,11 +1283,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
         tags: [],
         subjectSuggestion: subject,
       },
-      subject
+      subject,
+      this.preservedFrontmatter(notePath, altData.metadata.sourceKind, null)
     );
-
-    const vm = this.vaultManager!;
-    notePath = notePath ?? `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(altData.title)}.md`;
     const updateSummary = await vm.buildManagedNoteUpdateSummary(
       notePath,
       lectureMarkdown,

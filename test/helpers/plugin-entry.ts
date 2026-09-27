@@ -2,3 +2,4 @@
 export { default } from "../../src/main";
 // @ts-ignore resolved to the test stub by test/helpers/bundle-ts.mjs
 export { TFile } from "obsidian";
+export { insertFrontmatterLine } from "../../src/generator/NoteGenerator";

@@ -8,13 +8,16 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { importTs } from "./helpers/bundle-ts.mjs";
 import { FAKE_CLAUDE, fakeSession } from "./helpers/fake-cli.mjs";
 
 // pdfjs (bundled via PdfProcessor) warns about missing canvas polyfills on load.
 const quiet = { log: console.log, warn: console.warn };
 console.log = console.warn = () => {};
-const { default: Plugin, TFile } = await importTs("test/helpers/plugin-entry.ts");
+const { default: Plugin, TFile, insertFrontmatterLine } = await importTs("test/helpers/plugin-entry.ts");
 Object.assign(console, quiet);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -107,6 +110,8 @@ const pdfStub = {
   analyzeForPrep: async () => ({ layouts: TEXTS.map((text) => ({ text, boxes: [] })), grays: TEXTS.map((_, i) => grayFor(i)) }),
   renderPageJpeg: async (_d, page) => ({ pageNum: page, mimeType: "image/png", base64: PNG_1PX }),
   extractLectureMaterialContext: async () => null,
+  getPageTexts: async () => TEXTS,
+  getPageCount: async () => TEXTS.length,
 };
 const preview = () => ({
   altData: {
@@ -122,7 +127,15 @@ const preview = () => ({
   suggestedSubject: "CSED311",
 });
 
+// Linking adds one frontmatter line as text; everything else stays byte for byte.
+assert.equal(insertFrontmatterLine('---\ntitle: "x"\ntags: [a,  b]   # kept\n---\nbody\n', 'alt_local_id: "id"'), '---\ntitle: "x"\ntags: [a,  b]   # kept\nalt_local_id: "id"\n---\nbody\n');
+assert.equal(insertFrontmatterLine("body only\n", 'k: "v"'), '---\nk: "v"\n---\nbody only\n');
+assert.equal(insertFrontmatterLine("---\n---\nbody", 'k: "v"'), '---\nk: "v"\n---\nbody');
+assert.equal(insertFrontmatterLine('---\r\na: 1\r\n---\r\nb', 'k: "v"'), '---\r\na: 1\r\nk: "v"\n---\r\nb');
+console.log("PASS: frontmatter line insert keeps the YAML text as it is");
+
 const s = fakeSession("ok");
+const cacheRoot = mkdtempSync(join(tmpdir(), "alt2obs-cache-test-"));
 try {
   // Fresh install without a Gemini key: the logged-in Claude CLI becomes the default.
   {
@@ -146,6 +159,7 @@ try {
     settings: { apiKey: "old-key", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Alt2Obsidian", language: "ko", rateDelayMs: 5000 },
     recentImports: [],
   });
+  plugin.cacheRoot = cacheRoot;
   assert.equal(plugin.data.pendingCliDefault, true);
   plugin.data.settings.claudePath = FAKE_CLAUDE;
   await plugin.applyCliDefaultOnce();
@@ -272,7 +286,10 @@ try {
     assert.ok(!/alt_id:/.test(local), "no public id for a local note");
     assert.match(local, /alt_alignment: "(\d+:[\d.]+-[\d.]+\??)( \d+:[\d.]+-[\d.]+\??)*"/);
     assert.ok(files.has("Alt2Obsidian/CSED311/Lec7 Caches (2026-04-21).pdf"), "PDF next to the note");
-    const cached = JSON.parse(config.get(".obsidian/plugins/alt2obsidian/transcripts/local-1.json"));
+    const cacheFiles = readdirSync(cacheRoot, { recursive: true }).filter((f) => String(f).endsWith("local-1.json"));
+    assert.equal(cacheFiles.length, 1, "transcript cached outside the vault");
+    const cached = JSON.parse(readFileSync(join(cacheRoot, String(cacheFiles[0])), "utf8"));
+    assert.ok(![...config.keys()].some((k) => k.includes("transcripts")), "nothing written under .obsidian");
     assert.equal(cached.segments.length, talk.length);
     assert.deepEqual(await plugin.loadTranscript("local-1").then((t) => t[0]), { startMs: 0, endMs: 4800, text: talk[0] });
     const vault = plugin.vaultLectureNotes();
@@ -304,6 +321,38 @@ try {
     assert.match(updated, /alt_local_id: "local-2"/);
     assert.ok(updated.includes("내 메모 유지"), "memo kept");
     plugin.data.settings.tasks.alignment = { provider: "none", model: "", effort: "" };
+    // A URL re-import of the linked note keeps its local identity and alignment.
+    const beforeUrl = files.get(urlNotePath);
+    const alignLine = beforeUrl.match(/^alt_alignment: .*$/m)[0];
+    const urlPrep = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");
+    const urlRec = await plugin.runCliImport(urlPrep, { onConfirmUpdate: async () => true });
+    const afterUrl = files.get(urlRec.path);
+    assert.equal(urlRec.path, urlNotePath);
+    assert.match(afterUrl, /^alt_id: "note-7"$/m);
+    assert.match(afterUrl, /^alt_local_id: "local-2"$/m, "local id kept");
+    assert.ok(afterUrl.includes(alignLine), "alignment kept");
+
+    // Sidebar change count on the linked note: the textless slide was hashed
+    // with the public id at the URL import; compared by position, it is unchanged.
+    const pdfDir = mkdtempSync(join(tmpdir(), "alt2obs-pdf-test-"));
+    const pdfFile = join(pdfDir, "deck.pdf");
+    writeFileSync(pdfFile, "%PDF stub");
+    assert.equal(await plugin.slideChanges(urlNotePath, pdfFile, "local-2"), 0, "textless slide not counted as changed");
+    assert.equal(await plugin.localPdfPageCount(pdfFile), TEXTS.length);
+    rmSync(pdfDir, { recursive: true, force: true });
+
+    // Transcript cache pruning: ids no longer in the vault go, recent files and kept ids stay.
+    const cacheDir = join(cacheRoot, String(readdirSync(cacheRoot)[0]), "transcripts");
+    const oldTime = (Date.now() - 2 * 3600 * 1000) / 1000;
+    writeFileSync(join(cacheDir, "gone-id.json"), "{}");
+    utimesSync(join(cacheDir, "gone-id.json"), oldTime, oldTime);
+    utimesSync(join(cacheDir, "local-1.json"), oldTime, oldTime);
+    writeFileSync(join(cacheDir, "recent-id.json"), "{}");
+    assert.equal(await plugin.pruneTranscriptCache(), 1);
+    assert.deepEqual(readdirSync(cacheDir).sort(), ["local-1.json", "local-2.json", "recent-id.json"]);
+    assert.equal(statSync(join(cacheDir, "local-1.json")).mode & 0o777, 0o600);
+    console.log("PASS: URL re-import keeps alt_local_id and alt_alignment; transcript cache lives outside the vault (0600) and is pruned");
+
     console.log(`PASS: link offer and confirmed link keep the note and its public id; the optional alignment check (${low} uncertain spans) is estimated and run once`);
   }
 
@@ -331,4 +380,5 @@ try {
   console.log("PASS: cancel stops the import before anything is written");
 } finally {
   s.cleanup();
+  rmSync(cacheRoot, { recursive: true, force: true });
 }

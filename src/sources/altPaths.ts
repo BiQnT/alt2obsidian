@@ -109,3 +109,17 @@ function mtime(path: string): number {
     return 0;
   }
 }
+
+/**
+ * Alt2Obsidian's own cache folder outside any vault: ~/Library/Caches
+ * (macOS), %LOCALAPPDATA% (Windows), $XDG_CACHE_HOME or ~/.cache (Linux).
+ */
+export function pluginCacheDir(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir()
+): string {
+  if (platform === "darwin") return join(home, "Library", "Caches", "alt2obsidian");
+  if (platform === "win32") return join(env.LOCALAPPDATA || join(home, "AppData", "Local"), "alt2obsidian", "Cache");
+  return join(env.XDG_CACHE_HOME || join(home, ".cache"), "alt2obsidian");
+}

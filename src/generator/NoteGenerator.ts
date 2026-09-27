@@ -17,10 +17,21 @@ import { buildOverviewSection, linkConceptNames } from "../core/markdown";
  * the note again; the two id spaces never mix (spec 2.3).
  */
 function identityLines(altData: AltNoteData): string[] {
-  if (altData.metadata.sourceKind === "alt-local") {
-    return [`alt_local_id: "${altData.metadata.noteId}"`, `alt_source: "alt-local"`];
-  }
-  return [`alt_id: "${altData.metadata.noteId}"`];
+  const id = JSON.stringify(altData.metadata.noteId);
+  if (altData.metadata.sourceKind === "alt-local") return [`alt_local_id: ${id}`, `alt_source: "alt-local"`];
+  return [`alt_id: ${id}`];
+}
+
+/**
+ * Adds one line at the end of a note's frontmatter as text (creating a
+ * frontmatter block when there is none), leaving every other byte alone.
+ */
+export function insertFrontmatterLine(content: string, line: string): string {
+  if (/^---\r?\n---(\r?\n|$)/.test(content)) return content.replace(/^---\r?\n/, (open) => `${open}${line}\n`);
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/);
+  if (!m) return `---\n${line}\n---\n${content}`;
+  const end = m[0].length - m[2].length - 3;
+  return `${content.slice(0, end)}${line}\n${content.slice(end)}`;
 }
 
 export class NoteGenerator {
@@ -166,7 +177,7 @@ export class NoteGenerator {
   ): Promise<{ lectureMarkdown: string; conceptNotes: ConceptNote[] }> {
     // Handle partial parse quality
     if (altData.parseQuality === "partial") {
-      return this.generatePartialNote(altData, subject);
+      return this.generatePartialNote(altData, subject, extraFrontmatter);
     }
 
     const title = sanitizeFilename(altData.title);
@@ -224,7 +235,8 @@ export class NoteGenerator {
 
   private generatePartialNote(
     altData: AltNoteData,
-    subject: string
+    subject: string,
+    extraFrontmatter: string[] = []
   ): { lectureMarkdown: string; conceptNotes: ConceptNote[] } {
     const frontmatter = [
       "---",
@@ -235,6 +247,7 @@ export class NoteGenerator {
       `source: "alt2obsidian"`,
       `parse_quality: "partial"`,
       ...(altData.metadata.sourceKind === "alt-local" ? identityLines(altData) : []),
+      ...extraFrontmatter,
       "---",
       "",
     ].join("\n");
