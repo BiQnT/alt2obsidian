@@ -7,8 +7,9 @@
 //   <base>/<Subject>/Lectures/, with its sibling <stem>.pdf.
 // - Concepts/ stays where it is (same place in both layouts).
 // - <base>/Exam/ (1.x exam summaries) is left untouched.
-// - A target that already exists is a collision: the move is skipped and
-//   reported, and the note's PDF stays with the note.
+// - A note and its PDF are one unit: when either target is taken, both
+//   stay and are reported. The PDF moves first, then the note; if the note
+//   cannot move, the PDF is moved back.
 // - Other markdown files in a subject folder (the user's own notes) stay.
 // Running it again finds nothing to move: moved files are no longer
 // directly in a subject folder.
@@ -33,8 +34,16 @@ export interface MigrationSkip {
   reason: string;
 }
 
+export interface MigrationUnit {
+  note: MigrationMove;
+  pdf: MigrationMove | null;
+}
+
 export interface MigrationPlan {
   base: string;
+  /** A note with its sibling PDF, moved together. */
+  units: MigrationUnit[];
+  /** Every move of `units` in order (note, then its PDF): the dry-run list. */
   moves: MigrationMove[];
   skipped: MigrationSkip[];
   /** Markdown files in a subject folder that are not lecture notes (left in place). */
@@ -50,6 +59,7 @@ export interface MigrationResult {
 
 export const COLLISION_REASON = "옮길 위치에 같은 이름의 파일이 이미 있어 건너뜀";
 export const NOTE_SKIPPED_REASON = "노트를 옮기지 않아 PDF도 그대로 둠";
+export const PDF_TAKEN_REASON = "PDF를 옮길 위치에 같은 이름의 파일이 있어 노트도 그대로 둠";
 
 function trimSlashes(p: string): string {
   return p.replace(/^\/+|\/+$/g, "");
@@ -63,7 +73,7 @@ export function planLayoutMigration(baseFolder: string, files: VaultFileEntry[])
   const taken = new Set(files.map((f) => f.path.toLowerCase()));
   // Sibling PDFs by lowercased path (".PDF" too).
   const pdfByLower = new Map(files.filter((f) => /\.pdf$/i.test(f.path)).map((f) => [f.path.toLowerCase(), f.path]));
-  const plan: MigrationPlan = { base, moves: [], skipped: [], otherNotes: [], examFiles: 0 };
+  const plan: MigrationPlan = { base, units: [], moves: [], skipped: [], otherNotes: [], examFiles: 0 };
   const skipped = new Set<string>(SUBJECT_SUBDIRS);
 
   const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
@@ -88,21 +98,19 @@ export function planLayoutMigration(baseFolder: string, files: VaultFileEntry[])
     const hasPdf = found !== undefined;
     const pdf = found ?? `${prefix}${subject}/${stem}.pdf`;
     const pdfTarget = `${prefix}${subject}/${LECTURES_DIR}/${pdf.slice(pdf.lastIndexOf("/") + 1)}`;
-    if (taken.has(target.toLowerCase())) {
-      plan.skipped.push({ from: f.path, to: target, reason: COLLISION_REASON });
-      if (hasPdf) plan.skipped.push({ from: pdf, to: pdfTarget, reason: NOTE_SKIPPED_REASON });
+    const noteTaken = taken.has(target.toLowerCase());
+    const pdfTaken = hasPdf && taken.has(pdfTarget.toLowerCase());
+    if (noteTaken || pdfTaken) {
+      plan.skipped.push({ from: f.path, to: target, reason: noteTaken ? COLLISION_REASON : PDF_TAKEN_REASON });
+      if (hasPdf) plan.skipped.push({ from: pdf, to: pdfTarget, reason: pdfTaken ? COLLISION_REASON : NOTE_SKIPPED_REASON });
       continue;
     }
-    plan.moves.push({ from: f.path, to: target, kind: "note" });
+    const unit: MigrationUnit = { note: { from: f.path, to: target, kind: "note" }, pdf: hasPdf ? { from: pdf, to: pdfTarget, kind: "pdf" } : null };
+    plan.units.push(unit);
     taken.add(target.toLowerCase());
-    if (!hasPdf) continue;
-    if (taken.has(pdfTarget.toLowerCase())) {
-      plan.skipped.push({ from: pdf, to: pdfTarget, reason: COLLISION_REASON });
-      continue;
-    }
-    plan.moves.push({ from: pdf, to: pdfTarget, kind: "pdf" });
-    taken.add(pdfTarget.toLowerCase());
+    if (hasPdf) taken.add(pdfTarget.toLowerCase());
   }
+  plan.moves = plan.units.flatMap((u) => (u.pdf ? [u.note, u.pdf] : [u.note]));
   return plan;
 }
 
@@ -114,39 +122,68 @@ export interface MigrationIO {
 }
 
 /**
- * Applies a plan. Existence is checked again right before each move (the
- * vault may have changed since the dry run): a taken target or a missing
- * source is skipped and reported, never overwritten. A failed rename is
- * reported and the rest continues.
+ * Applies a plan, one note and PDF unit at a time. Existence is checked
+ * again right before each unit (the vault may have changed since the dry
+ * run): a taken target or a missing source skips the whole unit, never
+ * overwriting. The PDF moves first, then the note; when the note cannot
+ * move, the PDF is moved back, so a note and its PDF never end up apart.
  */
 export async function applyLayoutMigration(plan: MigrationPlan, io: MigrationIO): Promise<MigrationResult> {
   const result: MigrationResult = { moved: [], skipped: [...plan.skipped] };
-  const skippedNotes = new Set<string>();
-  for (const move of plan.moves) {
-    const noteOfPdf = move.kind === "pdf" ? move.from.replace(/\.pdf$/i, ".md") : null;
-    if (noteOfPdf && skippedNotes.has(noteOfPdf)) {
-      result.skipped.push({ from: move.from, to: move.to, reason: NOTE_SKIPPED_REASON });
+  const skipUnit = (u: MigrationUnit, reason: string, pdfReason = NOTE_SKIPPED_REASON) => {
+    result.skipped.push({ from: u.note.from, to: u.note.to, reason });
+    if (u.pdf) result.skipped.push({ from: u.pdf.from, to: u.pdf.to, reason: pdfReason });
+  };
+  for (const u of plan.units) {
+    if (!io.exists(u.note.from)) {
+      skipUnit(u, "원본 파일이 없어 건너뜀");
       continue;
     }
-    const skip = (reason: string) => {
-      result.skipped.push({ from: move.from, to: move.to, reason });
-      if (move.kind === "note") skippedNotes.add(move.from);
-    };
-    if (!io.exists(move.from)) {
-      skip("원본 파일이 없어 건너뜀");
+    if (io.exists(u.note.to)) {
+      skipUnit(u, COLLISION_REASON);
       continue;
     }
-    if (io.exists(move.to)) {
-      skip(COLLISION_REASON);
+    if (u.pdf && !io.exists(u.pdf.from)) {
+      // The PDF went away since the dry run: the note moves alone.
+      u.pdf = null;
+    }
+    if (u.pdf && io.exists(u.pdf.to)) {
+      skipUnit(u, PDF_TAKEN_REASON, COLLISION_REASON);
       continue;
     }
     try {
-      await io.ensureFolder(move.to.slice(0, move.to.lastIndexOf("/")));
-      await io.rename(move.from, move.to);
-      result.moved.push(move);
+      await io.ensureFolder(u.note.to.slice(0, u.note.to.lastIndexOf("/")));
     } catch (e) {
-      skip(`옮기지 못함: ${e instanceof Error ? e.message : String(e)}`);
+      skipUnit(u, `옮기지 못함: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
     }
+    if (u.pdf) {
+      try {
+        await io.rename(u.pdf.from, u.pdf.to);
+      } catch (e) {
+        skipUnit(u, "PDF를 옮기지 못해 노트도 그대로 둠", `옮기지 못함: ${e instanceof Error ? e.message : String(e)}`);
+        continue;
+      }
+    }
+    try {
+      await io.rename(u.note.from, u.note.to);
+    } catch (e) {
+      const why = `옮기지 못함: ${e instanceof Error ? e.message : String(e)}`;
+      if (u.pdf) {
+        try {
+          await io.rename(u.pdf.to, u.pdf.from);
+          skipUnit(u, why, "노트를 옮기지 못해 PDF를 제자리로 되돌림");
+        } catch (back) {
+          result.moved.push(u.pdf);
+          result.skipped.push({ from: u.note.from, to: u.note.to, reason: `${why}. PDF는 ${u.pdf.to}에 있고 되돌리지 못했습니다: ${back instanceof Error ? back.message : String(back)}` });
+        }
+      } else {
+        skipUnit(u, why);
+      }
+      continue;
+    }
+    result.moved.push(u.note);
+    if (u.pdf) result.moved.push(u.pdf);
   }
   return result;
 }

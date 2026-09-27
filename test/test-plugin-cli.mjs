@@ -250,8 +250,12 @@ try {
     const pv = preview();
     pv.altData = { ...pv.altData, title: "Old Lec", metadata: { ...pv.altData.metadata, noteId: "note-old" } };
     assert.equal(plugin.resolveNotePath(pv, "CSED311"), legacy, "found by alt_id");
-    files.set(legacy, '---\ntitle: "Old Lec"\n---\n# Old Lec\n');
-    assert.equal(plugin.resolveNotePath(pv, "CSED311"), legacy, "1.x path kept before migration");
+    files.set(legacy, '---\ntitle: "Old Lec"\nsource: "alt2obsidian"\n---\n# Old Lec\n');
+    assert.equal(plugin.resolveNotePath(pv, "CSED311"), legacy, "1.x path kept before migration (our note without an id)");
+    files.set(legacy, '---\ntitle: "Old Lec"\nsource: "alt2obsidian"\nalt_id: "another-lecture"\n---\n# Old Lec\n');
+    assert.equal(plugin.resolveNotePath(pv, "CSED311"), "Alt2Obsidian/CSED311/Lectures/Old Lec.md", "another lecture's 1.x note is never merged into");
+    files.set(legacy, "# 내가 쓴 같은 이름의 노트\n");
+    assert.equal(plugin.resolveNotePath(pv, "CSED311"), "Alt2Obsidian/CSED311/Lectures/Old Lec.md", "a user's own note is never merged into");
     files.delete(legacy);
     assert.equal(plugin.resolveNotePath(pv, "CSED311"), "Alt2Obsidian/CSED311/Lectures/Old Lec.md");
   }

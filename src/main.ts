@@ -561,8 +561,16 @@ export default class Alt2ObsidianPlugin extends Plugin {
       // or a 1.x note still at <subject>/<title>.md (vault not migrated).
       const own = alt.metadata.noteId ? this.vaultLectureNotes().find((v) => v.altId === alt.metadata.noteId) : undefined;
       if (own) return own.path;
+      // The 1.x path only for this lecture's own note: the same alt_id, or an
+      // Alt2Obsidian note with no id at all (never another lecture's note).
       const legacy = `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(alt.title)}.md`;
-      if (this.app.vault.getAbstractFileByPath(legacy)) return legacy;
+      const file = this.app.vault.getAbstractFileByPath(legacy);
+      if (file instanceof TFile) {
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+        const sameId = !!alt.metadata.noteId && fm?.alt_id === alt.metadata.noteId;
+        const ours = typeof fm?.source === "string" && fm.source.startsWith("alt2obsidian");
+        if (sameId || (ours && !fm?.alt_id && !fm?.alt_local_id)) return legacy;
+      }
       return `${base}.md`;
     }
     const own = this.vaultLectureNotes().find((v) => v.altLocalId === alt.metadata.noteId);
