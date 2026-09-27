@@ -10,8 +10,8 @@
 // failing the checks are asked for once more, alone (spec 4.2 rule 4). A
 // failed call is not retried as is (a timed-out one is tried once in two
 // halves); a fatal error (missing CLI, not logged in, usage limit) or two
-// failed calls in a row stop the run. Slides
-// still failing keep their previous commentary when the note had one, and
+// failed calls in a row stop the run (src/llm/jsonBatches.ts, shared with
+// the note verifier). Slides still failing keep their previous commentary when the note had one, and
 // are listed under "⚠️ 처리 실패 슬라이드" like 1.x.
 
 import { ImageInput, LLMProvider, PerSlideGenerationResult, SlideSection } from "../types";
@@ -19,8 +19,7 @@ import { renderPrompt } from "../prompts/render";
 import { formatSlideMeta } from "../core/slideMeta";
 import { templateGist } from "../core/prep/SlideAnalyzer";
 import { DeckPlan, PlannedSlide } from "../pipeline/batchPlan";
-import { CliRunError, isAbortError } from "../llm/cli/CliRunner";
-import { isFatalCliError, isUsageLimitError } from "../llm/cli/CliProviderBase";
+import { runJsonBatches } from "../llm/jsonBatches";
 import batchSystemTemplate from "../../prompts/slide-commentary-batch.system.md";
 import batchContextTemplate from "../../prompts/slide-commentary-batch.context.md";
 import batchUserTemplate from "../../prompts/slide-commentary-batch.user.md";
@@ -174,9 +173,6 @@ export interface BatchGenerationResult extends PerSlideGenerationResult {
   keptPrevious: number[];
 }
 
-/** Whole-call failures in a row after which the run stops (review M3). */
-const MAX_CONSECUTIVE_CALL_FAILURES = 2;
-
 export class BatchCommentaryGenerator {
   constructor(private llm: LLMProvider) {}
 
@@ -186,101 +182,34 @@ export class BatchCommentaryGenerator {
     const system = buildBatchSystemPrompt();
     const contextBlock = buildLectureContextBlock(opts.context, plan);
     const byPage = new Map(plan.slides.map((s) => [s.page, s]));
-    const done = new Map<number, BatchItem>();
-    const failures = new Map<number, string>();
-    const calls: number[][] = [];
     const llmTotal = plan.slides.filter((s) => s.mode === "llm").length;
-    let stopReason: string | null = null;
-    let consecutiveCallFailures = 0;
-
-    /**
-     * One call. `invalid`: slides whose answer was missing or invalid (asked
-     * for again once). `failed`: the call itself failed and is not repeated
-     * as is; a timed-out call is split in half once by the caller.
-     */
-    type CallResult = { kind: "ok"; invalid: Map<number, string> } | { kind: "failed"; timeout: boolean };
-    const runCall = async (slides: PlannedSlide[]): Promise<CallResult> => {
-      calls.push(slides.map((s) => s.page));
-      const images: ImageInput[] = [];
-      for (const s of slides) {
-        if (!s.sendImage) continue;
-        const img = await opts.renderImage(s.page);
-        if (img) images.push(img);
-      }
-      let raw: unknown;
-      try {
-        raw = await this.llm.generateJSON(buildBatchUserPrompt(contextBlock, slides), (r) => r, {
+    const { done, failures, calls } = await runJsonBatches<PlannedSlide, number, BatchItem>({
+      batches: plan.batches.map((b) => b.pages.map((p) => byPage.get(p)!)),
+      key: (s) => s.page,
+      unitObject: "슬라이드를",
+      signal: opts.signal,
+      call: async (slides) => {
+        const images: ImageInput[] = [];
+        for (const s of slides) {
+          if (!s.sendImage) continue;
+          const img = await opts.renderImage(s.page);
+          if (img) images.push(img);
+        }
+        return this.llm.generateJSON(buildBatchUserPrompt(contextBlock, slides), (r) => r, {
           systemPrompt: system,
           schema: BATCH_SCHEMA,
           images,
           signal: opts.signal,
-          // Retries are per failed slide, below.
+          // Retries are per failed slide (runJsonBatches).
           attempts: 1,
           // The per-call timeout is for an 8-slide text batch; bigger
           // batches (Codex uses 16) and images get proportionally longer.
           timeoutScale: Math.max(1, slides.length / 8) + 0.1 * images.length,
         });
-      } catch (e) {
-        if (isAbortError(e) || opts.signal?.aborted) throw e;
-        const msg = e instanceof Error ? e.message : String(e);
-        if (!(e instanceof CliRunError)) {
-          // The CLI answered but not with parsable JSON: every slide is invalid.
-          consecutiveCallFailures = 0;
-          return { kind: "ok", invalid: new Map(slides.map((s) => [s.page, `응답 JSON 형식 오류: ${msg.slice(0, 120)}`])) };
-        }
-        for (const s of slides) failures.set(s.page, msg);
-        consecutiveCallFailures++;
-        if (isFatalCliError(e)) {
-          stopReason = isUsageLimitError(e) ? `사용 한도에 걸려 남은 슬라이드를 중단했습니다: ${msg}` : `CLI 오류로 남은 슬라이드를 중단했습니다: ${msg}`;
-        } else if (consecutiveCallFailures >= MAX_CONSECUTIVE_CALL_FAILURES) {
-          stopReason = `호출이 ${MAX_CONSECUTIVE_CALL_FAILURES}번 연속 실패해 남은 슬라이드를 중단했습니다: ${msg}`;
-        }
-        return { kind: "failed", timeout: e.kind === "timeout" };
-      }
-      consecutiveCallFailures = 0;
-      const { ok, failed } = checkBatchAnswer(raw, slides);
-      for (const [page, item] of ok) done.set(page, item);
-      return { kind: "ok", invalid: failed };
-    };
-    const record = (invalid: Map<number, string>) => {
-      for (const [page, reason] of invalid) failures.set(page, reason);
-    };
-    /** Slides missing or invalid in an answer are asked for once more, together in one call. */
-    const retryInvalid = async (slides: PlannedSlide[], invalid: Map<number, string>, batch: number) => {
-      if (invalid.size === 0 || stopReason) {
-        record(invalid);
-        return;
-      }
-      opts.onProgress?.({ batch, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: true });
-      const retry = await runCall(slides.filter((s) => invalid.has(s.page)));
-      if (retry.kind === "ok") record(retry.invalid);
-    };
-
-    for (let b = 0; b < plan.batches.length; b++) {
-      const slides = plan.batches[b].pages.map((p) => byPage.get(p)!);
-      if (stopReason) {
-        for (const s of slides) failures.set(s.page, stopReason);
-        continue;
-      }
-      opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: false });
-      const first = await runCall(slides);
-      if (first.kind === "ok") {
-        await retryInvalid(slides, first.invalid, b + 1);
-      } else if (first.timeout && slides.length > 1 && !stopReason) {
-        // A timed-out batch is tried once more in two halves.
-        opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: true });
-        const mid = Math.ceil(slides.length / 2);
-        for (const half of [slides.slice(0, mid), slides.slice(mid)]) {
-          if (stopReason) {
-            for (const s of half) failures.set(s.page, stopReason);
-            continue;
-          }
-          const r = await runCall(half);
-          if (r.kind === "ok") await retryInvalid(half, r.invalid, b + 1);
-        }
-      }
-    }
-    opts.onProgress?.({ batch: plan.batches.length, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: false });
+      },
+      check: checkBatchAnswer,
+      onProgress: (p) => opts.onProgress?.({ batch: p.batch, batches: p.batches, slidesDone: p.done, slidesTotal: llmTotal, retry: p.retry }),
+    });
 
     const sections: SlideSection[] = [];
     const gists = new Map<number, string>();
