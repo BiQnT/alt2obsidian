@@ -228,8 +228,6 @@ export function emissionScores(slideTexts: string[], segments: TimedSegment[], p
   return raw.map((scores, i) => scores.map((s) => s / (bests[i] + damp)));
 }
 
-const TEXTLESS_BONUS = 0.05;
-
 /** A slide needs this many tokens to be matched by its text. */
 export const MIN_SLIDE_TOKENS = 3;
 
@@ -247,6 +245,27 @@ function transitionCost(from: number, to: number, p: AlignerParams, textBefore: 
   if (to === from + 1) return p.nextCost;
   if (to > from) return p.nextCost + p.skipCost * (textBefore[to] - textBefore[from + 1]);
   return p.backCost + p.backPerSlide * (from - to);
+}
+
+/**
+ * Talk that shares no word with its slide right before the path jumps over
+ * textless slides (A, unmatched talk, then B with image slides between) was
+ * most likely about those slides: it moves to them. Unmatched talk followed
+ * by more talk on the same slide (chatter) stays where it is.
+ */
+function giveOffTalkToSkippedTextless(path: number[], off: boolean[], isText: boolean[]): void {
+  for (let i = 1; i < path.length; i++) {
+    const from = path[i - 1];
+    const to = path[i];
+    if (to <= from + 1) continue;
+    const between: number[] = [];
+    for (let j = from + 1; j < to; j++) if (!isText[j]) between.push(j);
+    if (between.length === 0) continue;
+    let k = i;
+    while (k > 0 && off[k - 1] && path[k - 1] === from) k--;
+    const len = i - k;
+    for (let q = 0; q < len; q++) path[k + q] = between[Math.min(between.length - 1, Math.floor((q * between.length) / len))];
+  }
 }
 
 /**
@@ -285,12 +304,14 @@ export function alignTranscript(
   const n = segments.length;
   if (m === 0 || n === 0) return { spans: [], segmentSlides: [] };
   const e = emissionScores(slideTexts, segments, p);
-  // Textless slides: a flat score a little above the off-topic state, so talk
-  // that matches no slide text can settle on them instead of a neighbour.
+  // Textless slides: a flat score equal to the off-topic state (never
+  // above it), so chatter does not drift onto an image slide; skipping them
+  // is free, and the off-topic talk just before the path passes them is
+  // given to them afterwards.
   const isText = textSlideMask(slideTexts);
   const textBefore = new Int32Array(m + 1);
   for (let j = 0; j < m; j++) textBefore[j + 1] = textBefore[j] + (isText[j] ? 1 : 0);
-  for (const row of e) for (let j = 0; j < m; j++) if (!isText[j]) row[j] = p.offEmission + TEXTLESS_BONUS;
+  for (const row of e) for (let j = 0; j < m; j++) if (!isText[j]) row[j] = p.offEmission;
 
   // Viterbi, maximizing emission minus transition cost. Every slide has an
   // "on" state (talking about it) and an "off" state (talk that matches no
@@ -357,6 +378,9 @@ export function alignTranscript(
   states[n - 1] = lastState;
   for (let i = n - 1; i > 0; i--) states[i - 1] = back[i][states[i]];
   const path = states.map((st) => st % m);
+  const slideTokens = slideTexts.map((t) => new Set(alignTokens(t)));
+  const unmatched = states.map((st, i) => st >= m || !alignTokens(segments[i].text).some((t) => slideTokens[st % m].has(t)));
+  giveOffTalkToSkippedTextless(path, unmatched, isText);
   spreadTextless(path, isText);
 
   const spans: AlignedSpan[] = [];

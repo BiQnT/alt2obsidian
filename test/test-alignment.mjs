@@ -161,6 +161,32 @@ const segments = spoken.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 50
   const onSlide2 = (al.chunks[1].match(/picture/g) ?? []).length;
   assert.ok(onSlide2 <= 3, `most unmatched talk goes to the textless slides, not the neighbour (${onSlide2} on slide 2)`);
   console.log("PASS: textless slides: scanned or mostly image-only decks fall back to the even split; textless slides in a text deck share the unmatched talk");
+  // Chatter while a text slide is up stays on it (off topic); talk just
+  // before the lecture moves past an image slide goes to the image slide.
+  const deck2 = [slides[0], slides[1], "", slides[4], slides[5]];
+  const talk2 = [
+    [1, "welcome to lecture five about virtual memory"],
+    [2, "a page table maps virtual pages to physical frames"],
+    [0, "by the way the homework deadline moved to friday"],
+    [0, "and the midterm room is posted on the website"],
+    [2, "each page table entry has a valid bit and a frame number"],
+    [3, "now look at this picture, the arrows go from here to there"],
+    [3, "and this box in the middle feeds that one on the right"],
+    [4, "for replacement we can use LRU or FIFO"],
+    [4, "the clock algorithm approximates LRU cheaply"],
+    [5, "to wrap up, the key takeaways are on homework five"],
+  ];
+  const spoken2 = pace(talk2);
+  const segs2 = spoken2.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 5000 + 4800, text, speaker: "" }));
+  const r2 = m.alignLecture(deck2, segs2).result.segmentSlides;
+  spoken2.forEach(([t, text], i) => {
+    if (t === 0) assert.equal(r2[i], 2, `chatter stays on slide 2: "${text}" got ${r2[i]} (${r2.join(",")})`);
+  });
+  const imageTalk = spoken2.map(([t], i) => [t, r2[i]]).filter(([t]) => t === 3);
+  // The 15 s scoring window lets the next slide pull the last lines; at least half stay.
+  assert.ok(imageTalk.filter(([, p]) => p === 3).length * 2 >= imageTalk.length, `talk during the image slide goes to it (${r2.join(",")})`);
+  assert.ok(imageTalk.every(([, p]) => p !== 2), "none of it is left on the previous text slide");
+  console.log("PASS: chatter before an image slide stays on the text slide; talk during an image slide goes to the image slide");
 }
 
 // ---- alignLecture: timestamps required ----

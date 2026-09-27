@@ -581,7 +581,6 @@ function emissionScores(slideTexts, segments, p = DEFAULT_ALIGNER_PARAMS) {
   const damp = p.damping * typical;
   return raw.map((scores, i) => scores.map((s) => s / (bests[i] + damp)));
 }
-var TEXTLESS_BONUS = 0.05;
 var MIN_SLIDE_TOKENS = 3;
 function textSlideMask(slideTexts) {
   return slideTexts.map((t) => alignTokens(t).length >= MIN_SLIDE_TOKENS);
@@ -594,6 +593,26 @@ function transitionCost(from, to, p, textBefore) {
   if (to > from)
     return p.nextCost + p.skipCost * (textBefore[to] - textBefore[from + 1]);
   return p.backCost + p.backPerSlide * (from - to);
+}
+function giveOffTalkToSkippedTextless(path, off, isText) {
+  for (let i = 1; i < path.length; i++) {
+    const from = path[i - 1];
+    const to = path[i];
+    if (to <= from + 1)
+      continue;
+    const between = [];
+    for (let j = from + 1; j < to; j++)
+      if (!isText[j])
+        between.push(j);
+    if (between.length === 0)
+      continue;
+    let k = i;
+    while (k > 0 && off[k - 1] && path[k - 1] === from)
+      k--;
+    const len = i - k;
+    for (let q = 0; q < len; q++)
+      path[k + q] = between[Math.min(between.length - 1, Math.floor(q * between.length / len))];
+  }
 }
 function spreadTextless(path, isText) {
   const n = path.length;
@@ -634,7 +653,7 @@ function alignTranscript(slideTexts, segments, params = {}) {
   for (const row of e)
     for (let j = 0; j < m; j++)
       if (!isText[j])
-        row[j] = p.offEmission + TEXTLESS_BONUS;
+        row[j] = p.offEmission;
   let on = new Float64Array(m);
   let off = new Float64Array(m);
   for (let j = 0; j < m; j++) {
@@ -696,6 +715,9 @@ function alignTranscript(slideTexts, segments, params = {}) {
   for (let i = n - 1; i > 0; i--)
     states[i - 1] = back[i][states[i]];
   const path = states.map((st) => st % m);
+  const slideTokens = slideTexts.map((t) => new Set(alignTokens(t)));
+  const unmatched = states.map((st, i) => st >= m || !alignTokens(segments[i].text).some((t) => slideTokens[st % m].has(t)));
+  giveOffTalkToSkippedTextless(path, unmatched, isText);
   spreadTextless(path, isText);
   const spans = [];
   let start = 0;
