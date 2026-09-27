@@ -299,6 +299,10 @@ export interface CliDetection {
   path: string;
   version: string;
   detectedAt: string;
+  /** Its help listed every flag the providers pass (missing on data from before the check). */
+  featuresOk?: boolean;
+  /** Older than the tested version, with every flag present. */
+  warning?: string;
 }
 
 export interface PluginData {

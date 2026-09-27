@@ -29,9 +29,7 @@ import {
   createJobDir,
   probeCliLogin,
   isExecutable,
-  MIN_CLI_VERSION,
   readCliVersion,
-  versionAtLeast,
   removeJobDir,
   resolveCliBinary,
 } from "./llm/cli/CliRunner";
@@ -1467,14 +1465,16 @@ export default class Alt2ObsidianPlugin extends Plugin {
   async detectCli(name: CliName, force = false): Promise<CliDetection | null> {
     const settings = this.data.settings;
     try {
-      // Every candidate's version is read; older than the tested floor is skipped, the newest wins.
+      // Every candidate's --version and --help are read (no model call): one
+      // missing a flag the providers pass is skipped, the newest usable one wins.
       const resolved = await resolveCliBinary(name, {
         configuredPath: name === "claude" ? settings.claudePath : settings.codexPath,
         cachedPath: force ? undefined : this.data.cliDetection[name]?.path,
-        minVersion: MIN_CLI_VERSION[name],
+        checkFeatures: true,
         readVersion: (bin) => readCliVersion(bin),
       });
-      const detection = { path: resolved.path, version: resolved.version ?? "", detectedAt: new Date().toISOString() };
+      const detection: CliDetection = { path: resolved.path, version: resolved.version ?? "", detectedAt: new Date().toISOString(), featuresOk: true };
+      if (resolved.warning) detection.warning = resolved.warning;
       this.data.cliDetection[name] = detection;
       delete this.cliErrors[name];
       await this.savePluginData();
@@ -1493,9 +1493,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
   async resolveBin(name: CliName): Promise<string> {
     const configured = (name === "claude" ? this.data.settings.claudePath : this.data.settings.codexPath).trim();
     const cached = this.data.cliDetection[name];
-    // A cached path from before the version floor (or an older install) is looked up again.
-    if (cached && (!configured || configured === cached.path) && isExecutable(cached.path) && versionAtLeast(cached.version, MIN_CLI_VERSION[name])) return cached.path;
-    const found = await this.detectCli(name, !!cached && !versionAtLeast(cached.version, MIN_CLI_VERSION[name]));
+    // A cached path from before the feature check is checked again.
+    if (cached && (!configured || configured === cached.path) && isExecutable(cached.path) && cached.featuresOk) return cached.path;
+    const found = await this.detectCli(name, !!cached && !cached.featuresOk);
     if (!found) throw new Error(this.cliErrors[name] || cliNotFoundMessage(name));
     return found.path;
   }

@@ -370,32 +370,80 @@ export interface ResolveOptions {
   /** Environment for the Windows folders (%APPDATA% ...). Default process.env. */
   env?: Record<string, string | undefined>;
   /**
-   * Lowest usable version ("2.1.283"). When set, every candidate's
-   * `--version` is read, older ones are skipped and the newest usable one
-   * wins; a configured path below it is an error naming the alternatives.
+   * Check every candidate's features: its help text must list every flag
+   * the providers pass (REQUIRED_CLI_FEATURES). Candidates missing one are
+   * skipped, the newest usable one wins, and a configured path missing one
+   * is an error naming the alternatives.
    */
-  minVersion?: string;
+  checkFeatures?: boolean;
   /** Reads `<bin> --version` (default readCliVersion; tests override). */
   readVersion?: (bin: string) => Promise<string>;
+  /** Reads the help text the features are checked in (default readCliHelp). */
+  readHelp?: (bin: string, name: CliName) => Promise<string>;
 }
 
 export interface ResolvedCli {
   path: string;
   source: "settings" | "cache" | "login-shell" | "where" | "common-path";
-  /** `--version` output when a minimum version was checked. */
+  /** `--version` output when the features were checked. */
   version?: string;
+  /** Older than the tested version although every flag is present: works, but untested. */
+  warning?: string;
 }
 
 /**
- * Lowest CLI versions the providers are tested with (every flag they pass
- * exists there): Claude Code 2.1.283 (`--safe-mode`, `--disable-slash-commands`,
- * `--setting-sources`, `--effort`, `--permission-mode dontAsk`,
- * `--strict-mcp-config`, stream-json input) and Codex 0.155.1
- * (`--ignore-user-config`, `--ephemeral`, `--output-schema`). Older
- * versions stop at "unknown option"; the first version that supports all of
- * them is not documented, so the tested one is the floor.
+ * Versions the providers were tested with. A CLI older than this that
+ * lists every required flag is used with a warning; one missing a flag is
+ * never used.
  */
-export const MIN_CLI_VERSION: Record<CliName, string> = { claude: "2.1.283", codex: "0.155.1" };
+export const TESTED_CLI_VERSION: Record<CliName, string> = { claude: "2.1.283", codex: "0.155.1" };
+
+/**
+ * What the providers pass, checked in the help text (`claude --help`,
+ * `codex exec --help`): every flag, plus the values they rely on
+ * (`dontAsk`, `stream-json`). The first version with all of them is not
+ * documented, so this is checked on the installed binary instead.
+ */
+export const REQUIRED_CLI_FEATURES: Record<CliName, string[]> = {
+  claude: [
+    "--print",
+    "--safe-mode",
+    "--setting-sources",
+    "--strict-mcp-config",
+    "--mcp-config",
+    "--disable-slash-commands",
+    "--no-session-persistence",
+    "--system-prompt",
+    "--effort",
+    "--model",
+    "--tools",
+    "--permission-mode",
+    "dontAsk",
+    "--input-format",
+    "--output-format",
+    "stream-json",
+    "--settings",
+    "--allowedTools",
+    "--disallowedTools",
+    "--verbose",
+  ],
+  codex: ["--json", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--sandbox", "--cd", "--output-last-message", "--model", "--output-schema", "--config", "--image"],
+};
+
+/** Help command whose output lists the flags a provider uses. */
+export function helpArgs(name: CliName): string[] {
+  return name === "claude" ? ["--help"] : ["exec", "--help"];
+}
+
+/** Required features the help text does not mention (whole words). */
+export function missingCliFeatures(name: CliName, help: string): string[] {
+  return REQUIRED_CLI_FEATURES[name].filter((f) => !new RegExp(`(^|[^\\w-])${f.replace(/[-]/g, "\\-")}(?![\\w-])`).test(help));
+}
+
+export async function readCliHelp(bin: string, name: CliName, timeoutMs = 15_000): Promise<string> {
+  const out = await runCli({ bin, args: helpArgs(name), timeoutMs });
+  return `${out.stdout}\n${out.stderr}`;
+}
 
 /** [major, minor, patch] of the first x.y.z in a `--version` line, or null. */
 export function parseSemver(text: string): [number, number, number] | null {
@@ -412,15 +460,19 @@ export function versionAtLeast(version: string | undefined, min: string): boolea
   return true;
 }
 
-export function cliTooOldMessage(name: CliName, found: Array<{ path: string; version: string }>, min: string): string {
-  const list = found.map((f) => `${f.path} (${f.version || "버전 확인 실패"})`).join(", ");
-  return `${name} CLI ${min} 이상이 필요합니다. 찾은 실행 파일: ${list}. 새 버전으로 업데이트하거나(\`${name} update\` 또는 npm i -g) 설정 > LLM 연결에 새 버전의 절대 경로를 넣으세요.`;
+export function cliUnusableMessage(name: CliName, found: Array<{ path: string; version: string; missing: string[] }>): string {
+  const list = found.map((f) => `${f.path} (${f.version || "버전 확인 실패"}${f.missing.length ? `, 없는 옵션: ${f.missing.join(" ")}` : ""})`).join(", ");
+  return `이 플러그인이 쓰는 옵션을 모두 지원하는 ${name} CLI를 찾지 못했습니다. 찾은 실행 파일: ${list}. 새 버전(시험한 버전 ${TESTED_CLI_VERSION[name]} 이상)으로 업데이트하거나(\`${name} update\` 또는 npm i -g) 설정 > LLM 연결에 새 버전의 절대 경로를 넣으세요.`;
+}
+
+export function cliUntestedWarning(name: CliName, version: string): string {
+  return `${name} CLI ${version || "(버전 모름)"}은 시험한 버전 ${TESTED_CLI_VERSION[name]}보다 오래되었습니다. 필요한 옵션은 모두 있어 그대로 쓰지만, 문제가 생기면 업데이트하세요.`;
 }
 
 /** Message for an exit whose stderr says the CLI does not know a flag (too old). */
 export function unknownOptionMessage(name: CliName, stderr: string): string | null {
   if (!/unknown option|unexpected argument|unrecognized (option|argument)/i.test(stderr)) return null;
-  return `${name} CLI가 이 플러그인이 쓰는 옵션을 모릅니다 (${lastLine(stderr)}). ${name} CLI ${MIN_CLI_VERSION[name]} 이상으로 업데이트하거나 설정 > LLM 연결에서 '다시 찾기'를 누르세요.`;
+  return `${name} CLI가 이 플러그인이 쓰는 옵션을 모릅니다 (${lastLine(stderr)}). ${name} CLI를 업데이트(시험한 버전 ${TESTED_CLI_VERSION[name]} 이상)하거나 설정 > LLM 연결에서 '다시 찾기'를 누르세요.`;
 }
 
 export function cliNotFoundMessage(name: CliName, platform: NodeJS.Platform = process.platform): string {
@@ -509,7 +561,7 @@ export async function lookupWithWhere(name: CliName, timeoutMs: number, spawnFn?
 }
 
 export async function resolveCliBinary(name: CliName, opts: ResolveOptions): Promise<ResolvedCli> {
-  if (opts.minVersion) return resolveNewest(name, opts, opts.minVersion);
+  if (opts.checkFeatures) return resolveNewest(name, opts);
   const platform = opts.platform ?? process.platform;
   const P = pathLib(platform);
   const configured = opts.configuredPath.trim();
@@ -558,40 +610,43 @@ async function allCandidates(name: CliName, opts: ResolveOptions): Promise<Array
 }
 
 /**
- * Lookup with a version floor: a configured path must meet it; otherwise
- * the newest candidate at or above it wins (lookup order breaks ties).
+ * Lookup with a feature check: a configured path must list every required
+ * flag; otherwise the newest candidate that does wins (lookup order breaks
+ * ties). Older than the tested version is a warning, not a block.
  */
-async function resolveNewest(name: CliName, opts: ResolveOptions, min: string): Promise<ResolvedCli> {
+async function resolveNewest(name: CliName, opts: ResolveOptions): Promise<ResolvedCli> {
   const platform = opts.platform ?? process.platform;
   const P = pathLib(platform);
   const readVersion = opts.readVersion ?? ((bin: string) => readCliVersion(bin));
-  const versionOf = async (bin: string) => {
-    try {
-      return await readVersion(bin);
-    } catch {
-      return "";
-    }
+  const readHelp = opts.readHelp ?? ((bin: string, n: CliName) => readCliHelp(bin, n));
+  const inspect = async (c: Omit<ResolvedCli, "version">) => {
+    const [version, help] = await Promise.all([readVersion(c.path).catch(() => ""), readHelp(c.path, name).catch(() => "")]);
+    return { ...c, version, missing: help ? missingCliFeatures(name, help) : ["--help"] };
+  };
+  const finish = (c: Omit<ResolvedCli, "version"> & { version: string }): ResolvedCli => {
+    const out: ResolvedCli = { path: c.path, source: c.source, version: c.version };
+    if (!versionAtLeast(c.version, TESTED_CLI_VERSION[name])) out.warning = cliUntestedWarning(name, c.version);
+    return out;
   };
   const configured = opts.configuredPath.trim();
   if (configured) {
     if (!P.isAbsolute(configured) || !isExecutable(configured, platform)) {
       throw new CliRunError("not-found", `설정한 ${name} 경로에서 실행 파일을 찾지 못했습니다: ${configured}`);
     }
-    const version = await versionOf(configured);
-    if (versionAtLeast(version, min)) return { path: configured, source: "settings", version };
+    const own = await inspect({ path: configured, source: "settings" });
+    if (own.missing.length === 0) return finish(own);
     const others = (await allCandidates(name, { ...opts, cachedPath: undefined })).filter((c) => c.path !== configured);
-    const found = [{ path: configured, version }];
-    for (const c of others) found.push({ path: c.path, version: await versionOf(c.path) });
-    throw new CliRunError("not-found", cliTooOldMessage(name, found, min));
+    const found = [own, ...(await Promise.all(others.map(inspect)))];
+    throw new CliRunError("not-found", cliUnusableMessage(name, found));
   }
   const candidates = await allCandidates(name, opts);
   if (candidates.length === 0) throw new CliRunError("not-found", cliNotFoundMessage(name, platform));
-  const withVersions = await Promise.all(candidates.map(async (c) => ({ ...c, version: await versionOf(c.path) })));
-  const usable = withVersions.filter((c) => versionAtLeast(c.version, min));
-  if (usable.length === 0) throw new CliRunError("not-found", cliTooOldMessage(name, withVersions, min));
+  const inspected = await Promise.all(candidates.map(inspect));
+  const usable = inspected.filter((c) => c.missing.length === 0);
+  if (usable.length === 0) throw new CliRunError("not-found", cliUnusableMessage(name, inspected));
   let best = usable[0];
   for (const c of usable) if (versionAtLeast(c.version, best.version) && !versionAtLeast(best.version, c.version)) best = c;
-  return best;
+  return finish(best);
 }
 
 /** First line of `<bin> --version`, e.g. "2.1.283 (Claude Code)". */

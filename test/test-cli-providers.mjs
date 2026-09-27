@@ -116,42 +116,50 @@ const quiet = async (fn) => {
   }
 }
 
-// ---- version floor (MIN_CLI_VERSION): old installs skipped, the newest usable one wins ----
+// ---- CLI feature check: --help must list every flag; older than tested only warns ----
 {
   const dir = mkdtempSync(join(tmpdir(), "resolve-ver-"));
   try {
-    const mk = (sub, version, extra = "") => {
+    const fullHelp = (await import("node:child_process")).execFileSync(FAKE_CLAUDE, ["--help"], { encoding: "utf8" });
+    const mk = (sub, version, help, extra = "") => {
       mkdirSync(join(dir, sub));
       const f = join(dir, sub, "claude");
-      writeFileSync(f, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${version} (Claude Code)"; exit 0; fi\n${extra}\n`);
+      writeFileSync(join(dir, sub, "help.txt"), help);
+      writeFileSync(f, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${version} (Claude Code)"; exit 0; fi\nif [ "$1" = "--help" ]; then cat "${join(dir, sub, "help.txt")}"; exit 0; fi\n${extra}\n`);
       chmodSync(f, 0o755);
       return f;
     };
-    const old = mk("brew", "2.1.77", 'echo "error: unknown option \'--safe-mode\'" >&2; exit 1');
-    const cur = mk("nvm", "2.1.283");
-    const newer = mk("local", "2.2.0");
-    assert.equal(m.MIN_CLI_VERSION.claude, "2.1.283");
+    const lacking = mk("brew", "2.1.77", fullHelp.replace("--safe-mode", "--safe-modes-x"), 'echo "error: unknown option \'--safe-mode\'" >&2; exit 1');
+    const olderFull = mk("npm", "2.1.200", fullHelp);
+    const cur = mk("nvm", "2.1.283", fullHelp);
+    const newer = mk("local", "2.2.0", fullHelp);
+    assert.equal(m.TESTED_CLI_VERSION.claude, "2.1.283");
+    assert.deepEqual(m.missingCliFeatures("claude", fullHelp), []);
+    assert.deepEqual(m.missingCliFeatures("claude", fullHelp.replace("--safe-mode", "")), ["--safe-mode"]);
+    assert.deepEqual(m.missingCliFeatures("claude", fullHelp.replace('"dontAsk", ', "")), ["dontAsk"]);
+    assert.deepEqual(m.missingCliFeatures("codex", (await import("node:child_process")).execFileSync(FAKE_CODEX, ["exec", "--help"], { encoding: "utf8" })), []);
     assert.deepEqual(m.parseSemver("2.1.283 (Claude Code)"), [2, 1, 283]);
     assert.equal(m.versionAtLeast("2.1.77", "2.1.283"), false);
-    assert.equal(m.versionAtLeast("codex-cli 0.155.1", "0.155.1"), true);
-    assert.equal(m.versionAtLeast("", "0.1.0"), false);
-    const opts = { configuredPath: "", shell: FAKE_SHELL, minVersion: "2.1.283" };
-    // The login shell finds the old one first (like /opt/homebrew/bin before nvm): skipped.
-    process.env.FAKE_SHELL_RESULT = old;
+    const opts = { configuredPath: "", shell: FAKE_SHELL, checkFeatures: true };
+    // The login shell finds the one missing a flag first (like /opt/homebrew/bin before nvm): skipped.
+    process.env.FAKE_SHELL_RESULT = lacking;
     const r = await m.resolveCliBinary("claude", { ...opts, extraDirs: [join(dir, "nvm")] });
     assert.deepEqual(r, { path: cur, source: "common-path", version: "2.1.283 (Claude Code)" });
-    // The newest qualifying install wins; an old cached path is not kept.
-    assert.equal((await m.resolveCliBinary("claude", { ...opts, cachedPath: old, extraDirs: [join(dir, "nvm"), join(dir, "local")] })).path, newer);
-    // Only old installs: a clear error naming them.
-    await assert.rejects(m.resolveCliBinary("claude", { ...opts, extraDirs: [] }), (e) => /2\.1\.283 이상이 필요합니다/.test(e.message) && e.message.includes(`${old} (2.1.77 (Claude Code))`));
-    // A configured old path: error naming the usable alternatives.
+    assert.equal((await m.resolveCliBinary("claude", { ...opts, cachedPath: lacking, extraDirs: [join(dir, "nvm"), join(dir, "local")] })).path, newer, "the newest usable one wins");
+    // Older than tested but every flag present: used, with a warning only.
+    const soft = await m.resolveCliBinary("claude", { ...opts, extraDirs: [join(dir, "npm")] });
+    assert.equal(soft.path, olderFull);
+    assert.match(soft.warning, /시험한 버전 2\.1\.283보다 오래되었습니다/);
+    // Only a binary missing a flag: a clear block naming it and the flag.
+    await assert.rejects(m.resolveCliBinary("claude", { ...opts, extraDirs: [] }), (e) => e.message.includes(`${lacking} (2.1.77 (Claude Code), 없는 옵션: --safe-mode)`));
+    // A configured one missing a flag: the error names the usable alternatives.
     process.env.FAKE_SHELL_RESULT = "";
-    await assert.rejects(m.resolveCliBinary("claude", { ...opts, configuredPath: old, extraDirs: [join(dir, "nvm")] }), (e) => e.message.includes(old) && e.message.includes(cur));
-    assert.equal((await m.resolveCliBinary("claude", { ...opts, configuredPath: cur, extraDirs: [] })).source, "settings");
-    // An "unknown option" exit of an old CLI becomes the update message, fatal for the run.
-    const provider = new m.ClaudeCliProvider({ bin: old, model: "", effort: "", timeoutMs: 10000, workDir: dir, ownsWorkDir: false });
-    await assert.rejects(provider.generateText("hi"), (e) => e.kind === "spawn" && /2\.1\.283 이상으로 업데이트/.test(e.message) && m.isFatalCliError(e));
-    console.log("PASS: CLI version floor: older installs skipped, newest usable picked, clear errors, unknown option mapped");
+    await assert.rejects(m.resolveCliBinary("claude", { ...opts, configuredPath: lacking, extraDirs: [join(dir, "nvm")] }), (e) => e.message.includes(lacking) && e.message.includes(cur));
+    assert.equal((await m.resolveCliBinary("claude", { ...opts, configuredPath: olderFull, extraDirs: [] })).source, "settings");
+    // An "unknown option" exit at run time becomes the update message, fatal for the run.
+    const provider = new m.ClaudeCliProvider({ bin: lacking, model: "", effort: "", timeoutMs: 10000, workDir: dir, ownsWorkDir: false });
+    await assert.rejects(provider.generateText("hi"), (e) => e.kind === "spawn" && /업데이트/.test(e.message) && m.isFatalCliError(e));
+    console.log("PASS: CLI feature check: a binary missing a flag is skipped or blocked, older than tested only warns, newest usable picked, unknown option mapped");
   } finally {
     delete process.env.FAKE_SHELL_RESULT;
     rmSync(dir, { recursive: true, force: true });

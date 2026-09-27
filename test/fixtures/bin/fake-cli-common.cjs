@@ -207,6 +207,15 @@ function runClaude() {
     process.stdout.write("2.1.283 (Claude Code)\n");
     return;
   }
+  if (argv[0] === "--help") {
+    process.stdout.write(
+      "Usage: claude [options]\n  -p, --print\n  --safe-mode\n  --setting-sources <sources>\n  --strict-mcp-config\n  --mcp-config <configs...>\n" +
+        "  --disable-slash-commands\n  --no-session-persistence\n  --system-prompt <prompt>\n  --effort <level>\n  --model <model>\n  --tools <tools...>\n" +
+        '  --permission-mode <mode> (choices: "acceptEdits", "dontAsk", "plan")\n  --input-format <format> "text", "stream-json"\n  --output-format <format>\n' +
+        "  --settings <file-or-json>\n  --allowedTools, --allowed-tools <tools...>\n  --disallowedTools, --disallowed-tools <tools...>\n  --verbose\n"
+    );
+    return;
+  }
   if (argv[0] === "mcp" && argv[1] === "list") return runClaudeMcpList();
   if (argv[0] === "mcp" && argv[1] === "get") return runClaudeMcpGet(argv[2]);
   if (argv[0] === "auth" && argv[1] === "status") {
@@ -314,6 +323,10 @@ function runCodex() {
   }
   if (argv[0] === "login" && argv[1] === "status") {
     process.stderr.write("Logged in using ChatGPT\n");
+    return;
+  }
+  if (argv[0] === "exec" && argv[1] === "--help") {
+    process.stdout.write("Usage: codex exec [OPTIONS]\n  -c, --config\n  -i, --image\n  -m, --model\n  -s, --sandbox\n  -C, --cd\n  --skip-git-repo-check\n  --ephemeral\n  --ignore-user-config\n  --output-schema\n  --json\n  -o, --output-last-message\n");
     return;
   }
   if (argv[0] !== "exec") fail("expected exec subcommand");

@@ -179,6 +179,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         status.removeClass("is-missing");
         status.createDiv({ text: `찾음: ${found.version || "버전 확인 실패"}` });
         status.createDiv({ text: found.path, cls: "alt2obsidian-mono" });
+        if (found.warning) status.createDiv({ text: found.warning, cls: "alt2obsidian-muted" });
       } else {
         status.addClass("is-missing");
         status.removeClass("is-ok");
