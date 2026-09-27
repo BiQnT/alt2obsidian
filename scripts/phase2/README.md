@@ -5,16 +5,20 @@ Skill that imports an Alt lecture into the Obsidian vault using Claude Code Max'
 ## Files
 
 - `alt-scrape.mjs` — pure Node Alt URL scraper. Port of `src/scraper/{AltScraper,RscParser}.ts` with no Obsidian deps. Reads an `https://altalt.io/note/<id>` URL, prints metadata JSON to stdout: `{title, summary, pdfUrl, transcript, noteId, createdAt, parseQuality}`.
+- `slide-hashes.mjs`: per-page slide hashes for a PDF, `node scripts/phase2/slide-hashes.mjs <pdfPath> <sourceId>` prints `{"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}`. Generated from `scripts/src/slide-hashes.ts` by `npm run build:scripts` (also part of `npm run build`); it imports the plugin's `src/core/slideHash.ts`, so hashes are identical to the plugin's. `pdfjs-dist` is loaded from the repo's `node_modules`, so run `npm install` once.
 - `SKILL.md` — orchestration. Drives Claude Code through scrape → download PDF → read each slide via `Read(pages: "N-N")` → write Korean commentary → assemble page-anchored markdown → write to vault.
 
 ## Install
 
+From the repo root:
+
 ```bash
+npm install
 mkdir -p ~/.claude/skills/alt2obs
 ln -sf "$(pwd)/scripts/phase2/SKILL.md" ~/.claude/skills/alt2obs/SKILL.md
 ```
 
-(Or copy if you don't want a symlink.) The Skill is then available globally to Claude Code; project-local discovery would need `.claude/skills/alt2obs/SKILL.md` inside the target project (`.claude/` is git-ignored in this repo).
+Use a symlink, not a copy: the Skill finds the repo (prompts, scripts, `node_modules`) by resolving the link target, and it reads its commentary, overview and concept rules from `prompts/*.md` so the plugin and the Skill share one source. If `scripts/phase2/slide-hashes.mjs` is missing, run `npm run build:scripts`. The Skill is then available globally to Claude Code; project-local discovery would need `.claude/skills/alt2obs/SKILL.md` inside the target project (`.claude/` is git-ignored in this repo).
 
 ## Use
 
@@ -28,6 +32,10 @@ Vault path is auto-detected from `~/Library/Application Support/obsidian/obsidia
 
 The full plan (`.omc/plans/alt2obsidian-page-anchored-redesign.md`) calls for `packages/core` + `packages/cli` + npm-publish + `requestUrl` decoupling — multi-week work. Stage A skips the refactor and gets a working Claude-Code import path on disk in one session. Stage B is the real monorepo restructure, scheduled per user when they're ready.
 
-## Hash caveat
+## Hash compatibility
 
-Skill computes `SHA-1("{noteId}:{slide}").slice(0,8)`. Plugin computes `SHA-1(rendered_PNG_bytes).slice(0,8)`. Both produce 8-hex hashes that are **deterministic within their respective tool**, but the two tools' hashes don't match for the same lecture. Implication: if you import a lecture via Skill, then later re-import it via the plugin, every slide surfaces as `slideDrift` once (memos still preserved through the N-match-with-drift branch). Stage B will share the plugin's hash function via a node-canvas render path so the two are interchangeable.
+The plugin and the Skill compute the same slide hash, `sha1(normalized page text + ":" + page)` truncated to 8 hex (image-only pages: `sha1(noteId + ":" + page)`), from the same code in `src/core/slideHash.ts`. A lecture imported with one tool and re-imported with the other matches every slide by hash.
+
+Notes written by 1.x (plugin PNG-byte hash or the old Skill `sha1(noteId:page)` hash) show every slide as `slideDrift` once on their first re-import. Memos are preserved through the N-match-with-drift branch, and hashes are stable afterwards.
+
+`node test/test-slide-hash.mjs [pdfPath]` checks that the CLI output is deterministic and matches the hash rule.

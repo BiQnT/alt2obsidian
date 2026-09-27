@@ -39,12 +39,21 @@ The plugin checks `tags.includes("midterm")` or `tags.includes("final")` literal
 
 ## Workflow
 
-### 1. Scrape Alt metadata
+### 0. Resolve the repo root
 
-Run the scraper helper. The repo lives at `/Users/biqnt/dev_project/alt2obsidian` (adjust if invoked elsewhere).
+This skill is installed as a symlink to `scripts/phase2/SKILL.md` inside the Alt2Obsidian repo. Resolve the repo from the link target:
 
 ```bash
-node /Users/biqnt/dev_project/alt2obsidian/scripts/phase2/alt-scrape.mjs "<url>"
+REPO="$(cd "$(dirname "$(readlink -f ~/.claude/skills/alt2obs/SKILL.md)")/../.." && pwd)"
+test -f "$REPO/prompts/slide-commentary.user.md" && test -d "$REPO/node_modules/pdfjs-dist" && echo "$REPO"
+```
+
+If the check fails (skill copied instead of linked, or repo moved), ask the user for the repo path. If only `node_modules` is missing, run `npm install` in `$REPO` first. Every `$REPO/...` path below uses this value.
+
+### 1. Scrape Alt metadata
+
+```bash
+node "$REPO/scripts/phase2/alt-scrape.mjs" "<url>"
 ```
 
 Stdout is a single-line JSON object: `{title, summary, pdfUrl, transcript, noteId, createdAt, parseQuality}`. Capture and parse it.
@@ -69,40 +78,42 @@ Read(file_path="/tmp/alt-deck-<noteId>.pdf", pages="21-40")
 …
 ```
 
-Reading a PDF returns the page contents as images you can see directly. For each page N, write a Korean commentary section following these rules (these mirror the plugin's `PerSlideCommentaryGenerator` prompt — match the tone so plugin and Skill outputs feel uniform):
+Reading a PDF returns the page contents as images you can see directly. For each page N, write the Korean commentary exactly as the plugin's per-slide prompt asks. The prompt files are the single source for these rules, shared with the plugin:
 
-- Output is the section body only — never include the section heading (`## …`); the assembler step adds it.
-- 200–500 한글 문자.
-- 정의/개념: `> [!definition] 개념명` callout.
-- 예시/공식/코드: `> [!example]` callout.
-- 시험 출제 포인트: `> [!important]` callout.
-- 음성 전사가 있으면 (see step 4) 교수님 강조 1–2 포인트만 인용 형태로 — raw 덤프 금지.
-- 핵심 개념은 `[[개념명]]` wikilink (관련 개념이 반복되면 모든 슬라이드에서 일관되게 wrap).
-- 표지/목차/Thank you 같은 비실질 슬라이드는 한 줄로 간단히.
+- Read `$REPO/prompts/slide-commentary.system.md` and follow it.
+- Read `$REPO/prompts/slide-commentary.user.md` and follow it for every page, with `{{slideNum}}` = N, `{{totalSlides}}` = page count, `{{conceptList}}` = the existing concept names from `<vault>/Alt2Obsidian/<subject>/Concepts/*.md` (empty if none), `{{transcriptBlock}}` = the page's transcript chunk from step 4 (empty if none). Both fragments are formatted as in `buildSlidePrompt` in `$REPO/src/generator/PerSlideCommentaryGenerator.ts`. See `$REPO/prompts/README.md` for the template rules.
+
+Output format for this Skill: the commentary is the section body only, placed between the slide markers in step 6.
 
 ### 4. (optional) Curate transcript per slide
 
 If `transcript` is non-empty, split it evenly by character count across the slide count and pass the chunk that corresponds to slide N as additional context for the commentary. The transcript is from Alt's audio capture; lecturers' verbal asides go here. Even-split is the same heuristic the plugin uses — segment timestamps are dropped by Alt's RSC payload.
 
-### 5. Compute the slide hash
+### 5. Compute the slide hashes
 
-For each page N, compute `sha1("{noteId}:{N}").slice(0, 8)`. In Bash:
+Run the hash CLI once for the whole deck. It uses the same code as the plugin (`src/core/slideHash.ts`), so hashes match a plugin import of the same PDF:
 
 ```bash
-HASH=$(printf "%s:%d" "<noteId>" "<N>" | shasum -a 1 | cut -c1-8)
+node "$REPO/scripts/phase2/slide-hashes.mjs" "/tmp/alt-deck-<noteId>.pdf" "<noteId>"
 ```
 
-This is **deterministic but different from the plugin's hash** (the plugin hashes the rendered PNG bytes; the Skill cannot reproduce that hash without a Node canvas dependency). Document this caveat in the writeup at the bottom — see "Hash compat caveat" below.
+Stdout is `{"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}`. Use `pages[N-1].hash` in the markers for slide N. Do not compute hashes any other way. `textChars` is the normalized text length; `0` means an image-only page (its hash is derived from `noteId`).
+
+If the command fails because `scripts/phase2/slide-hashes.mjs` is missing, run `npm run build:scripts` in `$REPO` and retry.
 
 ### 6. Assemble the markdown
 
-Compose a `## 📋 전체 요약` block that sits between `# <title>` and the first `## 📚 슬라이드 1`. Source: the `summary` field returned by `alt-scrape.mjs`, **enriched with the transcript when the summary is thin or missing detail**:
+Compose a `## 📋 전체 요약` block that sits between `# <title>` and the first `## 📚 슬라이드 1`. Source: the `summary` field returned by `alt-scrape.mjs`, enriched with the transcript the same way the plugin does it (`transcript` = its first 15000 characters):
 
-- `summary.length < 500` 한글: 트랜스크립트(있으면)를 기반으로 직접 강의 노트형 요약을 새로 작성. 마크다운 섹션 헤더(`## …`) 없이 본문만, 핵심 정의는 `> [!definition]`, 예시는 `> [!example]`, 시험 포인트는 `> [!important]` callout 사용.
-- `500 ≤ summary.length < 2500`: 기존 summary를 골격으로 두고 트랜스크립트의 부연/예시/교수님 코멘트를 보강. 기존 구조와 문체는 유지.
-- `summary.length ≥ 2500`: 그대로 사용 (이미 충분히 자세함).
-- 핵심 개념은 `[[개념명]]` wikilink로 wrap (step 6.5에서 추출하는 concept 이름 목록과 일치시키기 위해 step 6.5 결과를 알고 있다면 그 이름을 사용; 아니면 본문에서 자명한 핵심어를 wrap).
-- 분량은 800–1500 한글 문자 권장. 슬라이드별 해설을 압도하지 않게.
+- `summary.length < 500` and a transcript exists: follow `$REPO/prompts/summary-from-transcript.system.md` and `$REPO/prompts/summary-from-transcript.md` (`{{memoContext}}` = `\n\n[학생 메모]\n<summary>` when the summary is non-empty, else empty).
+- `500 <= summary.length < 2500` and a transcript exists: follow `$REPO/prompts/summary-enhance-transcript.system.md` and `$REPO/prompts/summary-enhance-transcript.md`.
+- Otherwise use the summary as is.
+
+Output format for this Skill (overrides the prompt files where they differ):
+
+- No `## ...` section headers inside the overview block, body only.
+- Wrap key concepts in `[[개념명]]` wikilinks, using the concept names from step 6.5 when known.
+- Aim for 800 to 1500 Korean characters so the overview does not overwhelm the per-slide commentary.
 
 ```markdown
 ---
@@ -154,43 +165,12 @@ Marker format must match exactly:
 
 After all per-slide commentary is written and the assembled lecture markdown is in your buffer, run a final pass to extract academic concepts from the whole lecture. This produces separate `Concepts/<name>.md` files that the lecture's `[[wikilinks]]` resolve to — without this step the wikilinks dangle.
 
-**Concept extraction prompt (mirror this exactly — same quality bar as the plugin's `ConceptExtractor`):**
-
-```
-LANGUAGE: 모든 concept 필드 (definition, lectureContext, example, caution)는 한국어로. 영어 설명을 한국어 필드에 섞지 마. 단, 전문 용어는 괄호로 영어 병기 OK (예: **명세(Specification)**).
-
-For each concept provide:
-- name: 1-4 words. 한국어 + 영어 병기 패턴 "한국어 (English)", e.g. "데이터 추상화 (Data Abstraction)".
-- definition: 3-5 sentences. 개념이 무엇이고, 무엇과 구별되며, 이 강의 맥락에서 왜 중요한지 다 다뤄. 한 줄짜리 정의는 거부.
-- lectureContext: 2-3 sentences. 이번 강의에서 어떻게 도입되고 사용되었는지. "교수님이 이 슬라이드에서 X를 설명하기 위해 도입했다", "전 강의의 Y와 대비해 소개되었다"같이 narrative와 연결.
-- example: 강의에 있던 구체적 예시 (숫자, 코드, 공식, 특정 케이스). 2-3 sentences. 강의에 진짜 예시가 없으면 비워둬.
-- caution: 학생이 자주 하는 실수, 시험 함정, 미묘한 구분. 진짜 떠오르지 않으면 비워둬 — 패딩하지 마.
-- relatedConcepts: 같은 강의에서 추출한 다른 concept 이름들 (또는 기존 concepts/ 폴더에 있는 이름들). 2개 이상의 concept을 추출했으면 모든 concept은 적어도 1개의 relatedConcept을 가져야 해. 정확한 이름 사용, 새 이름 만들지 마.
-
-기존 concepts/ 폴더에 같은 의미의 노트가 있으면 그 정확한 이름을 재사용 — concept 그래프 분열 방지.
-
-분량: 4-8 concepts 추출 (보통 강의 기준). 좁은 강의면 더 적게, 광범위한 surveys면 더 많이. 패딩 금지.
-```
+**Concept extraction prompt:** read `$REPO/prompts/concept-extraction.system.ko.md` and `$REPO/prompts/concept-extraction.md` and follow them (same quality bar as the plugin's `ConceptExtractor`). Variables: `{{subject}}` = subject, `{{langInstruction}}` = the Korean (`ko`) branch of `langInstruction` in `$REPO/src/generator/ConceptExtractor.ts`, `{{existingConceptHint}}` = the existing concept names from step 1 below as a `- name` list, `{{summary}}` = the assembled lecture markdown.
 
 **Workflow:**
 
 1. List existing concept names by globbing `<vault>/Alt2Obsidian/<subject>/Concepts/*.md` (use `Bash` `ls`). These are reuse candidates.
-2. Apply the prompt above to the assembled lecture content. Output JSON shape:
-   ```json
-   {
-     "concepts": [
-       {
-         "name": "데이터 추상화 (Data Abstraction)",
-         "definition": "...",
-         "lectureContext": "...",
-         "example": "...",
-         "caution": "...",
-         "relatedConcepts": ["객체 명세 (Object Specification)", "..."]
-       }
-     ],
-     "tags": ["..."]
-   }
-   ```
+2. Apply the prompt above to the assembled lecture content. It defines the JSON shape (`concepts[]` with `name`, `definition`, `lectureContext`, `example`, `caution`, `relatedConcepts`, plus `tags[]`).
 3. For each concept, generate a markdown file at `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` using the **plugin's exact template** (mirror `src/vault/VaultManager.ts:250-277`):
 
    ```markdown
@@ -249,7 +229,9 @@ Tell the user: file path written, slide count, any slides where you found the co
 
 ## Hash compat caveat (always include in completion message)
 
-The hash field uses `SHA-1("{noteId}:{slideNum}").slice(0, 8)`. This is **deterministic per (lecture, slide)** — re-running the Skill on the same Alt URL produces matching hashes, so the Round 5 invariant (per-slide free-space preservation across regen) holds **within Skill outputs**. But the plugin's Gemini path uses `SHA-1(rendered_PNG_bytes).slice(0, 8)`, which is different. **If the user later re-imports the same lecture via the plugin, every section will surface as `slideDrift` once** — memos are still preserved (via the N-match-with-drift branch), but a confirmation modal will list every slide as "drifted." A future Stage B (real monorepo + node-canvas) can produce the same byte-hashes as the plugin and eliminate this.
+The plugin and this Skill now produce identical slide hashes: both run `src/core/slideHash.ts` (`sha1(normalized page text + ":" + page)`, first 8 hex; image-only pages use `sha1(noteId + ":" + page)`). Re-importing the same lecture with either tool matches slides by hash and keeps `> [!note] 내 메모` callouts in place.
+
+Notes written by 1.x (plugin PNG hash, or the old Skill `sha1(noteId:page)` hash) will show every slide as `slideDrift` once on their first re-import with this version. Memos are still preserved through the N-match-with-drift branch, and the new hashes are stable after that.
 
 ## Retroactive fix for existing Skill-generated notes
 
@@ -266,6 +248,7 @@ Or just re-run the Skill against the same Alt URL with `period=final` (or `midte
 ## Error handling
 
 - `alt-scrape.mjs` exits 1 with stderr message → relay to user, stop.
+- `slide-hashes.mjs` exits non-zero → relay its stderr to the user and stop. Do not invent hashes.
 - `parseQuality: "partial"` or `pdfUrl: null` → tell user the Alt note isn't a full lecture and stop.
 - `Read` of a PDF page fails → log the slide as `## ⚠️ 처리 실패 슬라이드 N` footer at the end of the markdown (matches the plugin's failure-footer convention), continue with the rest.
 - Vault path doesn't exist → ask the user; do NOT create it without consent.
@@ -273,7 +256,6 @@ Or just re-run the Skill against the same Alt URL with `period=final` (or `midte
 
 ## Out of scope (Phase 2 Stage B)
 
-- Hash compat with plugin (needs node-canvas + same pdfjs render path).
 - npm-publishable CLI. The script is repo-local for now.
 - requestUrl decoupling in the plugin's `src/llm/`, `src/scraper/`, `src/pdf/` (Task 2.3).
 - Cross-platform PDF.js spike (Task 2.5).
