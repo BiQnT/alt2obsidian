@@ -16,6 +16,20 @@
 //                                   per-task model and effort
 //   -i <file>...                    slide images (last on the command line,
 //                                   since the option takes several values)
+//   -c <key>=<value>                trims Codex's own prompt; every key below
+//                                   was accepted by `codex exec --strict-config`
+//                                   (unknown keys are ignored without it, so a
+//                                   later CLI that drops one still runs):
+//                                   project_doc_max_bytes=0 (no project
+//                                   AGENTS.md), include_environment_context,
+//                                   include_permissions_instructions,
+//                                   include_apps_instructions,
+//                                   include_collaboration_mode_instructions,
+//                                   skills.include_instructions = false,
+//                                   features.plugins/apps/multi_agent/memories
+//                                   = false, web_search = "disabled"
+// The global ~/.codex/AGENTS.md has no documented off switch short of moving
+// CODEX_HOME (which would break auth), so it stays; see README.
 // Codex has no system prompt flag, so the fixed instructions lead the stdin
 // prompt, which keeps the shared prefix identical across batches.
 
@@ -34,6 +48,29 @@ export interface CodexArgsInput {
   lastMessagePath: string;
 }
 
+/** Config overrides that shrink Codex's fixed per-call prompt (see header). */
+export const CODEX_TRIM_CONFIG = [
+  "project_doc_max_bytes=0",
+  "include_environment_context=false",
+  "include_permissions_instructions=false",
+  "include_apps_instructions=false",
+  "include_collaboration_mode_instructions=false",
+  "skills.include_instructions=false",
+  "features.plugins=false",
+  "features.apps=false",
+  "features.multi_agent=false",
+  "features.memories=false",
+  'web_search="disabled"',
+];
+
+/**
+ * Codex's read-only sandbox still lets the agent read any file the user can
+ * read. The first line of every prompt tells it to use only the given
+ * content (accepted risk, documented in README and settings).
+ */
+export const CODEX_CONTENT_ONLY =
+  "Use only the content in this message. Do not run commands, read files, or browse.";
+
 export function buildCodexArgs(input: CodexArgsInput): string[] {
   const args = [
     "exec",
@@ -48,6 +85,7 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
     "-o",
     input.lastMessagePath,
   ];
+  for (const kv of CODEX_TRIM_CONFIG) args.push("-c", kv);
   if (input.model) args.push("-m", input.model);
   if (input.effort) args.push("-c", `model_reasoning_effort="${input.effort}"`);
   if (input.schemaPath) args.push("--output-schema", input.schemaPath);
@@ -56,7 +94,8 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
 }
 
 export function codexPrompt(prompt: string, systemPrompt?: string): string {
-  return systemPrompt?.trim() ? `${systemPrompt.trim()}\n\n${prompt}` : prompt;
+  const head = systemPrompt?.trim() ? `${CODEX_CONTENT_ONLY}\n${systemPrompt.trim()}` : CODEX_CONTENT_ONLY;
+  return `${head}\n\n${prompt}`;
 }
 
 /** Parse `codex exec --json` JSONL. Throws when the turn failed. */
@@ -86,8 +125,12 @@ export function parseCodexEvents(stdout: string, lastMessage = ""): CliCallResul
     }
   }
   if (!text && lastMessage.trim()) text = lastMessage;
-  if (failure && !text) throw new CliRunError("exit", `Codex CLI 오류: ${failure.slice(0, 300)}`, "", stdout);
-  if (!text) throw new Error(`Codex CLI 출력에서 응답을 찾지 못했습니다: ${stdout.slice(0, 200)}`);
+  if (failure && !text) {
+    const err = new CliRunError("exit", `Codex CLI 오류: ${failure.slice(0, 300)}`, "", stdout);
+    err.cliError = failure;
+    throw err;
+  }
+  if (!text) throw new CliRunError("exit", "Codex CLI 출력에서 응답을 찾지 못했습니다", "", stdout);
   return { text, usage };
 }
 
@@ -132,6 +175,7 @@ export class CodexCliProvider extends CliProviderBase {
           parseCodexEvents(e.stdout);
         } catch (parsed) {
           if (parsed instanceof Error) e.message = parsed.message;
+          if (parsed instanceof CliRunError) e.cliError = parsed.cliError;
         }
       }
       throw e;

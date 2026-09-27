@@ -47,6 +47,22 @@ function legacyProvider(p: unknown): ProviderId {
   return p === "ollama" ? "ollama" : "gemini";
 }
 
+const PROVIDER_IDS: Array<ProviderId | "none"> = ["claude-cli", "codex-cli", "gemini", "ollama", "none"];
+
+/** Model names are passed as one argv entry: refuse anything that could read as a flag. */
+export function isSafeModelName(model: string): boolean {
+  return model === "" || /^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,120}$/.test(model);
+}
+
+/** Saved task settings with unknown provider, unknown effort or unsafe model reset to defaults. */
+export function sanitizeTask(raw: unknown, fallback: TaskLLMSetting): TaskLLMSetting {
+  const t = (raw && typeof raw === "object" ? raw : {}) as Partial<TaskLLMSetting>;
+  const provider = PROVIDER_IDS.includes(t.provider as ProviderId) ? (t.provider as TaskLLMSetting["provider"]) : fallback.provider;
+  const effort = EFFORT_LEVELS.includes(t.effort as EffortLevel) ? (t.effort as EffortLevel) : "";
+  const model = typeof t.model === "string" && isSafeModelName(t.model.trim()) ? t.model.trim() : "";
+  return { provider, model, effort };
+}
+
 function cloneTasks(tasks: Record<TaskId, TaskLLMSetting>): Record<TaskId, TaskLLMSetting> {
   const out = {} as Record<TaskId, TaskLLMSetting>;
   for (const id of TASK_IDS) out[id] = { ...tasks[id] };
@@ -56,8 +72,7 @@ function cloneTasks(tasks: Record<TaskId, TaskLLMSetting>): Record<TaskId, TaskL
 /**
  * Settings from saved plugin data. Every existing value is kept. When the
  * data has no `tasks` (1.x, or a fresh install) the tasks use the 1.x
- * provider and `needsCliDefault` is true: the caller looks for a Claude CLI
- * once and, if found, switches the tasks to it with `applyClaudeDefaults`.
+ * provider and `needsCliDefault` is true: see `cliDefaultAction`.
  */
 export function migrateSettings(saved: unknown): { settings: Alt2ObsidianSettings; needsCliDefault: boolean } {
   const raw = (saved && typeof saved === "object" ? saved : {}) as Partial<Alt2ObsidianSettings>;
@@ -71,7 +86,7 @@ export function migrateSettings(saved: unknown): { settings: Alt2ObsidianSetting
   };
   const hadTasks = !!raw.tasks && typeof raw.tasks === "object";
   if (hadTasks) {
-    for (const id of TASK_IDS) settings.tasks[id] = { ...DEFAULT_SETTINGS.tasks[id], ...(raw.tasks as any)[id] };
+    for (const id of TASK_IDS) settings.tasks[id] = sanitizeTask((raw.tasks as any)[id], DEFAULT_SETTINGS.tasks[id]);
   } else {
     const p = legacyProvider(raw.provider);
     for (const id of ["commentary", "concepts", "verification"] as TaskId[]) {
@@ -81,7 +96,19 @@ export function migrateSettings(saved: unknown): { settings: Alt2ObsidianSetting
   return { settings, needsCliDefault: !hadTasks };
 }
 
-/** Spec 4.2 defaults: commentary and verification on the user's default model, concepts on Haiku. */
+/**
+ * What to do once after a migration (review H2): a user with a working 1.x
+ * setup (Gemini key, or Ollama) keeps it and is only offered the switch; a
+ * user without one gets the Claude CLI when it is installed and logged in.
+ */
+export function cliDefaultAction(settings: Alt2ObsidianSettings, claudeUsable: boolean): "switch" | "offer" | "none" {
+  if (!claudeUsable) return "none";
+  const p = settings.tasks.commentary.provider;
+  const working = (p === "gemini" && settings.apiKey.trim() !== "") || p === "ollama";
+  return working ? "offer" : "switch";
+}
+
+/** Spec 4.2 / D5 defaults: commentary and verification on sonnet (medium), concepts on haiku (low). */
 export function applyClaudeDefaults(settings: Alt2ObsidianSettings): void {
   for (const id of ["commentary", "concepts", "verification"] as TaskId[]) {
     settings.tasks[id] = { ...CLAUDE_TASK_DEFAULTS[id] };
@@ -129,4 +156,15 @@ export function effectiveModel(settings: Alt2ObsidianSettings, task: TaskLLMSett
   if (task.provider === "gemini") return settings.geminiModel;
   if (task.provider === "ollama") return settings.ollamaModel;
   return "";
+}
+
+/**
+ * Slides per call for a provider. Codex carries about 12k fixed tokens per
+ * call (its instructions and ~/.codex/AGENTS.md), so it gets twice the
+ * batch size to spread that cost; the image rule (half with images) applies
+ * on top.
+ */
+export function batchSizeFor(provider: ProviderId | "none", base: number): number {
+  const k = Math.max(1, Math.floor(base));
+  return provider === "codex-cli" ? k * 2 : k;
 }

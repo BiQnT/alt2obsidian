@@ -20,27 +20,28 @@ export function estimateTextTokens(text: string): number {
 }
 
 /**
- * Per provider, measured with test/smoke-cli.mjs (2026-09-27, claude 2.1.283
+ * Per provider, measured with test/smoke-cli.mjs (2026-09-28, claude 2.1.283
  * haiku, codex 0.155.1):
  * - fixedPerTurn: tokens the CLI adds to every model turn (its own
- *   instructions and tool definitions). Claude with our flags: about 0.55k
- *   with tools off, about 2.15k when the Read tool is on for images.
- *   Codex: about 18k, most of it Codex's base instructions plus the user's
- *   global ~/.codex/AGENTS.md, which `codex exec` always loads.
- * - schemaTurns / imageTurns: extra model turns per call, each re-sending
- *   the prompt. Claude returns schema output through a tool call (one extra
- *   turn) and reads images with the Read tool (one more); Codex answers in
- *   one turn.
+ *   instructions). Claude with stream-json input, tools off, own system
+ *   prompt: about 0.45k (553 input tokens for a 60-token prompt plus an 8x8
+ *   image). Codex with the trim config: about 11.9k, most of it Codex's base
+ *   instructions plus the user's global ~/.codex/AGENTS.md, which has no
+ *   documented off switch (it was 18.3k before the trim config).
+ * - schemaTurns / imageTurns: extra model turns per call. Both are 0 now:
+ *   Claude gets images inline and the JSON format in the prompt (one turn),
+ *   Codex answers --output-schema in one turn.
  * - perImage: input tokens of one 1024px JPEG.
  */
 export const PROVIDER_COSTS: Record<
   ProviderId,
-  { fixedPerTurn: number; fixedPerTurnWithImages: number; schemaTurns: number; imageTurns: number; perImage: number }
+  { fixedPerTurn: number; schemaTurns: number; imageTurns: number; perImage: number }
 > = {
-  "claude-cli": { fixedPerTurn: 550, fixedPerTurnWithImages: 2150, schemaTurns: 1, imageTurns: 1, perImage: 1100 },
-  "codex-cli": { fixedPerTurn: 18000, fixedPerTurnWithImages: 18000, schemaTurns: 0, imageTurns: 0, perImage: 800 },
-  gemini: { fixedPerTurn: 0, fixedPerTurnWithImages: 0, schemaTurns: 0, imageTurns: 0, perImage: 260 },
-  ollama: { fixedPerTurn: 0, fixedPerTurnWithImages: 0, schemaTurns: 0, imageTurns: 0, perImage: 600 },
+  "claude-cli": { fixedPerTurn: 450, schemaTurns: 0, imageTurns: 0, perImage: 1100 },
+  "codex-cli": { fixedPerTurn: 11900, schemaTurns: 0, imageTurns: 0, perImage: 800 },
+  // Gemini: 258 tokens per 768px tile; a 1024px slide is 2 tiles.
+  gemini: { fixedPerTurn: 0, schemaTurns: 0, imageTurns: 0, perImage: 516 },
+  ollama: { fixedPerTurn: 0, schemaTurns: 0, imageTurns: 0, perImage: 600 },
 };
 
 /** Expected output per generated slide: commentary + gist + JSON keys. */
@@ -78,8 +79,7 @@ export function estimateCalls(
   let images = 0;
   for (const c of calls) {
     const turns = 1 + (c.schema ? cost.schemaTurns : 0) + (c.images > 0 ? cost.imageTurns : 0);
-    const fixed = c.images > 0 ? cost.fixedPerTurnWithImages : cost.fixedPerTurn;
-    input += turns * (fixed + estimateTextTokens(c.promptText)) + c.images * cost.perImage;
+    input += turns * (cost.fixedPerTurn + estimateTextTokens(c.promptText)) + c.images * cost.perImage;
     output += c.outputTokens;
     images += c.images;
   }

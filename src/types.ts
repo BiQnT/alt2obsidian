@@ -75,12 +75,12 @@ export const DEFAULT_GENERATION: GenerationOptions = {
   onlyChangedSlides: true,
 };
 
-/** Spec 4.2 default table, used when a Claude CLI is available. */
+/** Spec 4.2 / D5 defaults, used when the Claude CLI is chosen. */
 export const CLAUDE_TASK_DEFAULTS: Record<TaskId, TaskLLMSetting> = {
-  commentary: { provider: "claude-cli", model: "", effort: "medium" },
+  commentary: { provider: "claude-cli", model: "sonnet", effort: "medium" },
   concepts: { provider: "claude-cli", model: "haiku", effort: "low" },
   alignment: { provider: "none", model: "", effort: "" },
-  verification: { provider: "claude-cli", model: "", effort: "medium" },
+  verification: { provider: "claude-cli", model: "sonnet", effort: "medium" },
 };
 
 export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
@@ -286,6 +286,8 @@ export interface PluginData {
   usageTotals: UsageTotals;
   /** Set by the 1.x migration until the Claude CLI lookup has run once. */
   pendingCliDefault?: boolean;
+  /** A working 1.x setup was kept although a logged-in Claude CLI exists: show the switch button. */
+  cliSwitchOffered?: boolean;
 }
 
 export const DEFAULT_PLUGIN_DATA: PluginData = {

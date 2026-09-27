@@ -49,7 +49,7 @@ const quiet = async (fn) => {
   try {
     const started = Date.now();
     await assert.rejects(
-      m.runCli({ bin: FAKE_CLAUDE, args: ["-p", "--output-format", "json", "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands", "--system-prompt", "s", "--tools", ""], input: "hi", cwd: job, timeoutMs: 1500 }),
+      m.runCli({ bin: FAKE_CLAUDE, args: m.buildClaudeArgs({ model: "", effort: "", systemPrompt: "s" }), input: m.buildClaudeInput({ prompt: "hi" }), cwd: job, timeoutMs: 1500 }),
       (e) => e.kind === "timeout"
     );
     assert.ok(Date.now() - started < 6000, "timeout returns promptly");
@@ -70,7 +70,7 @@ const quiet = async (fn) => {
   const job = m.createJobDir();
   try {
     const ctrl = new AbortController();
-    const p = m.runCli({ bin: FAKE_CODEX, args: ["exec", "--json", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--sandbox", "read-only", "-C", job, "-o", join(job, "o.txt")], input: "hi", cwd: job, timeoutMs: 60000, signal: ctrl.signal });
+    const p = m.runCli({ bin: FAKE_CODEX, args: m.buildCodexArgs({ model: "", effort: "", imagePaths: [], workDir: job, lastMessagePath: join(job, "o.txt") }), input: m.codexPrompt("hi"), cwd: job, timeoutMs: 60000, signal: ctrl.signal });
     for (let i = 0; i < 50 && s.pids().length < 2; i++) await sleep(100);
     ctrl.abort();
     await assert.rejects(p, (e) => m.isAbortError(e));
@@ -143,14 +143,17 @@ for (const [label, Provider, bin] of [
     assert.equal(calls.length, 3);
     if (label === "Claude") {
       assert.ok(calls[0].argv.includes("--system-prompt") && calls[0].argv[calls[0].argv.indexOf("--system-prompt") + 1] === "SYS");
-      assert.equal(calls[0].stdin, "요약해 주세요", "prompt goes through stdin");
+      assert.equal(calls[0].stdin, "요약해 주세요", "prompt goes through stdin as a stream-json user message");
+      assert.ok(!calls[0].argv.includes("--json-schema") && !calls[0].argv.includes("--add-dir"), "no schema turn, no file access");
+      assert.ok(calls[1].stdin.includes("[출력 형식]"), "JSON format asked in the prompt");
       assert.deepEqual(calls[0].argv.slice(calls[0].argv.indexOf("--model"), calls[0].argv.indexOf("--model") + 4), ["--model", "test-model", "--effort", "low"]);
     } else {
-      assert.ok(calls[0].stdin.startsWith("SYS\n\n요약해 주세요"), "codex: fixed instructions lead the stdin prompt");
+      assert.ok(calls[0].stdin.startsWith("Use only the content in this message."), "codex: content-only instruction first");
+      assert.ok(calls[0].stdin.includes("SYS\n\n요약해 주세요"), "codex: fixed instructions lead the stdin prompt");
       assert.ok(calls[0].argv.includes('model_reasoning_effort="low"'));
     }
-    assert.equal(calls[2].images.length, 1, "image passed as a file");
-    assert.deepEqual(readdirSync(job), [], "temp images and schema files removed after the call");
+    assert.equal(calls[2].images.length, 1, label === "Claude" ? "image passed inline" : "image passed as a file");
+    assert.deepEqual(readdirSync(job), [], "no temp files left after the call");
     const total = usage.total();
     assert.equal(total.calls, 3);
     assert.equal(total.imagesSent, 1);
@@ -161,13 +164,17 @@ for (const [label, Provider, bin] of [
     await quiet(() => assert.rejects(make().generateJSON("x", (r) => r, { schema: SCHEMA })));
     assert.equal(s.calls().length, 5, "invalid JSON asked once more, not more");
 
-    // Subscription limit: surfaced as a usage-limit error.
+    // Subscription limit: a fatal usage-limit error, read from the CLI's error field.
     process.env.FAKE_CLI_MODE = "limit";
-    await assert.rejects(make().generateText("x"), (e) => m.isUsageLimitError(e));
+    await assert.rejects(make().generateText("x"), (e) => m.isUsageLimitError(e) && m.isFatalCliError(e));
+    // A crash is a call failure, but not fatal.
+    process.env.FAKE_CLI_MODE = "crash";
+    await assert.rejects(make().generateText("x"), (e) => e.kind === "exit" && !m.isFatalCliError(e));
 
-    // Wrong flag value is rejected by the fake (guards the argument builders).
+    // Model and effort are checked before anything runs (review L9).
     process.env.FAKE_CLI_MODE = "ok";
-    await assert.rejects(make({ effort: "bogus" }).generateText("x"), (e) => e.kind === "exit");
+    assert.throws(() => make({ effort: "bogus" }), /effort/);
+    assert.throws(() => make({ model: "--dangerously-skip-permissions" }), /모델 이름/);
 
     console.log(`PASS: ${label} CLI provider text, schema JSON, image file, usage, retry once, usage limit, flag check`);
   } finally {
@@ -179,10 +186,28 @@ for (const [label, Provider, bin] of [
 // Output parsers on the documented formats.
 {
   const c = m.parseClaudeOutput(
-    JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "{\"a\":1}", structured_output: { a: 1 }, total_cost_usd: 0.02, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 85, output_tokens: 7 } })
+    [
+      JSON.stringify({ type: "system", subtype: "init" }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "{\"a\":1}", total_cost_usd: 0.02, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 85, output_tokens: 7 } }),
+    ].join("\n")
   );
   assert.deepEqual(c.usage, { calls: 1, inputTokens: 100, cachedInputTokens: 85, outputTokens: 7, imagesSent: 0, costUsd: 0.02 });
-  assert.deepEqual(c.structured, { a: 1 });
+  assert.equal(c.text, "{\"a\":1}");
+  // modelUsage (all turns, all models) wins over usage (review A.3).
+  const mu = m.parseClaudeOutput(
+    JSON.stringify({
+      type: "result", subtype: "success", is_error: false, result: "x",
+      usage: { input_tokens: 10, output_tokens: 1 },
+      modelUsage: {
+        "claude-sonnet": { inputTokens: 100, outputTokens: 40, cacheReadInputTokens: 900, cacheCreationInputTokens: 50 },
+        "claude-haiku": { inputTokens: 20, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+      },
+    })
+  );
+  assert.deepEqual([mu.usage.inputTokens, mu.usage.cachedInputTokens, mu.usage.outputTokens], [1070, 900, 45]);
+  // A model answer that mentions a limit is not a usage-limit error (review L2).
+  const modelText = new Error("응답 JSON 형식 오류: I hit a usage limit, sorry");
+  assert.equal(m.isUsageLimitError(modelText), false);
   assert.throws(() => m.parseClaudeOutput(JSON.stringify({ type: "result", subtype: "error_max_turns", is_error: true, result: "" })), /error_max_turns/);
   const x = m.parseCodexEvents(
     [

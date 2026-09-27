@@ -7,7 +7,8 @@
 //   FAKE_CLI_LOG      append one JSON line per call {cli, argv, cwd, stdin, images}
 //   FAKE_CLI_STATE    JSON file for per-test counters (retry scenarios)
 //   FAKE_CLI_MODE     comma-separated: ok | drop:<page> | dropalways:<page> |
-//                     short:<page> | hang | limit | badjson
+//                     short:<page> | hang | limit | badjson | textlimit |
+//                     crash | loggedout
 //   FAKE_CLI_PIDFILE  (hang) the fake and its child write their pids here
 
 "use strict";
@@ -102,13 +103,18 @@ function log(entry) {
 
 // ---- claude ----
 
-const CLAUDE_BOOL = new Set(["-p", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]);
-const CLAUDE_VALUE = new Set(["--output-format", "--setting-sources", "--system-prompt", "--tools", "--allowedTools", "--add-dir", "--model", "--effort", "--json-schema"]);
+const CLAUDE_BOOL = new Set(["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]);
+const CLAUDE_VALUE = new Set(["--input-format", "--output-format", "--setting-sources", "--system-prompt", "--tools", "--model", "--effort"]);
 
 function runClaude() {
   const argv = process.argv.slice(2);
   if (argv[0] === "--version") {
     process.stdout.write("2.1.283 (Claude Code)\n");
+    return;
+  }
+  if (argv[0] === "auth" && argv[1] === "status") {
+    const loggedIn = process.env.FAKE_CLAUDE_LOGGED_OUT !== "1";
+    process.stdout.write(JSON.stringify({ loggedIn, authMethod: loggedIn ? "claude.ai" : "none" }));
     return;
   }
   const flags = {};
@@ -120,57 +126,78 @@ function runClaude() {
       flags[a] = argv[++i];
     } else fail(`unknown option '${a}'`);
   }
-  for (const req of ["-p", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]) {
+  for (const req of ["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]) {
     if (!flags[req]) fail(`missing ${req}`);
   }
-  if (flags["--output-format"] !== "json") fail("--output-format must be json");
+  if (flags["--input-format"] !== "stream-json") fail("--input-format must be stream-json");
+  if (flags["--output-format"] !== "stream-json") fail("--input-format=stream-json requires output-format=stream-json");
   if (flags["--setting-sources"] !== "") fail("--setting-sources must be empty");
+  if (flags["--tools"] !== "") fail(`--tools must be "" (no tools), got ${flags["--tools"]}`);
   if (!flags["--system-prompt"]) fail("--system-prompt missing");
   if (flags["--effort"] !== undefined && !["low", "medium", "high", "xhigh", "max"].includes(flags["--effort"])) {
     fail(`invalid effort ${flags["--effort"]}`);
   }
-  let schema = null;
-  if (flags["--json-schema"] !== undefined) {
-    schema = JSON.parse(flags["--json-schema"]);
-    if (schema.type !== "object") fail("schema must be an object schema");
-  }
+  if (flags["--model"] !== undefined && flags["--model"].startsWith("-")) fail("model looks like a flag");
   const cwd = fs.realpathSync(process.cwd());
   checkJobDir(cwd);
-  const stdin = readStdin();
-  const images = [...stdin.matchAll(/^- 슬라이드 \d+: (.+)$/gm)].map((m) => m[1]);
-  if (flags["--tools"] === "Read") {
-    if (flags["--allowedTools"] !== "Read") fail("--allowedTools Read expected with images");
-    if (flags["--add-dir"] !== cwd) fail(`--add-dir must be the job dir ${cwd}, got ${flags["--add-dir"]}`);
-    if (images.length === 0) fail("Read enabled but no image files listed");
-    for (const f of images) if (!fs.existsSync(f) || path.dirname(f) !== cwd) fail(`image not in job dir: ${f}`);
-  } else if (flags["--tools"] === "") {
-    if (images.length > 0 || flags["--add-dir"] !== undefined) fail("images listed but tools disabled");
-  } else fail(`--tools must be "" or Read, got ${flags["--tools"]}`);
-  log({ cli: "claude", argv, cwd, stdin, images });
+  const raw = readStdin().trim();
+  let msg;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    fail("stdin must be one stream-json user message");
+  }
+  if (msg.type !== "user" || msg.message?.role !== "user" || !Array.isArray(msg.message.content)) fail("bad user message");
+  const texts = msg.message.content.filter((c) => c.type === "text").map((c) => c.text);
+  const images = msg.message.content.filter((c) => c.type === "image");
+  for (const img of images) {
+    if (img.source?.type !== "base64" || !/^image\/(png|jpeg)$/.test(img.source.media_type) || !img.source.data) fail("bad image block");
+  }
+  const stdin = texts[0] ?? "";
+  // The JSON format is asked in the prompt: the schema is the last line.
+  let schema = null;
+  const marker = stdin.lastIndexOf("[출력 형식]");
+  if (marker >= 0) schema = JSON.parse(stdin.slice(marker).split("\n").pop());
+  log({ cli: "claude", argv, cwd, stdin, images: images.map((i) => i.source.media_type) });
 
   const ms = modes();
   if (ms.includes("hang")) return hang();
+  const emit = (ev) => process.stdout.write(JSON.stringify(ev) + "\n");
+  emit({ type: "system", subtype: "init", model: flags["--model"] ?? "default" });
   if (ms.includes("limit")) {
-    process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "Claude usage limit reached. Your limit resets at 5pm." }));
+    emit({ type: "result", subtype: "success", is_error: true, result: "Claude usage limit reached. Your limit resets at 5pm." });
     process.exit(1);
   }
+  if (ms.includes("loggedout")) {
+    emit({ type: "result", subtype: "success", is_error: true, result: "Not logged in. Please run /login" });
+    process.exit(1);
+  }
+  if (ms.includes("crash")) {
+    process.stderr.write("internal error\n");
+    process.exit(3);
+  }
   const a = answer(stdin, schema);
-  const out = {
+  const text = ms.includes("badjson")
+    ? "이건 JSON이 아님"
+    : ms.includes("textlimit")
+      ? "Sorry, I reached my usage limit on this topic."
+    : typeof a.result === "string"
+      ? a.result
+      : "```json\n" + JSON.stringify(a.result) + "\n```";
+  emit({ type: "assistant", message: { content: [{ type: "text", text }] } });
+  const modelName = flags["--model"] ?? "claude-default";
+  emit({
     type: "result",
     subtype: "success",
     is_error: false,
-    num_turns: images.length > 0 ? 2 : 1,
-    result: ms.includes("badjson") ? "이건 JSON이 아님" : typeof a.result === "string" ? a.result : JSON.stringify(a.result),
+    num_turns: 1,
+    result: text,
     total_cost_usd: 0.001,
-    usage: {
-      input_tokens: a.usage.input - a.usage.cached,
-      cache_creation_input_tokens: 0,
-      cache_read_input_tokens: a.usage.cached,
-      output_tokens: a.usage.output,
+    usage: { input_tokens: a.usage.input - a.usage.cached, cache_creation_input_tokens: 0, cache_read_input_tokens: a.usage.cached, output_tokens: a.usage.output },
+    modelUsage: {
+      [modelName]: { inputTokens: a.usage.input - a.usage.cached, outputTokens: a.usage.output, cacheReadInputTokens: a.usage.cached, cacheCreationInputTokens: 0 },
     },
-  };
-  if (schema && !ms.includes("badjson")) out.structured_output = a.result;
-  process.stdout.write(JSON.stringify(out));
+  });
 }
 
 // ---- codex ----
@@ -181,13 +208,23 @@ function runCodex() {
     process.stdout.write("codex-cli 0.155.1\n");
     return;
   }
+  if (argv[0] === "login" && argv[1] === "status") {
+    process.stderr.write("Logged in using ChatGPT\n");
+    return;
+  }
   if (argv[0] !== "exec") fail("expected exec subcommand");
   const flags = {};
   let images = [];
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (["--json", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config"].includes(a)) flags[a] = true;
-    else if (["--sandbox", "-C", "-o", "-m", "-c", "--output-schema"].includes(a)) {
+    else if (a === "-c") {
+      if (i + 1 >= argv.length) fail("a value is required for '-c'");
+      const kv = argv[++i];
+      if (!/^[a-z_.]+=/.test(kv)) fail(`bad -c ${kv}`);
+      if (kv.startsWith("model_reasoning_effort=")) flags["-c"] = kv;
+      else (flags.trim = flags.trim || []).push(kv);
+    } else if (["--sandbox", "-C", "-o", "-m", "--output-schema"].includes(a)) {
       if (i + 1 >= argv.length) fail(`a value is required for '${a}'`);
       flags[a] = argv[++i];
     } else if (a === "-i") {
@@ -206,7 +243,9 @@ function runCodex() {
   let schema = null;
   if (flags["--output-schema"] !== undefined) schema = JSON.parse(fs.readFileSync(flags["--output-schema"], "utf8"));
   for (const f of images) if (!fs.existsSync(f)) fail(`image missing: ${f}`);
+  if (!(flags.trim || []).includes("project_doc_max_bytes=0")) fail("trim config missing");
   const stdin = readStdin();
+  if (!stdin.startsWith("Use only the content in this message.")) fail("content-only instruction missing");
   log({ cli: "codex", argv, cwd, stdin, images });
 
   const ms = modes();
@@ -217,6 +256,10 @@ function runCodex() {
   if (ms.includes("limit")) {
     emit({ type: "turn.failed", error: { message: "You've hit your usage limit. Try again later." } });
     process.exit(1);
+  }
+  if (ms.includes("crash")) {
+    process.stderr.write("internal error\n");
+    process.exit(3);
   }
   const a = answer(stdin, schema);
   const text = ms.includes("badjson") ? "이건 JSON이 아님" : typeof a.result === "string" ? a.result : JSON.stringify(a.result);
