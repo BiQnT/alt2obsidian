@@ -7,3 +7,4 @@ export { parseTranscript, pickSlides, folderChain, bundleFromRows, detailsFromCo
 export { plateToMarkdown, componentTextToMarkdown } from "../../src/sources/plateToMarkdown";
 export { untimedSegments, bundleFromAltData } from "../../src/sources/AltPublicUrlSource";
 export * from "../../src/core/noteStatus";
+export { parseLsof, parseProcNetTcp, parseNetstat, parseTasklist, isAltExecutable, systemOwnerVerifier } from "../../src/sources/altOwnership";

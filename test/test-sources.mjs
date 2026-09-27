@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -151,6 +151,12 @@ CREATE TABLE note_components (id TEXT PRIMARY KEY, user_id TEXT, channel_id TEXT
 CREATE TABLE file_metadata (inode BIGINT PRIMARY KEY, file_path TEXT, file_name TEXT, file_size BIGINT, mime_type TEXT, hash_sha256 TEXT, created_at DATETIME, last_verified DATETIME);
 CREATE TABLE file_ref_local_files (file_ref_id TEXT PRIMARY KEY, file_inode BIGINT, local_cache_path TEXT, created_at DATETIME, updated_at DATETIME);
 CREATE TABLE migrations (version INTEGER PRIMARY KEY, applied_at DATETIME);
+CREATE TABLE channels (id TEXT PRIMARY KEY, workspace_id TEXT, deleted_at TEXT, archived_at TEXT);
+CREATE TABLE channel_members (channel_id TEXT, user_id TEXT);
+CREATE TABLE workspaces (id TEXT PRIMARY KEY, deleted_at TEXT);
+CREATE TABLE workspace_members (workspace_id TEXT, user_id TEXT, status TEXT);
+CREATE TABLE workspace_access_snapshot (kind TEXT, id TEXT);
+CREATE TABLE workspace_access_snapshot_state (x INTEGER);
 `;
 const TRANSCRIPT = JSON.stringify([
   { createdAt: 1, relativeStart: 0, segments: [
@@ -184,10 +190,23 @@ function buildStore(path, { version = 40, dropColumn = null, pdfPath, extraNote 
   n.run("n3", "f1", "deleted note", "2026-01-01", "slide", null, "2026-02-01T00:00:00Z");
   n.run("n4", "f1", "Synced deck", "2026-05-01", "slide", null, null);
   if (extraNote) n.run(extraNote, "f1", "extra", "2026-06-01", "slide", null, null);
+  // Team channels: the user is in "team-ok" (active workspace), not in "team-other".
+  if (!dropColumn) {
+    db.exec(`INSERT INTO workspaces VALUES ('w1', NULL);
+      INSERT INTO workspace_members VALUES ('w1', 'user-123', 'active');
+      INSERT INTO channels VALUES ('team-ok', 'w1', NULL, NULL), ('team-other', 'w1', NULL, NULL);
+      INSERT INTO channel_members VALUES ('team-ok', 'user-123'), ('team-other', 'someone-else');`);
+    const t = db.prepare("INSERT INTO lecture_notes (id, channel_id, folder_id, title, lecture_date, type) VALUES (?, ?, ?, ?, ?, 'slide')");
+    t.run("n6", "team-ok", null, "Team lecture", "2026-06-10");
+    t.run("n7", "team-other", null, "Not my team", "2026-06-11");
+  }
   if (!dropColumn) {
     const c = db.prepare("INSERT INTO note_components (id, note_id, component_type, title, file_inode, content_text, metadata, display_order, file_ref_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     c.run("c1", "n1", "slides", "Lec13-Caches", 101, "Alpha Introduction to Caches", null, 0, null, null);
     c.run("c2", "n1", "transcript", "Transcript", null, TRANSCRIPT, '{"recordingSessionId":"s"}', 1, null, null);
+    // A second (older) transcript and summary Alt does not display: ignored.
+    c.run("c2b", "n1", "transcript", "Transcript", null, JSON.stringify([{ createdAt: 9, relativeStart: 0, segments: [{ start: 0, end: 3000, text: "an older recording", speaker: "" }] }]), null, 7, null, null);
+    c.run("c3b", "n1", "summary", "Summary", null, plate("다른 요약"), PLATE_META, null, null, null);
     c.run("c3", "n1", "summary", "Summary", null, plate("캐시와 일관성"), PLATE_META, 2, null, null);
     c.run("c4", "n1", "slide_memo", "Slide 2", null, plate("MESI 외우기"), '{"slideIndex":2,"contentFormat":"plate-json"}', 3, null, null);
     c.run("c5", "n1", "memo", "메모", null, JSON.stringify([{ type: "p", children: [{ text: "" }] }]), PLATE_META, 4, null, null);
@@ -195,7 +214,9 @@ function buildStore(path, { version = 40, dropColumn = null, pdfPath, extraNote 
     c.run("c7", "n2", "transcript", "Transcript", null, JSON.stringify([{ createdAt: 1, relativeStart: 0, segments: [{ start: 0, end: 61000, text: "memo only lecture", speaker: "" }] }]), null, 0, null, null);
     c.run("c8", "n4", "slides", "Synced", null, null, null, 0, "ref-1", null);
     db.prepare("INSERT INTO file_metadata (inode, file_path, file_name) VALUES (101, ?, 'deck.pdf')").run(pdfPath);
-    db.prepare("INSERT INTO file_ref_local_files (file_ref_id, local_cache_path) VALUES ('ref-1', ?)").run(pdfPath);
+    // Synced file: its registered file (inode 202) holds the path, the cache path is empty.
+    db.prepare("INSERT INTO file_metadata (inode, file_path, file_name) VALUES (202, ?, 'deck.pdf')").run(pdfPath);
+    db.prepare("INSERT INTO file_ref_local_files (file_ref_id, file_inode, local_cache_path, updated_at) VALUES ('ref-1', 202, '', '2026-05-01')").run();
   }
   return db;
 }
@@ -212,6 +233,11 @@ function makeUserData(name, opts = {}) {
   const store = join(dbDir, `powersync-store.account-${digest}.db`);
   const db = buildStore(store, { ...opts, pdfPath });
   db.close();
+  // Another account's store on this computer: never read while the signed-in user is known.
+  const other = new DatabaseSync(join(dbDir, "powersync-store.account-ffffffffffffffff.db"));
+  other.exec(SCHEMA);
+  other.prepare("INSERT INTO lecture_notes (id, title, type) VALUES ('x1', 'other account', 'slide')").run();
+  other.close();
   // A stale pre-sync store with other content: must not be preferred.
   const legacy = new DatabaseSync(join(dbDir, "lecture_notes.db"));
   legacy.exec(SCHEMA);
@@ -231,14 +257,19 @@ try {
     writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
     writer.prepare("INSERT INTO lecture_notes (id, folder_id, title, lecture_date, type) VALUES ('n5', 'f1', 'only in the WAL', '2026-06-02', 'slide')").run();
     const before = { db: fileHash(store), wal: fileHash(`${store}-wal`), mtime: statSync(store).mtimeMs };
-    assert.deepEqual(m.dbCandidates(ud).map((p) => p.split("/").pop()), [store.split("/").pop(), "lecture_notes.db"]);
+    assert.deepEqual(
+      m.dbCandidates(ud).map((c) => [c.path.split("/").pop(), c.accountId]),
+      [[store.split("/").pop(), "user-123"], ["lecture_notes.db", undefined]],
+      "only the signed-in account's store, then the pre-sync store"
+    );
 
     const src = m.AltLocalDbSource.open({ userData: ud, tmpRoot: root });
     assert.equal(src.mode, "db");
     assert.equal(src.label, "Alt 꺼짐 · DB 읽기");
     assert.deepEqual(src.schema, { version: 40, known: true });
     const notes = await src.listNotes();
-    assert.deepEqual(notes.map((n) => n.id).sort(), ["n1", "n2", "n4", "n5"], "deleted note hidden, WAL row visible, account store used");
+    assert.deepEqual(notes.map((n) => n.id).sort(), ["n1", "n2", "n4", "n5", "n6"], "deleted note and other team's note hidden, WAL row visible, account store used");
+    assert.equal(src.storeDetail, "", "known account: no store note");
     const n1 = notes.find((n) => n.id === "n1");
     assert.deepEqual(n1.folderPath, ["CSED311 컴퓨터구조", "Lectures"]);
     assert.equal(n1.lectureDate, "2026-04-21");
@@ -278,11 +309,35 @@ try {
     const { ud: ud2 } = makeUserData("db-newer", { version: 41 });
     const src = m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root });
     assert.equal(src.label, "Alt 꺼짐 · DB 읽기 (확인되지 않은 스키마 v41)");
-    assert.equal((await src.listNotes()).length, 3);
+    assert.equal((await src.listNotes()).length, 4);
     src.close();
     assert.throws(() => m.AltLocalDbSource.open({ userData: join(root, "nothing"), tmpRoot: root }), /찾지 못했습니다/);
     assert.throws(() => m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root, sqlite: { DatabaseSync: class { constructor() { throw new Error("boom"); } } } }), /사본을 열지 못했습니다 \(.*\): boom/);
     console.log("PASS: DB source fails clearly on an unknown schema, labels an unverified schema version");
+
+    // Signed-in account unknown: newest account store, named in the status detail, no team filter possible.
+    const { ud: ud3 } = makeUserData("db-unknown");
+    rmSync(join(ud3, "storage-desktopSync.json"));
+    const cands = m.dbCandidates(ud3).map((c) => c.accountId);
+    assert.ok(cands.every((a) => a !== "user-123"), "no account id guessed");
+    const src3 = m.AltLocalDbSource.open({ userData: ud3, tmpRoot: root });
+    assert.match(src3.storeDetail, /로그인 계정을 알 수 없어 가장 최근 저장소를 읽었습니다: powersync-store\.account-/);
+    src3.close();
+    const c3 = await m.connectAltLocal(ud3, { tmpRoot: root, probeTimeoutMs: 200, verifyOwner: async () => ({ ok: true, reason: "" }) });
+    assert.match(c3.detail, /가장 최근 저장소/);
+    c3.source?.close();
+
+    // Leftover private copies older than an hour are swept on the next open.
+    const stale = join(root, "alt2obs-altdb-stale");
+    mkdirSync(stale);
+    const old = (Date.now() - 2 * 3600 * 1000) / 1000;
+    utimesSync(stale, old, old);
+    const fresh = join(root, "alt2obs-altdb-fresh");
+    mkdirSync(fresh);
+    m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root }).close();
+    assert.ok(!existsSync(stale) && existsSync(fresh), "stale copy removed, recent one kept");
+    rmSync(fresh, { recursive: true });
+    console.log("PASS: DB source account scoping: unknown account named in the status; stale private copies swept");
   }
 
   // ---- HTTP API source (fake Alt) ----
@@ -312,6 +367,7 @@ try {
     if (req.url === "/api/lectureNotes/nope") return send(200, { ok: true, data: null });
     if (req.url === "/api/noteComponents/note/n1") return send(200, { ok: true, data: components });
     if (req.url === "/api/noteComponents/note/n2") return send(200, { ok: true, data: [] });
+    if (req.url === "/api/noteComponents/note/n4") return send(200, { ok: true, data: [{ id: "c8", note_id: "n4", component_type: "slides", title: "Synced", file_inode: null, file_ref_id: "ref-1", content_text: null, metadata: null, display_order: 0 }] });
     return send(404, { ok: false, error: `Not found: ${req.method} ${req.url}` });
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -321,7 +377,32 @@ try {
   writeFileSync(m.tokenFilePath(apiUd), FAKE_TOKEN + "\n", { mode: 0o600 });
   try {
     assert.deepEqual(m.readHttpServerConfig(apiUd), { port, enabled: true });
-    const det = await m.AltLocalApiSource.detect(apiUd);
+    // Ownership checks, pure parsers first.
+    assert.deepEqual(m.parseLsof("p4242\ncAlt\nu501\nf12\n"), [{ pid: 4242, uid: 501, command: "Alt" }]);
+    assert.deepEqual(m.parseProcNetTcp("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0100007F:B3AF 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 98765 1\n   1: 0100007F:B3B0 00000000:0000 01 0 0 0 1000 0 11111 1\n", 45999), ["98765"]);
+    assert.equal(m.parseNetstat("  TCP    127.0.0.1:45623        0.0.0.0:0              LISTENING       7788\r\n  TCP    127.0.0.1:45623        127.0.0.1:50000        ESTABLISHED     7788\r\n", 45623), 7788);
+    assert.equal(m.parseNetstat("  TCP    127.0.0.1:45624  0.0.0.0:0  LISTENING  1", 45623), null);
+    assert.equal(m.parseTasklist('"Alt.exe","7788","Console","1","250,000 K"'), "Alt.exe");
+    assert.equal(m.isAltExecutable("/Applications/Alt.app/Contents/MacOS/Alt", "darwin"), true);
+    assert.equal(m.isAltExecutable("/opt/homebrew/bin/node", "darwin"), false);
+    assert.equal(m.isAltExecutable("/tmp/Alt.app.fake/node", "darwin"), false);
+    assert.equal(m.isAltExecutable("Alt.exe", "win32"), true);
+    assert.equal(m.isAltExecutable("node.exe", "win32"), false);
+    assert.equal(m.isAltExecutable("/opt/alt/alt", "linux"), true);
+
+    // Impostor: something that answers /api/status like Alt (this test's own
+    // server, owned by node) never receives the token; the database is used.
+    const verdict = await m.systemOwnerVerifier()(port);
+    assert.equal(verdict.ok, false, "a node process is not Alt");
+    const impostor = await m.connectAltLocal(apiUd, { tmpRoot: root });
+    assert.equal(impostor.source.mode, "db");
+    assert.match(impostor.detail, /토큰을 보내지 않았습니다/);
+    impostor.source.close();
+    assert.ok(requests.length > 0 && requests.every((r) => r.auth === null && r.url === "/api/status"), "only the unauthenticated status probe reached it");
+
+    // A verified owner gets the token.
+    const alt = async () => ({ ok: true, reason: "" });
+    const det = await m.AltLocalApiSource.detect(apiUd, { verifyOwner: alt });
     assert.ok(det.source, det.reason);
     const api = det.source;
     assert.equal(api.label, "Alt 연결됨 · 로컬 API (v0.12.0)");
@@ -343,20 +424,28 @@ try {
     await assert.rejects(bad.listNotes(), (e) => /토큰을 거부했습니다/.test(e.message) && !e.message.includes("wrong-token") && !e.message.includes(FAKE_TOKEN));
 
     // connectAltLocal prefers the API.
-    const c = await m.connectAltLocal(apiUd, { tmpRoot: root });
+    const c = await m.connectAltLocal(apiUd, { tmpRoot: root, verifyOwner: alt });
     assert.equal(c.source.mode, "api");
+    // A synced slides file (file_ref_id, no file in the API answer): its path comes from a DB copy.
+    assert.equal((await c.source.noteDetails("n4")).pdfPath, apiPdf);
     assert.equal(c.label, "Alt 연결됨 · 로컬 API (v0.12.0)");
-    console.log("PASS: API source: status probe, Bearer token from the token file, folders tree, components with file paths, GET only, token never in errors");
+    console.log("PASS: API source: token only to a listener verified as Alt (impostor refused), status probe, folders tree, synced slides path from the DB, GET only, token never in errors");
 
-    // Skill CLI parity (alt-local.mjs uses the same src/sources code). Run
-    // asynchronously: the fake server lives in this process.
+    // Skill CLI (alt-local.mjs, same src/sources code) against the same
+    // impostor: it refuses to send the token and reads the database copy.
+    // Run asynchronously: the fake server lives in this process.
+    const before = requests.length;
     const run = async (args) => (await promisify(execFile)("node", [join(repo, "scripts/phase2/alt-local.mjs"), ...args, "--alt-dir", apiUd], { encoding: "utf8" })).stdout;
     const cli = async (args) => JSON.parse(await run(args));
-    assert.deepEqual(await cli(["status"]), { mode: "api", label: "Alt 연결됨 · 로컬 API (v0.12.0)", detail: "" });
+    const st = await cli(["status"]);
+    assert.equal(st.mode, "db");
+    assert.match(st.detail, /토큰을 보내지 않았습니다/);
     const listed = await cli(["list"]);
-    assert.deepEqual(listed.notes.map((n) => [n.id, n.subject]), [["n1", "CSED311"], ["n2", "미분류"]]);
-    const out = join(root, "export");
-    const exp = await cli(["export", "n1", out]);
+    assert.deepEqual(listed.notes.map((n) => [n.id, n.subject]).sort(), [["n1", "CSED311"], ["n2", "미분류"], ["n4", "CSED311"], ["n6", "미분류"]]);
+    const exp = await cli(["export", "n1"]);
+    assert.ok(exp.dir.startsWith(join(tmpdir(), "alt2obs-export-")), "private temp folder by default");
+    assert.equal(statSync(exp.dir).mode & 0o777, 0o700);
+    assert.equal(statSync(exp.bundle).mode & 0o777, 0o600);
     assert.equal(exp.pdfPath, apiPdf);
     assert.equal(exp.segments, 6);
     assert.equal(exp.timestamps, true);
@@ -364,12 +453,16 @@ try {
     assert.equal(bundleJson.subject, "CSED311");
     assert.equal(bundleJson.pdf, undefined, "no PDF bytes in bundle.json");
     assert.equal(bundleJson.transcript[3].startMs, 15000);
-    assert.equal(readFileSync(join(out, "transcript.txt"), "utf8").split("\n").length, 6);
-    const dbList = JSON.parse((await promisify(execFile)("node", [join(repo, "scripts/phase2/alt-local.mjs"), "--source", "db", "--alt-dir", apiUd, "list"], { encoding: "utf8" })).stdout);
-    assert.equal(dbList.mode, "db");
-    const allOut = (await run(["status"])) + (await run(["list"])) + readFileSync(exp.bundle, "utf8");
+    assert.equal(readFileSync(join(exp.dir, "transcript.txt"), "utf8").split("\n").length, 6);
+    rmSync(exp.dir, { recursive: true, force: true });
+    const out = join(root, "export");
+    const exp2 = JSON.parse((await promisify(execFile)("node", [join(repo, "scripts/phase2/alt-local.mjs"), "--source", "db", "--alt-dir", apiUd, "export", "n1", out], { encoding: "utf8" })).stdout);
+    assert.equal(exp2.dir, out);
+    assert.equal(statSync(out).mode & 0o777, 0o700);
+    const allOut = JSON.stringify(st) + (await run(["list"])) + readFileSync(exp2.bundle, "utf8");
     assert.ok(!allOut.includes(FAKE_TOKEN), "the CLI never prints the token");
-    console.log("PASS: alt-local.mjs status / list / export match the plugin sources, token never printed");
+    assert.ok(requests.slice(before).every((r) => r.auth === null), "the CLI never sent the token to the impostor");
+    console.log("PASS: alt-local.mjs refuses the impostor, lists and exports from the DB copy into a private folder, token never printed");
   } finally {
     await new Promise((r) => server.close(r));
   }
@@ -393,7 +486,7 @@ try {
     const none = await m.connectAltLocal(join(root, "empty"), { tmpRoot: root, probeTimeoutMs: 300 });
     assert.equal(none.source, null);
     assert.equal(none.label, "연결 안 됨");
-    const off = await m.AltLocalApiSource.detect(apiUd, 300);
+    const off = await m.AltLocalApiSource.detect(apiUd, { probeTimeoutMs: 300 });
     assert.match(off.reason, /로컬 HTTP 서버가 꺼져/);
     console.log("PASS: source selection: API, else database copy, else none, with the reason");
   }

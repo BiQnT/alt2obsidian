@@ -56,28 +56,49 @@ export function readHttpServerConfig(userData: string): { port: number; enabled:
   return { port, enabled };
 }
 
-/** Database files to try, best first. Only existing files are returned. */
-export function dbCandidates(userData: string): string[] {
+/**
+ * A store to try and the account whose notes it shows: a user id (signed-in
+ * account store), null (device store, notes without a channel), or
+ * undefined (unknown owner, or the pre-sync store: no account filter).
+ */
+export interface DbCandidate {
+  path: string;
+  accountId: string | null | undefined;
+}
+
+export function activeProfileUserId(userData: string): string | null {
+  const active = readJson(join(userData, "storage-desktopSync.json"))?.activeProfileUserId;
+  return typeof active === "string" && active ? active : null;
+}
+
+/**
+ * Stores to try, best first; only existing files. With a known signed-in
+ * user: that account's store, then the device and pre-sync stores, never
+ * another account's store. Unknown user: account stores by recency.
+ */
+export function dbCandidates(userData: string): DbCandidate[] {
   const dir = join(userData, "data", "database");
   if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  const active = readJson(join(userData, "storage-desktopSync.json"))?.activeProfileUserId;
-  if (typeof active === "string" && active) {
+  const out: DbCandidate[] = [];
+  const active = activeProfileUserId(userData);
+  if (active) {
     const digest = createHash("sha256").update(active).digest("hex").slice(0, 16);
-    out.push(join(dir, `powersync-store.account-${digest}.db`));
+    out.push({ path: join(dir, `powersync-store.account-${digest}.db`), accountId: active });
+  } else {
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      names = [];
+    }
+    names
+      .filter((n) => /^powersync-store\.account-[0-9a-f]+\.db$/.test(n))
+      .map((n) => join(dir, n))
+      .sort((x, y) => mtime(y) - mtime(x))
+      .forEach((path) => out.push({ path, accountId: undefined }));
   }
-  let names: string[] = [];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    names = [];
-  }
-  const accounts = names
-    .filter((n) => /^powersync-store\.account-[0-9a-f]+\.db$/.test(n))
-    .map((n) => join(dir, n))
-    .sort((a, b) => mtime(b) - mtime(a));
-  out.push(...accounts, join(dir, "powersync-store.db"), join(dir, "lecture_notes.db"));
-  return Array.from(new Set(out)).filter((p) => existsSync(p));
+  out.push({ path: join(dir, "powersync-store.db"), accountId: null }, { path: join(dir, "lecture_notes.db"), accountId: undefined });
+  return out.filter((c) => existsSync(c.path));
 }
 
 function mtime(path: string): number {

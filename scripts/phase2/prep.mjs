@@ -738,11 +738,17 @@ function chunksFromAlignment(result, segments, slideCount) {
     return text.length > 0 ? text : null;
   });
 }
+function tenths(ms) {
+  return (ms / 1e3).toFixed(1).replace(/\.0$/, "");
+}
+function toTenth(ms) {
+  return Math.floor(ms / 100) * 100;
+}
 function formatAlignment(spans) {
   return spans.map((s, i) => {
-    const start = Math.floor(s.startMs / 1e3);
-    const end = i + 1 < spans.length ? Math.floor(spans[i + 1].startMs / 1e3) : Math.ceil(s.endMs / 1e3);
-    return `${s.slide}:${start}-${Math.max(start, end)}${s.confidence < LOW_CONFIDENCE ? "?" : ""}`;
+    const start = toTenth(s.startMs);
+    const end = i + 1 < spans.length ? toTenth(spans[i + 1].startMs) : Math.ceil(s.endMs / 100) * 100;
+    return `${s.slide}:${tenths(start)}-${tenths(Math.max(start, end))}${s.confidence < LOW_CONFIDENCE ? "?" : ""}`;
   }).join(" ");
 }
 

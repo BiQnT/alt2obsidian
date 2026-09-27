@@ -3,6 +3,7 @@
 
 import { AltLocalApiSource } from "./AltLocalApiSource";
 import { AltLocalDbSource, SqliteModule } from "./AltLocalDbSource";
+import { OwnerVerifier } from "./altOwnership";
 import { AltLocalSource } from "./types";
 
 export * from "./types";
@@ -19,13 +20,26 @@ export interface ConnectResult {
 
 export async function connectAltLocal(
   userData: string,
-  opts: { sqlite?: SqliteModule; tmpRoot?: string; probeTimeoutMs?: number } = {}
+  opts: { sqlite?: SqliteModule; tmpRoot?: string; probeTimeoutMs?: number; verifyOwner?: OwnerVerifier } = {}
 ): Promise<ConnectResult> {
-  const api = await AltLocalApiSource.detect(userData, opts.probeTimeoutMs);
+  const dbOpts = { userData, sqlite: opts.sqlite, tmpRoot: opts.tmpRoot };
+  const api = await AltLocalApiSource.detect(userData, {
+    probeTimeoutMs: opts.probeTimeoutMs,
+    verifyOwner: opts.verifyOwner,
+    // Synced slides: the API has no path for them, a short-lived DB copy does.
+    resolvePdfPath: async (noteId) => {
+      const db = AltLocalDbSource.open(dbOpts);
+      try {
+        return (await db.noteDetails(noteId)).pdfPath;
+      } finally {
+        db.close();
+      }
+    },
+  });
   if (api.source) return { source: api.source, label: api.source.label, detail: "" };
   try {
-    const db = AltLocalDbSource.open({ userData, sqlite: opts.sqlite, tmpRoot: opts.tmpRoot });
-    return { source: db, label: db.label, detail: api.reason };
+    const db = AltLocalDbSource.open(dbOpts);
+    return { source: db, label: db.label, detail: [api.reason, db.storeDetail].filter(Boolean).join(" ") };
   } catch (e) {
     return { source: null, label: "연결 안 됨", detail: `${api.reason} ${e instanceof Error ? e.message : String(e)}`.trim() };
   }

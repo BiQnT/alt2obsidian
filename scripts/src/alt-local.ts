@@ -7,7 +7,7 @@
 // Usage:
 //   node scripts/phase2/alt-local.mjs status
 //   node scripts/phase2/alt-local.mjs list [--query TEXT]
-//   node scripts/phase2/alt-local.mjs export <noteId> <outDir>
+//   node scripts/phase2/alt-local.mjs export <noteId> [<outDir>]
 // Options: --alt-dir <dir>   Alt's data folder (default: the platform's)
 //          --source auto|api|db
 //
@@ -15,10 +15,13 @@
 // list    prints {"mode","notes":[{id,title,type,lectureDate,folderPath,subject}]}.
 // export  writes <outDir>/bundle.json (the LectureBundle without PDF bytes,
 //         plus "subject" and "pdfPath") and <outDir>/transcript.txt (one
-//         segment per line), and prints {"bundle","pdfPath","segments","timestamps"}.
-//         The PDF is not copied: read it from pdfPath (Alt's own file).
+//         segment per line), and prints {"dir","bundle","pdfPath","segments","timestamps"}.
+//         Without <outDir> a private folder is made under the OS temp folder.
+//         The folder is 0700 and the files 0600 (lecture text); remove the
+//         folder when done. The PDF is not copied: read it from pdfPath.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AltLocalApiSource } from "../../src/sources/AltLocalApiSource";
 import { AltLocalDbSource } from "../../src/sources/AltLocalDbSource";
@@ -57,7 +60,7 @@ async function main(): Promise<void> {
   const userData = option(args, "--alt-dir") ?? altUserDataDir();
   const mode = option(args, "--source") ?? "auto";
   if (!["status", "list", "export"].includes(cmd) || !["auto", "api", "db"].includes(mode)) {
-    process.stderr.write("Usage: node scripts/phase2/alt-local.mjs status | list [--query T] | export <noteId> <outDir> [--alt-dir DIR] [--source auto|api|db]\n");
+    process.stderr.write("Usage: node scripts/phase2/alt-local.mjs status | list [--query T] | export <noteId> [outDir] [--alt-dir DIR] [--source auto|api|db]\n");
     process.exit(2);
   }
   const conn = await connect(userData, mode);
@@ -76,17 +79,25 @@ async function main(): Promise<void> {
       process.stdout.write(JSON.stringify({ mode: source.mode, notes }) + "\n");
       return;
     }
-    const [, id, outDir] = pos;
-    if (!id || !outDir) throw new Error("export needs <noteId> <outDir>");
+    const [, id, outArg] = pos;
+    if (!id) throw new Error("export needs <noteId>");
     const bundle = await source.getBundle(id);
-    mkdirSync(outDir, { recursive: true });
+    let outDir: string;
+    if (outArg) {
+      mkdirSync(outArg, { recursive: true, mode: 0o700 });
+      chmodSync(outArg, 0o700);
+      outDir = outArg;
+    } else {
+      outDir = mkdtempSync(join(tmpdir(), "alt2obs-export-"));
+    }
     const { pdf: _pdf, ...rest } = bundle;
     const out = { ...rest, subject: inferSubject(bundle.folderPath ?? [], bundle.title) };
     const bundlePath = join(outDir, "bundle.json");
-    writeFileSync(bundlePath, JSON.stringify(out, null, 1));
-    writeFileSync(join(outDir, "transcript.txt"), bundle.transcript.map((s) => s.text).join("\n"));
+    writeFileSync(bundlePath, JSON.stringify(out, null, 1), { mode: 0o600 });
+    writeFileSync(join(outDir, "transcript.txt"), bundle.transcript.map((s) => s.text).join("\n"), { mode: 0o600 });
     process.stdout.write(
       JSON.stringify({
+        dir: outDir,
         bundle: bundlePath,
         pdfPath: bundle.pdf ? bundle.pdfPath : null,
         segments: bundle.transcript.length,

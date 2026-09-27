@@ -9,7 +9,8 @@ import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import * as http from "node:http";
 import { ALT_PORT_TRIES, readHttpServerConfig, tokenFilePath } from "./altPaths";
-import { bundleFromRows, ComponentRow, detailsFromComponents, FolderRow, NoteRow, toSummary } from "./altRows";
+import { OwnerVerifier, systemOwnerVerifier } from "./altOwnership";
+import { bundleFromRows, ComponentRow, detailsFromComponents, FolderRow, NoteRow, pickSlides, toSummary } from "./altRows";
 import { AltLocalSource, AltNoteDetails, AltNoteSummary, LectureBundle } from "./types";
 
 const HOST = "127.0.0.1";
@@ -74,8 +75,9 @@ function componentFromApi(raw: Record<string, unknown>): ComponentRow {
     title: typeof raw.title === "string" ? raw.title : null,
     content_text: typeof raw.content_text === "string" ? raw.content_text : null,
     metadata: typeof raw.metadata === "string" ? raw.metadata : raw.metadata ? JSON.stringify(raw.metadata) : null,
-    display_order: typeof raw.display_order === "number" ? raw.display_order : 0,
+    display_order: typeof raw.display_order === "number" ? raw.display_order : null,
     file_path: typeof file?.file_path === "string" ? file.file_path : null,
+    file_ref_id: typeof raw.file_ref_id === "string" ? raw.file_ref_id : null,
   };
 }
 
@@ -84,6 +86,19 @@ export interface ApiSourceOptions {
   token: string;
   version?: string;
   timeoutMs?: number;
+  /**
+   * Local path of a synced slides file the API gives no path for (the
+   * components route joins file_metadata by inode only): read from a copy
+   * of Alt's database.
+   */
+  resolvePdfPath?: (noteId: string) => Promise<string | null>;
+}
+
+export interface DetectOptions {
+  probeTimeoutMs?: number;
+  /** Who listens on the port; the token is sent only when this says Alt. */
+  verifyOwner?: OwnerVerifier;
+  resolvePdfPath?: (noteId: string) => Promise<string | null>;
 }
 
 export class AltLocalApiSource implements AltLocalSource {
@@ -93,8 +108,10 @@ export class AltLocalApiSource implements AltLocalSource {
   private readonly token: string;
   private readonly timeoutMs: number;
   private folders: Map<string, FolderRow> | null = null;
+  private readonly resolvePdfPath?: (noteId: string) => Promise<string | null>;
 
   constructor(opts: ApiSourceOptions) {
+    this.resolvePdfPath = opts.resolvePdfPath;
     this.port = opts.port;
     this.token = opts.token;
     this.timeoutMs = opts.timeoutMs ?? 15000;
@@ -106,12 +123,19 @@ export class AltLocalApiSource implements AltLocalSource {
    * ones Alt falls back to. Null when Alt does not answer or the token file
    * cannot be read; `reason` says why.
    */
-  static async detect(userData: string, probeTimeoutMs = 800): Promise<{ source: AltLocalApiSource | null; reason: string }> {
+  static async detect(userData: string, opts: DetectOptions = {}): Promise<{ source: AltLocalApiSource | null; reason: string }> {
     const { port, enabled } = readHttpServerConfig(userData);
+    const verify = opts.verifyOwner ?? systemOwnerVerifier();
+    // The configured port first, then the ones Alt falls back to. The token
+    // goes only to a listener verified as Alt run by this user; if that
+    // cannot be verified, the database copy is used and the token is never sent.
     for (let p = port; p < port + ALT_PORT_TRIES; p++) {
-      // A refused port fails at once; another program on a port is skipped.
-      const status = await probeAltStatus(p, probeTimeoutMs);
+      const status = await probeAltStatus(p, opts.probeTimeoutMs ?? 800);
       if (!status) continue;
+      const owner = await verify(p);
+      if (!owner.ok) {
+        return { source: null, reason: `로컬 API가 Alt인지 확인하지 못해 토큰을 보내지 않았습니다: ${owner.reason}` };
+      }
       let token: string;
       try {
         token = readFileSync(tokenFilePath(userData), "utf8").trim();
@@ -119,7 +143,7 @@ export class AltLocalApiSource implements AltLocalSource {
         return { source: null, reason: "Alt는 실행 중이지만 로컬 API 토큰 파일을 읽지 못했습니다." };
       }
       if (!token) return { source: null, reason: "Alt 로컬 API 토큰 파일이 비어 있습니다." };
-      return { source: new AltLocalApiSource({ port: p, token, version: status.version }), reason: "" };
+      return { source: new AltLocalApiSource({ port: p, token, version: status.version, resolvePdfPath: opts.resolvePdfPath }), reason: "" };
     }
     return {
       source: null,
@@ -167,14 +191,28 @@ export class AltLocalApiSource implements AltLocalSource {
     return raw.map(componentFromApi);
   }
 
+  /** Components, with the slides path filled in from the database for synced files. */
+  private async componentsWithPaths(id: string): Promise<ComponentRow[]> {
+    const components = await this.components(id);
+    const slides = pickSlides(components);
+    if (slides && !slides.file_path && slides.file_ref_id && this.resolvePdfPath) {
+      try {
+        slides.file_path = await this.resolvePdfPath(id);
+      } catch (e) {
+        console.warn("[Alt2Obsidian] slides path lookup in the database failed:", e);
+      }
+    }
+    return components;
+  }
+
   async noteDetails(id: string): Promise<AltNoteDetails> {
-    return detailsFromComponents(await this.components(id));
+    return detailsFromComponents(await this.componentsWithPaths(id));
   }
 
   async getBundle(id: string): Promise<LectureBundle> {
     const note = await this.get<NoteRow | null>(`/api/lectureNotes/${encodeURIComponent(id)}`);
     if (!note || typeof note.id !== "string") throw new AltApiError("Alt에서 이 노트를 찾지 못했습니다.", 404);
-    const [folders, components] = await Promise.all([this.folderMap(), this.components(id)]);
+    const [folders, components] = await Promise.all([this.folderMap(), this.componentsWithPaths(id)]);
     return bundleFromRows({
       note,
       folders,

@@ -29,6 +29,8 @@ export interface ComponentRow {
   display_order?: number | null;
   /** Local file of a file component (slides, recording), when known. */
   file_path?: string | null;
+  /** Synced file reference (desktop sync); its local path is in the database only. */
+  file_ref_id?: string | null;
 }
 
 export function folderChain(folderId: string | null, folders: Map<string, FolderRow>): string[] {
@@ -111,19 +113,39 @@ export function transcriptMinutes(segments: TranscriptSegment[]): number | null 
   return segments.length > 0 ? Math.max(1, Math.round(end / 60000)) : null;
 }
 
-function byOrder(a: ComponentRow, b: ComponentRow): number {
-  return (a.display_order ?? 0) - (b.display_order ?? 0);
+function compareOptionalString(a: string | null | undefined, b: string | null | undefined): number {
+  const x = a ?? "";
+  const y = b ?? "";
+  return x === y ? 0 : x < y ? -1 : 1;
 }
 
-/** The slides component the PDF comes from: first by display order with a file. */
+/**
+ * Alt's display order (compareNoteComponentsForDisplay): display_order with
+ * missing values last, then component_type, title and id.
+ */
+export function compareForDisplay(a: ComponentRow, b: ComponentRow): number {
+  const oa = a.display_order ?? Number.MAX_SAFE_INTEGER;
+  const ob = b.display_order ?? Number.MAX_SAFE_INTEGER;
+  return oa - ob || compareOptionalString(a.component_type, b.component_type) || compareOptionalString(a.title, b.title) || compareOptionalString(a.id, b.id);
+}
+
+/**
+ * The component Alt shows for a type (findDisplayComponentByType): a note
+ * can hold several rows of one type (an older transcript, a replaced
+ * summary); Alt uses the first in display order, and so does the import.
+ */
+export function displayComponent(components: ComponentRow[], type: string): ComponentRow | null {
+  return [...components].sort(compareForDisplay).find((c) => c.component_type === type) ?? null;
+}
+
+/** The slides component the PDF comes from: the one Alt displays. */
 export function pickSlides(components: ComponentRow[]): ComponentRow | null {
-  const slides = components.filter((c) => c.component_type === "slides").sort(byOrder);
-  return slides.find((c) => !!c.file_path) ?? slides[0] ?? null;
+  return displayComponent(components, "slides");
 }
 
 export function detailsFromComponents(components: ComponentRow[]): AltNoteDetails {
   const slides = pickSlides(components);
-  const transcript = components.filter((c) => c.component_type === "transcript").flatMap((c) => parseTranscript(c.content_text));
+  const transcript = parseTranscript(displayComponent(components, "transcript")?.content_text);
   return {
     hasSlides: !!slides,
     slidesTitle: slides?.title ?? null,
@@ -174,7 +196,13 @@ export async function bundleFromRows(input: BundleInput): Promise<LectureBundle>
   const slides = pickSlides(components);
   let pdf: ArrayBuffer | null = null;
   const pdfPath = slides?.file_path ?? null;
-  if (slides && !pdfPath) warnings.push("슬라이드 PDF 파일 경로를 찾지 못했습니다. 슬라이드 없이 가져옵니다.");
+  if (slides && !pdfPath) {
+    warnings.push(
+      slides.file_ref_id
+        ? "슬라이드 PDF가 동기화된 파일인데 이 컴퓨터의 경로를 찾지 못했습니다 (Alt에서 슬라이드를 한 번 열어 내려받은 뒤 다시 시도하세요). 슬라이드 없이 가져옵니다."
+        : "슬라이드 PDF 파일 경로를 찾지 못했습니다. 슬라이드 없이 가져옵니다."
+    );
+  }
   if (pdfPath) {
     try {
       pdf = await input.readFile(pdfPath);
@@ -182,19 +210,16 @@ export async function bundleFromRows(input: BundleInput): Promise<LectureBundle>
       warnings.push(`슬라이드 PDF를 읽지 못했습니다 (${e instanceof Error ? e.message : String(e)}). 슬라이드 없이 가져옵니다.`);
     }
   }
-  const transcript = components
-    .filter((c) => c.component_type === "transcript")
-    .sort(byOrder)
-    .flatMap((c) => parseTranscript(c.content_text));
-  const summary = components
-    .filter((c) => c.component_type === "summary")
-    .sort(byOrder)
-    .map((c) => componentTextToMarkdown(c.content_text, c.metadata))
-    .filter((t) => t.trim().length > 0)
-    .join("\n\n");
+  // One displayed component per single-valued type (transcript, summary,
+  // memo, meeting notes); slide memos are one per slide and all kept.
+  const transcriptRow = displayComponent(components, "transcript");
+  const transcript = parseTranscript(transcriptRow?.content_text);
+  const summaryRow = displayComponent(components, "summary");
+  const summary = summaryRow ? componentTextToMarkdown(summaryRow.content_text, summaryRow.metadata).trim() : "";
   const memos: string[] = [];
-  for (const c of components.filter((c) => c.component_type === "memo" || c.component_type === "meeting_notes").sort(byOrder)) {
-    const md = componentTextToMarkdown(c.content_text, c.metadata);
+  for (const type of ["memo", "meeting_notes"]) {
+    const c = displayComponent(components, type);
+    const md = c ? componentTextToMarkdown(c.content_text, c.metadata) : "";
     if (md.trim()) memos.push(md);
   }
   const slideMemos = components
@@ -204,13 +229,13 @@ export async function bundleFromRows(input: BundleInput): Promise<LectureBundle>
     .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
   for (const m of slideMemos) memos.push(`### 슬라이드 ${m.index ?? "?"} 메모\n\n${m.md}`);
 
-  const summaryRow = toSummary(note, input.folders);
+  const noteInfo = toSummary(note, input.folders);
   return {
     sourceId: note.id,
     sourceKind: "alt-local",
-    title: summaryRow.title,
-    lectureDate: summaryRow.lectureDate ?? undefined,
-    folderPath: summaryRow.folderPath,
+    title: noteInfo.title,
+    lectureDate: noteInfo.lectureDate ?? undefined,
+    folderPath: noteInfo.folderPath,
     pdf,
     pdfPath,
     slideTexts: null,

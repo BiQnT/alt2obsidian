@@ -11,11 +11,11 @@
 // Before reading, the schema is checked: the tables and columns this source
 // needs must exist, otherwise it fails with a clear message.
 
-import { copyFileSync, constants, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, constants, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { dbCandidates } from "./altPaths";
+import { activeProfileUserId, DbCandidate, dbCandidates } from "./altPaths";
 import { bundleFromRows, ComponentRow, detailsFromComponents, FolderRow, NoteRow, toSummary } from "./altRows";
 import { AltLocalSource, AltNoteDetails, AltNoteSummary, LectureBundle } from "./types";
 
@@ -106,6 +106,58 @@ function hasColumn(db: Database, table: string, column: string): boolean {
   return (db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as Array<{ name: string }>).some((r) => r.name === column);
 }
 
+const SCOPE_TABLES = ["channel_members", "channels", "workspace_members", "workspaces", "workspace_access_snapshot", "workspace_access_snapshot_state"];
+
+/**
+ * Alt's row filter for what an account sees (its activeContentRowSql):
+ * rows without a channel, plus rows of team channels the user belongs to
+ * (active, not archived, in a workspace the user is an active member of,
+ * and in the workspace access snapshot when there is one). The device
+ * store (account null) shows only rows without a channel.
+ */
+export function activeContentSql(alias: string, accountId: string | null | undefined, canScope: boolean): string {
+  const active = `${alias}.deleted_at IS NULL`;
+  if (accountId === undefined || !canScope) return active;
+  const space = `${alias}.channel_id`;
+  if (accountId === null) return `${active} AND ${space} IS NULL`;
+  const actor = `'${accountId.replace(/'/g, "''")}'`;
+  const snapshot = `(NOT EXISTS(SELECT 1 FROM workspace_access_snapshot_state) OR ${space} IN (SELECT id FROM workspace_access_snapshot WHERE kind='team'))`;
+  return `${active} AND (${space} IS NULL OR (${snapshot} AND ${space} IN (
+    SELECT tm.channel_id FROM channel_members tm JOIN channels t ON t.id=tm.channel_id
+    WHERE tm.user_id=${actor} AND t.deleted_at IS NULL AND t.archived_at IS NULL
+    AND (t.workspace_id IS NULL OR t.workspace_id IN (
+      SELECT wm.workspace_id FROM workspace_members wm JOIN workspaces w ON w.id=wm.workspace_id
+      WHERE wm.user_id=${actor} AND wm.status='active' AND w.deleted_at IS NULL
+    ))
+  )))`;
+}
+
+/** Private copies older than this are left over from a crash and removed. */
+const STALE_COPY_MS = 60 * 60 * 1000;
+
+export function sweepStaleCopies(tmpRoot: string, now = Date.now()): number {
+  let removed = 0;
+  let names: string[] = [];
+  try {
+    names = readdirSync(tmpRoot);
+  } catch {
+    return 0;
+  }
+  for (const n of names) {
+    if (!n.startsWith("alt2obs-altdb-")) continue;
+    const p = join(tmpRoot, n);
+    try {
+      if (now - statSync(p).mtimeMs > STALE_COPY_MS) {
+        rmSync(p, { recursive: true, force: true });
+        removed++;
+      }
+    } catch {
+      // gone already
+    }
+  }
+  return removed;
+}
+
 export interface DbSourceOptions {
   userData: string;
   sqlite?: SqliteModule;
@@ -119,6 +171,10 @@ export class AltLocalDbSource implements AltLocalSource {
   readonly schema: SchemaInfo;
   /** Which store file was copied (file name only). */
   readonly storeName: string;
+  /** Status detail naming the store when the signed-in account is unknown ("" otherwise). */
+  storeDetail = "";
+  private accountId: string | null | undefined = undefined;
+  private canScope = false;
 
   private constructor(
     private db: Database,
@@ -132,6 +188,22 @@ export class AltLocalDbSource implements AltLocalSource {
     this.label = `Alt 꺼짐 · DB 읽기${schema.known ? "" : ` (확인되지 않은 스키마 v${schema.version ?? "?"})`}`;
   }
 
+  private setScope(c: DbCandidate, userKnown: boolean): void {
+    this.accountId = c.accountId;
+    // Stores without channels (pre-sync) have nothing to scope.
+    this.canScope =
+      ["lecture_notes", "folders", "note_components"].every((t) => hasColumn(this.db, t, "channel_id")) && SCOPE_TABLES.every((t) => this.tableExists(t));
+    if (!userKnown) this.storeDetail = `로그인 계정을 알 수 없어 가장 최근 저장소를 읽었습니다: ${this.storeName}`;
+  }
+
+  private tableExists(name: string): boolean {
+    return !!this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type IN ('table','view') AND name = ?").get(name);
+  }
+
+  private scope(alias: string): string {
+    return activeContentSql(alias, this.accountId, this.canScope);
+  }
+
   /**
    * Copies the best store (signed-in account first) to a temp folder and
    * opens the copy. A store without notes is skipped when another has some.
@@ -139,13 +211,17 @@ export class AltLocalDbSource implements AltLocalSource {
   static open(opts: DbSourceOptions): AltLocalDbSource {
     const candidates = dbCandidates(opts.userData);
     if (candidates.length === 0) throw new AltDbError("Alt 데이터베이스를 찾지 못했습니다. Alt가 이 컴퓨터에 설치되어 있는지 확인하세요.");
+    const userKnown = activeProfileUserId(opts.userData) !== null;
+    sweepStaleCopies(opts.tmpRoot ?? tmpdir());
     const sqlite = opts.sqlite ?? loadSqlite();
     let fallback: AltLocalDbSource | null = null;
     let lastError: unknown = null;
-    for (const file of candidates) {
+    for (const candidate of candidates) {
+      const file = candidate.path;
       let source: AltLocalDbSource;
       try {
         source = AltLocalDbSource.openCopy(file, sqlite, opts.tmpRoot ?? tmpdir());
+        source.setScope(candidate, userKnown);
       } catch (e) {
         // An unknown schema is fatal: an older store would show stale notes.
         if (e instanceof AltDbError) {
@@ -154,7 +230,7 @@ export class AltLocalDbSource implements AltLocalSource {
         }
         // The best store failed (for example a copy torn by a checkpoint):
         // say so instead of silently reading an older store.
-        if (file === candidates[0]) {
+        if (file === candidates[0].path) {
           throw new AltDbError(`Alt 데이터베이스 사본을 열지 못했습니다 (${basename(file)}): ${e instanceof Error ? e.message : String(e)}. 잠시 뒤 다시 시도하세요.`);
         }
         lastError = e;
@@ -201,36 +277,38 @@ export class AltLocalDbSource implements AltLocalSource {
   }
 
   private noteCount(): number {
-    const row = this.db.prepare("SELECT COUNT(*) AS c FROM lecture_notes WHERE deleted_at IS NULL").get() as { c: number };
+    const row = this.db.prepare(`SELECT COUNT(*) AS c FROM lecture_notes ln WHERE ${this.scope("ln")}`).get() as { c: number };
     return row.c;
   }
 
   private folderMap(): Map<string, FolderRow> {
-    const rows = this.db.prepare("SELECT id, name, parent_id FROM folders WHERE deleted_at IS NULL").all() as FolderRow[];
+    const rows = this.db.prepare(`SELECT f.id, f.name, f.parent_id FROM folders f WHERE ${this.scope("f")}`).all() as FolderRow[];
     return new Map(rows.map((r) => [r.id, { id: r.id, name: r.name, parent_id: r.parent_id }]));
   }
 
   async listNotes(): Promise<AltNoteSummary[]> {
     const folders = this.folderMap();
     const rows = this.db
-      .prepare("SELECT id, title, type, lecture_date, folder_id, updated_at FROM lecture_notes WHERE deleted_at IS NULL ORDER BY lecture_date DESC, id DESC")
+      .prepare(`SELECT ln.id, ln.title, ln.type, ln.lecture_date, ln.folder_id, ln.updated_at FROM lecture_notes ln WHERE ${this.scope("ln")} ORDER BY ln.lecture_date DESC, ln.id DESC`)
       .all() as NoteRow[];
     return rows.map((r) => toSummary(r, folders));
   }
 
   private components(noteId: string): ComponentRow[] {
-    // A file component's path: file_metadata via file_inode, else the
-    // synced file's local cache path via file_ref_id.
-    const refJoin = this.hasFileRefs
-      ? "LEFT JOIN file_ref_local_files fl ON fl.file_ref_id = nc.file_ref_id"
-      : "";
-    const refPath = this.hasFileRefs ? "NULLIF(fl.local_cache_path, '')" : "NULL";
+    // A file component's path: file_metadata via file_inode, else the synced
+    // file (file_ref_id) through file_ref_local_files: its registered file's
+    // path, else its cache path. Subqueries with LIMIT 1 keep one row per
+    // component even when an inode or a ref has several matches.
+    const refPath = this.hasFileRefs
+      ? `(SELECT COALESCE(NULLIF(fm2.file_path, ''), NULLIF(fl.local_cache_path, ''))
+            FROM file_ref_local_files fl LEFT JOIN file_metadata fm2 ON fm2.inode = fl.file_inode
+           WHERE fl.file_ref_id = nc.file_ref_id ORDER BY fl.updated_at DESC LIMIT 1)`
+      : "NULL";
     const sql = `SELECT nc.id, nc.note_id, nc.component_type, nc.title, nc.content_text, nc.metadata, nc.display_order,
-                        COALESCE(NULLIF(fm.file_path, ''), ${refPath}) AS file_path
+                        ${this.hasFileRefs ? "nc.file_ref_id" : "NULL"} AS file_ref_id,
+                        COALESCE((SELECT NULLIF(fm.file_path, '') FROM file_metadata fm WHERE fm.inode = nc.file_inode LIMIT 1), ${refPath}) AS file_path
                    FROM note_components nc
-                   LEFT JOIN file_metadata fm ON fm.inode = nc.file_inode
-                   ${refJoin}
-                  WHERE nc.note_id = ? AND nc.deleted_at IS NULL
+                  WHERE nc.note_id = ? AND ${this.scope("nc")}
                   ORDER BY nc.display_order, nc.component_type, nc.title, nc.id`;
     try {
       return this.db.prepare(sql).all(noteId) as ComponentRow[];
@@ -248,7 +326,7 @@ export class AltLocalDbSource implements AltLocalSource {
 
   async getBundle(id: string): Promise<LectureBundle> {
     const note = this.db
-      .prepare("SELECT id, title, type, lecture_date, folder_id, updated_at FROM lecture_notes WHERE id = ? AND deleted_at IS NULL")
+      .prepare(`SELECT ln.id, ln.title, ln.type, ln.lecture_date, ln.folder_id, ln.updated_at FROM lecture_notes ln WHERE ln.id = ? AND ${this.scope("ln")}`)
       .get(id) as NoteRow | undefined;
     if (!note) throw new AltDbError("Alt 데이터베이스에서 이 노트를 찾지 못했습니다.");
     return bundleFromRows({
