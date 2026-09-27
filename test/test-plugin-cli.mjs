@@ -270,7 +270,7 @@ try {
     assert.equal(rec.altLocalId, "local-1");
     assert.match(local, /alt_local_id: "local-1"\nalt_source: "alt-local"/);
     assert.ok(!/alt_id:/.test(local), "no public id for a local note");
-    assert.match(local, /alt_alignment: "(\d+:\d+-\d+\??)( \d+:\d+-\d+\??)*"/);
+    assert.match(local, /alt_alignment: "(\d+:[\d.]+-[\d.]+\??)( \d+:[\d.]+-[\d.]+\??)*"/);
     assert.ok(files.has("Alt2Obsidian/CSED311/Lec7 Caches (2026-04-21).pdf"), "PDF next to the note");
     const cached = JSON.parse(config.get(".obsidian/plugins/alt2obsidian/transcripts/local-1.json"));
     assert.equal(cached.segments.length, talk.length);
