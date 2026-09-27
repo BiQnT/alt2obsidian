@@ -40,3 +40,17 @@ export function parseSlideMeta(managed: string): SlideMeta | null {
 export function stripSlideMeta(managed: string): string {
   return managed.replace(META_RE, "");
 }
+
+// Key diagram image (spec 4.8): an embed on its own line at the end of the
+// commentary, before the metadata line, inside the managed block. It is
+// rebuilt on every import, so it is stripped when a previous body is reused.
+const DIAGRAM_RE = /\n+!\[\[[^\]\n]+\.png\]\]\s*$/;
+
+export function formatDiagramEmbed(vaultPath: string): string {
+  return `![[${vaultPath}]]`;
+}
+
+/** Commentary without a trailing diagram embed. */
+export function stripDiagramEmbed(body: string): string {
+  return body.replace(DIAGRAM_RE, "");
+}

@@ -4,7 +4,7 @@
 // batches. The estimate and the generator both work from this plan.
 
 import { splitMultiManagedNote } from "../core/merge";
-import { formatSlideMeta, parseSlideMeta, stripSlideMeta } from "../core/slideMeta";
+import { formatSlideMeta, parseSlideMeta, stripDiagramEmbed, stripSlideMeta } from "../core/slideMeta";
 import { PageLayout, SlideInfo, sameImageSignal, templateCommentary } from "../core/prep/SlideAnalyzer";
 import { compressTranscript, splitTranscriptEvenly } from "../core/prep/TranscriptCompressor";
 
@@ -56,7 +56,7 @@ export function parseExistingSlides(noteContent: string): ExistingSlide[] {
     return {
       slideNum: s.slideNum,
       hash: s.hash,
-      commentary: stripSlideMeta(s.managed).trim(),
+      commentary: stripDiagramEmbed(stripSlideMeta(s.managed).trim()).trim(),
       imageSignal: meta?.imageSignal ?? null,
       gist: meta?.gist ?? "",
       meta: meta ? formatSlideMeta(meta.imageSignal, meta.gist) : "",

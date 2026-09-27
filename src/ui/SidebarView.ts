@@ -722,6 +722,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
         rows.createEl("li", { text: "전사 타임스탬프가 없어 슬라이드마다 균등 분할합니다." });
       }
       if (prepared.plan.scanned) rows.createEl("li", { text: "텍스트 레이어가 없는 PDF라 모든 슬라이드를 이미지로 보냅니다." });
+      if (prepared.diagramPages.length > 0) rows.createEl("li", { text: `핵심 다이어그램 ${prepared.diagramPages.length}장 (슬라이드 ${prepared.diagramPages.join(", ")})을 Attachments/에 저장하고 노트에 넣습니다 (토큰 0)` });
       if (prepared.fewerImages) rows.createEl("li", { text: "이미지 줄이기 적용됨: 텍스트가 있는 도표 슬라이드는 텍스트만 보냅니다." });
     } else {
       rows.createEl("li", { text: "PDF가 없어 슬라이드별 해설 없이 강의 요약 노트를 만듭니다." });

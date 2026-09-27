@@ -956,6 +956,10 @@ function parseSlideMeta(managed) {
 function stripSlideMeta(managed) {
   return managed.replace(META_RE, "");
 }
+var DIAGRAM_RE = /\n+!\[\[[^\]\n]+\.png\]\]\s*$/;
+function stripDiagramEmbed(body) {
+  return body.replace(DIAGRAM_RE, "");
+}
 
 // src/core/prep/TranscriptCompressor.ts
 var KO_FILLERS = ["\uC74C", "\uC73C\uC74C", "\uC74C\uC74C", "\uC5B4", "\uC5B4\uC5B4", "\uC5D0", "\uC5D0\uC5D0", "\uADF8\uB7EC\uB2C8\uAE4C", "\uC800\uAE30", "\uADF8\uB2C8\uAE4C"];
@@ -1093,7 +1097,7 @@ function parseExistingSlides(noteContent) {
     return {
       slideNum: s.slideNum,
       hash: s.hash,
-      commentary: stripSlideMeta(s.managed).trim(),
+      commentary: stripDiagramEmbed(stripSlideMeta(s.managed).trim()).trim(),
       imageSignal: meta?.imageSignal ?? null,
       gist: meta?.gist ?? "",
       meta: meta ? formatSlideMeta(meta.imageSignal, meta.gist) : ""

@@ -364,3 +364,34 @@ async function deck(n, visualPages = []) {
   assert.ok(m.isSafeModelName("claude-sonnet-4-5[1m]") && m.isSafeModelName("gpt-5.6-luna") && !m.isSafeModelName("-m") && !m.isSafeModelName("a b"));
   console.log("PASS: 1.x settings kept, CLI defaults (sonnet/haiku), switch only without a working setup, presets, recent models, unsafe values dropped");
 }
+
+// ---- key diagram selection and embed (spec 4.8) ----
+{
+  const info = (page, kind, imageRatio, extra = {}) => ({ page, hash: "00000000", textChars: 100, imageRatio, kind, dupOf: null, sendImage: false, title: "", imageSignal: null, ...extra });
+  const slides = [
+    info(1, "cover", 0.6),
+    info(2, "visual", 0.35),
+    info(3, "content", 0.1),
+    info(4, "visual", 0.9, { dupOf: 5 }),
+    info(5, "visual", 0.9),
+    info(6, "visual", 0.1, { textChars: 10 }),
+    info(7, "visual", null),
+    ...Array.from({ length: 10 }, (_, k) => info(8 + k, "visual", 0.4 + k * 0.01)),
+  ];
+  const picked = m.selectKeyDiagrams(slides, false);
+  assert.equal(picked.length, m.MAX_KEY_DIAGRAMS);
+  assert.ok(picked.includes(5) && !picked.includes(4) && !picked.includes(1) && !picked.includes(6) && !picked.includes(7) && !picked.includes(2));
+  assert.deepEqual(picked, [...picked].sort((a, b) => a - b), "deck order");
+  assert.deepEqual(m.selectKeyDiagrams(slides, true), [], "scanned PDF: no diagrams");
+  // The embed sits inside the managed block and is stripped when the body is reused.
+  const embed = m.formatDiagramEmbed("A/S/Attachments/lec-5.png");
+  assert.equal(embed, "![[A/S/Attachments/lec-5.png]]");
+  const managed = `해설 본문 [[캐시]]\n\n${embed}\n\n${m.formatSlideMeta(null, "요지")}`;
+  const note = `---\ntitle: x\n---\n# x\n\n## 📚 슬라이드 5\n\n<!-- alt2obs:slide:5 hash:abcdef12 start -->\n${managed}\n<!-- alt2obs:slide:5 hash:abcdef12 end -->\n`;
+  const [prev] = m.parseExistingSlides(note);
+  assert.equal(prev.commentary, "해설 본문 [[캐시]]");
+  assert.equal(prev.gist, "요지");
+  assert.equal(m.stripDiagramEmbed("본문\n\n![[그림 설명.png]]\n"), "본문");
+  assert.equal(m.stripDiagramEmbed("본문 ![[inline.png]] 뒤"), "본문 ![[inline.png]] 뒤", "only a trailing embed line");
+  console.log("PASS: key diagrams: visual pages by ink share, capped, no templates, build steps or scans; embed stripped from reused bodies");
+}

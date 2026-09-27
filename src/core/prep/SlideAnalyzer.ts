@@ -373,6 +373,31 @@ export async function analyzeSlides(
   return { slides, scanned };
 }
 
+// ---- key diagrams (spec 4.8, ported from the retired lecture-note skill) ----
+
+/** At most this many diagram images per lecture (lecture-note used 5 to 10). */
+export const MAX_KEY_DIAGRAMS = 8;
+
+/**
+ * Pages worth saving as an image in the note: diagrams, circuits, plots,
+ * state machines and trees, picked by the render alone (no tokens). A page
+ * qualifies when it is a generated "visual" page whose non-text ink covers
+ * at least 30% of the render; template pages (cover, contents, closing),
+ * animation build steps that are not the last step, and scanned PDFs
+ * (every page is an image) are skipped, as are text-only and decorative
+ * pages below the ink threshold. The most graphic pages win, returned in
+ * deck order.
+ */
+export function selectKeyDiagrams(slides: SlideInfo[], scanned: boolean, max = MAX_KEY_DIAGRAMS): number[] {
+  if (scanned) return [];
+  return slides
+    .filter((s) => s.kind === "visual" && s.dupOf === null && s.imageRatio !== null && s.imageRatio >= VISUAL_RATIO)
+    .sort((a, b) => (b.imageRatio ?? 0) - (a.imageRatio ?? 0) || a.page - b.page)
+    .slice(0, max)
+    .map((s) => s.page)
+    .sort((a, b) => a - b);
+}
+
 // ---- template lines for slides that get no LLM call ----
 
 export function templateCommentary(slide: SlideInfo, deckTitle: string): string | null {

@@ -115,6 +115,7 @@ const pdfStub = {
   extractLectureMaterialContext: async () => null,
   getPageTexts: async () => TEXTS,
   getPageLayouts: async () => TEXTS.map((text) => ({ text, boxes: [] })),
+  renderPagesToImages: async (_d, pages) => pages.map((pageNum) => ({ pageNum, base64Png: PNG_1PX })),
   getPageCount: async () => TEXTS.length,
 };
 const preview = () => ({
@@ -211,6 +212,12 @@ try {
   assert.match(note, /tags: \[csed311, cache, memory\]/, "no exam period tag (spec G5)");
   assert.equal((note.match(/<!-- alt2obs:meta img:/g) ?? []).length, 6);
   assert.ok(files.has("Alt2Obsidian/CSED311/Concepts/캐시.md"));
+  // Key diagram (spec 4.8): the visual slide 4 saved to Attachments/ and embedded inside its managed block.
+  assert.deepEqual(prepared.diagramPages, [4]);
+  const diagram = "Alt2Obsidian/CSED311/Attachments/Lec7 Caches-4.png";
+  assert.ok(files.has(diagram));
+  assert.equal((note.match(/!\[\[[^\]]+\.png\]\]/g) ?? []).length, 1);
+  assert.match(note, new RegExp(`hash:[0-9a-f]{8} start -->\\n[^]*?\\n\\n!\\[\\[${diagram.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\]\\n\\n<!-- alt2obs:meta [^\\n]*\\n<!-- alt2obs:slide:4 hash:[0-9a-f]{8} end -->`));
   assert.ok(files.has("Alt2Obsidian/CSED311/Lectures/Lec7 Caches.pdf"));
   assert.equal(plugin.data.usageTotals.lectures, 1);
   assert.equal(plugin.data.usageTotals.calls, lastUsage.calls);
@@ -231,6 +238,8 @@ try {
   assert.equal(confirmed.slideDrifts.length, 0);
   assert.ok(files.get(record.path).includes("내 메모 유지"));
   assert.equal((files.get(record.path).match(/^alt_id:/gm) ?? []).length, 1, "one alt_id line");
+  assert.equal((files.get(record.path).match(/!\[\[[^\]]+\.png\]\]/g) ?? []).length, 1, "the diagram embed is not duplicated by a re-import");
+  assert.equal([...files.keys()].filter((k) => k.includes("/Attachments/")).length, 1, "the image is replaced in place");
   console.log("PASS: re-import reuses all unchanged slides (2 calls), keeps the memo");
 
   // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).
@@ -238,6 +247,9 @@ try {
     // The CLI answers (tokens spent) but never with valid JSON.
     process.env.FAKE_CLI_MODE = "badjson";
     plugin.data.settings.generation.onlyChangedSlides = false;
+    plugin.data.settings.generation.saveKeyDiagrams = false;
+    assert.deepEqual((await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311")).diagramPages, [], "setting off: no diagram");
+    plugin.data.settings.generation.saveKeyDiagrams = true;
     const warn = console.warn;
     console.warn = () => {};
     const snap = files.get(record.path);

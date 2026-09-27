@@ -203,6 +203,8 @@ export interface SlideSection {
   citedConcepts: string[];
   /** 2.0 metadata comment (src/core/slideMeta.ts), appended after concept linking. */
   meta?: string;
+  /** Vault path of the slide's saved diagram image (spec 4.8), embedded before `meta`. */
+  diagram?: string;
 }
 
 export interface PerSlideGenerationResult {

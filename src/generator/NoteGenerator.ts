@@ -10,6 +10,7 @@ import {
 } from "../types";
 import { sanitizeFilename, formatDate } from "../utils/helpers";
 import { buildOverviewSection, linkConceptNames } from "../core/markdown";
+import { formatDiagramEmbed } from "../core/slideMeta";
 
 /**
  * Note identity: `alt_id` (public share id, 1.x and URL imports) or
@@ -170,7 +171,8 @@ export class NoteGenerator {
    */
   private buildSlideSection(slide: SlideSection, conceptNames: string[]): string {
     const linked = linkConceptNames(slide.commentary, conceptNames);
-    const body = slide.meta ? `${linked}\n\n${slide.meta}` : linked;
+    const withDiagram = slide.diagram ? `${linked}\n\n${formatDiagramEmbed(slide.diagram)}` : linked;
+    const body = slide.meta ? `${withDiagram}\n\n${slide.meta}` : withDiagram;
     const startMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} start -->`;
     const endMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} end -->`;
     return [

@@ -43,7 +43,7 @@ import {
   PROVIDER_LABELS,
   rememberModel,
 } from "./settings/llmSettings";
-import { analyzeSlides } from "./core/prep/SlideAnalyzer";
+import { analyzeSlides, selectKeyDiagrams } from "./core/prep/SlideAnalyzer";
 import { DeckPlan, parseExistingSlides, planDeck, withFewerImages, withTranscriptChunks } from "./pipeline/batchPlan";
 import { estimateLecture, PipelineStep, runBatchedLecture } from "./pipeline/lecturePipeline";
 import type { BatchProgress, LectureContext } from "./generator/BatchCommentaryGenerator";
@@ -69,7 +69,7 @@ import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
 import { pluginCacheDir } from "./sources/altPaths";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
-import { lecturePath, verificationPathForNote } from "./vault/layout";
+import { attachmentPathForNote, lecturePath, verificationPathForNote } from "./vault/layout";
 import {
   estimateVerification,
   mergeVerificationNote,
@@ -114,6 +114,8 @@ export interface PreparedImport {
   alignment: LectureAlignment | null;
   /** Page texts the alignment used (alignment check prompt). */
   slideTexts: string[];
+  /** Pages saved to Attachments/ and embedded (spec 4.8); empty when the setting is off. */
+  diagramPages: number[];
 }
 
 /** A verification after claims, evidence and estimate, before any LLM call. */
@@ -922,6 +924,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
     notePath?: string;
     /** Local sources: its timestamped transcript is cached for the viewer. */
     bundle?: LectureBundle;
+    /** Diagram images embedded in the note, written after it (spec 4.8). */
+    attachments?: Array<{ path: string; data: ArrayBuffer }>;
     onProgress?: (stage: string, percent: number) => void;
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
     /** A cancelled import must not write anything. */
@@ -957,6 +961,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
       // Sibling of the note (the Synced Viewer looks for <note>.pdf).
       pdfPath = await vm.saveRawFile(pdfData, `${noteStem}.pdf`);
     }
+    // Same path on every import: an image is replaced, never duplicated.
+    for (const a of args.attachments ?? []) await vm.saveRawFile(a.data, a.path);
     await this.cacheTranscript(args.bundle).catch((e) => console.warn("[Alt2Obsidian] transcript cache write failed:", e));
     void this.pruneTranscriptCache(args.bundle ? [args.bundle.sourceId] : []).catch(() => undefined);
 
@@ -1044,7 +1050,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
       }
     }
     onProgress?.("예산 산정 완료", 100);
-    return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, context, fewerImages: false, alignment, slideTexts });
+    const diagramPages = plan && settings.generation.saveKeyDiagrams ? selectKeyDiagrams(plan.slides, plan.scanned) : [];
+    return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, context, fewerImages: false, alignment, slideTexts, diagramPages });
   }
 
   /** Same plan with visual slides sent as text only (spec 5.5 "fewer images"). */
@@ -1172,6 +1179,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
       }
 
       hooks.onStep?.("save");
+      // Key diagram images (spec 4.8): rendered now, written after the note.
+      const diagrams = await this.renderKeyDiagrams(pdfData, prepared.diagramPages, prepared.notePath);
+      const diagramByPage = new Map(diagrams.map((d) => [d.page, d.path]));
+      const slides = run.slidesResult.slides.map((sec) => (diagramByPage.has(sec.slideNum) ? { ...sec, diagram: diagramByPage.get(sec.slideNum) } : sec));
       const existingConceptNames = new Set(prepared.context.knownConcepts);
       const concepts = this.normalizeConcepts(run.concepts, existingConceptNames);
       const tags = run.tags;
@@ -1183,7 +1194,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       ];
       const { lectureMarkdown, conceptNotes } = await new NoteGenerator(commentaryLlm).generatePageAnchored(
         altData,
-        { ...run.slidesResult, errors },
+        { ...run.slidesResult, slides, errors },
         { processedSummary: run.overview, concepts, tags, subjectSuggestion: subject },
         subject,
         [
@@ -1200,6 +1211,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         pdfData,
         notePath: prepared.notePath,
         bundle: preview.bundle,
+        attachments: diagrams.filter((d) => slides.some((sec) => sec.diagram === d.path)),
         onProgress: hooks.onProgress,
         onConfirmUpdate: hooks.onConfirmUpdate,
         signal,
@@ -1212,6 +1224,24 @@ export default class Alt2ObsidianPlugin extends Plugin {
         await this.recordUsage(usage).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
       }
     }
+  }
+
+  /**
+   * PNG renders (long edge 1600) of the key diagram pages, at
+   * <subject folder>/Attachments/<lecture>-<page>.png. A page that fails to
+   * render is left out (no embed pointing at a missing file).
+   */
+  private async renderKeyDiagrams(pdfData: ArrayBuffer, pages: number[], notePath: string): Promise<Array<{ page: number; path: string; data: ArrayBuffer }>> {
+    if (pages.length === 0 || !this.pdfProcessor) return [];
+    const images = await this.pdfProcessor.renderPagesToImages(pdfData, pages, 1600);
+    return images.map((img) => {
+      const buf = Buffer.from(img.base64Png, "base64");
+      return {
+        page: img.pageNum,
+        path: attachmentPathForNote(notePath, img.pageNum),
+        data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+      };
+    });
   }
 
   /** The alignment check call; a failure keeps the script alignment. */
