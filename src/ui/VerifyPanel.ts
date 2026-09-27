@@ -33,6 +33,7 @@ export class VerifyPanel {
   private estimateEl: HTMLElement | null = null;
   private notionMarkdown: { url: string; markdown: string } | null = null;
   private controller: AbortController | null = null;
+  private notionController: AbortController | null = null;
   private busy = false;
 
   constructor(
@@ -67,7 +68,7 @@ export class VerifyPanel {
     this.notionInput = row.createEl("input", { type: "text", placeholder: "https://www.notion.so/..." });
     const fetchBtn = row.createEl("button", { text: "가져오기" });
     fetchBtn.addEventListener("click", () => void this.fetchNotion(fetchBtn));
-    this.notionStatus = notionBox.createDiv({ cls: "alt2obsidian-muted", text: "Claude CLI의 Notion MCP로 원문 마크다운만 가져옵니다 (호출 1회, 바뀌지 않은 페이지는 캐시 사용)." });
+    this.notionStatus = notionBox.createDiv({ cls: "alt2obsidian-muted", text: "Claude CLI가 Notion 조회 도구 하나만 불러 페이지 원문을 가져옵니다 (호출 1회, 내용은 도구 결과를 그대로 씀)." });
     this.inputBoxes.set("notion", notionBox);
 
     // Paste.
@@ -124,17 +125,33 @@ export class VerifyPanel {
   private async fetchNotion(btn: HTMLButtonElement): Promise<void> {
     const url = this.notionInput?.value.trim() ?? "";
     if (!url || !this.notionStatus) return;
-    btn.disabled = true;
+    // The fetch button becomes a cancel button while the call runs.
+    if (this.notionController) {
+      this.notionController.abort();
+      return;
+    }
+    const controller = new AbortController();
+    this.notionController = controller;
+    btn.setText("취소");
     this.notionStatus.setText("Notion에서 가져오는 중...");
     try {
-      const res = await this.plugin.fetchNotionMarkdown(url);
+      const res = await this.plugin.fetchNotionMarkdown(url, controller.signal);
       this.notionMarkdown = { url, markdown: res.markdown };
-      this.notionStatus.setText(
-        `${res.fromCache ? "바뀌지 않아 캐시를 썼습니다" : "가져왔습니다"}: ${res.markdown.length.toLocaleString()}자` + (res.lastEdited ? ` · 마지막 수정 ${res.lastEdited}` : "")
-      );
+      this.notionStatus.empty();
+      this.notionStatus.createDiv({
+        text:
+          `가져왔습니다: ${res.markdown.length.toLocaleString()}자` +
+          (res.lastEdited ? ` · 마지막 수정 ${res.lastEdited}` : "") +
+          (res.unchanged ? " · 지난번과 같은 페이지" : ""),
+      });
+      for (const w of res.warnings) this.notionStatus.createDiv({ cls: "alt2obsidian-error", text: w });
     } catch (e) {
       this.notionMarkdown = null;
       this.notionStatus.empty();
+      if (controller.signal.aborted) {
+        this.notionStatus.setText("가져오기를 취소했습니다.");
+        return;
+      }
       const box = this.notionStatus.createDiv({ cls: e instanceof NotionMcpMissingError ? "alt2obsidian-link-offer" : "alt2obsidian-error" });
       box.setText(e instanceof Error ? e.message : String(e));
       if (e instanceof NotionMcpMissingError) {
@@ -142,7 +159,8 @@ export class VerifyPanel {
         fallback.addEventListener("click", () => this.setKind("file"));
       }
     } finally {
-      btn.disabled = false;
+      this.notionController = null;
+      btn.setText("가져오기");
     }
   }
 
@@ -270,5 +288,6 @@ export class VerifyPanel {
 
   abort(): void {
     this.controller?.abort();
+    this.notionController?.abort();
   }
 }

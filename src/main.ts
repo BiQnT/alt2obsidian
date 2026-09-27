@@ -1307,15 +1307,22 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
   /**
    * Raw markdown of a Notion page through the user's Notion MCP (one Claude
-   * CLI call with only the Notion fetch tool), cached outside the vault. The
-   * copy runs on the light concept model when that task is on the Claude
-   * CLI (it only copies text), else the CLI default model, low effort.
+   * CLI call that may only use the Notion fetch tool; the content is the
+   * tool's result, not model text), cached outside the vault. The model
+   * only calls the tool, so the light concept model is used when that task
+   * is on the Claude CLI, else the CLI default, low effort. Cancel with
+   * `signal`; plugin unload cancels it too.
    */
   async fetchNotionMarkdown(url: string, signal?: AbortSignal): Promise<NotionFetchResult> {
     const settings = this.data.settings;
     const bin = await this.resolveBin("claude");
     const job = createJobDir();
     const usage = new UsageTracker();
+    const controller = new AbortController();
+    const forward = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    signal?.addEventListener("abort", forward, { once: true });
+    this.activeJobs.add(controller);
     try {
       const concepts = settings.tasks.concepts;
       const provider = new NotionFetchProvider({
@@ -1326,7 +1333,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         workDir: job,
         usage,
         task: "notion-fetch",
-        signal,
+        signal: controller.signal,
         ownsWorkDir: false,
       });
       return await fetchNotionPage(provider, {
@@ -1335,9 +1342,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
         cacheDir: joinPath(this.vaultCacheDir(), "notion"),
         workDir: job,
         toolName: settings.notionFetchTool,
-        signal,
+        signal: controller.signal,
       });
     } finally {
+      signal?.removeEventListener("abort", forward);
+      this.activeJobs.delete(controller);
       removeJobDir(job);
       if (usage.total().calls > 0) await this.recordUsage(usage, [], false).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
     }

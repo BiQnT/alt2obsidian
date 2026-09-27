@@ -139,37 +139,66 @@ function log(entry) {
 // ---- claude ----
 
 const CLAUDE_BOOL = new Set(["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]);
-const CLAUDE_VALUE = new Set(["--input-format", "--output-format", "--setting-sources", "--system-prompt", "--tools", "--model", "--effort", "--permission-mode", "--allowedTools", "--disallowedTools"]);
+const CLAUDE_VALUE = new Set(["--input-format", "--output-format", "--setting-sources", "--system-prompt", "--tools", "--model", "--effort", "--permission-mode", "--allowedTools", "--disallowedTools", "--settings", "--mcp-config"]);
 
-// Notion MCP (FAKE_NOTION_MCP=connected|failed|none, default none).
+// Notion MCP (FAKE_NOTION_MCP=connected|connector|failed|none, default none).
 function runClaudeMcpList() {
   const state = process.env.FAKE_NOTION_MCP || "none";
   log({ cli: "claude", argv: ["mcp", "list"], cwd: process.cwd(), stdin: "" });
   process.stdout.write("Checking MCP server health…\n\n");
   process.stdout.write("claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected\n");
   if (state === "connected") process.stdout.write("notion: https://mcp.notion.com/mcp (HTTP) - ✔ Connected\n");
+  if (state === "connector") process.stdout.write("claude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected\n");
   if (state === "failed") process.stdout.write("notion: https://mcp.notion.com/mcp (HTTP) - ✘ Failed to connect\n");
 }
 
-/** The Notion fetch call: only the Notion tool, the user's MCP config kept. */
-function checkNotionFlags(flags) {
-  if (flags["--strict-mcp-config"] || flags["--safe-mode"]) fail("the Notion call must keep the user's MCP servers");
-  if (flags["--tools"] !== "") fail("--tools must be \"\" (no built-in tools)");
-  if (flags["--permission-mode"] !== "dontAsk") fail("--permission-mode dontAsk expected");
-  if (!/^mcp__[A-Za-z0-9_-]+__notion-fetch$/.test(flags["--allowedTools"])) fail(`only the Notion fetch tool may be allowed, got ${flags["--allowedTools"]}`);
-  if (flags["--setting-sources"] !== "user") fail("--setting-sources user expected");
-  const server = flags["--allowedTools"].slice(0, flags["--allowedTools"].lastIndexOf("__") + 2);
-  const denied = (flags["--disallowedTools"] || "").split(",");
-  for (const t of ["notion-update-page", "notion-create-pages", "notion-move-pages"]) if (!denied.includes(server + t)) fail(`${server + t} must be denied`);
+function runClaudeMcpGet(name) {
+  log({ cli: "claude", argv: ["mcp", "get", name], cwd: process.cwd(), stdin: "" });
+  if (name !== "notion") fail(`No MCP server found with name: ${name}`, 1);
+  process.stdout.write("notion:\n  Scope: User config (available in all your projects)\n  Status: ✔ Connected\n  Type: http\n  URL: https://mcp.notion.com/mcp\n\nTo remove this server, run: claude mcp remove notion -s user\n");
 }
 
-function notionAnswer(stdin) {
+/** The Notion fetch call: only the Notion fetch tool, hooks and user settings off. */
+function checkNotionFlags(flags) {
+  if (flags["--safe-mode"]) fail("--safe-mode would switch the MCP servers off");
+  if (flags["--tools"] !== "") fail("--tools must be \"\" (no built-in tools)");
+  if (flags["--permission-mode"] !== "dontAsk") fail("--permission-mode dontAsk expected");
+  const tool = flags["--allowedTools"];
+  if (!/^mcp__[A-Za-z0-9_-]+__notion-fetch$/.test(tool)) fail(`only the Notion fetch tool may be allowed, got ${tool}`);
+  if (flags["--setting-sources"] !== "") fail("--setting-sources must be empty");
+  let settings;
+  try {
+    settings = JSON.parse(flags["--settings"] || "");
+  } catch {
+    fail("--settings must be JSON");
+  }
+  if (settings.disableAllHooks !== true) fail("hooks must be disabled");
+  const prefix = tool.slice(0, tool.lastIndexOf("__") + 2);
+  const denied = (flags["--disallowedTools"] || "").split(",");
+  for (const t of ["notion-update-page", "notion-create-pages", "notion-move-pages", "notion-search"]) if (!denied.includes(prefix + t)) fail(`${prefix + t} must be denied`);
+  if (denied.includes(tool)) fail("the fetch tool itself is denied");
+  if (flags["--strict-mcp-config"]) {
+    const cfg = JSON.parse(flags["--mcp-config"] || "{}");
+    const names = Object.keys(cfg.mcpServers || {});
+    if (names.length !== 1 || names[0] !== "notion" || cfg.mcpServers.notion.url !== "https://mcp.notion.com/mcp") fail(`strict config must hold only the notion server: ${flags["--mcp-config"]}`);
+  } else if (!denied.includes("mcp__claude_ai_Gmail")) fail("without a strict config every other MCP server must be denied");
+}
+
+/** stream-json events of a Notion fetch: the tool call and its result, then DONE. */
+function notionEvents(tool) {
   const edited = process.env.FAKE_NOTION_EDITED || "2026-09-20T10:00:00.000Z";
-  const cached = (stdin.match(/exactly `([^`]*)`/) || [])[1];
-  if (process.env.FAKE_NOTION_ERROR) return `ERROR: ${process.env.FAKE_NOTION_ERROR}`;
-  if (cached === edited) return `last_edited_time: ${edited}\nUNCHANGED`;
   const page = process.env.FAKE_NOTION_PAGE || "# 13강 노트\n\n- 캐시는 SRAM으로 만든다\n- DRAM은 SRAM보다 빠르다 (거짓)";
-  return `last_edited_time: ${edited}\n---\n${page}`;
+  const events = [];
+  if (process.env.FAKE_NOTION_NO_TOOL !== "1") {
+    events.push({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu_1", name: tool, input: { id: "x" } }], stop_reason: "tool_use" } });
+    const body = process.env.FAKE_NOTION_ERROR
+      ? process.env.FAKE_NOTION_ERROR
+      : JSON.stringify({ title: "13강 노트", page_last_edited_at: edited, text: page, truncated: process.env.FAKE_NOTION_TRUNC === "1" });
+    events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_1", is_error: !!process.env.FAKE_NOTION_ERROR, content: [{ type: "text", text: body }] }] } });
+  }
+  // The model's own text is never the page: a summary here must not reach the result.
+  events.push({ type: "assistant", message: { content: [{ type: "text", text: "DONE (모델 요약은 쓰이지 않음)" }], stop_reason: "end_turn" } });
+  return events;
 }
 
 function runClaude() {
@@ -179,6 +208,7 @@ function runClaude() {
     return;
   }
   if (argv[0] === "mcp" && argv[1] === "list") return runClaudeMcpList();
+  if (argv[0] === "mcp" && argv[1] === "get") return runClaudeMcpGet(argv[2]);
   if (argv[0] === "auth" && argv[1] === "status") {
     const loggedIn = process.env.FAKE_CLAUDE_LOGGED_OUT !== "1";
     process.stdout.write(JSON.stringify({ loggedIn, authMethod: loggedIn ? "claude.ai" : "none" }));
@@ -248,8 +278,9 @@ function runClaude() {
     process.exit(3);
   }
   const a = answer(stdin, schema);
+  if (notion) for (const ev of notionEvents(flags["--allowedTools"])) emit(ev);
   const text = notion
-    ? notionAnswer(stdin)
+    ? "DONE"
     : ms.includes("badjson")
     ? "이건 JSON이 아님"
     : ms.includes("textlimit")
