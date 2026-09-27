@@ -9,6 +9,7 @@ import {
   SlideSection,
 } from "../types";
 import { sanitizeFilename, formatDate } from "../utils/helpers";
+import { buildOverviewSection, linkConceptNames } from "../core/markdown";
 
 export class NoteGenerator {
   constructor(private llm: LLMProvider) {}
@@ -77,6 +78,14 @@ export class NoteGenerator {
     // running the regex pass once per section over all concepts[]". This
     // matches: every section is rewritten with all known concept names.
     const conceptNames = llmResult.concepts.map((c) => c.name);
+    // Overview body: summary headings demoted one level, concept names
+    // linked (src/core/markdown.ts, shared with the Skill). The overview
+    // block is replaced on re-import; text outside it is kept
+    // (VaultManager.mergeOverviewPreamble).
+    const overviewSection = buildOverviewSection(
+      llmResult.processedSummary || altData.summary,
+      conceptNames
+    );
     const sections = slidesResult.slides
       .map((slide) => this.buildSlideSection(slide, conceptNames))
       .join("\n\n");
@@ -93,6 +102,7 @@ export class NoteGenerator {
     const lectureMarkdown =
       frontmatter +
       `# ${altData.title}\n\n` +
+      overviewSection +
       sections +
       orphanFooter +
       "\n";
@@ -117,14 +127,7 @@ export class NoteGenerator {
    * the multi-managed merge algorithm (Task 1.3).
    */
   private buildSlideSection(slide: SlideSection, conceptNames: string[]): string {
-    let body = slide.commentary;
-    for (const name of conceptNames) {
-      const regex = new RegExp(
-        `(?<!\\[\\[)${this.escapeRegex(name)}(?!\\]\\])`,
-        "gi"
-      );
-      body = body.replace(regex, `[[${name}]]`);
-    }
+    const body = linkConceptNames(slide.commentary, conceptNames);
     const startMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} start -->`;
     const endMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} end -->`;
     return [
@@ -174,10 +177,10 @@ export class NoteGenerator {
     let content = llmResult.processedSummary || altData.summary;
 
     // Insert concept wikilinks
-    for (const concept of llmResult.concepts) {
-      const regex = new RegExp(`(?<!\\[\\[)${this.escapeRegex(concept.name)}(?!\\]\\])`, "gi");
-      content = content.replace(regex, `[[${concept.name}]]`);
-    }
+    content = linkConceptNames(
+      content,
+      llmResult.concepts.map((c) => c.name)
+    );
 
     const lectureMarkdown =
       frontmatter +
@@ -228,9 +231,5 @@ export class NoteGenerator {
       "## 내 메모\n";
 
     return { lectureMarkdown, conceptNotes: [] };
-  }
-
-  private escapeRegex(str: string): string {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 }

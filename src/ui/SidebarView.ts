@@ -489,6 +489,10 @@ class UpdatePreviewModal extends Modal {
     this.renderList("제거 섹션", this.summary.removedSections);
     this.renderList("추가 개념", this.summary.addedConcepts);
     this.renderList("제거 개념", this.summary.removedConcepts);
+    this.renderSlideChanges();
+    for (const note of this.summary.notes ?? []) {
+      contentEl.createEl("p", { text: note });
+    }
 
     const actions = contentEl.createDiv({ cls: "alt2obsidian-update-actions" });
     const cancelBtn = actions.createEl("button", { text: "취소" });
@@ -499,6 +503,40 @@ class UpdatePreviewModal extends Modal {
       cls: "mod-cta",
     });
     confirmBtn.addEventListener("click", () => this.finish(true));
+
+    // Most existing slides would become orphans: likely a different lecture
+    // is being imported onto this note. Require an explicit opt-in.
+    if (this.summary.confirmDeckReplacement) {
+      confirmBtn.disabled = true;
+      const warning = contentEl.createDiv({ cls: "alt2obsidian-update-section" });
+      warning.createEl("p", {
+        text: "기존 슬라이드의 절반 이상이 새 슬라이드와 맞지 않습니다. 다른 강의를 이 노트에 덮어쓰려는 것일 수 있습니다. 맞지 않는 슬라이드의 메모는 노트 끝 '삭제된 슬라이드' 구간으로 옮겨집니다.",
+      });
+      const label = warning.createEl("label");
+      const checkbox = label.createEl("input", { type: "checkbox" });
+      label.appendText(" 이 노트를 새 슬라이드 구성으로 교체하는 것이 맞습니다");
+      checkbox.addEventListener("change", () => {
+        confirmBtn.disabled = !checkbox.checked;
+      });
+      contentEl.appendChild(actions);
+    }
+  }
+
+  private renderSlideChanges(): void {
+    const { slideDrifts, slideReorders, slideInsertions, slideDeletions } = this.summary;
+    if (!slideDrifts && !slideReorders && !slideInsertions && !slideDeletions) return;
+    const fmt = (nums: number[]) =>
+      nums.length > 0 ? ` (슬라이드 ${nums.slice(0, 12).join(", ")}${nums.length > 12 ? " ..." : ""})` : "";
+    const drifts = slideDrifts ?? [];
+    const reorders = slideReorders ?? [];
+    const insertions = slideInsertions ?? [];
+    const deletions = slideDeletions ?? [];
+    this.renderList("슬라이드 변경", [
+      `내용 변경(drift): ${drifts.length}개${fmt(drifts.map((d) => d.slideNum))}`,
+      `순서 이동: ${reorders.length}개${fmt(reorders.map((r) => r.to))}`,
+      `새 슬라이드: ${insertions.length}개${fmt(insertions)}`,
+      `삭제된 슬라이드(orphan): ${deletions.length}개${fmt(deletions.map((d) => d.slideNum))}`,
+    ]);
   }
 
   onClose(): void {

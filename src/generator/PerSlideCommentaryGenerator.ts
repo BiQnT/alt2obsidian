@@ -1,8 +1,8 @@
 // Per-slide LLM commentary generator (plan Task 1.1).
 //
-// Renders each PDF page to a PNG, hashes it with the spike-validated 8-hex
-// SHA-1, and calls the LLM's multimodal endpoint with [prompt, image,
-// transcript-chunk]. Returns SlideSection[] for the assembler (Task 1.2) to
+// Hashes each page's text layer (src/core/slideHash.ts, shared with the
+// Skill CLI), renders the page to a PNG, and calls the LLM's multimodal
+// endpoint with [prompt, image, transcript-chunk]. Returns SlideSection[] for the assembler (Task 1.2) to
 // wrap in `## 📚 슬라이드 N` + `<!-- alt2obs:slide:N hash:H -->` markers.
 //
 // Pattern mirrors junnnnnw00/autonotes' `_process_slide`: one LLM call per
@@ -17,7 +17,10 @@ import {
   VisionImageRef,
 } from "../types";
 import { PdfProcessor } from "../pdf/PdfProcessor";
-import { hashSlidePngBase64 } from "../vault/slideHash";
+import { computeSlideHash } from "../core/slideHash";
+import { renderPrompt } from "../prompts/render";
+import slideCommentarySystemTemplate from "../../prompts/slide-commentary.system.md";
+import slideCommentaryUserTemplate from "../../prompts/slide-commentary.user.md";
 
 export interface PerSlideGenerationOptions {
   /**
@@ -35,6 +38,11 @@ export interface PerSlideGenerationOptions {
    * separate concept notes.
    */
   existingConceptNames: string[];
+  /**
+   * Alt note id. Seeds the slide hash of pages without a text layer
+   * (image-only slides), see `computeSlideHash`.
+   */
+  sourceId: string;
   /** Max render width in px. Default 1024 (matches PdfProcessor default). */
   maxPngWidth?: number;
   /** Override per-slide max output tokens. Default 2048. */
@@ -46,9 +54,6 @@ export interface PerSlideGenerationOptions {
     stage: "rendering" | "hashing" | "calling" | "done"
   ) => void;
 }
-
-const SYSTEM_PROMPT =
-  "You are an academic note-taking assistant for Korean university students. Produce concise, well-structured Korean Markdown for studying. Output only the section body — never section headers.";
 
 function buildSlidePrompt(
   slideNum: number,
@@ -64,16 +69,12 @@ function buildSlidePrompt(
     ? `\n\n[해당 구간 음성 전사 (참고용 — raw 그대로 붙여넣기 금지, 교수님 강조 포인트만 발췌해 큐레이팅하시오)]\n${transcriptChunk.trim()}`
     : "";
 
-  return `다음은 강의 슬라이드 ${slideNum}/${totalSlides}의 이미지입니다. 슬라이드 내용을 보고 학생이 공부하기 좋은 한국어 마크다운 해설을 작성하시오.
-
-규칙:
-- 출력은 마크다운 본문만. 섹션 헤더(\`#\`, \`##\`) 사용 금지 — 호출자가 슬라이드 헤더를 따로 붙입니다.
-- 슬라이드의 핵심 정의는 \`> [!definition] 개념명\` callout으로 표시.
-- 예시/공식/코드는 \`> [!example]\` callout으로 표시.
-- 시험 출제 포인트는 \`> [!important]\` callout으로 표시.
-- 음성 전사가 있으면 교수님이 강조한 1-2개 포인트만 \`> "..."\` 인용 형태로 (raw 덤프 X).
-- 핵심 개념(아래 목록 또는 슬라이드에서 새로 정의된 것)은 \`[[개념명]]\` wikilink로 감싸시오.
-- 분량: 200-500자 한국어. 표지/목차/Thank you 같은 비실질 슬라이드는 한 줄로 짧게.${conceptList}${transcriptBlock}`;
+  return renderPrompt(slideCommentaryUserTemplate, {
+    slideNum,
+    totalSlides,
+    conceptList,
+    transcriptBlock,
+  });
 }
 
 export class PerSlideCommentaryGenerator {
@@ -103,12 +104,14 @@ export class PerSlideCommentaryGenerator {
       };
     }
 
+    const pageTexts = await this.pdfProcessor.getPageTexts(pdfData);
     const transcriptChunks = this.splitTranscriptEvenly(options.transcript, pageCount);
     const slides: SlideSection[] = [];
     const errors: PerSlideGenerationResult["errors"] = [];
     const perSlideWallTimeMs: number[] = [];
     const maxWidth = options.maxPngWidth ?? 1024;
     const maxOutputTokens = options.maxOutputTokens ?? 2048;
+    const systemPrompt = renderPrompt(slideCommentarySystemTemplate, {});
 
     // Circuit breaker: if we hit 3 rate-limit errors in a row even after the
     // retry sleep, the free-tier window is exhausted for this run. Stop the
@@ -133,7 +136,11 @@ export class PerSlideCommentaryGenerator {
         const img: VisionImageRef = images[0];
 
         options.onProgress?.(pageNum, pageCount, "hashing");
-        const hash = await hashSlidePngBase64(img.base64Png);
+        const hash = await computeSlideHash(
+          pageTexts[pageNum - 1] ?? null,
+          pageNum,
+          options.sourceId
+        );
 
         options.onProgress?.(pageNum, pageCount, "calling");
         const prompt = buildSlidePrompt(
@@ -145,7 +152,7 @@ export class PerSlideCommentaryGenerator {
         const commentary = await this.callMultimodalWithRetry(
           prompt,
           img,
-          { systemPrompt: SYSTEM_PROMPT, maxOutputTokens },
+          { systemPrompt, maxOutputTokens },
           pageNum
         );
 

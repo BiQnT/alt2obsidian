@@ -174,7 +174,7 @@ alt_id: "0a471d1c-..."
 (... 슬라이드 N까지 ...)
 ```
 
-마커 형식: `<!-- alt2obs:slide:N hash:<8-hex> start --> ... <!-- end -->`. 해시는 슬라이드 PNG의 SHA-1 8자리로, Alt이 슬라이드를 reorder/insert/delete해도 사용자 메모가 올바른 슬라이드에 따라가도록 보존합니다.
+마커 형식: `<!-- alt2obs:slide:N hash:<8-hex> start --> ... <!-- end -->`. 해시는 정규화한 슬라이드 텍스트의 SHA-1 8자리로 페이지 번호와 무관하며(텍스트가 없는 페이지만 Alt 노트 id와 페이지 번호 기반, `src/core/slideHash.ts`), Alt이 슬라이드를 reorder/insert/delete해도 사용자 메모가 올바른 슬라이드에 따라가도록 보존합니다.
 
 ### 개념 노트
 ```markdown
