@@ -323,24 +323,56 @@ export function parseNotionStream(stdout: string, toolName: string, url: string)
   return out;
 }
 
-/** Claude Code's note that a large tool output was saved to a file instead. */
-const PERSISTED = /persisted-output|Output too large|Full output saved to/i;
+/** Claude Code's wrapper around a large tool output it saved to a file instead. */
+const PERSISTED_WRAPPER = "<persisted-output>";
 
 /**
- * When Claude Code saved a large tool result to a file, the full text from
- * that file. Only a file under `<home>/.claude/projects/<...>/tool-results/`
- * is read (checked on the resolved path); otherwise the result is marked
- * truncated.
+ * Claude Code's project folder name for a working folder: every character
+ * other than a letter, digit or "-" becomes "-" ("/private/tmp/x_y" ->
+ * "-private-tmp-x-y").
  */
-export async function resolvePersistedOutput(text: string, home: string): Promise<{ text: string; persisted: boolean; truncated: boolean }> {
-  if (!PERSISTED.test(text)) return { text, persisted: false, truncated: false };
-  const path = text.match(/Full output saved to:?\s*(\S+)/i)?.[1]?.replace(/[)"'>.,]+$/, "");
+export function claudeProjectKey(dir: string): string {
+  return dir.replace(/[^A-Za-z0-9-]/g, "-");
+}
+
+/** Allowed clock skew between the call start and the saved file's mtime (coarse file-system timestamps). */
+const MTIME_SLACK_MS = 2000;
+
+/**
+ * When Claude Code saved this call's large tool result to a file, the full
+ * text from that file. Only honoured when the result itself starts with
+ * Claude Code's `<persisted-output>` wrapper (the same words inside the
+ * page are page text), and only for a file under
+ * `<home>/.claude/projects/<this call's working folder>/**\/tool-results/`
+ * (checked on the resolved path) written since the call started. Any other
+ * wrapped result is marked truncated.
+ */
+export async function resolvePersistedOutput(
+  text: string,
+  opts: { home: string; workDir: string; callStart: number }
+): Promise<{ text: string; persisted: boolean; truncated: boolean }> {
+  if (!text.trimStart().startsWith(PERSISTED_WRAPPER)) return { text, persisted: false, truncated: false };
+  // Claude Code's line right after the wrapper: "Output too large (...). Full output saved to: <path>".
+  // The path runs to the end of that line (it may hold spaces).
+  const head = text.trimStart().split("\n").slice(0, 3).join("\n");
+  const path = head.match(/Full output saved to:[ \t]*(.+?)[ \t]*$/m)?.[1];
   if (!path) return { text, persisted: true, truncated: true };
   try {
-    const root = await fsp.realpath(join(home, ".claude", "projects"));
+    const root = await fsp.realpath(join(opts.home, ".claude", "projects"));
     const real = await fsp.realpath(path);
     const rel = relative(root, real);
-    if (rel.startsWith("..") || isAbsolute(rel) || !rel.split(sep).includes("tool-results")) return { text, persisted: true, truncated: true };
+    const parts = rel.split(sep);
+    if (rel.startsWith("..") || isAbsolute(rel) || !parts.includes("tool-results")) return { text, persisted: true, truncated: true };
+    // This call's project folder: its working folder, as given or resolved.
+    const keys = new Set([claudeProjectKey(opts.workDir)]);
+    try {
+      keys.add(claudeProjectKey(await fsp.realpath(opts.workDir)));
+    } catch {
+      // the folder may be gone already; the given path still counts
+    }
+    if (!keys.has(parts[0])) return { text, persisted: true, truncated: true };
+    const st = await fsp.stat(real);
+    if (st.mtimeMs < opts.callStart - MTIME_SLACK_MS) return { text, persisted: true, truncated: true };
     return { text: await fsp.readFile(real, "utf8"), persisted: true, truncated: false };
   } catch {
     return { text, persisted: true, truncated: true };
@@ -376,7 +408,7 @@ export function pageFromToolResult(text: string): NotionPage {
     truncated = /"?truncated"?\s*[:=]\s*true/.test(text);
   }
   // Claude Code cuts or saves very large tool outputs and says so.
-  if (/\[truncated\]|output (?:was )?truncated|exceeds maximum allowed tokens|too large to include/i.test(text.slice(-2000)) || PERSISTED.test(text)) truncated = true;
+  if (/\[truncated\]|output (?:was )?truncated|exceeds maximum allowed tokens|too large to include/i.test(text.slice(-2000))) truncated = true;
   return { markdown: markdown.trimEnd() + "\n", lastEdited, truncated };
 }
 
@@ -503,12 +535,60 @@ export function detailsFromMcpJson(json: unknown, server: string): McpServerDeta
   return { scope: "plugin", type, url: typeof entry.url === "string" ? entry.url : null, hasHeaders: !!headers };
 }
 
-/** The server entry of a plugin's .mcp.json under <home>/.claude/plugins (the plugin's own folder), or null. */
+/** Newest first by the x.y.z version in a label ("1.10.0" after "1.9.2"); unversioned last. */
+function newestFirst<T>(items: T[], versionOf: (t: T) => string): T[] {
+  const key = (t: T) => versionOf(t).match(/(\d+)\.(\d+)\.(\d+)/)?.slice(1).map(Number) ?? null;
+  return [...items].sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    if (!ka || !kb) return ka ? -1 : kb ? 1 : 0;
+    for (let i = 0; i < 3; i++) if (ka[i] !== kb[i]) return kb[i] - ka[i];
+    return 0;
+  });
+}
+
+async function serverFromPluginDir(dir: string, server: string): Promise<McpServerDetails | null> {
+  for (const f of [join(dir, ".mcp.json"), join(dir, ".claude-plugin", "plugin.json")]) {
+    try {
+      const json = JSON.parse(await fsp.readFile(f, "utf8"));
+      const d = detailsFromMcpJson(f.endsWith("plugin.json") ? { mcpServers: json?.mcpServers } : json, server);
+      if (d) return d;
+    } catch {
+      // missing or unreadable: the next file
+    }
+  }
+  return null;
+}
+
+/**
+ * The server entry of an installed plugin: the install paths listed in
+ * `<home>/.claude/plugins/installed_plugins.json` (newest version first),
+ * else a walk of `<home>/.claude/plugins` for the plugin's folders, newest
+ * version folder first. Null when none has it.
+ */
 export async function findPluginMcpServer(home: string, plugin: string, server: string): Promise<McpServerDetails | null> {
   const root = join(home, ".claude", "plugins");
-  const found: string[] = [];
+  try {
+    const installed = JSON.parse(await fsp.readFile(join(root, "installed_plugins.json"), "utf8"));
+    const map = (installed?.plugins ?? installed) as Record<string, unknown>;
+    const entries: Array<{ installPath: string; version: string }> = [];
+    for (const [key, list] of Object.entries(map ?? {})) {
+      if (key.split("@")[0] !== plugin || !Array.isArray(list)) continue;
+      for (const e of list as Array<{ installPath?: unknown; version?: unknown }>) {
+        if (typeof e?.installPath === "string") entries.push({ installPath: e.installPath, version: typeof e.version === "string" ? e.version : e.installPath });
+      }
+    }
+    for (const e of newestFirst(entries, (x) => x.version)) {
+      const d = await serverFromPluginDir(e.installPath, server);
+      if (d) return d;
+    }
+    if (entries.length > 0) return null;
+  } catch {
+    // no installed_plugins.json: walk the plugin folders
+  }
+  const dirs: string[] = [];
   const walk = async (dir: string, depth: number) => {
-    if (depth > 6 || found.length > 20) return;
+    if (depth > 6 || dirs.length > 50) return;
     let entries;
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -518,17 +598,13 @@ export async function findPluginMcpServer(home: string, plugin: string, server: 
     for (const e of entries) {
       const p = join(dir, e.name);
       if (e.isDirectory() && e.name !== "node_modules" && !e.name.startsWith(".git")) await walk(p, depth + 1);
-      else if (e.isFile() && e.name === ".mcp.json" && p.split(sep).includes(plugin)) found.push(p);
+      else if (e.isFile() && e.name === ".mcp.json" && p.split(sep).includes(plugin)) dirs.push(dir);
     }
   };
   await walk(root, 0);
-  for (const f of found.sort().reverse()) {
-    try {
-      const d = detailsFromMcpJson(JSON.parse(await fsp.readFile(f, "utf8")), server);
-      if (d) return d;
-    } catch {
-      // unreadable: the next one
-    }
+  for (const dir of newestFirst(dirs, (d) => d.split(sep).pop() ?? "")) {
+    const d = await serverFromPluginDir(dir, server);
+    if (d) return d;
   }
   return null;
 }
@@ -568,13 +644,14 @@ export async function fetchNotionPage(
   provider.plan = { toolName, settingSources, strictConfig, deny: notionDenyList(toolName, others, !!strictConfig) };
   provider.pageUrl = opts.url;
 
+  const callStart = Date.now();
   const res = await provider.call({ prompt: buildNotionFetchPrompt(opts.url), signal: opts.signal });
   const tool = res.structured as NotionToolOutput;
   if (!tool.toolUsed) throw new Error(`Notion 조회 도구(${toolName})가 이번 호출에서 쓰이지 않았습니다. 서버: ${server.name}. 모델 답: ${res.text.slice(0, 200)}`);
   if (!tool.matched) throw new Error(`Notion 조회 도구가 요청한 페이지가 아닌 다른 페이지만 조회했습니다 (서버: ${server.name}).`);
   if (tool.resultText === null) throw new Error("노션 조회 도구의 결과가 출력에 없습니다.");
   if (tool.isError) throw new Error(`노션 페이지를 가져오지 못했습니다: ${tool.resultText.slice(0, 300)}`);
-  const full = await resolvePersistedOutput(tool.resultText, home);
+  const full = await resolvePersistedOutput(tool.resultText, { home, workDir: opts.workDir, callStart });
   const page = pageFromToolResult(full.text);
   if (!page.markdown.trim()) throw new Error("노션 페이지 내용이 비어 있습니다.");
   const warnings: string[] = [];

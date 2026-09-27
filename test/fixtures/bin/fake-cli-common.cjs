@@ -204,7 +204,7 @@ function notionEvents(tool, stdin) {
     const body = process.env.FAKE_NOTION_ERROR
       ? process.env.FAKE_NOTION_ERROR
       : process.env.FAKE_NOTION_PERSISTED
-        ? (fs.writeFileSync(process.env.FAKE_NOTION_PERSISTED, json),
+        ? (process.env.FAKE_NOTION_PERSISTED_NOWRITE === "1" || fs.writeFileSync(process.env.FAKE_NOTION_PERSISTED, json),
           `<persisted-output>\nOutput too large (61.8KB). Full output saved to: ${process.env.FAKE_NOTION_PERSISTED}\n\nPreview (first 2KB):\n${json.slice(0, 40)}\n...\n</persisted-output>`)
         : json;
     events.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_1", is_error: !!process.env.FAKE_NOTION_ERROR, content: [{ type: "text", text: body }] }] } });
