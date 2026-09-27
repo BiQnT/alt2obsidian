@@ -243,6 +243,18 @@ The rest of the note is the same for both sources:
 … (repeat for all N slides) …
 ```
 
+**Key diagrams (spec 4.8).** Unless the user turned it off, every page listed in `keyDiagrams` of the `prep.mjs` output (picked by the plugin's `selectKeyDiagrams`: visual pages whose non-text ink covers at least 30% of the render, at most 8, never cover, contents, closing, build steps or scanned decks; empty without `pdftoppm` renders) gets its image embedded as the last line of its managed block, after a blank line, exactly like the plugin:
+
+```markdown
+<!-- alt2obs:slide:N hash:<8-hex> start -->
+<commentary for slide N>
+
+![[Alt2Obsidian/<subject>/Attachments/<title>-N.png]]
+<!-- alt2obs:slide:N hash:<8-hex> end -->
+```
+
+The image file is written in step 8.
+
 Marker format must match exactly:
 
 - 슬라이드: `<!-- alt2obs:slide:N hash:HHHHHHHH start -->` (single spaces), parsed by `VaultManager.splitMultiManagedNote`. No `dup:` suffix.
@@ -250,12 +262,12 @@ Marker format must match exactly:
 
 ### 8. Write to the vault
 
-Save the assembled markdown to `/tmp/alt2obs-<noteId>/note.md` first. The target is `<vault>/Alt2Obsidian/<subject>/<title>.md`, except for local notes: if a note in `<vault>/Alt2Obsidian/` already has `alt_local_id: "<id>"` in its frontmatter (`grep -rl`), that note is the target wherever it is; if the default target exists but belongs to another lecture (a different `alt_local_id`, or an `alt_id` without `alt_local_id`), use `<title> (<lectureDate>).md` instead and never merge into it. When an older note with only `alt_id` has the same title and date, ask the user whether to link it (add `alt_local_id` to its frontmatter, keep `alt_id`) before using it as the target.
+Save the assembled markdown to `/tmp/alt2obs-<noteId>/note.md` first. The target is `<vault>/Alt2Obsidian/<subject>/Lectures/<title>.md` (the 2.0 layout, spec 4.5; a vault still in the 1.x layout, with lecture notes directly in `<subject>/`, should first run the plugin command "Migrate 1.x vault layout"), except for local notes: if a note in `<vault>/Alt2Obsidian/` already has `alt_local_id: "<id>"` in its frontmatter (`grep -rl`), that note is the target wherever it is; if the default target exists but belongs to another lecture (a different `alt_local_id`, or an `alt_id` without `alt_local_id`), use `<title> (<lectureDate>).md` instead and never merge into it. When an older note with only `alt_id` has the same title and date, ask the user whether to link it (add `alt_local_id` to its frontmatter, keep `alt_id`) before using it as the target.
 
 **If the target does not exist:**
 
 ```
-mkdir -p "<vault>/Alt2Obsidian/<subject>"
+mkdir -p "<vault>/Alt2Obsidian/<subject>/Lectures"
 ```
 
 Then `Write` `note.md` to the target unchanged.
@@ -278,10 +290,17 @@ Then `Write` `note.md` to the target unchanged.
 
    then copy `merged.md` over the target (`cp`). If `merge-note.mjs` exits non-zero, relay its message and leave the target untouched.
 
-Copy the PDF to its sibling location (Task 1.4 layout):
+Copy the PDF next to the note (the Synced Viewer opens `<note>.pdf`):
 
 ```bash
-cp "/tmp/alt-deck-<noteId>.pdf" "<vault>/Alt2Obsidian/<subject>/<title>.pdf"
+cp "/tmp/alt-deck-<noteId>.pdf" "<vault>/Alt2Obsidian/<subject>/Lectures/<title>.pdf"
+```
+
+Save the key diagram images that step 7 embedded (one `pdftoppm` call per page in `keyDiagrams`; the same path on every re-import, so an image is replaced, never duplicated):
+
+```bash
+mkdir -p "<vault>/Alt2Obsidian/<subject>/Attachments"
+pdftoppm -png -r 150 -f <page> -l <page> -singlefile "/tmp/alt-deck-<noteId>.pdf" "<vault>/Alt2Obsidian/<subject>/Attachments/<title>-<page>"
 ```
 
 ### 9. Clean up
@@ -295,6 +314,28 @@ rm -rf "<dir>" "/tmp/alt2obs-<noteId>"
 ### 10. Report completion
 
 Tell the user: file path written, whether it was a new note or a merge (with the change counts), slide count, the concept notes written, any slides where you found the content was unusually thin (e.g. a totally blank slide), and a one-line note that the Synced Viewer can be opened from Obsidian's command palette.
+
+## Note verification (spec 4.6, same tokens as the plugin)
+
+When the user asks to check their own notes (for example a Notion page exported as markdown, or text they paste) against a lecture already in the vault, run the plugin's verifier steps. The script does the claim split and the evidence retrieval (no tokens); you only judge, batch by batch, exactly the prompts the plugin sends. Never edit the user's note.
+
+1. Inputs: the user's note file (`<noteFile>`; a Notion page: export it as Markdown, or fetch it with the Notion MCP tool and save the page's raw markdown without summarizing), the lecture note `<vault>/Alt2Obsidian/<subject>/Lectures/<lecture>.md` and its sibling PDF. For a local Alt note also export the bundle (step 1A) and read the note's `alt_alignment` frontmatter value.
+2. Prepare:
+
+   ```bash
+   node "$REPO/scripts/phase2/verify-prep.mjs" prep "<vault>/Alt2Obsidian/<subject>/Lectures/<lecture>.pdf" "<noteFile>" --lecture "<lecture>" --out "/tmp/alt2obs-verify-<lecture>" [--bundle "<dir>/bundle.json" --alignment "<alt_alignment>"]
+   ```
+
+   It prints `{"claims","judged","scriptOnly","likelyTrue","uncoveredSlides","batches":[{"file","ids"}],"missing","estimate"}`. Tell the user the claim count, how many go to judgment and the estimate, and ask before continuing.
+3. Judge: read `system.md` once (the verdict rules and the JSON schema), then each `batch-<n>.md` in order. For each batch write one answer object `{"results":[{"id","v","r"}]}` covering exactly the ids of that batch, following `system.md` (verdicts `맞음`, `틀림`, `근거 없음`, `전사 불확실`; judge only from the evidence in the batch). Collect the answers as a JSON array in `/tmp/alt2obs-verify-<lecture>/answers.json`. If `missing` is not null, answer `missing.md` the same way into `/tmp/alt2obs-verify-<lecture>/missing.json`.
+4. Render and write:
+
+   ```bash
+   node "$REPO/scripts/phase2/verify-prep.mjs" render "/tmp/alt2obs-verify-<lecture>" --answers "/tmp/alt2obs-verify-<lecture>/answers.json" [--missing "/tmp/alt2obs-verify-<lecture>/missing.json"] --source "<[[note path]] or Notion URL or 붙여넣기>" --existing "<vault>/Alt2Obsidian/<subject>/Verification/<lecture> verification.md" > "/tmp/alt2obs-verify-<lecture>/out.md"
+   ```
+
+   then `mkdir -p "<vault>/Alt2Obsidian/<subject>/Verification"` and copy `out.md` to `<vault>/Alt2Obsidian/<subject>/Verification/<lecture> verification.md`. A re-run keeps what the user wrote below the managed block. Delete `/tmp/alt2obs-verify-<lecture>` afterwards (it holds the user's note).
+5. Report the counts (맞음, 틀림, 근거 없음, 전사 불확실, 누락 후보) and every `틀림` card.
 
 ## Hash compat caveat (always include in completion message)
 

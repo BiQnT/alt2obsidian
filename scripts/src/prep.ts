@@ -18,13 +18,13 @@
 //   --no-render             or skips rendering (image ratio and image signal null)
 //   --existing <note.md>    previous note: slides with the same text hash and
 //                           image signal are marked "reuse"
-// Prints {"scanned","transcriptChars","pages":[...],"batches":[[...]],"alignment"}.
+// Prints {"scanned","transcriptChars","pages":[...],"batches":[[...]],"keyDiagrams":[...],"alignment"}.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { analyzeSlides, GrayImage } from "../../src/core/prep/SlideAnalyzer";
+import { analyzeSlides, GrayImage, selectKeyDiagrams } from "../../src/core/prep/SlideAnalyzer";
 import { ANALYSIS_LONG_EDGE, extractPageLayouts, layoutAlignmentText, parsePgm } from "../../src/core/prep/pageLayout";
 import { alignLecture } from "../../src/pipeline/alignment";
 import { TranscriptSegment } from "../../src/sources/types";
@@ -119,6 +119,8 @@ async function main(): Promise<void> {
         transcriptChars: plan.transcriptChars,
         pages,
         batches: plan.batches.map((b) => b.pages),
+        // Pages to save as images and embed (spec 4.8); empty without renders.
+        keyDiagrams: selectKeyDiagrams(plan.slides, plan.scanned),
         alignment: alignment
           ? {
               value: alignment.value,

@@ -284,6 +284,12 @@ async function analyzeSlides(layouts, grays, opts) {
   }
   return { slides, scanned };
 }
+var MAX_KEY_DIAGRAMS = 8;
+function selectKeyDiagrams(slides, scanned, max = MAX_KEY_DIAGRAMS) {
+  if (scanned)
+    return [];
+  return slides.filter((s) => s.kind === "visual" && s.dupOf === null && s.imageRatio !== null && s.imageRatio >= VISUAL_RATIO).sort((a, b) => (b.imageRatio ?? 0) - (a.imageRatio ?? 0) || a.page - b.page).slice(0, max).map((s) => s.page).sort((a, b) => a - b);
+}
 function templateCommentary(slide, deckTitle) {
   if (slide.dupOf !== null) {
     return `\uB2E4\uC74C \uC2AC\uB77C\uC774\uB4DC\uC640 \uAC19\uC740 \uB0B4\uC6A9\uC785\uB2C8\uB2E4. \uD574\uC124\uC740 [[#\u{1F4DA} \uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}|\uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}]]\uC744 \uBCF4\uC138\uC694.`;
@@ -1282,6 +1288,8 @@ async function main() {
         transcriptChars: plan.transcriptChars,
         pages,
         batches: plan.batches.map((b) => b.pages),
+        // Pages to save as images and embed (spec 4.8); empty without renders.
+        keyDiagrams: selectKeyDiagrams(plan.slides, plan.scanned),
         alignment: alignment ? {
           value: alignment.value,
           spans: alignment.result.spans.map((s) => ({ slide: s.slide, startMs: s.startMs, endMs: s.endMs, confidence: s.confidence })),

@@ -284,42 +284,73 @@ export async function runVerification(
       opts.onProgress?.({ batch: p.batch, batches: p.batches, judged: p.done, total: plan.judged.length, retry: p.retry, step: "judge" }),
   });
 
+  let missing: MissingCandidate[] = [];
+  const missingPrompt = buildMissingPrompt(plan);
+  if (missingPrompt) {
+    opts.onProgress?.({ batch: plan.batches.length, batches: plan.batches.length, judged: done.size, total: plan.judged.length, retry: false, step: "missing" });
+    try {
+      missing = await llm.generateJSON(missingPrompt, (raw) => checkMissingAnswer(raw, plan), { schema: MISSING_SCHEMA, signal: opts.signal });
+    } catch (e) {
+      if (isAbortError(e) || opts.signal?.aborted) throw e;
+      warnings.push(`누락 탐지 실패: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return assembleResult(plan, done, failures, missing, warnings);
+}
+
+/** Missing candidates from an answer: only slides that were offered, once each, in deck order. */
+export function checkMissingAnswer(raw: unknown, plan: VerifyPlan): MissingCandidate[] {
+  const list = (raw as { missing?: unknown })?.missing;
+  if (!Array.isArray(list)) throw new Error("missing 배열이 없음");
+  const allowed = new Map(plan.uncovered.map((u) => [u.slide, u]));
+  const out: MissingCandidate[] = [];
+  for (const it of list as Array<{ s?: unknown; r?: unknown }>) {
+    const u = allowed.get(Number(it?.s));
+    if (!u || out.some((o) => o.slide === u.slide)) continue;
+    out.push({ slide: u.slide, title: u.title, reason: typeof it.r === "string" ? it.r.trim().slice(0, REASON_MAX) : "" });
+  }
+  return out.sort((a, b) => a.slide - b.slide);
+}
+
+/** Verdict per claim: the script's, the model's, or none with the failure reason. */
+function assembleResult(plan: VerifyPlan, done: Map<number, JudgeItem>, failures: Map<number, string>, missing: MissingCandidate[], warnings: string[]): VerifyResult {
   const items: VerifiedClaim[] = plan.claims.map((e) => {
     if (e.noEvidence) return { evidence: e, verdict: "근거 없음", reason: "슬라이드와 전사에서 겹치는 용어를 찾지 못했습니다 (스크립트 판정).", byScript: true };
     const d = done.get(e.claim.id);
     if (d) return { evidence: e, verdict: d.v, reason: d.r, byScript: false };
     return { evidence: e, verdict: null, reason: failures.get(e.claim.id) ?? "응답에 이 주장이 없음", byScript: false };
   });
+  const failedCount = items.filter((i) => i.verdict === null).length;
+  const out = [...warnings];
+  if (failedCount > 0) out.push(`주장 ${failedCount}개는 판정하지 못했습니다.`);
+  return { lecture: plan.lecture, items, missing, warnings: out };
+}
 
+/**
+ * Result from answers produced elsewhere (the Skill judges the same batch
+ * prompts in its own session): every `{"results":[...]}` answer is checked
+ * like a plugin answer; claims without a valid verdict are reported.
+ */
+export function resultFromAnswers(plan: VerifyPlan, answers: unknown[], missingAnswer?: unknown): VerifyResult {
+  const done = new Map<number, JudgeItem>();
+  const failures = new Map<number, string>();
+  for (const batch of plan.batches) {
+    for (const raw of answers) {
+      const { ok } = checkJudgeAnswer(raw, batch);
+      for (const [id, item] of ok) if (!done.has(id)) done.set(id, item);
+    }
+    for (const e of batch) if (!done.has(e.claim.id)) failures.set(e.claim.id, "답에 이 주장이 없음");
+  }
+  const warnings: string[] = [];
   let missing: MissingCandidate[] = [];
-  const missingPrompt = buildMissingPrompt(plan);
-  if (missingPrompt) {
-    opts.onProgress?.({ batch: plan.batches.length, batches: plan.batches.length, judged: done.size, total: plan.judged.length, retry: false, step: "missing" });
+  if (missingAnswer !== undefined) {
     try {
-      const allowed = new Map(plan.uncovered.map((u) => [u.slide, u]));
-      missing = await llm.generateJSON(
-        missingPrompt,
-        (raw) => {
-          const list = (raw as { missing?: unknown })?.missing;
-          if (!Array.isArray(list)) throw new Error("missing 배열이 없음");
-          const out: MissingCandidate[] = [];
-          for (const it of list as Array<{ s?: unknown; r?: unknown }>) {
-            const u = allowed.get(Number(it?.s));
-            if (!u || out.some((o) => o.slide === u.slide)) continue;
-            out.push({ slide: u.slide, title: u.title, reason: typeof it.r === "string" ? it.r.trim().slice(0, REASON_MAX) : "" });
-          }
-          return out.sort((a, b) => a.slide - b.slide);
-        },
-        { schema: MISSING_SCHEMA, signal: opts.signal }
-      );
+      missing = checkMissingAnswer(missingAnswer, plan);
     } catch (e) {
-      if (isAbortError(e) || opts.signal?.aborted) throw e;
       warnings.push(`누락 탐지 실패: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  const failedCount = items.filter((i) => i.verdict === null).length;
-  if (failedCount > 0) warnings.push(`주장 ${failedCount}개는 판정하지 못했습니다.`);
-  return { lecture: plan.lecture, items, missing, warnings };
+  return assembleResult(plan, done, failures, missing, warnings);
 }
 
 // ---- output note ----
