@@ -155,13 +155,14 @@ console.log(`PASS: evidence (slides top 2, aligned transcript top 2), unmatched 
     "# 캐시",
     "- 캐시는 최근에 쓴 블록을 프로세서 가까이에 둔다",
     "- 그림으로 보면 이해가 쉽다",
+    "- 이것은 거짓으로 적은 문장이다",
     "# 쓰기 정책",
     "- 두 가지 방식이 있다",
   ].join("\n");
   const kp = m.planVerification({ lecture: "13강", noteMarkdown: ko, slideTexts: slides, transcript: null });
   const k = (t) => kp.claims.find((c) => c.claim.text.includes(t));
   assert.equal(kp.unmatched.length, 0, "every Korean claim reaches the judge");
-  assert.equal(kp.judged.length, 5);
+  assert.equal(kp.judged.length, 6);
   assert.equal(k("공간 지역성").source, "direct", "technical Korean terms find the English slide through the glossary");
   assert.equal(k("공간 지역성").slides[0].slide, 4);
   assert.equal(k("최근에 참조").source, "neighbour", "one shared term is weak: the neighbour's strong match is used");
@@ -180,9 +181,12 @@ console.log(`PASS: evidence (slides top 2, aligned transcript top 2), unmatched 
   try {
     const kllm = new m.ClaudeCliProvider({ bin: FAKE_CLAUDE, model: "sonnet", effort: "medium", timeoutMs: 20000, workDir: kjob, ownsWorkDir: false });
     const kres = await m.runVerification(kp, kllm);
-    assert.equal(kres.items.length, 5);
+    assert.equal(kres.items.length, 6);
     assert.ok(kres.items.every((i) => i.verdict !== null), "the (fake) judge gave every Korean claim a verdict");
     assert.equal(kres.unmatched.length, 0);
+    const kmd = m.renderVerificationNote(kres, { source: "x", date: "2026-09-28", usageLine: null, model: "fake" });
+    assert.match(kmd, /> \[!failure\] 틀림 \(문맥 근거, 확인 필요\)\n> "이것은 거짓으로 적은 문장이다"/, "a 틀림 on context evidence is flagged for a look");
+    assert.match(kmd, /> \[!success\]- 맞음 \(문맥 근거\)/);
   } finally {
     m.removeJobDir(kjob);
     ks.cleanup();
@@ -220,6 +224,8 @@ console.log(`PASS: evidence (slides top 2, aligned transcript top 2), unmatched 
   assert.equal(m.lectureLink({ title: "13강", path: "A/CS/Lectures/13강.md" }, 3), "[[A/CS/Lectures/13강#📚 슬라이드 3|13강 · 슬라이드 3]]");
   assert.equal(m.lectureLink({ title: "13강", path: "A/CS/Lectures/13강.md" }), "[[A/CS/Lectures/13강|13강]]");
   assert.equal(m.lectureLink({ title: "13강", path: null }, 3), "[[13강#📚 슬라이드 3|13강 · 슬라이드 3]]");
+  assert.equal(m.frontmatterLectureLink({ title: "13강", path: "A/CS/Lectures/13강.md" }), "[[A/CS/Lectures/13강|13강]]");
+  assert.equal(m.frontmatterLectureLink({ title: "[OS] 3강 #2", path: "A/C#/Lectures/[OS] 3강 #2.md" }), "[[OS 3강 2]]", "frontmatter never gets a percent-encoded Markdown link");
   assert.equal(
     m.lectureLink({ title: "[OS] 3강 #2", path: "A/C#/Lectures/[OS] 3강 #2.md" }, 5),
     "[OS 3강 2 · 슬라이드 5](A/C%23/Lectures/%5BOS%5D%203%EA%B0%95%20%232.md#%F0%9F%93%9A%20%EC%8A%AC%EB%9D%BC%EC%9D%B4%EB%93%9C%205)",

@@ -1432,6 +1432,10 @@ function lectureLink(ref, slide) {
   const url = file.split("/").map(encodeURIComponent).join("/") + (heading ? `#${encodeURIComponent(heading)}` : "");
   return `[${alias}](${url})`;
 }
+function frontmatterLectureLink(ref) {
+  const link = lectureLink(ref);
+  return link.startsWith("[[") ? link : `[[${aliasText(ref.title)}]]`;
+}
 function refOf(result) {
   return { title: result.lecture, path: result.notePath };
 }
@@ -1440,6 +1444,11 @@ function evidenceLinks(ref, e) {
   for (const t of e.transcript)
     parts.push(`[${formatTimestamp(t.startMs)}]${t.slide ? ` (\uC2AC\uB77C\uC774\uB4DC ${t.slide})` : ""}`);
   return parts.join(" \xB7 ");
+}
+function contextNote(it) {
+  if (it.evidence.source === "direct")
+    return "";
+  return it.verdict === "\uD2C0\uB9BC" ? " (\uBB38\uB9E5 \uADFC\uAC70, \uD655\uC778 \uD544\uC694)" : " (\uBB38\uB9E5 \uADFC\uAC70)";
 }
 function quote(text) {
   return text.replace(/\s+/g, " ").replace(/^\[!/, "[\\!").replace(/<!--/g, "&lt;!--").trim();
@@ -1450,7 +1459,7 @@ function renderVerificationNote(result, meta) {
   const ref = refOf(result);
   const fm = [
     "---",
-    `lecture: ${JSON.stringify(lectureLink(ref))}`,
+    `lecture: ${JSON.stringify(frontmatterLectureLink(ref))}`,
     `verified_source: ${JSON.stringify(meta.source)}`,
     `date: "${meta.date}"`,
     `source: "alt2obsidian-verify"`,
@@ -1481,7 +1490,7 @@ function renderVerificationNote(result, meta) {
     for (const it of items) {
       const links = evidenceLinks(ref, it.evidence);
       body.push(
-        `> [!${sec.callout}]${sec.fold ? "-" : ""} ${label}${it.evidence.source !== "direct" ? " (\uBB38\uB9E5 \uADFC\uAC70)" : ""}`,
+        `> [!${sec.callout}]${sec.fold ? "-" : ""} ${label}${contextNote(it)}`,
         `> "${quote(it.evidence.claim.text)}"`,
         `> ${it.reason || "(\uC774\uC720 \uC5C6\uC74C)"}`,
         ...links ? [`> \uADFC\uAC70: ${links}`] : [],

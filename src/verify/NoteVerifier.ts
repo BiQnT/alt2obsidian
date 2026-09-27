@@ -421,6 +421,15 @@ export function lectureLink(ref: LectureRef, slide?: number): string {
   return `[${alias}](${url})`;
 }
 
+/**
+ * Frontmatter form: a wikilink (properties render no Markdown links). A path
+ * with # ^ [ ] | falls back to the title with those characters removed.
+ */
+export function frontmatterLectureLink(ref: LectureRef): string {
+  const link = lectureLink(ref);
+  return link.startsWith("[[") ? link : `[[${aliasText(ref.title)}]]`;
+}
+
 function refOf(result: VerifyResult): LectureRef {
   return { title: result.lecture, path: result.notePath };
 }
@@ -429,6 +438,12 @@ function evidenceLinks(ref: LectureRef, e: ClaimEvidence): string {
   const parts = e.slides.map((h) => lectureLink(ref, h.slide));
   for (const t of e.transcript) parts.push(`[${formatTimestamp(t.startMs)}]${t.slide ? ` (슬라이드 ${t.slide})` : ""}`);
   return parts.join(" · ");
+}
+
+/** Label suffix for a verdict made on context evidence: a 틀림 there needs a look. */
+function contextNote(it: VerifiedClaim): string {
+  if (it.evidence.source === "direct") return "";
+  return it.verdict === "틀림" ? " (문맥 근거, 확인 필요)" : " (문맥 근거)";
 }
 
 /** Quote safe inside a callout: one line, no leading callout syntax. */
@@ -451,7 +466,7 @@ export function renderVerificationNote(result: VerifyResult, meta: VerificationM
   const ref = refOf(result);
   const fm = [
     "---",
-    `lecture: ${JSON.stringify(lectureLink(ref))}`,
+    `lecture: ${JSON.stringify(frontmatterLectureLink(ref))}`,
     `verified_source: ${JSON.stringify(meta.source)}`,
     `date: "${meta.date}"`,
     `source: "alt2obsidian-verify"`,
@@ -480,7 +495,7 @@ export function renderVerificationNote(result: VerifyResult, meta: VerificationM
     for (const it of items) {
       const links = evidenceLinks(ref, it.evidence);
       body.push(
-        `> [!${sec.callout}]${sec.fold ? "-" : ""} ${label}${it.evidence.source !== "direct" ? " (문맥 근거)" : ""}`,
+        `> [!${sec.callout}]${sec.fold ? "-" : ""} ${label}${contextNote(it)}`,
         `> "${quote(it.evidence.claim.text)}"`,
         `> ${it.reason || "(이유 없음)"}`,
         ...(links ? [`> 근거: ${links}`] : []),

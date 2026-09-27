@@ -188,6 +188,19 @@ assert.deepEqual(raced.skipped.map((s) => s.reason), [M.COLLISION_REASON]);
   assert.deepEqual([...where].sort(), ["B/S/n.md", "B/S/n.pdf"], "both where they were");
   assert.equal(res.moved.length, 0);
   assert.deepEqual(res.skipped.map((x) => x.from), ["B/S/n.md", "B/S/n.pdf"]);
+  // The PDF cannot be moved back either: the result says where it is.
+  const where2 = new Set(["B/S/n.md", "B/S/n.pdf"]);
+  const stuck = await M.applyLayoutMigration(M.planLayoutMigration("B", [{ path: "B/S/n.md", isLectureNote: true }, { path: "B/S/n.pdf" }]), {
+    exists: (p) => where2.has(p),
+    ensureFolder: async () => {},
+    rename: async (from, to) => {
+      if (from.endsWith(".md") || from.startsWith("B/S/Lectures/")) throw new Error("locked");
+      where2.delete(from);
+      where2.add(to);
+    },
+  });
+  assert.deepEqual(stuck.moved.map((x) => x.to), ["B/S/Lectures/n.pdf"], "the PDF that stayed moved is reported as moved");
+  assert.match(stuck.skipped.find((x) => x.from === "B/S/n.md").reason, /PDF는 B\/S\/Lectures\/n\.pdf에 있고 되돌리지 못했습니다/);
   // A PDF target taken after the dry run: the whole unit stays.
   where.add("B/S/Lectures/n.pdf");
   calls.length = 0;
