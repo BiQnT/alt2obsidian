@@ -122,6 +122,34 @@ const segments = spoken.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 50
   console.log("PASS: per-slide chunks follow the alignment, not an even split");
 }
 
+// ---- textless slides ----
+{
+  // Scanned or image-only deck: no text to match, even split instead.
+  const timed = segments.map((s) => ({ ...s, speaker: "" }));
+  assert.equal(m.alignLecture(slides.map(() => ""), timed), null, "image-only deck");
+  assert.equal(m.alignLecture(slides, timed, { scanned: true }), null, "scanned deck");
+  assert.equal(m.alignLecture(["Page Tables page table entry", "", "", "", "", "Replacement LRU FIFO clock"], timed), null, "under half of the slides have text");
+  // Textless slides inside a text deck share the talk that matches no slide text.
+  const deck = [slides[0], slides[1], "", "   ", slides[4], slides[5]];
+  const pics = [
+    [1, "welcome to lecture five about virtual memory"],
+    [2, "a page table maps virtual pages to physical frames"],
+    [2, "each page table entry has a valid bit"],
+    ...Array.from({ length: 8 }, (_, i) => [3, `look at this picture, the arrows go from here to there, number ${i}`]),
+    [5, "for replacement we can use LRU or FIFO"],
+    [5, "the clock algorithm approximates LRU cheaply"],
+    [6, "to wrap up, the key takeaways are on homework five"],
+  ];
+  const picSegs = pace(pics).map(([, text], i) => ({ startMs: i * 5000, endMs: i * 5000 + 4800, text, speaker: "" }));
+  const al = m.alignLecture(deck, picSegs);
+  assert.ok(al, "a text deck with a few textless slides is aligned");
+  assert.ok(al.chunks[2] && al.chunks[3], `both textless slides get talk: ${JSON.stringify(al.chunks.map((c) => (c ? c.slice(0, 20) : null)))}`);
+  assert.ok(al.chunks[2].includes("picture") && al.chunks[3].includes("picture"));
+  const onSlide2 = (al.chunks[1].match(/picture/g) ?? []).length;
+  assert.ok(onSlide2 <= 3, `most unmatched talk goes to the textless slides, not the neighbour (${onSlide2} on slide 2)`);
+  console.log("PASS: textless slides: scanned or mostly image-only decks fall back to the even split; textless slides in a text deck share the unmatched talk");
+}
+
 // ---- alignLecture: timestamps required ----
 {
   const timed = segments.map((s) => ({ ...s, speaker: "" }));

@@ -835,7 +835,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         const existingNote = settings.generation.onlyChangedSlides ? await vm.readNoteIfExists(notePath) : null;
         // Timestamped transcript (local sources): aligned to the slides, no tokens (spec 4.3).
         slideTexts = layouts.map(layoutAlignmentText);
-        alignment = alignLecture(slideTexts, preview.bundle?.transcript);
+        alignment = alignLecture(slideTexts, preview.bundle?.transcript, { scanned: analysis.scanned });
         plan = planDeck({
           ...analysis,
           layouts,

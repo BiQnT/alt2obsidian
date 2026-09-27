@@ -581,14 +581,44 @@ function emissionScores(slideTexts, segments, p = DEFAULT_ALIGNER_PARAMS) {
   const damp = p.damping * typical;
   return raw.map((scores, i) => scores.map((s) => s / (bests[i] + damp)));
 }
-function transitionCost(from, to, p) {
+var TEXTLESS_BONUS = 0.05;
+var MIN_SLIDE_TOKENS = 3;
+function textSlideMask(slideTexts) {
+  return slideTexts.map((t) => alignTokens(t).length >= MIN_SLIDE_TOKENS);
+}
+function transitionCost(from, to, p, textBefore) {
   if (to === from)
     return 0;
   if (to === from + 1)
     return p.nextCost;
   if (to > from)
-    return p.nextCost + p.skipCost * (to - from - 1);
+    return p.nextCost + p.skipCost * (textBefore[to] - textBefore[from + 1]);
   return p.backCost + p.backPerSlide * (from - to);
+}
+function spreadTextless(path, isText) {
+  const n = path.length;
+  let i = 0;
+  while (i < n) {
+    if (isText[path[i]]) {
+      i++;
+      continue;
+    }
+    let a = path[i];
+    while (a > 0 && !isText[a - 1])
+      a--;
+    let b = path[i];
+    while (b + 1 < isText.length && !isText[b + 1])
+      b++;
+    let k = i;
+    while (k < n && path[k] >= a && path[k] <= b)
+      k++;
+    const len = k - i;
+    const slides = b - a + 1;
+    if (slides > 1)
+      for (let q = 0; q < len; q++)
+        path[i + q] = a + Math.min(slides - 1, Math.floor(q * slides / len));
+    i = k;
+  }
 }
 function alignTranscript(slideTexts, segments, params = {}) {
   const p = { ...DEFAULT_ALIGNER_PARAMS, ...params };
@@ -597,10 +627,18 @@ function alignTranscript(slideTexts, segments, params = {}) {
   if (m === 0 || n === 0)
     return { spans: [], segmentSlides: [] };
   const e = emissionScores(slideTexts, segments, p);
+  const isText = textSlideMask(slideTexts);
+  const textBefore = new Int32Array(m + 1);
+  for (let j = 0; j < m; j++)
+    textBefore[j + 1] = textBefore[j] + (isText[j] ? 1 : 0);
+  for (const row of e)
+    for (let j = 0; j < m; j++)
+      if (!isText[j])
+        row[j] = p.offEmission + TEXTLESS_BONUS;
   let on = new Float64Array(m);
   let off = new Float64Array(m);
   for (let j = 0; j < m; j++) {
-    const enter = j === 0 ? 0 : (p.nextCost + p.skipCost * (j - 1)) * 0.5;
+    const enter = j === 0 ? 0 : (p.nextCost + p.skipCost * textBefore[j]) * 0.5;
     on[j] = e[0][j] - enter;
     off[j] = p.offEmission - p.offCost - enter;
   }
@@ -624,7 +662,7 @@ function alignTranscript(slideTexts, segments, params = {}) {
       let v = -Infinity;
       let arg = k;
       for (let j = 0; j < m; j++) {
-        const c = best[j] - transitionCost(j, k, p);
+        const c = best[j] - transitionCost(j, k, p, textBefore);
         if (c > v) {
           v = c;
           arg = bestState[j];
@@ -658,6 +696,7 @@ function alignTranscript(slideTexts, segments, params = {}) {
   for (let i = n - 1; i > 0; i--)
     states[i - 1] = back[i][states[i]];
   const path = states.map((st) => st % m);
+  spreadTextless(path, isText);
   const spans = [];
   let start = 0;
   for (let i = 1; i <= n; i++) {
@@ -734,9 +773,13 @@ function finish(result, segments, slideCount, llmChanged) {
     llmChanged
   };
 }
-function alignLecture(slideTexts, segments) {
+var MIN_TEXT_SLIDE_SHARE = 0.5;
+function alignLecture(slideTexts, segments, opts = {}) {
   const timed = timedSegments(segments);
-  if (!timed || slideTexts.length === 0)
+  if (!timed || slideTexts.length === 0 || opts.scanned)
+    return null;
+  const textSlides = textSlideMask(slideTexts).filter(Boolean).length;
+  if (textSlides < slideTexts.length * MIN_TEXT_SLIDE_SHARE)
     return null;
   return finish(alignTranscript(slideTexts, timed), timed, slideTexts.length, 0);
 }
@@ -1173,7 +1216,7 @@ async function main() {
     const analysis = await analyzeSlides(layouts, grays, { sourceId, imageRule });
     const bundleFile = option(args, "--bundle");
     const segments = bundleFile ? JSON.parse(readFileSync(bundleFile, "utf8")).transcript : void 0;
-    const alignment = alignLecture(layouts.map(layoutAlignmentText), segments);
+    const alignment = alignLecture(layouts.map(layoutAlignmentText), segments, { scanned: analysis.scanned });
     const transcriptText = transcriptFile ? readFileSync(transcriptFile, "utf8") : segments ? segments.map((s) => s.text).join("\n") : null;
     const plan = planDeck({
       ...analysis,

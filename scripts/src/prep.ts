@@ -87,7 +87,7 @@ async function main(): Promise<void> {
     const analysis = await analyzeSlides(layouts, grays, { sourceId, imageRule });
     const bundleFile = option(args, "--bundle");
     const segments: TranscriptSegment[] | undefined = bundleFile ? JSON.parse(readFileSync(bundleFile, "utf8")).transcript : undefined;
-    const alignment = alignLecture(layouts.map(layoutAlignmentText), segments);
+    const alignment = alignLecture(layouts.map(layoutAlignmentText), segments, { scanned: analysis.scanned });
     const transcriptText = transcriptFile ? readFileSync(transcriptFile, "utf8") : segments ? segments.map((s) => s.text).join("\n") : null;
     const plan = planDeck({
       ...analysis,

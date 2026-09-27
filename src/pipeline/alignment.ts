@@ -14,6 +14,7 @@ import {
   formatAlignment,
   LOW_CONFIDENCE,
   TimedSegment,
+  textSlideMask,
 } from "../core/prep/TranscriptAligner";
 import alignmentCheckTemplate from "../../prompts/alignment-check.md";
 
@@ -58,10 +59,23 @@ function finish(result: AlignmentResult, segments: TimedSegment[], slideCount: n
   };
 }
 
-/** Aligns when the transcript has timestamps; null otherwise (even split applies). */
-export function alignLecture(slideTexts: string[], segments: TranscriptSegment[] | undefined): LectureAlignment | null {
+/** Below this share of slides with text, the deck cannot be aligned by text. */
+export const MIN_TEXT_SLIDE_SHARE = 0.5;
+
+/**
+ * Aligns when the transcript has timestamps and the deck has a text layer;
+ * null otherwise (the even split applies): URL source, scanned or mostly
+ * image-only decks.
+ */
+export function alignLecture(
+  slideTexts: string[],
+  segments: TranscriptSegment[] | undefined,
+  opts: { scanned?: boolean } = {}
+): LectureAlignment | null {
   const timed = timedSegments(segments);
-  if (!timed || slideTexts.length === 0) return null;
+  if (!timed || slideTexts.length === 0 || opts.scanned) return null;
+  const textSlides = textSlideMask(slideTexts).filter(Boolean).length;
+  if (textSlides < slideTexts.length * MIN_TEXT_SLIDE_SHARE) return null;
   return finish(alignTranscript(slideTexts, timed), timed, slideTexts.length, 0);
 }
 

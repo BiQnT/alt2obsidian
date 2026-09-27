@@ -228,11 +228,51 @@ export function emissionScores(slideTexts: string[], segments: TimedSegment[], p
   return raw.map((scores, i) => scores.map((s) => s / (bests[i] + damp)));
 }
 
-function transitionCost(from: number, to: number, p: AlignerParams): number {
+const TEXTLESS_BONUS = 0.05;
+
+/** A slide needs this many tokens to be matched by its text. */
+export const MIN_SLIDE_TOKENS = 3;
+
+/** Slides with enough text to be matched (textless: image-only or scanned pages). */
+export function textSlideMask(slideTexts: string[]): boolean[] {
+  return slideTexts.map((t) => alignTokens(t).length >= MIN_SLIDE_TOKENS);
+}
+
+/**
+ * `textBefore[j]` = text slides among 0..j-1. Skipping a textless slide is
+ * free: nothing in the transcript can show it was shown.
+ */
+function transitionCost(from: number, to: number, p: AlignerParams, textBefore: Int32Array): number {
   if (to === from) return 0;
   if (to === from + 1) return p.nextCost;
-  if (to > from) return p.nextCost + p.skipCost * (to - from - 1);
+  if (to > from) return p.nextCost + p.skipCost * (textBefore[to] - textBefore[from + 1]);
   return p.backCost + p.backPerSlide * (from - to);
+}
+
+/**
+ * A run of segments on a block of consecutive textless slides is split in
+ * order across the block, so each textless slide gets part of the talk
+ * given while the block was on screen (the path itself cannot tell them apart).
+ */
+function spreadTextless(path: number[], isText: boolean[]): void {
+  const n = path.length;
+  let i = 0;
+  while (i < n) {
+    if (isText[path[i]]) {
+      i++;
+      continue;
+    }
+    let a = path[i];
+    while (a > 0 && !isText[a - 1]) a--;
+    let b = path[i];
+    while (b + 1 < isText.length && !isText[b + 1]) b++;
+    let k = i;
+    while (k < n && path[k] >= a && path[k] <= b) k++;
+    const len = k - i;
+    const slides = b - a + 1;
+    if (slides > 1) for (let q = 0; q < len; q++) path[i + q] = a + Math.min(slides - 1, Math.floor((q * slides) / len));
+    i = k;
+  }
 }
 
 export function alignTranscript(
@@ -245,6 +285,12 @@ export function alignTranscript(
   const n = segments.length;
   if (m === 0 || n === 0) return { spans: [], segmentSlides: [] };
   const e = emissionScores(slideTexts, segments, p);
+  // Textless slides: a flat score a little above the off-topic state, so talk
+  // that matches no slide text can settle on them instead of a neighbour.
+  const isText = textSlideMask(slideTexts);
+  const textBefore = new Int32Array(m + 1);
+  for (let j = 0; j < m; j++) textBefore[j + 1] = textBefore[j] + (isText[j] ? 1 : 0);
+  for (const row of e) for (let j = 0; j < m; j++) if (!isText[j]) row[j] = p.offEmission + TEXTLESS_BONUS;
 
   // Viterbi, maximizing emission minus transition cost. Every slide has an
   // "on" state (talking about it) and an "off" state (talk that matches no
@@ -253,7 +299,7 @@ export function alignTranscript(
   let on = new Float64Array(m);
   let off = new Float64Array(m);
   for (let j = 0; j < m; j++) {
-    const enter = j === 0 ? 0 : (p.nextCost + p.skipCost * (j - 1)) * 0.5;
+    const enter = j === 0 ? 0 : (p.nextCost + p.skipCost * textBefore[j]) * 0.5;
     on[j] = e[0][j] - enter;
     off[j] = p.offEmission - p.offCost - enter;
   }
@@ -278,7 +324,7 @@ export function alignTranscript(
       let v = -Infinity;
       let arg = k;
       for (let j = 0; j < m; j++) {
-        const c = best[j] - transitionCost(j, k, p);
+        const c = best[j] - transitionCost(j, k, p, textBefore);
         if (c > v) {
           v = c;
           arg = bestState[j];
@@ -311,6 +357,7 @@ export function alignTranscript(
   states[n - 1] = lastState;
   for (let i = n - 1; i > 0; i--) states[i - 1] = back[i][states[i]];
   const path = states.map((st) => st % m);
+  spreadTextless(path, isText);
 
   const spans: AlignedSpan[] = [];
   let start = 0;
