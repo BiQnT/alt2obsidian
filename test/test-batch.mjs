@@ -142,6 +142,20 @@ assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "ì
     m.removeJobDir(job1);
     s1.cleanup();
   }
+  // A slide missing from a half's answer goes through the normal one-time retry.
+  const s2 = fakeSession("hangbig:2,drop:3");
+  const job2 = m.createJobDir();
+  try {
+    const one = { ...plan, batches: plan.batches.slice(0, 1) };
+    const res = await new m.BatchCommentaryGenerator(provider(m.ClaudeCliProvider, FAKE_CLAUDE, job2, new m.UsageTracker(), { timeoutMs: 800 })).generate({ plan: one, context, renderImage });
+    assert.deepEqual(s2.calls().map(pagesOf), [[2, 3, 4, 5], [2, 3], [3], [4, 5]]);
+    assert.equal(res.generatedCount, 4);
+    assert.equal(res.errors.filter((e) => e.slideNum <= 5).length, 0);
+    console.log("PASS: a slide missing from a split half is retried once alone");
+  } finally {
+    m.removeJobDir(job2);
+    s2.cleanup();
+  }
   // Everything hangs: batch, then its first half time out, which is 2 failures in a row: stop.
   const s = fakeSession("hang");
   const job = m.createJobDir();

@@ -126,6 +126,7 @@ try {
     // taskkill fails and the process never closes: child.kill() is used and the run still ends (review N4).
     const s3 = stubSpawn((child, call) => {
       if (call.command === "taskkill") return exitWith(child, 1);
+      s3.victim = child;
       child.kill = () => {
         s3.killed = true;
         return true;
@@ -135,7 +136,10 @@ try {
     await assert.rejects(m.runCli({ bin: exe, args: [], platform: "win32", spawnFn: s3.fn, timeoutMs: 50 }), (e) => e.kind === "timeout");
     assert.equal(s3.killed, true, "fallback child.kill() after taskkill failed");
     assert.ok(Date.now() - started >= 2 * m.KILL_GRACE_MS - 100, "rejected by the give-up timer, not a close event");
-    console.log("PASS: taskkill failure falls back to child.kill(); a process that never closes is given up on");
+    assert.equal(s3.victim.stdout.listenerCount("data"), 0, "give-up detaches the stdout listener");
+    assert.equal(s3.victim.stderr.listenerCount("data"), 0, "give-up detaches the stderr listener");
+    assert.ok(s3.victim.stdout.destroyed, "give-up destroys the pipes");
+    console.log("PASS: taskkill failure falls back to child.kill(); a process that never closes is given up on, its streams detached");
   }
 
   // Lookup: `where` first (.exe preferred), then %APPDATA%\npm.

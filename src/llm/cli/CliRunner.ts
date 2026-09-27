@@ -247,8 +247,14 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
       killTree(child, platform, spawnFn, "SIGTERM");
       if (platform !== "win32") killTimer = setTimeout(() => killTree(child, platform, spawnFn, "SIGKILL"), KILL_GRACE_MS);
       // Reject even if the process never reports `close` (a stuck kill).
+      // The streams are detached so a process that outlives its kill cannot
+      // keep appending to buffers nobody reads. Residual edge case: such a
+      // process (for example one stuck in uninterruptible I/O, or a child
+      // that left the process group) stays alive as an orphan until the OS
+      // reaps it; the plugin cannot do more than SIGKILL / taskkill here.
       giveUpTimer = setTimeout(() => {
         const f = failure!;
+        detachStreams();
         finish(() => {
           f.stdout = stdout;
           f.stderr = stderr;
@@ -283,6 +289,15 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
     });
     // The CLI may exit before reading all of stdin (bad flag); ignore EPIPE.
     child.stdin?.on("error", () => undefined);
+    function detachStreams(): void {
+      for (const s of [child.stdout, child.stderr]) {
+        if (!s) continue;
+        s.removeAllListeners("data");
+        // A late error on a destroyed pipe must not surface as unhandled.
+        s.on("error", () => undefined);
+        s.destroy();
+      }
+    }
 
     child.on("error", (e: NodeJS.ErrnoException) => {
       finish(() =>

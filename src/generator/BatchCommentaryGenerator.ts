@@ -245,6 +245,16 @@ export class BatchCommentaryGenerator {
     const record = (invalid: Map<number, string>) => {
       for (const [page, reason] of invalid) failures.set(page, reason);
     };
+    /** Slides missing or invalid in an answer are asked for once more, alone. */
+    const retryInvalid = async (slides: PlannedSlide[], invalid: Map<number, string>, batch: number) => {
+      if (invalid.size === 0 || stopReason) {
+        record(invalid);
+        return;
+      }
+      opts.onProgress?.({ batch, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: true });
+      const retry = await runCall(slides.filter((s) => invalid.has(s.page)));
+      if (retry.kind === "ok") record(retry.invalid);
+    };
 
     for (let b = 0; b < plan.batches.length; b++) {
       const slides = plan.batches[b].pages.map((p) => byPage.get(p)!);
@@ -255,13 +265,7 @@ export class BatchCommentaryGenerator {
       opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: false });
       const first = await runCall(slides);
       if (first.kind === "ok") {
-        if (first.invalid.size > 0 && !stopReason) {
-          opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: true });
-          const retry = await runCall(slides.filter((s) => first.invalid.has(s.page)));
-          if (retry.kind === "ok") record(retry.invalid);
-        } else {
-          record(first.invalid);
-        }
+        await retryInvalid(slides, first.invalid, b + 1);
       } else if (first.timeout && slides.length > 1 && !stopReason) {
         // A timed-out batch is tried once more in two halves.
         opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: true });
@@ -272,7 +276,7 @@ export class BatchCommentaryGenerator {
             continue;
           }
           const r = await runCall(half);
-          if (r.kind === "ok") record(r.invalid);
+          if (r.kind === "ok") await retryInvalid(half, r.invalid, b + 1);
         }
       }
     }
