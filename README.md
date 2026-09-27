@@ -13,7 +13,7 @@ Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그�
 - **가져오기 전 예산 미리보기**: 예상 호출 수, 입력·출력 토큰, 보낼 이미지 수, 생략한 슬라이드 수를 사이드바에서 확인한 뒤 시작합니다. 강의당 토큰 상한을 넘으면 시작 전에 멈추고 이미지 줄이기를 제안합니다. 진행 중에는 단계, 묶음 진행률, 실시간 사용량, 취소 버튼이 보입니다.
 - **사용량 기록**: 실제 사용량(입력, 캐시 적중, 출력)을 노트 frontmatter `alt2obs_usage`와 설정 화면의 누적 사용량에 남깁니다.
 
-> **외부 프로그램 실행과 구독 사용량 안내**: Claude CLI나 Codex CLI를 고르면 이 플러그인은 컴퓨터에 설치된 `claude` / `codex` 프로그램을 자식 프로세스로 실행합니다. 모든 호출은 **사용자 계정의 구독 한도(또는 API 사용량)를 소모**합니다. CLI는 vault 밖 임시 폴더에서 실행되고(Claude: 도구 없음 또는 이미지 읽기(Read)만 허용, 설정·MCP·세션 저장 없음 / Codex: 읽기 전용 샌드박스, 세션 저장 없음), 노트 쓰기는 플러그인만 합니다. 데스크톱 전용입니다.
+> **외부 프로그램 실행과 구독 사용량 안내**: Claude CLI나 Codex CLI를 고르면 이 플러그인은 컴퓨터에 설치된 `claude` / `codex` 프로그램을 자식 프로세스로 실행합니다. 모든 호출은 **사용자 계정의 구독 한도(또는 API 사용량)를 소모**합니다. CLI는 vault 밖 임시 폴더에서 실행되고(Claude: 도구를 모두 끄고 이미지는 메시지에 직접 담아 보냄, 설정·MCP·세션 저장 없음 / Codex: 읽기 전용 샌드박스, 세션 저장 없음), 노트 쓰기는 플러그인만 합니다. Codex의 읽기 전용 샌드박스는 사용자 계정이 읽을 수 있는 파일은 읽을 수 있습니다. 프롬프트로 주어진 내용만 쓰라고 지시하지만 이 위험은 남아 있으니, 감수할 수 있을 때만 Codex를 고르세요. 데스크톱 전용입니다(macOS, Windows, Linux).
 
 ## 주요 기능
 
@@ -25,8 +25,8 @@ Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그�
 - **시험대비 요약본**: 과목별 강의 관계도 + 핵심 요약을 자동 생성.
 - **사이드바 UI**: URL 입력, 과목 선택, 최근 노트, 시험요약본 생성을 한 곳에서 관리.
 - **다중 LLM 지원**:
-  - **Claude Code CLI (기본, 설치되어 있으면)**: `claude -p`를 실행. 모델은 `sonnet`, `opus`, `haiku` 같은 별칭이나 전체 이름을 자유롭게 입력.
-  - **Codex CLI**: `codex exec`를 실행. 호출마다 Codex 자체 지시문과 전역 `~/.codex/AGENTS.md`가 함께 실려(이 컴퓨터 측정 약 18k 토큰) 고정 비용이 큽니다. 묶음 전송으로 나눠 냅니다.
+  - **Claude Code CLI**: `claude -p`를 실행. 기본은 슬라이드 해설 `sonnet` + medium, 개념 추출 `haiku` + low. 모델은 `sonnet`, `opus`, `haiku` 같은 별칭이나 전체 이름을 자유롭게 입력. 호출 하나가 모델 한 턴이고, CLI가 더하는 고정 입력은 약 0.45k 토큰입니다.
+  - **Codex CLI**: `codex exec`를 실행. 호출마다 Codex 자체 지시문과 전역 `~/.codex/AGENTS.md`가 함께 실려 고정 비용이 큽니다(설정으로 줄일 수 있는 부분을 끈 뒤에도 이 컴퓨터 측정 약 12k 토큰, 끄기 전 18k). 플러그인은 사용자 파일을 건드리지 않고, 대신 Codex는 배치 크기의 두 배로 묶어 보냅니다.
   - **Google AI Studio**: Gemini 2.5 Flash, **Gemma 3 27B/12B/4B** (모두 멀티모달, Gemma는 무료 등급 RPM ~30으로 더 여유). 모델명만 변경.
   - **Multi-key rotation**: API 키 필드에 콤마로 여러 무료 키 입력 → 429 시 자동 round-robin (3개 키 ≈ 15 RPM).
   - **Ollama (로컬)**: 멀티모달은 `llama3.2-vision:11b`, 텍스트는 `gemma3:4b` 권장. 무제한·무료·offline.
@@ -52,6 +52,8 @@ codex login
 ```
 
 Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니다. 플러그인은 처음 한 번 로그인 셸에서 `command -v claude`로 경로를 찾아 저장하고, 못 찾으면 흔한 설치 폴더를 살펴봅니다. 그래도 못 찾으면 **설정 → Alt2Obsidian → LLM 연결**에 `command -v claude` 결과(절대 경로)를 넣고 '다시 찾기'를 누르세요.
+
+**Windows**: 경로는 `where claude`로 찾고, 못 찾으면 `%APPDATA%\npm`, `%USERPROFILE%\.local\bin` 등을 살펴봅니다. npm으로 설치한 `claude.cmd` / `codex.cmd`는 셸 없이 실행하기 위해 스크립트 안의 JavaScript 파일을 찾아 `node.exe`로 직접 실행하고(`node.exe`가 PATH나 같은 폴더에 있어야 함), 네이티브 설치본(`claude.exe`)은 그대로 실행합니다. 취소하면 `taskkill /T /F`로 프로세스 트리를 종료합니다. Windows 경로는 단위 테스트로만 확인했고 실제 Windows PC에서는 아직 확인하지 않았습니다.
 
 ### 방법 1: 수동 설치 (지금 바로 사용)
 
@@ -118,8 +120,10 @@ Alt2Obsidian을 사용하려면 먼저 Alt 앱에서 강의 노트의 공유 링
 
 ### 1단계: LLM 연결
 
-1. **설정 → Alt2Obsidian → LLM 연결**에서 Claude CLI / Codex CLI 카드에 경로와 버전이 보이는지 확인합니다. 1.x에서 올라온 경우에도 Claude CLI가 설치되어 있으면 슬라이드 해설과 개념 추출이 자동으로 Claude CLI로 설정됩니다(기존 Gemini 설정 값은 그대로 남습니다).
-2. **작업별 모델** 표에서 작업마다 프로바이더, 모델, effort를 고릅니다. 모델 칸을 비우면 CLI 기본 모델을 씁니다. 기본값: 슬라이드 해설은 기본 모델 + medium, 개념 추출은 `haiku` + low.
+1. **설정 → Alt2Obsidian → LLM 연결**에서 Claude CLI / Codex CLI 카드에 경로와 버전이 보이는지 확인합니다.
+   - 새로 설치했고 Gemini 키가 없으면, 로그인된 Claude CLI가 있을 때 자동으로 Claude CLI를 씁니다. 로그인 여부는 `claude auth status`로만 확인하고 모델은 호출하지 않습니다.
+   - 1.x에서 Gemini 키(또는 Ollama)로 쓰고 있었다면 설정을 그대로 둡니다. Claude 카드의 **Claude CLI로 전환** 버튼을 누를 때만 바뀝니다.
+2. **작업별 모델** 표에서 작업마다 프로바이더, 모델, effort를 고릅니다. 모델 칸을 비우면 CLI 기본 모델을 씁니다. 기본값: 슬라이드 해설은 `sonnet` + medium, 개념 추출은 `haiku` + low.
 3. Gemini API를 쓰려면 [Google AI Studio](https://aistudio.google.com/apikey)에서 무료 API 키를 발급받아 Gemini 카드에 입력하고, 작업 표에서 Gemini를 고릅니다. 이때는 1.1.0과 같은 슬라이드별 호출 방식으로 동작합니다.
 
 ### 2단계: Alt 노트 가져오기
@@ -226,7 +230,7 @@ tags: [concept]
 | 설정 | 설명 | 기본값 |
 |------|------|--------|
 | LLM 연결 | Claude CLI / Codex CLI 경로(비우면 자동 탐색)와 버전, Gemini API 키, Ollama | 자동 탐색 |
-| 작업별 모델 | 슬라이드 해설, 개념 추출마다 프로바이더·모델·effort. 전사 정렬 확인과 노트 검증은 다음 베타에서 사용 | 해설: Claude CLI 기본 모델 medium / 개념: Claude CLI haiku low (Claude CLI가 없으면 Gemini) |
+| 작업별 모델 | 슬라이드 해설, 개념 추출마다 프로바이더·모델·effort. 전사 정렬 확인과 노트 검증은 다음 베타에서 사용 | 해설: Claude CLI sonnet medium / 개념: Claude CLI haiku low (Gemini 키가 있던 1.x 사용자는 전환 버튼을 누르기 전까지 Gemini) |
 | 프리셋 | `절약`: 모든 작업 경량 모델 + low. `품질`: 해설·검증 상위 모델 + high | 사용자 지정 |
 | 배치 크기 | CLI 호출 한 번에 보낼 슬라이드 수 (이미지가 있으면 절반) | 8 |
 | 이미지 전송 규칙 | 자동(도표 위주 슬라이드와 스캔 PDF만) / 텍스트만 | 자동 |
