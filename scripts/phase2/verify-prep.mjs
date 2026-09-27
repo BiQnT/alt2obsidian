@@ -1121,10 +1121,13 @@ function withContextEvidence(evidence, index) {
     const slides = pages.slice(0, TOP_SLIDES).map((n) => ({ slide: n, score: 0, shared: 0, coverage: 0, excerpt: slideExcerpt(index.slideTexts[n - 1] ?? "", terms) }));
     return { ...e, slides, transcript: e.transcript.length > 0 ? e.transcript : transcriptFor(slides.map((h) => h.slide)), source, likelyTrue: false, unmatched: false };
   };
-  for (let i = 0; i < out.length; i++) {
-    const e = out[i];
-    if (e.slides.length > 0 && e.source === "direct")
-      continue;
+  const strongPages = (text) => {
+    const t = retrievalTerms(text);
+    const hits = slideHits(bm252(t, index.slides), new Set(t), index);
+    return strongHit(hits[0]) ? hits.map((h) => h.slide) : [];
+  };
+  const contextFor = (i) => {
+    const e = evidence[i];
     const weight = /* @__PURE__ */ new Map();
     for (let d = 1; d <= NEIGHBOUR_WINDOW; d++) {
       for (const j of [i - d, i + d]) {
@@ -1133,26 +1136,32 @@ function withContextEvidence(evidence, index) {
         evidence[j].slides.forEach((h, rank) => weight.set(h.slide, (weight.get(h.slide) ?? 0) + (NEIGHBOUR_WINDOW + 1 - d) / (rank + 1)));
       }
     }
-    if (weight.size > 0) {
-      out[i] = fromSlides(e, [...weight.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([n]) => n), "neighbour");
-      continue;
-    }
-    const strongPages = (text) => {
-      const t = retrievalTerms(text);
-      const hits = slideHits(bm252(t, index.slides), new Set(t), index);
-      return strongHit(hits[0]) ? hits.map((h) => h.slide) : [];
-    };
+    if (weight.size > 0)
+      return { pages: [...weight.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([n]) => n), source: "neighbour" };
     if (e.claim.section) {
       const heading = strongPages(e.claim.section);
-      if (heading.length > 0) {
-        out[i] = fromSlides(e, heading, "heading");
-        continue;
-      }
+      if (heading.length > 0)
+        return { pages: heading, source: "heading" };
     }
     const sectionText = evidence.filter((x) => x.claim.sectionIndex === e.claim.sectionIndex).map((x) => x.claim.text).join(" ");
     const section = strongPages(sectionText);
-    if (section.length > 0)
-      out[i] = fromSlides(e, section, "section");
+    return section.length > 0 ? { pages: section, source: "section" } : null;
+  };
+  for (let i = 0; i < out.length; i++) {
+    const e = out[i];
+    if (e.slides.length > 0 && e.source === "direct")
+      continue;
+    const ctx = contextFor(i);
+    if (e.source === "weak" && e.slides.length > 0) {
+      if (!ctx)
+        continue;
+      const own = e.slides[0];
+      const rest = fromSlides(e, ctx.pages.filter((n) => n !== own.slide), ctx.source).slides;
+      out[i] = { ...e, slides: [own, ...rest].slice(0, TOP_SLIDES), source: "weak", likelyTrue: false };
+      continue;
+    }
+    if (ctx)
+      out[i] = fromSlides(e, ctx.pages, ctx.source);
   }
   return out;
 }
@@ -1243,7 +1252,7 @@ function claimBlock(e) {
     ...e.slides.map((h) => `- \uC2AC\uB77C\uC774\uB4DC ${h.slide}: ${h.excerpt}`),
     ...e.transcript.map((h) => `- \uC804\uC0AC [${formatTimestamp(h.startMs)}]${h.slide ? ` (\uC2AC\uB77C\uC774\uB4DC ${h.slide} \uAD6C\uAC04)` : ""}: ${h.excerpt}`)
   ];
-  const evidenceNote = e.source === "direct" ? "" : " (\uC8FC\uC7A5\uACFC \uACB9\uCE58\uB294 \uC6A9\uC5B4\uAC00 \uC5C6\uC5B4 \uAC19\uC740 \uC808\uC758 \uBB38\uB9E5\uC73C\uB85C \uCC3E\uC740 \uD6C4\uBCF4)";
+  const evidenceNote = e.source === "direct" ? "" : e.source === "weak" ? " (\uACB9\uCE58\uB294 \uC6A9\uC5B4 1\uAC1C: \uCCAB \uC2AC\uB77C\uC774\uB4DC\uB294 \uADF8 \uC6A9\uC5B4\uB85C, \uB098\uBA38\uC9C0\uB294 \uAC19\uC740 \uC808\uC758 \uBB38\uB9E5\uC73C\uB85C \uCC3E\uC740 \uD6C4\uBCF4)" : " (\uC8FC\uC7A5\uACFC \uACB9\uCE58\uB294 \uC6A9\uC5B4\uAC00 \uC5C6\uC5B4 \uAC19\uC740 \uC808\uC758 \uBB38\uB9E5\uC73C\uB85C \uCC3E\uC740 \uD6C4\uBCF4)";
   return renderPrompt(note_verify_claim_default, { id: e.claim.id, claim: e.claim.text, evidenceNote, evidence: lines.join("\n") || "- (\uC5C6\uC74C)" });
 }
 function buildJudgePrompt(lecture, batch) {
@@ -1448,7 +1457,8 @@ function evidenceLinks(ref, e) {
 function contextNote(it) {
   if (it.evidence.source === "direct")
     return "";
-  return it.verdict === "\uD2C0\uB9BC" ? " (\uBB38\uB9E5 \uADFC\uAC70, \uD655\uC778 \uD544\uC694)" : " (\uBB38\uB9E5 \uADFC\uAC70)";
+  const what = it.evidence.source === "weak" ? "\uACB9\uCE58\uB294 \uC6A9\uC5B4 1\uAC1C" : "\uBB38\uB9E5 \uADFC\uAC70";
+  return it.verdict === "\uD2C0\uB9BC" ? ` (${what}, \uD655\uC778 \uD544\uC694)` : ` (${what})`;
 }
 function quote(text) {
   return text.replace(/\s+/g, " ").replace(/^\[!/, "[\\!").replace(/<!--/g, "&lt;!--").trim();
