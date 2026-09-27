@@ -44,7 +44,9 @@ export class NoteGenerator {
     altData: AltNoteData,
     slidesResult: PerSlideGenerationResult,
     llmResult: LLMResult,
-    subject: string
+    subject: string,
+    /** Extra frontmatter lines (2.0 CLI path: `alt2obs_usage`). */
+    extraFrontmatter: string[] = []
   ): Promise<{ lectureMarkdown: string; conceptNotes: ConceptNote[] }> {
     if (slidesResult.slides.length === 0) {
       // No usable slide commentary — fall back to lecture-level path.
@@ -66,6 +68,7 @@ export class NoteGenerator {
         ? `alt_created: "${altData.metadata.createdAt}"`
         : null,
       `alt_id: "${altData.metadata.noteId}"`,
+      ...extraFrontmatter,
       "---",
       "",
     ]
@@ -127,7 +130,8 @@ export class NoteGenerator {
    * the multi-managed merge algorithm (Task 1.3).
    */
   private buildSlideSection(slide: SlideSection, conceptNames: string[]): string {
-    const body = linkConceptNames(slide.commentary, conceptNames);
+    const linked = linkConceptNames(slide.commentary, conceptNames);
+    const body = slide.meta ? `${linked}\n${slide.meta}` : linked;
     const startMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} start -->`;
     const endMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} end -->`;
     return [

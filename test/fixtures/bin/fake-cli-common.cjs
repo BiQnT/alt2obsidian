@@ -71,7 +71,7 @@ function answer(stdin, schema) {
   } else if (schema && schema.properties && schema.properties.concepts) {
     result = {
       concepts: [
-        { name: "캐시", definition: "자주 쓰는 데이터를 가까이 두는 빠른 메모리. ".repeat(3), lectureContext: "p.2에서 소개.", example: "", caution: "", relatedConcepts: ["캐시 일관성"] },
+        { name: "캐시", definition: "자주 쓰는 데이터를 가까이 두는 빠른 메모리. ".repeat(4), lectureContext: "p.2에서 소개.", example: "", caution: "", relatedConcepts: ["캐시 일관성"] },
         { name: "캐시 일관성", definition: "여러 캐시가 같은 주소에 대해 같은 값을 보게 하는 성질. ".repeat(3), lectureContext: "p.3", example: "MESI", caution: "", relatedConcepts: ["캐시"] },
       ],
       tags: ["cache", "memory"],

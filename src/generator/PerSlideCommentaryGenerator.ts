@@ -19,6 +19,7 @@ import {
 import { PdfProcessor } from "../pdf/PdfProcessor";
 import { computeSlideHash } from "../core/slideHash";
 import { renderPrompt } from "../prompts/render";
+import { splitTranscriptEvenly } from "../core/prep/TranscriptCompressor";
 import slideCommentarySystemTemplate from "../../prompts/slide-commentary.system.md";
 import slideCommentaryUserTemplate from "../../prompts/slide-commentary.user.md";
 
@@ -105,7 +106,7 @@ export class PerSlideCommentaryGenerator {
     }
 
     const pageTexts = await this.pdfProcessor.getPageTexts(pdfData);
-    const transcriptChunks = this.splitTranscriptEvenly(options.transcript, pageCount);
+    const transcriptChunks = splitTranscriptEvenly(options.transcript, pageCount);
     const slides: SlideSection[] = [];
     const errors: PerSlideGenerationResult["errors"] = [];
     const perSlideWallTimeMs: number[] = [];
@@ -244,31 +245,6 @@ export class PerSlideCommentaryGenerator {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  /**
-   * Split transcript into N equal-character chunks, one per slide. Even-split
-   * is the stop-gap until `RscParser` preserves segment timestamps (then we
-   * can do altToNotes-style time-proportional mapping). For now an even split
-   * works because the LLM has the slide image as the primary anchor; the
-   * transcript chunk provides surrounding-context only.
-   */
-  private splitTranscriptEvenly(
-    transcript: string | null,
-    slideCount: number
-  ): Array<string | null> {
-    if (!transcript || slideCount === 0) {
-      return new Array(slideCount).fill(null);
-    }
-    const chunkSize = Math.ceil(transcript.length / slideCount);
-    const chunks: Array<string | null> = [];
-    for (let i = 0; i < slideCount; i++) {
-      const start = i * chunkSize;
-      const end = Math.min(start + chunkSize, transcript.length);
-      const chunk = transcript.slice(start, end).trim();
-      chunks.push(chunk.length > 0 ? chunk : null);
-    }
-    return chunks;
   }
 
   /**

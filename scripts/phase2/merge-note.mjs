@@ -4,6 +4,51 @@
 import { readFile } from "node:fs/promises";
 
 // src/types.ts
+var DEFAULT_GENERATION = {
+  batchSize: 8,
+  imageRule: "auto",
+  transcriptCapChars: 600,
+  tokenCapPerLecture: 0,
+  saveKeyDiagrams: true,
+  onlyChangedSlides: true
+};
+var DEFAULT_SETTINGS = {
+  apiKey: "",
+  provider: "gemini",
+  geminiModel: "gemini-2.5-flash",
+  ollamaEndpoint: "http://localhost:11434",
+  ollamaModel: "gemma3:4b",
+  baseFolderPath: "Alt2Obsidian",
+  language: "ko",
+  rateDelayMs: 4e3,
+  settingsVersion: 2,
+  claudePath: "",
+  codexPath: "",
+  cliTimeoutSec: 300,
+  tasks: {
+    commentary: { provider: "gemini", model: "", effort: "" },
+    concepts: { provider: "gemini", model: "", effort: "" },
+    alignment: { provider: "none", model: "", effort: "" },
+    verification: { provider: "gemini", model: "", effort: "" }
+  },
+  preset: "custom",
+  recentModels: {},
+  generation: DEFAULT_GENERATION
+};
+var EMPTY_USAGE = {
+  calls: 0,
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  outputTokens: 0,
+  imagesSent: 0,
+  costUsd: 0
+};
+var DEFAULT_PLUGIN_DATA = {
+  settings: DEFAULT_SETTINGS,
+  recentImports: [],
+  cliDetection: {},
+  usageTotals: { ...EMPTY_USAGE, lectures: 0, byProvider: {}, since: "" }
+};
 var MANAGED_NOTE_START = "<!-- alt2obsidian:start -->";
 var MANAGED_NOTE_END = "<!-- alt2obsidian:end -->";
 var OVERVIEW_BLOCK_START = "<!-- alt2obs:overview start -->";
