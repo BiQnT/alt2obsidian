@@ -32,7 +32,22 @@ assert.equal(
   demoteHeadings("# A\n## B\n###### F\n#no-heading\n```\n## in code\n```\n~~~\n# tilde\n~~~\n### C"),
   "## A\n### B\n###### F\n#no-heading\n```\n## in code\n```\n~~~\n# tilde\n~~~\n#### C"
 );
-console.log("PASS: demoteHeadings (one level, fences untouched, h6 stays)");
+// ATX headings with up to 3 leading spaces; 4 spaces is code, not a heading.
+assert.equal(demoteHeadings("   ## A\n    ## code"), "   ### A\n    ## code");
+// Setext headings become ATX one level down, including multi-line paragraphs.
+assert.equal(
+  demoteHeadings("Title\n=====\n\nSub one\nsub two\n---\ntext"),
+  "## Title\n\n### Sub one sub two\ntext"
+);
+// A thematic break after a blank line, list, or quote is not a setext underline.
+assert.equal(demoteHeadings("para\n\n---\n- item\n---\n> q\n==="), "para\n\n---\n- item\n---\n> q\n===");
+// A closing fence needs the same character and at least the opening length.
+assert.equal(
+  demoteHeadings("````\n```\n# still code\n````\n# out"),
+  "````\n```\n# still code\n````\n## out"
+);
+assert.equal(demoteHeadings("```\n~~~\n# code\n```\n# out"), "```\n~~~\n# code\n```\n## out");
+console.log("PASS: demoteHeadings (one level, fences untouched, h6 stays, indented ATX, setext, fence length)");
 
 assert.equal(
   buildOverviewSection("## 개요\n캐시 설명", ["캐시"]),

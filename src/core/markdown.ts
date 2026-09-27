@@ -37,25 +37,72 @@ export function linkConceptNames(text: string, conceptNames: string[]): string {
 }
 
 /**
- * Push every ATX heading down one level (`#` to `##`, ..., `#####` to
- * `######`; `######` stays). Lines inside fenced code blocks are untouched.
+ * Push every heading down one level so the summary nests under
+ * "## 📋 전체 요약":
+ * - ATX headings with 0 to 3 leading spaces: `#` to `##`, ..., `#####` to
+ *   `######`; `######` stays.
+ * - Setext headings (a paragraph underlined with `===` or `---`) become ATX
+ *   headings one level down (`##` and `###`).
+ * Lines inside fenced code blocks are untouched; a fence closes only on the
+ * same character repeated at least as many times as the opening fence.
  */
 export function demoteHeadings(markdown: string): string {
-  let fence: string | null = null;
-  return markdown
-    .split("\n")
-    .map((line) => {
-      const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-      if (fenceMatch) {
-        const marker = fenceMatch[1][0];
-        if (fence === null) fence = marker;
-        else if (fence === marker) fence = null;
-        return line;
+  const out: string[] = [];
+  let fence: { char: string; len: number } | null = null;
+  // Number of trailing `out` lines forming a paragraph that a setext
+  // underline could turn into a heading.
+  let paragraphLines = 0;
+
+  for (const line of markdown.split("\n")) {
+    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (
+        fenceMatch &&
+        fenceMatch[1][0] === fence.char &&
+        fenceMatch[1].length >= fence.len &&
+        fenceMatch[2].trim() === ""
+      ) {
+        fence = null;
       }
-      if (fence !== null) return line;
-      return /^#{1,5}(\s|$)/.test(line) ? `#${line}` : line;
-    })
-    .join("\n");
+      out.push(line);
+      continue;
+    }
+    if (fenceMatch && !(fenceMatch[1][0] === "`" && fenceMatch[2].includes("`"))) {
+      fence = { char: fenceMatch[1][0], len: fenceMatch[1].length };
+      out.push(line);
+      paragraphLines = 0;
+      continue;
+    }
+
+    const setext = line.match(/^ {0,3}(=+|-+)[ \t]*$/);
+    if (setext && paragraphLines > 0) {
+      const text = out
+        .splice(out.length - paragraphLines, paragraphLines)
+        .map((l) => l.trim())
+        .join(" ");
+      out.push(`${setext[1][0] === "=" ? "##" : "###"} ${text}`);
+      paragraphLines = 0;
+      continue;
+    }
+
+    const atx = line.match(/^( {0,3})(#{1,6})(?=[ \t]|$)/);
+    if (atx) {
+      out.push(atx[2].length < 6 ? `${atx[1]}#${line.slice(atx[1].length)}` : line);
+      paragraphLines = 0;
+      continue;
+    }
+
+    out.push(line);
+    paragraphLines = isParagraphLine(line) ? paragraphLines + 1 : 0;
+  }
+  return out.join("\n");
+}
+
+/** A line that can be part of a paragraph (and so of a setext heading). */
+function isParagraphLine(line: string): boolean {
+  if (line.trim() === "") return false;
+  if (/^ {4,}/.test(line)) return false; // indented code
+  return !/^ {0,3}([>|]|[-*+][ \t]|\d{1,9}[.)][ \t]|<!--)/.test(line);
 }
 
 /**
