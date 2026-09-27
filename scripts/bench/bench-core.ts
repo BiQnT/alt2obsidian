@@ -26,9 +26,10 @@ import { createJobDir, removeJobDir, resolveCliBinary } from "../../src/llm/cli/
 import { GeminiProvider } from "../../src/llm/GeminiProvider";
 import { UsageTracker } from "../../src/llm/usage";
 import { NoteGenerator } from "../../src/generator/NoteGenerator";
-import { PerSlideCommentaryGenerator } from "../../src/generator/PerSlideCommentaryGenerator";
+import { buildSlidePrompt, PerSlideCommentaryGenerator } from "../../src/generator/PerSlideCommentaryGenerator";
 import { ConceptExtractor } from "../../src/generator/ConceptExtractor";
 import { renderPrompt } from "../../src/prompts/render";
+import { batchSizeFor } from "../../src/settings/llmSettings";
 import type { AltNoteData, EffortLevel, ImageInput, LLMProvider, VisionImageRef } from "../../src/types";
 import summaryFromTranscriptTemplate from "../../prompts/summary-from-transcript.md";
 import summaryFromTranscriptSystemTemplate from "../../prompts/summary-from-transcript.system.md";
@@ -36,6 +37,11 @@ import summaryEnhanceTranscriptTemplate from "../../prompts/summary-enhance-tran
 import summaryEnhanceTranscriptSystemTemplate from "../../prompts/summary-enhance-transcript.system.md";
 import summaryEnhanceMaterialTemplate from "../../prompts/summary-enhance-material.md";
 import summaryEnhanceMaterialSystemTemplate from "../../prompts/summary-enhance-material.system.md";
+import slideCommentarySystemTemplate from "../../prompts/slide-commentary.system.md";
+import conceptExtractionTemplate from "../../prompts/concept-extraction.md";
+import { splitTranscriptEvenly } from "../../src/core/prep/TranscriptCompressor";
+import { CallShape, estimateCalls } from "../../src/core/budget/estimate";
+import type { LectureMaterialContext } from "../../src/types";
 
 export interface BenchOptions {
   pdf: string;
@@ -156,10 +162,10 @@ async function runCli(o: BenchOptions): Promise<BenchResult> {
     layouts,
     transcript: o.transcript,
     transcriptCapChars: o.capChars,
-    batchSize: o.batchSize,
+    batchSize: batchSizeFor(o.provider, o.batchSize),
     deckTitle: o.title,
   });
-  if (o.fewerImages) plan = withFewerImages(plan, o.batchSize);
+  if (o.fewerImages) plan = withFewerImages(plan, batchSizeFor(o.provider, o.batchSize));
   const context = { title: o.title, subjectTags: [], knownConcepts: [] };
   const estimate = estimateLecture(plan, context, o.summary, o.provider as "claude-cli", o.provider as "claude-cli");
   const counts = planCounts(plan);
@@ -228,6 +234,40 @@ async function runCli(o: BenchOptions): Promise<BenchResult> {
 
 // ---- 1.1.0 Gemini path ----
 
+/**
+ * 1.1.0 estimate from the exact 1.1.0 prompts: the summary passes, concept
+ * extraction from the summary, then one multimodal call per slide (prompt
+ * built like PerSlideCommentaryGenerator.buildSlidePrompt, raw even-split
+ * transcript chunk, one 1024px PNG). Summaries the passes would write are
+ * assumed to be 4000 characters.
+ */
+export function estimateGeminiLegacy(
+  pageCount: number,
+  transcript: string | null,
+  summary: string,
+  material: LectureMaterialContext | null
+): { calls: number; inputTokens: number; outputTokens: number; imagesSent: number } {
+  const calls: CallShape[] = [];
+  const t = (transcript ?? "").slice(0, 15000);
+  let summaryLen = summary.length;
+  if (t && summary.length < 2500) {
+    calls.push({ promptText: summaryEnhanceTranscriptSystemTemplate + summaryEnhanceTranscriptTemplate + summary + t, images: 0, outputTokens: 3500, schema: false });
+    summaryLen = Math.max(summaryLen, 4000);
+  }
+  if (material) {
+    calls.push({ promptText: summaryEnhanceMaterialSystemTemplate + summaryEnhanceMaterialTemplate + "가".repeat(summaryLen) + material.text, images: 0, outputTokens: 3500, schema: false });
+    summaryLen = Math.max(summaryLen, 4000);
+  }
+  calls.push({ promptText: conceptExtractionTemplate + "가".repeat(summaryLen), images: 0, outputTokens: 3800, schema: false });
+  const chunks = splitTranscriptEvenly(transcript, pageCount);
+  const system = renderPrompt(slideCommentarySystemTemplate, {});
+  for (let i = 0; i < pageCount; i++) {
+    const prompt = buildSlidePrompt(i + 1, pageCount, chunks[i] ?? null, []);
+    calls.push({ promptText: system + prompt, images: 1, outputTokens: 450, schema: false });
+  }
+  return estimateCalls(calls, "gemini");
+}
+
 async function runGemini(o: BenchOptions): Promise<BenchResult> {
   const started = Date.now();
   const doc = await openPdf(o.pdf);
@@ -235,10 +275,11 @@ async function runGemini(o: BenchOptions): Promise<BenchResult> {
   const material = await extractLectureMaterialContext(doc, `${o.title}\n\n${o.summary}`);
   await doc.destroy();
   const slidesBase = { total: texts.length, generated: texts.length, templated: 0, deduped: 0, reused: 0, failed: 0 };
+  const estimate = estimateGeminiLegacy(texts.length, o.transcript, o.summary, material);
   if (o.dryRun) {
     return {
       provider: "gemini (1.1.0 per-slide)", model: o.model, effort: "-", slides: slidesBase, calls: 0, inputTokens: 0, cachedInputTokens: 0,
-      cacheHitPct: 0, outputTokens: 0, imagesSent: 0, costUsd: 0, estimate: null, transcriptChars: null, wallTimeMs: Date.now() - started, dryRun: true,
+      cacheHitPct: 0, outputTokens: 0, imagesSent: 0, costUsd: 0, estimate, transcriptChars: null, wallTimeMs: Date.now() - started, dryRun: true,
     };
   }
   if (!o.apiKey) throw new Error("gemini needs --api-key or GEMINI_API_KEY");
@@ -304,7 +345,7 @@ async function runGemini(o: BenchOptions): Promise<BenchResult> {
     outputTokens: t.outputTokens,
     imagesSent: t.imagesSent,
     costUsd: 0,
-    estimate: null,
+    estimate,
     transcriptChars: null,
     wallTimeMs: Date.now() - started,
     dryRun: false,

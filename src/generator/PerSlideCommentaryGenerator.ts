@@ -56,7 +56,7 @@ export interface PerSlideGenerationOptions {
   ) => void;
 }
 
-function buildSlidePrompt(
+export function buildSlidePrompt(
   slideNum: number,
   totalSlides: number,
   transcriptChunk: string | null,

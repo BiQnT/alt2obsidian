@@ -25,6 +25,6 @@ Options: `--model`, `--effort low|medium|high|xhigh|max`, `--concept-model` (def
 
 The transcript and summary are plain text files. With the Skill's scraper you can get them from an Alt URL: `node scripts/phase2/alt-scrape.mjs <url> > alt.json`, then save its `transcript` and `summary` fields.
 
-Pass criteria (spec 5.6): 2.0 input tokens at most 50% of the 1.1.0 run on the same lecture, and a 1 to 5 rating of 10 random slides not lower than 1.1.0. The Gemini baseline reports Gemini's own token counts (`usageMetadata`), which use a different tokenizer from Claude and Codex, so compare orders of magnitude and the per-slide cost rather than exact numbers.
+Pass criteria (spec 5.6): 2.0 input tokens at most 50% of the 1.1.0 run on the same lecture, and a 1 to 5 rating of 10 random slides not lower than 1.1.0. The Gemini provider also prints a 1.1.0 estimate (same prompt builders as 1.1.0, even-split raw transcript, one 1024px image per slide), so `--dry-run --provider gemini` gives the baseline without an API key. The Gemini baseline reports Gemini's own token counts (`usageMetadata`), which use a different tokenizer from Claude and Codex, so compare orders of magnitude and the per-slide cost rather than exact numbers.
 
 `node test/test-bench.mjs` runs this harness against the fake CLIs in `test/fixtures/bin`.
