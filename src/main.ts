@@ -20,7 +20,9 @@ import { PdfProcessor } from "./pdf/PdfProcessor";
 import { createTaskProvider } from "./llm/index";
 import {
   cliNotFoundMessage,
+  CliRunError,
   createJobDir,
+  probeCliLogin,
   isExecutable,
   readCliVersion,
   removeJobDir,
@@ -29,6 +31,8 @@ import {
 import { UsageTracker, accumulateTotals, formatUsageFrontmatter } from "./llm/usage";
 import {
   applyClaudeDefaults,
+  batchSizeFor,
+  cliDefaultAction,
   isCliProvider,
   migrateSettings,
   PROVIDER_LABELS,
@@ -38,7 +42,8 @@ import { analyzeSlides } from "./core/prep/SlideAnalyzer";
 import { DeckPlan, parseExistingSlides, planDeck, withFewerImages } from "./pipeline/batchPlan";
 import { estimateLecture, PipelineStep, runBatchedLecture } from "./pipeline/lecturePipeline";
 import type { BatchProgress, LectureContext } from "./generator/BatchCommentaryGenerator";
-import { BudgetEstimate, exceedsCap } from "./core/budget/estimate";
+import { BudgetEstimate, CallShape, estimateCalls, exceedsCap } from "./core/budget/estimate";
+import conceptExtractionTemplateText from "../prompts/concept-extraction.md";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { NoteGenerator } from "./generator/NoteGenerator";
 import { PerSlideCommentaryGenerator } from "./generator/PerSlideCommentaryGenerator";
@@ -161,7 +166,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
   }
 
   onunload(): void {
-    // Views are automatically cleaned up by Obsidian
+    // Kill running CLI processes; their finally blocks remove the temp folders.
+    this.abortAllJobs();
   }
 
   /**
@@ -280,7 +286,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
     llm: ILLMProvider,
     conceptLlm: ILLMProvider,
     onProgress?: (stage: string, percent: number) => void,
-    onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>
+    onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>,
+    signal?: AbortSignal
   ): Promise<ImportRecord> {
     const altData = preview.altData;
     const pdfDataPromise = this.downloadPdfForImport(preview);
@@ -301,7 +308,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
         pdfDataPromise,
         materialContextPromise,
         onProgress,
-        onConfirmUpdate
+        onConfirmUpdate,
+        signal
       );
     }
 
@@ -438,6 +446,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       pdfData,
       onProgress,
       onConfirmUpdate,
+      signal,
     });
   }
 
@@ -452,8 +461,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
     pdfData: ArrayBuffer | null;
     onProgress?: (stage: string, percent: number) => void;
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
+    /** A cancelled import must not write anything. */
+    signal?: AbortSignal;
   }): Promise<ImportRecord> {
-    const { url, altData, subject, examPeriod, lectureMarkdown, conceptNotes, pdfData, onProgress, onConfirmUpdate } = args;
+    const { url, altData, subject, examPeriod, lectureMarkdown, conceptNotes, pdfData, onProgress, onConfirmUpdate, signal } = args;
     const vm = this.vaultManager!;
     // Save everything to vault
     onProgress?.("Vault에 저장 중...", 90);
@@ -473,6 +484,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       onProgress?.("Vault에 저장 중...", 90);
     }
 
+    if (signal?.aborted) throw new CliRunError("aborted", "취소되었습니다");
     const saveResult = await vm.saveManagedNote(lectureMarkdown, notePath);
     await vm.saveConceptNotes(conceptNotes, noteFilename, subject);
 
@@ -555,7 +567,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
           layouts,
           transcript: altData.transcript,
           transcriptCapChars: settings.generation.transcriptCapChars,
-          batchSize: settings.generation.batchSize,
+          batchSize: batchSizeFor(settings.tasks.commentary.provider, settings.generation.batchSize),
           deckTitle: altData.title,
           existing: existingNote ? parseExistingSlides(existingNote) : undefined,
         });
@@ -570,7 +582,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
     if (!prepared.plan) return prepared;
     return this.withEstimate({
       ...prepared,
-      plan: withFewerImages(prepared.plan, this.data.settings.generation.batchSize),
+      plan: withFewerImages(
+        prepared.plan,
+        batchSizeFor(this.data.settings.tasks.commentary.provider, this.data.settings.generation.batchSize)
+      ),
       fewerImages: true,
     });
   }
@@ -580,39 +595,74 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const asProvider = (id: ProviderId | "none"): ProviderId => (id === "none" ? "claude-cli" : id);
     const estimate: BudgetEstimate = p.plan
       ? estimateLecture(p.plan, p.context, p.preview.altData.summary, asProvider(tasks.commentary.provider), asProvider(tasks.concepts.provider))
-      : {
-          // No PDF: the 1.x lecture-level flow (summary passes + concepts).
-          calls: 3,
-          inputTokens: Math.ceil(Math.min(p.preview.altData.transcript?.length ?? 0, 15000) + p.preview.altData.summary.length) + 4000,
-          outputTokens: 8000,
-          imagesSent: 0,
-          slidesTotal: 0,
-          slidesGenerated: 0,
-          slidesTemplated: 0,
-          slidesDeduped: 0,
-          slidesReused: 0,
-        };
+      : this.estimateLectureLevel(p.preview, asProvider(tasks.commentary.provider), asProvider(tasks.concepts.provider));
     return { ...p, estimate, overCap: exceedsCap(estimate, this.data.settings.generation.tokenCapPerLecture) };
   }
 
-  /** Run a prepared CLI import. Cancel with `hooks.signal`; nothing is written when cancelled. */
+  /**
+   * No PDF: the 1.x lecture-level flow (one transcript pass when there is a
+   * transcript, then concepts), estimated from the same prompt templates.
+   */
+  private estimateLectureLevel(preview: ImportPreview, commentary: ProviderId, concepts: ProviderId): BudgetEstimate {
+    const alt = preview.altData;
+    const transcript = (alt.transcript ?? "").slice(0, 15000);
+    const calls: CallShape[] = [];
+    if (transcript && alt.summary.length < 2500) {
+      calls.push({
+        promptText: summaryEnhanceTranscriptSystemTemplate + summaryEnhanceTranscriptTemplate + alt.summary + transcript,
+        images: 0,
+        outputTokens: 3000,
+        schema: false,
+      });
+    }
+    const main = estimateCalls(calls, commentary);
+    // Concepts read the (enhanced) summary: assume about 6000 characters.
+    const concept = estimateCalls(
+      [{ promptText: conceptExtractionTemplateText + "가".repeat(Math.max(alt.summary.length, 6000)), images: 0, outputTokens: 3800, schema: false }],
+      concepts
+    );
+    return {
+      calls: main.calls + concept.calls,
+      inputTokens: main.inputTokens + concept.inputTokens,
+      outputTokens: main.outputTokens + concept.outputTokens,
+      imagesSent: 0,
+      slidesTotal: 0,
+      slidesGenerated: 0,
+      slidesTemplated: 0,
+      slidesDeduped: 0,
+      slidesReused: 0,
+    };
+  }
+
+  /** Every running CLI import, aborted on plugin unload (review M2). */
+  private activeJobs = new Set<AbortController>();
+
+  /**
+   * Run a prepared CLI import. Cancel with `hooks.signal`; nothing is written
+   * when cancelled. Usage is recorded even when the run fails or the update
+   * is declined, since the tokens were spent.
+   */
   async runCliImport(prepared: PreparedImport, hooks: CliImportHooks = {}): Promise<ImportRecord> {
     const settings = this.data.settings;
     const job = createJobDir();
     const usage = new UsageTracker();
     usage.onChange((total) => hooks.onUsage?.(total));
+    const controller = new AbortController();
+    const forward = () => controller.abort();
+    if (hooks.signal?.aborted) controller.abort();
+    hooks.signal?.addEventListener("abort", forward, { once: true });
+    this.activeJobs.add(controller);
+    const signal = controller.signal;
     try {
-      const commentaryLlm = await this.providerFor("commentary", job, usage, hooks.signal);
-      const conceptLlm = await this.providerFor("concepts", job, usage, hooks.signal);
+      const commentaryLlm = await this.providerFor("commentary", job, usage, signal);
+      const conceptLlm = await this.providerFor("concepts", job, usage, signal);
       const { preview, subject, examPeriod, url, plan, pdfData } = prepared;
       const altData = preview.altData;
 
       if (!plan || !pdfData) {
         // No PDF: 1.x lecture-level note, generated by the CLI provider.
         hooks.onStep?.("overview");
-        const record = await this.runLegacyImport(url, preview, subject, examPeriod, commentaryLlm, conceptLlm, hooks.onProgress, hooks.onConfirmUpdate);
-        await this.recordUsage(usage);
-        return record;
+        return await this.runLegacyImport(url, preview, subject, examPeriod, commentaryLlm, conceptLlm, hooks.onProgress, hooks.onConfirmUpdate, signal);
       }
 
       const pdfProcessor = this.pdfProcessor!;
@@ -625,11 +675,17 @@ export default class Alt2ObsidianPlugin extends Plugin {
         commentaryLlm,
         conceptLlm,
         renderImage: (page) => pdfProcessor.renderPageJpeg(pdfData, page),
-        signal: hooks.signal,
+        signal,
         onStep: hooks.onStep,
         onBatch: hooks.onBatch,
       });
-      if (hooks.signal?.aborted) throw new Error("취소되었습니다");
+      if (signal.aborted) throw new CliRunError("aborted", "취소되었습니다");
+      // Nothing generated at all: keep the existing note as it is (review H1).
+      const llmSlides = plan.slides.filter((s) => s.mode === "llm").length;
+      if (llmSlides > 0 && run.slidesResult.generatedCount === 0) {
+        const first = run.slidesResult.errors[0]?.reason ?? "알 수 없는 오류";
+        throw new Error(`슬라이드 해설을 하나도 만들지 못해 노트를 저장하지 않았습니다: ${first}`);
+      }
 
       hooks.onStep?.("save");
       const existingConceptNames = new Set(prepared.context.knownConcepts);
@@ -648,7 +704,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         subject,
         [formatUsageFrontmatter(usage.total(), providerLabel)]
       );
-      const record = await this.saveLecture({
+      return await this.saveLecture({
         url,
         altData,
         subject,
@@ -658,12 +714,21 @@ export default class Alt2ObsidianPlugin extends Plugin {
         pdfData,
         onProgress: hooks.onProgress,
         onConfirmUpdate: hooks.onConfirmUpdate,
+        signal,
       });
-      await this.recordUsage(usage);
-      return record;
     } finally {
+      hooks.signal?.removeEventListener("abort", forward);
+      this.activeJobs.delete(controller);
       removeJobDir(job);
+      if (usage.total().calls > 0) {
+        await this.recordUsage(usage).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
+      }
     }
+  }
+
+  /** Abort every running CLI import (plugin unload). */
+  abortAllJobs(): void {
+    for (const c of this.activeJobs) c.abort();
   }
 
   /** Cumulative usage and recently used models (spec 5.5, 4.2). */
@@ -723,15 +788,38 @@ export default class Alt2ObsidianPlugin extends Plugin {
     return found.path;
   }
 
-  /** 1.x data or a fresh install: use the Claude CLI for the tasks when it is installed. */
+  /**
+   * Once after a 1.x migration or a fresh install (review H2). Nothing here
+   * calls a model: the check is `claude auth status`.
+   * - A working 1.x setup (Gemini key, or Ollama) is kept; the settings show
+   *   a "switch to Claude CLI" button and a Notice says so.
+   * - Without one, the Claude CLI becomes the default when it is installed
+   *   and logged in.
+   */
   private async applyCliDefaultOnce(): Promise<void> {
     if (!this.data.pendingCliDefault) return;
     const claude = await this.detectCli("claude");
+    const usable = !!claude && (await probeCliLogin("claude", claude.path));
     delete this.data.pendingCliDefault;
-    if (claude) {
+    const action = cliDefaultAction(this.data.settings, usable);
+    if (action === "switch") {
       applyClaudeDefaults(this.data.settings);
-      new Notice("Alt2Obsidian 2.0: Claude CLI를 찾아 슬라이드 해설과 개념 추출을 Claude CLI로 설정했습니다. 설정에서 바꿀 수 있습니다.");
+      new Notice("Alt2Obsidian 2.0: 로그인된 Claude CLI를 찾아 슬라이드 해설과 개념 추출에 쓰도록 설정했습니다. 설정에서 바꿀 수 있습니다.");
+    } else if (action === "offer") {
+      this.data.cliSwitchOffered = true;
+      new Notice("Alt2Obsidian 2.0: Claude CLI를 찾았습니다. 기존 설정은 그대로 두었습니다. API 키 없이 쓰려면 설정 > LLM 연결에서 'Claude CLI로 전환'을 누르세요.");
     }
+    await this.savePluginData();
+  }
+
+  /** Settings button: switch the tasks to the Claude CLI after a free login check. */
+  async switchToClaudeCli(): Promise<void> {
+    const bin = await this.resolveBin("claude");
+    if (!(await probeCliLogin("claude", bin))) {
+      throw new Error("Claude CLI에 로그인되어 있지 않습니다. 터미널에서 claude를 한 번 실행해 로그인한 뒤 다시 시도하세요.");
+    }
+    applyClaudeDefaults(this.data.settings);
+    delete this.data.cliSwitchOffered;
     await this.savePluginData();
   }
 
@@ -758,7 +846,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
     pdfDataPromise: Promise<ArrayBuffer | null>,
     materialContextPromise: Promise<LectureMaterialContext | null>,
     onProgress?: (stage: string, percent: number) => void,
-    onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>
+    onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>,
+    signal?: AbortSignal
   ): Promise<ImportRecord> {
     onProgress?.("부분 노트 생성 중...", 50);
 
@@ -799,6 +888,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       onProgress?.("Vault에 저장 중...", 90);
     }
 
+    if (signal?.aborted) throw new CliRunError("aborted", "취소되었습니다");
     const saveResult = await vm.saveManagedNote(lectureMarkdown, notePath);
 
     let pdfPath: string | undefined;

@@ -26,7 +26,7 @@ try {
 
   const dry = bench(["--provider", "claude-cli", "--dry-run"]);
   assert.match(dry, /\| mode +\| dry run/);
-  assert.match(dry, /5 total: 2 generated, 2 template, 1 duplicate/);
+  assert.match(dry, /5 total: 3 generated, 1 template, 1 duplicate/);
   assert.equal(s.calls().length, 0, "dry run makes no CLI call");
   console.log("PASS: bench dry run prints the plan and estimate without calling a CLI");
 

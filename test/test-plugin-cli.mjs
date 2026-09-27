@@ -90,7 +90,24 @@ const preview = () => ({
 
 const s = fakeSession("ok");
 try {
-  // 1.x data: settings kept, Claude CLI becomes the default once found.
+  // Fresh install without a Gemini key: the logged-in Claude CLI becomes the default.
+  {
+    const fresh = await makePlugin(undefined);
+    fresh.plugin.data.settings.claudePath = FAKE_CLAUDE;
+    await fresh.plugin.applyCliDefaultOnce();
+    assert.deepEqual(fresh.plugin.data.settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
+    // Logged out: nothing switches.
+    process.env.FAKE_CLAUDE_LOGGED_OUT = "1";
+    const loggedOut = await makePlugin(undefined);
+    loggedOut.plugin.data.settings.claudePath = FAKE_CLAUDE;
+    await loggedOut.plugin.applyCliDefaultOnce();
+    assert.equal(loggedOut.plugin.data.settings.tasks.commentary.provider, "gemini");
+    await assert.rejects(loggedOut.plugin.switchToClaudeCli(), /로그인되어 있지 않습니다/);
+    delete process.env.FAKE_CLAUDE_LOGGED_OUT;
+    assert.equal(s.calls().length, 0, "the login check never calls a model");
+  }
+
+  // 1.x data with a Gemini key: kept, the switch is only offered (review H2).
   const { plugin, files, stored } = await makePlugin({
     settings: { apiKey: "old-key", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Alt2Obsidian", language: "ko", rateDelayMs: 5000 },
     recentImports: [],
@@ -98,15 +115,18 @@ try {
   assert.equal(plugin.data.pendingCliDefault, true);
   plugin.data.settings.claudePath = FAKE_CLAUDE;
   await plugin.applyCliDefaultOnce();
+  assert.equal(plugin.data.settings.tasks.commentary.provider, "gemini", "working Gemini setup kept");
+  assert.equal(plugin.data.cliSwitchOffered, true);
+  assert.equal(stored().pendingCliDefault, undefined);
+  await plugin.switchToClaudeCli();
   assert.equal(plugin.data.settings.tasks.commentary.provider, "claude-cli");
   assert.equal(plugin.data.settings.tasks.concepts.model, "haiku");
   assert.equal(plugin.data.settings.apiKey, "old-key");
   assert.equal(plugin.data.settings.geminiModel, "gemma-3-27b-it");
   assert.equal(plugin.data.cliDetection.claude.version, "2.1.283 (Claude Code)");
-  assert.equal(stored().pendingCliDefault, undefined);
   assert.ok(plugin.isCliCommentary());
   plugin.pdfProcessor = pdfStub;
-  console.log("PASS: 1.x settings migrate, Claude CLI detected and made the default, old values kept");
+  console.log("PASS: CLI default only without a working setup and after a free login check; 1.x Gemini users get an offer");
 
   // Prepare: no CLI call, estimate matches the plan.
   const prepared = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311", "midterm");
@@ -125,14 +145,14 @@ try {
   assert.equal(s.calls().length, prepared.estimate.calls, "estimated call count");
   const note = files.get(record.path);
   assert.ok(note.startsWith("---\n"));
-  assert.match(note, /alt2obs_usage: \{provider: "Claude CLI", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
+  assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
   assert.match(note, /tags: \[csed311, cache, memory, midterm\]/);
   assert.equal((note.match(/<!-- alt2obs:meta img:/g) ?? []).length, 6);
   assert.ok(files.has("Alt2Obsidian/CSED311/Concepts/캐시.md"));
   assert.ok(files.has("Alt2Obsidian/CSED311/Lec7 Caches.pdf"));
   assert.equal(plugin.data.usageTotals.lectures, 1);
   assert.equal(plugin.data.usageTotals.calls, lastUsage.calls);
-  assert.deepEqual(plugin.data.settings.recentModels["claude-cli"], ["haiku"]);
+  assert.deepEqual(plugin.data.settings.recentModels["claude-cli"], ["haiku", "sonnet"]);
   assert.equal(plugin.data.recentImports[0].path, record.path);
   console.log(`PASS: CLI import writes the note (usage frontmatter, meta, tags), concepts and PDF; ${lastUsage.calls} calls recorded`);
 
@@ -150,9 +170,42 @@ try {
   assert.ok(files.get(record.path).includes("내 메모 유지"));
   console.log("PASS: re-import reuses all unchanged slides (2 calls), keeps the memo");
 
+  // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).
+  {
+    // The CLI answers (tokens spent) but never with valid JSON.
+    process.env.FAKE_CLI_MODE = "badjson";
+    plugin.data.settings.generation.onlyChangedSlides = false;
+    const warn = console.warn;
+    console.warn = () => {};
+    const snap = files.get(record.path);
+    const callsBefore = plugin.data.usageTotals.calls;
+    const failing = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");
+    await assert.rejects(plugin.runCliImport(failing), /하나도 만들지 못해 노트를 저장하지 않았습니다/);
+    assert.equal(files.get(record.path), snap);
+    console.warn = warn;
+    assert.ok(plugin.data.usageTotals.calls > callsBefore, "spent calls are counted");
+    // Declining the update modal still records usage.
+    process.env.FAKE_CLI_MODE = "ok";
+    const before2 = plugin.data.usageTotals.calls;
+    await assert.rejects(plugin.runCliImport(await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311"), { onConfirmUpdate: async () => false }), /취소/);
+    assert.ok(plugin.data.usageTotals.calls > before2);
+    assert.equal(files.get(record.path), snap);
+    console.log("PASS: a run with no generated slide writes nothing; usage is recorded even when the update is declined");
+  }
+
+  // Unload aborts running jobs (review M2).
+  {
+    process.env.FAKE_CLI_MODE = "hang";
+    const job = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");
+    const run = plugin.runCliImport(job);
+    for (let i = 0; i < 50 && s.pids().length < 2; i++) await sleep(100);
+    plugin.onunload();
+    await assert.rejects(run);
+    console.log("PASS: plugin unload aborts a running CLI import");
+  }
+
   // Cancel: the CLI is killed and nothing is written.
   process.env.FAKE_CLI_MODE = "hang";
-  plugin.data.settings.generation.onlyChangedSlides = false;
   const snapshot = files.get(record.path);
   const third = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");
   const ctrl = new AbortController();

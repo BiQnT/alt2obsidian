@@ -60,7 +60,7 @@ for (const [label, Provider, bin] of [
     assert.equal(res.slides.length, 14);
     assert.equal(res.slides[0].commentary, "표지 슬라이드: **Lecture 7 Caches**");
     assert.equal(res.slides[13].commentary, "마무리 슬라이드입니다.");
-    assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "슬라이드 2의 요지");
+assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "슬라이드 2의 요지");
     const calls = s.calls();
     assert.equal(calls.length, 3);
     assert.deepEqual(calls.map((c) => c.images.length), [1, 1, 0], "images only for visual slides");
@@ -125,18 +125,86 @@ for (const [label, Provider, bin] of [
   }
 }
 
-// ---- timeout: batch retried once, then reported ----
+// ---- timeout is fatal: no retry, the run stops (review M3) ----
 {
-  const small = m.planDeck({ ...d, transcript: null, transcriptCapChars: 200, batchSize: 8, deckTitle: "L7" });
-  const one = { ...small, batches: small.batches.slice(0, 1) };
   const s = fakeSession("hang");
   const job = m.createJobDir();
   try {
-    const res = await new m.BatchCommentaryGenerator(provider(m.ClaudeCliProvider, FAKE_CLAUDE, job, new m.UsageTracker(), { timeoutMs: 800 })).generate({ plan: one, context, renderImage });
-    assert.equal(s.calls().length, 2);
-    assert.equal(res.errors.length, 4);
-    assert.ok(res.errors.every((e) => /응답이 없어 중단/.test(e.reason)));
-    console.log("PASS: a timed-out batch is retried once, then its slides are reported");
+    const res = await new m.BatchCommentaryGenerator(provider(m.ClaudeCliProvider, FAKE_CLAUDE, job, new m.UsageTracker(), { timeoutMs: 800 })).generate({ plan, context, renderImage });
+    assert.equal(s.calls().length, 1, "no retry, no further batch after a timeout");
+    assert.equal(res.errors.length, 12);
+    assert.ok(res.errors.slice(0, 4).every((e) => /응답이 없어 중단/.test(e.reason)));
+    assert.ok(res.errors.slice(4).every((e) => /중단했습니다/.test(e.reason)));
+    console.log("PASS: a timeout stops the run after one call, every remaining slide reported");
+  } finally {
+    m.removeJobDir(job);
+    s.cleanup();
+  }
+}
+
+// ---- whole-call failures are not retried; two in a row stop the run ----
+{
+  const s = fakeSession("crash");
+  const job = m.createJobDir();
+  try {
+    const res = await new m.BatchCommentaryGenerator(provider(m.CodexCliProvider, FAKE_CODEX, job, new m.UsageTracker())).generate({ plan, context, renderImage });
+    const pagesOf = (c) => [...c.stdin.matchAll(/^### 슬라이드 (\d+)/gm)].map((x) => Number(x[1]));
+    assert.deepEqual(s.calls().map(pagesOf), [[2, 3, 4, 5], [6, 7, 8, 9]], "no retry of a failed call; stop after 2 failures");
+    assert.equal(res.errors.length, 12);
+    assert.ok(res.errors.slice(8).every((e) => /2번 연속 실패/.test(e.reason)));
+    console.log("PASS: failed calls are not retried, two consecutive failures stop the run");
+  } finally {
+    m.removeJobDir(job);
+    s.cleanup();
+  }
+}
+
+// ---- model text that mentions a limit is an invalid answer, not a usage limit (review L2) ----
+{
+  const s = fakeSession("textlimit");
+  const job = m.createJobDir();
+  try {
+    const one = { ...plan, batches: plan.batches.slice(0, 1) };
+    const res = await new m.BatchCommentaryGenerator(provider(m.ClaudeCliProvider, FAKE_CLAUDE, job, new m.UsageTracker())).generate({ plan: one, context, renderImage });
+    assert.equal(s.calls().length, 2, "invalid answer asked for once more");
+    assert.ok(res.errors.slice(0, 4).every((e) => /JSON 형식 오류/.test(e.reason)), JSON.stringify(res.errors));
+    console.log("PASS: a model answer mentioning a limit is retried as invalid, not treated as a usage limit");
+  } finally {
+    m.removeJobDir(job);
+    s.cleanup();
+  }
+}
+
+// ---- failed re-import keeps the previous commentary (review H1) ----
+{
+  const previous = (page, hash, withMeta) => ({
+    slideNum: page,
+    hash,
+    commentary: `이전 해설 ${page}`,
+    imageSignal: withMeta ? "0".repeat(128) : null,
+    gist: withMeta ? `이전 요지 ${page}` : "",
+    meta: withMeta ? m.formatSlideMeta("0".repeat(128), `이전 요지 ${page}`) : "",
+  });
+  const existing = [previous(2, plan.slides[1].hash, true), previous(3, "ffffffff", false)];
+  const withPrev = m.planDeck({ ...d, transcript: null, transcriptCapChars: 200, batchSize: 8, deckTitle: "L7", existing });
+  assert.equal(withPrev.slides[1].previous.commentary, "이전 해설 2", "hash match");
+  assert.equal(withPrev.slides[2].previous.commentary, "이전 해설 3", "same-number fallback");
+  const s = fakeSession("dropalways:2,dropalways:3,dropalways:4");
+  const job = m.createJobDir();
+  try {
+    const one = { ...withPrev, batches: withPrev.batches.slice(0, 1) };
+    const res = await new m.BatchCommentaryGenerator(provider(m.ClaudeCliProvider, FAKE_CLAUDE, job, new m.UsageTracker())).generate({ plan: one, context, renderImage });
+    const byNum = new Map(res.slides.map((x) => [x.slideNum, x]));
+    assert.equal(byNum.get(2).commentary, "이전 해설 2");
+    assert.equal(m.parseSlideMeta(byNum.get(2).meta).gist, "이전 요지 2", "old meta kept");
+    assert.equal(byNum.get(3).commentary, "이전 해설 3");
+    assert.equal(byNum.get(3).meta, undefined);
+    assert.ok(!byNum.has(4), "no previous section: listed as failed");
+    assert.deepEqual(res.keptPrevious, [2, 3]);
+    assert.equal(res.generatedCount, 1, "slide 5 was generated");
+    assert.deepEqual(res.errors.filter((e) => e.slideNum <= 5).map((e) => e.slideNum), [2, 3, 4]);
+    assert.match(res.errors[0].reason, /이전 해설을 유지/);
+    console.log("PASS: failed slides keep their previous commentary and meta, and are listed as warnings");
   } finally {
     m.removeJobDir(job);
     s.cleanup();

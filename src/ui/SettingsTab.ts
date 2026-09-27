@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type Alt2ObsidianPlugin from "../main";
 import { CliName, EffortLevel, PresetId, ProviderId, TaskId, TaskLLMSetting } from "../types";
 import {
@@ -60,8 +60,36 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   private renderConnections(containerEl: HTMLElement): void {
     containerEl.createEl("h3", { text: "LLM 연결" });
     const grid = containerEl.createDiv({ cls: "alt2obsidian-cards" });
-    this.renderCliCard(grid, "claude", "Claude CLI", "claudePath");
-    this.renderCliCard(grid, "codex", "Codex CLI", "codexPath");
+    const claudeCard = this.renderCliCard(grid, "claude", "Claude CLI", "claudePath");
+    if (this.settings.tasks.commentary.provider !== "claude-cli") {
+      new Setting(claudeCard)
+        .setName("Claude CLI로 전환")
+        .setDesc(
+          (this.plugin.data.cliSwitchOffered ? "기존 설정을 그대로 두었습니다. " : "") +
+            "슬라이드 해설은 sonnet (medium), 개념 추출은 haiku (low)로 바꿉니다. 로그인 여부만 확인하고 모델은 호출하지 않습니다."
+        )
+        .addButton((b) =>
+          b.setButtonText("전환").onClick(async () => {
+            b.setDisabled(true);
+            try {
+              await this.plugin.switchToClaudeCli();
+              new Notice("슬라이드 해설과 개념 추출을 Claude CLI로 바꿨습니다.");
+              this.display();
+            } catch (e) {
+              new Notice(e instanceof Error ? e.message : String(e));
+              b.setDisabled(false);
+            }
+          })
+        );
+    }
+    const codexCard = this.renderCliCard(grid, "codex", "Codex CLI", "codexPath");
+    codexCard.createDiv({
+      cls: "alt2obsidian-muted",
+      text:
+        "Codex는 호출마다 자체 지시문과 ~/.codex/AGENTS.md가 함께 실려 고정 비용이 큽니다 (이 플러그인 설정으로 줄인 뒤에도 호출당 약 12k 토큰). " +
+        "그래서 Codex는 배치 크기의 두 배로 묶어 보냅니다. 또 읽기 전용 샌드박스라도 Codex는 사용자 계정이 읽을 수 있는 파일을 읽을 수 있습니다. " +
+        "프롬프트로 주어진 내용만 쓰라고 지시하지만, 이 위험을 감수하는 경우에만 쓰세요.",
+    });
 
     const gemini = grid.createDiv({ cls: "alt2obsidian-card" });
     gemini.createEl("h4", { text: "Gemini API" });
@@ -138,7 +166,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     name: CliName,
     label: string,
     pathKey: "claudePath" | "codexPath"
-  ): void {
+  ): HTMLElement {
     const card = grid.createDiv({ cls: "alt2obsidian-card" });
     card.createEl("h4", { text: label });
     const status = card.createDiv({ cls: "alt2obsidian-card-status" });
@@ -184,6 +212,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
           renderStatus();
         })
       );
+    return card;
   }
 
   // ---- per-task table ----
@@ -313,7 +342,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
           })
         );
 
-    numberSetting("배치 크기", "CLI 호출 한 번에 보낼 슬라이드 수. 이미지가 섞인 배치는 절반만 보냅니다.", () => g.batchSize, (n) => (g.batchSize = n), 1);
+    numberSetting("배치 크기", "CLI 호출 한 번에 보낼 슬라이드 수. 이미지가 섞인 배치는 절반만 보냅니다. Codex는 호출당 고정 비용이 커서 이 값의 두 배로 묶습니다.", () => g.batchSize, (n) => (g.batchSize = n), 1);
     new Setting(containerEl)
       .setName("이미지 전송 규칙")
       .setDesc("자동: 도표·그림 위주 슬라이드와 텍스트가 없는 스캔 PDF만 이미지(긴 변 1024px JPEG)를 함께 보냅니다.")

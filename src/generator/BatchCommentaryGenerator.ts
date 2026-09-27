@@ -5,18 +5,21 @@
 //   1. fixed instructions      prompts/slide-commentary-batch.system.md
 //   2. lecture-wide context    prompts/slide-commentary-batch.context.md
 //   3. this batch's slides     prompts/slide-commentary-batch.user.md (last)
-// The answer is JSON enforced by a schema. Slides missing from the answer or
-// failing the checks are asked for once more, alone (spec 4.2 rule 4). Slides
-// still failing end up in `errors`, which the note lists under
-// "⚠️ 처리 실패 슬라이드" like 1.x.
+// The answer is JSON (Codex: --output-schema; Claude: schema stated at the
+// end of the prompt), validated here. Slides missing from the answer or
+// failing the checks are asked for once more, alone (spec 4.2 rule 4). A
+// failed call is not retried; a fatal error (timeout, missing CLI, not
+// logged in, usage limit) or two failed calls in a row stop the run. Slides
+// still failing keep their previous commentary when the note had one, and
+// are listed under "⚠️ 처리 실패 슬라이드" like 1.x.
 
 import { ImageInput, LLMProvider, PerSlideGenerationResult, SlideSection } from "../types";
 import { renderPrompt } from "../prompts/render";
 import { formatSlideMeta } from "../core/slideMeta";
 import { templateGist } from "../core/prep/SlideAnalyzer";
 import { DeckPlan, PlannedSlide } from "../pipeline/batchPlan";
-import { isAbortError } from "../llm/cli/CliRunner";
-import { isUsageLimitError } from "../llm/cli/CliProviderBase";
+import { CliRunError, isAbortError } from "../llm/cli/CliRunner";
+import { isFatalCliError, isUsageLimitError } from "../llm/cli/CliProviderBase";
 import batchSystemTemplate from "../../prompts/slide-commentary-batch.system.md";
 import batchContextTemplate from "../../prompts/slide-commentary-batch.context.md";
 import batchUserTemplate from "../../prompts/slide-commentary-batch.user.md";
@@ -164,7 +167,14 @@ export interface BatchGenerationResult extends PerSlideGenerationResult {
   gists: Map<number, string>;
   /** Pages sent in each call, retries included (benchmark detail). */
   calls: number[][];
+  /** LLM slides that got new commentary in this run. */
+  generatedCount: number;
+  /** Failed LLM slides that kept their previous commentary (listed in `errors` too). */
+  keptPrevious: number[];
 }
+
+/** Whole-call failures in a row after which the run stops (review M3). */
+const MAX_CONSECUTIVE_CALL_FAILURES = 2;
 
 export class BatchCommentaryGenerator {
   constructor(private llm: LLMProvider) {}
@@ -176,12 +186,17 @@ export class BatchCommentaryGenerator {
     const contextBlock = buildLectureContextBlock(opts.context, plan);
     const byPage = new Map(plan.slides.map((s) => [s.page, s]));
     const done = new Map<number, BatchItem>();
-    const errors: PerSlideGenerationResult["errors"] = [];
+    const failures = new Map<number, string>();
     const calls: number[][] = [];
     const llmTotal = plan.slides.filter((s) => s.mode === "llm").length;
     let stopReason: string | null = null;
+    let consecutiveCallFailures = 0;
 
-    const runCall = async (slides: PlannedSlide[]): Promise<Map<number, string>> => {
+    /**
+     * One call. Returns the slides whose answer was missing or invalid (to be
+     * asked for again), or null when the call itself failed (not retried).
+     */
+    const runCall = async (slides: PlannedSlide[]): Promise<Map<number, string> | null> => {
       calls.push(slides.map((s) => s.page));
       const images: ImageInput[] = [];
       for (const s of slides) {
@@ -189,8 +204,9 @@ export class BatchCommentaryGenerator {
         const img = await opts.renderImage(s.page);
         if (img) images.push(img);
       }
+      let raw: unknown;
       try {
-        const raw = await this.llm.generateJSON(buildBatchUserPrompt(contextBlock, slides), (r) => r, {
+        raw = await this.llm.generateJSON(buildBatchUserPrompt(contextBlock, slides), (r) => r, {
           systemPrompt: system,
           schema: BATCH_SCHEMA,
           images,
@@ -198,37 +214,51 @@ export class BatchCommentaryGenerator {
           // Retries are per failed slide, below.
           attempts: 1,
         });
-        const { ok, failed } = checkBatchAnswer(raw, slides);
-        for (const [page, item] of ok) done.set(page, item);
-        return failed;
       } catch (e) {
         if (isAbortError(e) || opts.signal?.aborted) throw e;
         const msg = e instanceof Error ? e.message : String(e);
-        if (isUsageLimitError(e)) stopReason = `사용 한도에 걸려 남은 슬라이드를 중단했습니다: ${msg}`;
-        return new Map(slides.map((s) => [s.page, msg]));
+        if (!(e instanceof CliRunError)) {
+          // The CLI answered but not with parsable JSON: every slide is invalid.
+          consecutiveCallFailures = 0;
+          return new Map(slides.map((s) => [s.page, `응답 JSON 형식 오류: ${msg.slice(0, 120)}`]));
+        }
+        for (const s of slides) failures.set(s.page, msg);
+        consecutiveCallFailures++;
+        if (isFatalCliError(e)) {
+          stopReason = isUsageLimitError(e) ? `사용 한도에 걸려 남은 슬라이드를 중단했습니다: ${msg}` : `CLI 오류로 남은 슬라이드를 중단했습니다: ${msg}`;
+        } else if (consecutiveCallFailures >= MAX_CONSECUTIVE_CALL_FAILURES) {
+          stopReason = `호출이 ${MAX_CONSECUTIVE_CALL_FAILURES}번 연속 실패해 남은 슬라이드를 중단했습니다: ${msg}`;
+        }
+        return null;
       }
+      consecutiveCallFailures = 0;
+      const { ok, failed } = checkBatchAnswer(raw, slides);
+      for (const [page, item] of ok) done.set(page, item);
+      return failed;
     };
 
     for (let b = 0; b < plan.batches.length; b++) {
       const slides = plan.batches[b].pages.map((p) => byPage.get(p)!);
       if (stopReason) {
-        for (const s of slides) errors.push({ slideNum: s.page, reason: stopReason });
+        for (const s of slides) failures.set(s.page, stopReason);
         continue;
       }
       opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: false });
-      const failed = await runCall(slides);
-      if (failed.size > 0 && !stopReason) {
+      const invalid = await runCall(slides);
+      if (invalid && invalid.size > 0 && !stopReason) {
         opts.onProgress?.({ batch: b + 1, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: true });
-        const retry = await runCall(slides.filter((s) => failed.has(s.page)));
-        for (const [page, reason] of retry) errors.push({ slideNum: page, reason });
-      } else {
-        for (const [page, reason] of failed) errors.push({ slideNum: page, reason });
+        const retry = await runCall(slides.filter((s) => invalid.has(s.page)));
+        for (const [page, reason] of retry ?? new Map<number, string>()) failures.set(page, reason);
+      } else if (invalid) {
+        for (const [page, reason] of invalid) failures.set(page, reason);
       }
     }
     opts.onProgress?.({ batch: plan.batches.length, batches: plan.batches.length, slidesDone: done.size, slidesTotal: llmTotal, retry: false });
 
     const sections: SlideSection[] = [];
     const gists = new Map<number, string>();
+    const errors: PerSlideGenerationResult["errors"] = [];
+    const keptPrevious: number[] = [];
     for (const s of plan.slides) {
       if (s.mode === "template") {
         sections.push({ slideNum: s.page, hash: s.hash, commentary: s.template ?? "", citedConcepts: [] });
@@ -245,23 +275,42 @@ export class BatchCommentaryGenerator {
         gists.set(s.page, s.reused.gist);
       } else {
         const item = done.get(s.page);
-        if (!item) continue; // listed in errors
-        sections.push({
-          slideNum: s.page,
-          hash: s.hash,
-          commentary: item.commentary,
-          citedConcepts: [],
-          meta: formatSlideMeta(s.imageSignal, item.gist),
-        });
-        gists.set(s.page, item.gist);
+        if (item) {
+          sections.push({
+            slideNum: s.page,
+            hash: s.hash,
+            commentary: item.commentary,
+            citedConcepts: [],
+            meta: formatSlideMeta(s.imageSignal, item.gist),
+          });
+          gists.set(s.page, item.gist);
+          continue;
+        }
+        const reason = failures.get(s.page) ?? "응답에 이 슬라이드가 없음";
+        if (s.previous && s.previous.commentary.trim()) {
+          // Keep the old commentary (and its old meta, so the next import tries again).
+          sections.push({
+            slideNum: s.page,
+            hash: s.hash,
+            commentary: s.previous.commentary,
+            citedConcepts: [],
+            meta: s.previous.meta || undefined,
+          });
+          if (s.previous.gist) gists.set(s.page, s.previous.gist);
+          keptPrevious.push(s.page);
+          errors.push({ slideNum: s.page, reason: `새 해설 생성 실패, 이전 해설을 유지했습니다 (${reason})` });
+        } else {
+          errors.push({ slideNum: s.page, reason });
+        }
       }
     }
-    errors.sort((a, b) => a.slideNum - b.slideNum);
     return {
       slides: sections,
       errors,
       gists,
       calls,
+      generatedCount: done.size,
+      keptPrevious,
       totalWallTimeMs: Date.now() - started,
       perSlideWallTimeMs: [],
     };

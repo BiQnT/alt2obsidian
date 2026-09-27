@@ -4,7 +4,7 @@
 // batches. The estimate and the generator both work from this plan.
 
 import { splitMultiManagedNote } from "../core/merge";
-import { parseSlideMeta, stripSlideMeta } from "../core/slideMeta";
+import { formatSlideMeta, parseSlideMeta, stripSlideMeta } from "../core/slideMeta";
 import { PageLayout, SlideInfo, sameImageSignal, templateCommentary } from "../core/prep/SlideAnalyzer";
 import { compressTranscript, splitTranscriptEvenly } from "../core/prep/TranscriptCompressor";
 
@@ -18,6 +18,12 @@ export interface PlannedSlide extends SlideInfo {
   template?: string;
   /** Previous managed body (without its meta line) and gist for reused slides. */
   reused?: { commentary: string; gist: string };
+  /**
+   * LLM slides only: the previous note's section for this slide (same hash,
+   * else same number), kept when generation fails so a failed re-import never
+   * deletes existing commentary (review H1).
+   */
+  previous?: ExistingSlide;
 }
 
 export interface Batch {
@@ -37,24 +43,25 @@ export interface ExistingSlide {
   hash: string;
   commentary: string;
   imageSignal: string | null;
+  /** "" for sections without 2.0 metadata (1.x or Skill notes). */
   gist: string;
+  /** The section's meta comment, "" when it has none. */
+  meta: string;
 }
 
-/** Slides of an existing page-anchored note that carry 2.0 metadata. */
+/** Every slide section of an existing page-anchored note. */
 export function parseExistingSlides(noteContent: string): ExistingSlide[] {
-  const out: ExistingSlide[] = [];
-  for (const s of splitMultiManagedNote(noteContent).sections) {
+  return splitMultiManagedNote(noteContent).sections.map((s) => {
     const meta = parseSlideMeta(s.managed);
-    if (!meta || !meta.gist) continue;
-    out.push({
+    return {
       slideNum: s.slideNum,
       hash: s.hash,
       commentary: stripSlideMeta(s.managed).trim(),
-      imageSignal: meta.imageSignal,
-      gist: meta.gist,
-    });
-  }
-  return out;
+      imageSignal: meta?.imageSignal ?? null,
+      gist: meta?.gist ?? "",
+      meta: meta ? formatSlideMeta(meta.imageSignal, meta.gist) : "",
+    };
+  });
 }
 
 export interface PlanInput {
@@ -92,21 +99,31 @@ export function planDeck(input: PlanInput): DeckPlan {
 
   let before = 0;
   let after = 0;
+  const used = new Set<ExistingSlide>();
   const slides: PlannedSlide[] = input.slides.map((s, i) => {
     const text = input.layouts[i]?.text ?? "";
     const template = templateCommentary(s, input.deckTitle);
     if (template !== null) return { ...s, text, transcript: "", mode: "template", template };
     const candidates = pool.get(s.hash);
-    const prev = candidates && candidates.length > 0 ? candidates[0] : undefined;
-    if (prev) candidates!.shift();
-    if (prev && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal)) {
+    const prev = candidates && candidates.length > 0 ? candidates.shift() : undefined;
+    if (prev) used.add(prev);
+    if (prev && prev.gist && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal)) {
       return { ...s, text, transcript: "", mode: "reuse", reused: { commentary: prev.commentary, gist: prev.gist } };
     }
     const compressed = compressTranscript(runChunks[i] || null, text, input.transcriptCapChars);
     before += compressed.originalChars;
     after += compressed.text.length;
-    return { ...s, text, transcript: compressed.text, mode: "llm" };
+    return { ...s, text, transcript: compressed.text, mode: "llm", previous: prev };
   });
+  // LLM slides without a hash match fall back to the unused section with the same number.
+  for (const s of slides) {
+    if (s.mode !== "llm" || s.previous) continue;
+    const byNum = (input.existing ?? []).find((e) => !used.has(e) && e.slideNum === s.page);
+    if (byNum) {
+      used.add(byNum);
+      s.previous = byNum;
+    }
+  }
 
   return {
     slides,

@@ -21,6 +21,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
   private examPeriodSelect: HTMLSelectElement | null = null;
   /** Estimate panel and run panel of the CLI path (spec 5.5). */
   private cliPanel: HTMLElement | null = null;
+  /** The running CLI import, aborted when the view closes (review M2). */
+  private runController: AbortController | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: Alt2ObsidianPlugin) {
     super(leaf);
@@ -359,6 +361,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
     }
 
     const controller = new AbortController();
+    this.runController = controller;
     const view = this.showRunPanel(prepared, () => controller.abort());
     try {
       const result = await this.plugin.runCliImport(prepared, {
@@ -378,6 +381,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
         return;
       }
       throw e;
+    } finally {
+      this.runController = null;
     }
   }
 
@@ -425,7 +430,17 @@ export class Alt2ObsidianSidebarView extends ItemView {
       }
       const actions = panel.createDiv({ cls: "alt2obsidian-estimate-actions" });
       const start = actions.createEl("button", { text: prepared.overCap ? "상한 무시하고 시작" : "시작", cls: prepared.overCap ? "" : "mod-cta" });
-      start.addEventListener("click", () => resolve("start"));
+      let armed = false;
+      start.addEventListener("click", () => {
+        // Over the cap: a second, explicit click is required (review L1).
+        if (prepared.overCap && !armed) {
+          armed = true;
+          start.textContent = `상한 ${compactTokens(cap)}을 넘겨도 시작하려면 한 번 더 누르세요`;
+          start.addClass("mod-warning");
+          return;
+        }
+        resolve("start");
+      });
       if (prepared.plan && e.imagesSent > 0 && !prepared.fewerImages) {
         const fewer = actions.createEl("button", { text: "이미지 줄이기", cls: prepared.overCap ? "mod-cta" : "" });
         fewer.addEventListener("click", () => resolve("fewer-images"));
@@ -467,6 +482,11 @@ export class Alt2ObsidianSidebarView extends ItemView {
     let current = "prep";
     return {
       step: (id: string) => {
+        // Writing has started: cancelling now could leave a half-written import (review L6).
+        if (id === "save") {
+          cancel.disabled = true;
+          cancel.textContent = "저장 중에는 취소할 수 없습니다";
+        }
         items.get(current)?.removeClass("is-active");
         items.get(current)?.addClass("is-done");
         current = id;
@@ -634,7 +654,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    // Cleanup
+    // Closing the view stops a running CLI import; its temp folder is removed.
+    this.runController?.abort();
   }
 }
 
