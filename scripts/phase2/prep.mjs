@@ -844,7 +844,8 @@ var DEFAULT_SETTINGS = {
   preset: "custom",
   recentModels: {},
   generation: DEFAULT_GENERATION,
-  altDataDir: ""
+  altDataDir: "",
+  notionFetchTool: ""
 };
 var EMPTY_USAGE = {
   calls: 0,
