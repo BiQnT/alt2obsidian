@@ -86,7 +86,21 @@ const FAKE_TOKEN = "fake-token-for-tests-0123456789";
   assert.equal(m.componentTextToMarkdown("plain memo", null), "plain memo");
   assert.equal(m.componentTextToMarkdown("[{broken", '{"contentFormat":"plate-json"}'), "[{broken");
   assert.equal(m.componentTextToMarkdown(null, null), "");
-  console.log("PASS: plate-json to markdown (headings, marks, indent lists, links, quote, code, hr, table, equations, timestamps, unknown blocks)");
+  // Containers, todos, and the raw-text fallback.
+  const nested = [
+    { type: "toggle", children: [{ type: "p", children: [{ text: "접힌 제목" }] }, { type: "p", children: [{ text: "접힌 내용" }] }] },
+    { type: "callout", children: [{ type: "p", children: [{ text: "주의" }] }, { type: "p", children: [{ text: "시험 범위" }] }] },
+    { type: "column_group", children: [{ type: "column", children: [{ type: "p", children: [{ text: "왼쪽" }] }] }, { type: "column", children: [{ type: "p", children: [{ text: "오른쪽" }] }] }] },
+    { type: "p", listStyleType: "todo", indent: 1, checked: true, children: [{ text: "복습" }] },
+    { type: "p", listStyleType: "todo", indent: 1, children: [{ text: "과제" }] },
+    { type: "action_item", checked: false, children: [{ text: "질문하기" }] },
+  ];
+  assert.equal(
+    m.plateToMarkdown(nested),
+    ["접힌 제목", "", "접힌 내용", "", "> 주의", ">", "> 시험 범위", "", "왼쪽", "", "오른쪽", "", "- [x] 복습", "- [ ] 과제", "- [ ] 질문하기"].join("\n")
+  );
+  assert.equal(m.componentTextToMarkdown(JSON.stringify({ root: { children: [{ text: "다른 형식" }] } }), '{"contentFormat":"plate-json"}'), "다른 형식", "unknown shape: raw text kept");
+  console.log("PASS: plate-json to markdown (headings, marks, indent lists, todos, links, quote, code, hr, table, equations, timestamps, containers, unknown blocks, raw-text fallback)");
 }
 
 // ---- transcript parsing and subject inference ----

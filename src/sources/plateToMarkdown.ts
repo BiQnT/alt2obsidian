@@ -113,7 +113,8 @@ export function plateToMarkdown(doc: unknown): string {
       const pad = "  ".repeat(level - 1);
       const text = renderInline(node.children).trim();
       let bullet = "-";
-      if (listStyle === "decimal" || listStyle === "lower-alpha" || listStyle === "upper-alpha" || listStyle === "lower-roman" || listStyle === "upper-roman") {
+      if (listStyle === "todo") bullet = node.checked ? "- [x]" : "- [ ]";
+      else if (listStyle === "decimal" || listStyle === "lower-alpha" || listStyle === "upper-alpha" || listStyle === "lower-roman" || listStyle === "upper-roman") {
         const start = typeof node.listStart === "number" ? node.listStart : (counters.get(level) ?? 0) + 1;
         counters.set(level, start);
         bullet = `${start}.`;
@@ -126,9 +127,10 @@ export function plateToMarkdown(doc: unknown): string {
       prevWasList = true;
       continue;
     }
-    counters.clear();
+    const todoItem = type === "action_item" || type === "todo" || type === "todo_li";
+    if (!todoItem) counters.clear();
     // Lists are joined line by line; a new block after a list starts a paragraph.
-    if (prevWasList) blocks.push("");
+    if (prevWasList && !todoItem) blocks.push("");
     prevWasList = false;
 
     const m = type.match(/^h([1-6])$/);
@@ -137,6 +139,14 @@ export function plateToMarkdown(doc: unknown): string {
       continue;
     }
     switch (type) {
+      case "action_item":
+      case "todo":
+      case "todo_li": {
+        const pad = "  ".repeat(Math.max(0, indent - 1));
+        blocks.push(`${pad}${node.checked ? "- [x]" : "- [ ]"} ${renderInline(node.children).trim()}`);
+        prevWasList = true;
+        break;
+      }
       case "blockquote": {
         const text = renderInline(node.children).trim();
         blocks.push(text.split("\n").map((l) => `> ${l}`).join("\n"), "");
@@ -160,12 +170,43 @@ export function plateToMarkdown(doc: unknown): string {
         blocks.push(`$$\n${String(node.texExpression ?? renderInline(node.children))}\n$$`, "");
         break;
       default: {
+        // Containers (toggle, callout, column_group, column, and unknown
+        // elements holding blocks) render their blocks recursively.
+        if (hasBlockChildren(node)) {
+          const inner = plateToMarkdown(node.children);
+          if (inner) blocks.push(type === "callout" ? inner.split("\n").map((l) => `> ${l}`.trimEnd()).join("\n") : inner, "");
+          break;
+        }
         const text = renderInline(node.children).trim();
         blocks.push(text, "");
       }
     }
   }
   return blocks.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+const INLINE_TYPES = new Set(["a", "inline_equation", "mention", "recording_timestamp"]);
+
+/** An element whose children are blocks, not text runs. */
+function hasBlockChildren(node: PlateNode): boolean {
+  return (node.children ?? []).some((c) => !isText(c) && !!c.type && !INLINE_TYPES.has(c.type));
+}
+
+/** Every `text` string anywhere in the value, one per line: the fallback when conversion yields nothing. */
+function plainText(value: unknown): string {
+  const out: string[] = [];
+  const walk = (v: unknown) => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+        if (k === "text" && typeof x === "string") {
+          if (x.trim()) out.push(x);
+        } else walk(x);
+      }
+    }
+  };
+  walk(value);
+  return out.join("\n");
 }
 
 /** Parse a component's content_text; plate JSON or plain text. */
@@ -181,7 +222,10 @@ export function componentTextToMarkdown(contentText: string | null | undefined, 
   const trimmed = contentText.trim();
   if (format === "plate-json" || trimmed.startsWith("[{")) {
     try {
-      return plateToMarkdown(JSON.parse(trimmed));
+      const doc = JSON.parse(trimmed);
+      const md = plateToMarkdown(doc);
+      // An unexpected shape converts to nothing: keep its text rather than lose it.
+      return md || plainText(doc).trim();
     } catch {
       return trimmed;
     }

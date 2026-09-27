@@ -313,7 +313,9 @@ function plateToMarkdown(doc) {
       const pad = "  ".repeat(level - 1);
       const text = renderInline(node.children).trim();
       let bullet = "-";
-      if (listStyle === "decimal" || listStyle === "lower-alpha" || listStyle === "upper-alpha" || listStyle === "lower-roman" || listStyle === "upper-roman") {
+      if (listStyle === "todo")
+        bullet = node.checked ? "- [x]" : "- [ ]";
+      else if (listStyle === "decimal" || listStyle === "lower-alpha" || listStyle === "upper-alpha" || listStyle === "lower-roman" || listStyle === "upper-roman") {
         const start = typeof node.listStart === "number" ? node.listStart : (counters.get(level) ?? 0) + 1;
         counters.set(level, start);
         bullet = `${start}.`;
@@ -326,8 +328,10 @@ function plateToMarkdown(doc) {
       prevWasList = true;
       continue;
     }
-    counters.clear();
-    if (prevWasList)
+    const todoItem = type === "action_item" || type === "todo" || type === "todo_li";
+    if (!todoItem)
+      counters.clear();
+    if (prevWasList && !todoItem)
       blocks.push("");
     prevWasList = false;
     const m = type.match(/^h([1-6])$/);
@@ -336,6 +340,14 @@ function plateToMarkdown(doc) {
       continue;
     }
     switch (type) {
+      case "action_item":
+      case "todo":
+      case "todo_li": {
+        const pad = "  ".repeat(Math.max(0, indent - 1));
+        blocks.push(`${pad}${node.checked ? "- [x]" : "- [ ]"} ${renderInline(node.children).trim()}`);
+        prevWasList = true;
+        break;
+      }
       case "blockquote": {
         const text = renderInline(node.children).trim();
         blocks.push(text.split("\n").map((l) => `> ${l}`).join("\n"), "");
@@ -361,12 +373,40 @@ ${String(node.texExpression ?? renderInline(node.children))}
 $$`, "");
         break;
       default: {
+        if (hasBlockChildren(node)) {
+          const inner = plateToMarkdown(node.children);
+          if (inner)
+            blocks.push(type === "callout" ? inner.split("\n").map((l) => `> ${l}`.trimEnd()).join("\n") : inner, "");
+          break;
+        }
         const text = renderInline(node.children).trim();
         blocks.push(text, "");
       }
     }
   }
   return blocks.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+var INLINE_TYPES = /* @__PURE__ */ new Set(["a", "inline_equation", "mention", "recording_timestamp"]);
+function hasBlockChildren(node) {
+  return (node.children ?? []).some((c) => !isText(c) && !!c.type && !INLINE_TYPES.has(c.type));
+}
+function plainText(value) {
+  const out = [];
+  const walk = (v) => {
+    if (Array.isArray(v))
+      v.forEach(walk);
+    else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) {
+        if (k === "text" && typeof x === "string") {
+          if (x.trim())
+            out.push(x);
+        } else
+          walk(x);
+      }
+    }
+  };
+  walk(value);
+  return out.join("\n");
 }
 function componentTextToMarkdown(contentText, metadata) {
   if (!contentText)
@@ -381,7 +421,9 @@ function componentTextToMarkdown(contentText, metadata) {
   const trimmed = contentText.trim();
   if (format === "plate-json" || trimmed.startsWith("[{")) {
     try {
-      return plateToMarkdown(JSON.parse(trimmed));
+      const doc = JSON.parse(trimmed);
+      const md = plateToMarkdown(doc);
+      return md || plainText(doc).trim();
     } catch {
       return trimmed;
     }
