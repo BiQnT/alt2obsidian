@@ -1,4 +1,4 @@
-import { App, TFolder, normalizePath } from "obsidian";
+import { App, TFile, TFolder, normalizePath } from "obsidian";
 import {
   ConceptNote,
   ExamPeriod,
@@ -186,6 +186,38 @@ export class VaultManager {
     }
 
     return savedPaths;
+  }
+
+  /**
+   * Tags already used by this subject's notes, most used first, from
+   * Obsidian's metadataCache (spec 4.8 TagIndex). Put in the prompts so the
+   * model reuses tags instead of inventing new spellings.
+   */
+  getSubjectTags(subject: string, limit = 60): string[] {
+    const prefix = normalizePath(`${this.basePath}/${sanitizeFilename(subject)}`) + "/";
+    const counts = new Map<string, number>();
+    const skip = new Set(["concept", "midterm", "final", subject.toLowerCase()]);
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!file.path.startsWith(prefix)) continue;
+      const raw = this.app.metadataCache.getFileCache(file)?.frontmatter?.tags;
+      const tags: unknown[] = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(/[,\s]+/) : [];
+      for (const t of tags) {
+        const tag = String(t).replace(/^#/, "").trim();
+        if (!tag || skip.has(tag.toLowerCase())) continue;
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, limit)
+      .map(([t]) => t);
+  }
+
+  /** Current content of a note, or null when it does not exist. */
+  async readNoteIfExists(path: string): Promise<string | null> {
+    const existing = this.app.vault.getAbstractFileByPath(normalizePath(path));
+    if (!existing || existing instanceof TFolder) return null;
+    return this.app.vault.read(existing as TFile);
   }
 
   async getExistingConceptNames(subject: string): Promise<Set<string>> {

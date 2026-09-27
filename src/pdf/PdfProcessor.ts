@@ -2,7 +2,9 @@ import { requestUrl } from "obsidian";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { extractPageTexts } from "../core/slideHash";
 import { extractLectureMaterialContext } from "../core/lectureMaterial";
-import type { LectureMaterialContext, VisionImageRef } from "../types";
+import type { ImageInput, LectureMaterialContext, VisionImageRef } from "../types";
+import type { GrayImage, PageLayout } from "../core/prep/SlideAnalyzer";
+import { ANALYSIS_LONG_EDGE, extractPageLayouts, rgbaToGray } from "../core/prep/pageLayout";
 
 export class PdfProcessor {
   /**
@@ -130,6 +132,84 @@ export class PdfProcessor {
     } catch (e) {
       console.warn("[Alt2Obsidian] PDF page render setup failed:", e);
       return [];
+    }
+  }
+
+  /**
+   * Text layouts and small grayscale renders of every page for SlideAnalyzer
+   * (spec 5.1). One document open; a page that fails to render gets null.
+   */
+  async analyzeForPrep(
+    pdfData: ArrayBuffer,
+    onProgress?: (page: number, total: number) => void
+  ): Promise<{ layouts: PageLayout[]; grays: Array<GrayImage | null> }> {
+    const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
+    try {
+      const layouts = await extractPageLayouts(pdf);
+      const grays: Array<GrayImage | null> = [];
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        onProgress?.(pageNum, pdf.numPages);
+        try {
+          const page = await pdf.getPage(pageNum);
+          const base = page.getViewport({ scale: 1 });
+          const viewport = page.getViewport({ scale: ANALYSIS_LONG_EDGE / Math.max(base.width, base.height) });
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(viewport.width));
+          canvas.height = Math.max(1, Math.round(viewport.height));
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          if (!ctx) {
+            grays.push(null);
+            continue;
+          }
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          await page.render({ canvasContext: ctx, viewport }).promise;
+          const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          grays.push(rgbaToGray(pixels.data, canvas.width, canvas.height));
+          canvas.width = 0;
+          canvas.height = 0;
+        } catch (e) {
+          console.warn(`[Alt2Obsidian] analysis render failed for page ${pageNum}:`, e);
+          grays.push(null);
+        }
+      }
+      return { layouts, grays };
+    } finally {
+      await pdf.destroy();
+    }
+  }
+
+  /** Page as JPEG, long edge `longEdge` px, quality `quality` (spec 5.2). */
+  async renderPageJpeg(
+    pdfData: ArrayBuffer,
+    pageNum: number,
+    longEdge = 1024,
+    quality = 0.8
+  ): Promise<ImageInput | null> {
+    try {
+      const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
+      try {
+        const page = await pdf.getPage(pageNum);
+        const base = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: longEdge / Math.max(base.width, base.height) });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(viewport.width);
+        canvas.height = Math.round(viewport.height);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        const base64 = canvas.toDataURL("image/jpeg", quality).replace(/^data:image\/jpeg;base64,/, "");
+        canvas.width = 0;
+        canvas.height = 0;
+        return { pageNum, mimeType: "image/jpeg", base64 };
+      } finally {
+        await pdf.destroy();
+      }
+    } catch (e) {
+      console.warn(`[Alt2Obsidian] JPEG render failed for page ${pageNum}:`, e);
+      return null;
     }
   }
 }

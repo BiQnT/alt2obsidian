@@ -300,3 +300,137 @@
   gap: 8px;
   margin-top: 18px;
 }
+
+/* ---- 2.0: CLI estimate and run panels (sidebar) ---- */
+.alt2obsidian-cli-panel {
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.alt2obsidian-estimate-main {
+  font-weight: 600;
+  margin: 4px 0 6px;
+}
+
+.alt2obsidian-estimate-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: var(--font-ui-small);
+}
+
+.alt2obsidian-estimate-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.alt2obsidian-steps {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.alt2obsidian-steps li.is-active {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.alt2obsidian-steps li.is-done {
+  color: var(--text-faint);
+}
+
+.alt2obsidian-steps li.is-done::after {
+  content: " ✓";
+}
+
+.alt2obsidian-usage-line {
+  margin: 6px 0;
+  font-size: var(--font-ui-smaller);
+  font-family: var(--font-monospace);
+}
+
+.alt2obsidian-cancel-btn {
+  margin-top: 4px;
+}
+
+.alt2obsidian-muted {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+/* ---- 2.0: settings ---- */
+.alt2obsidian-disclosure {
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-left: 3px solid var(--interactive-accent);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+}
+
+.alt2obsidian-disclosure p {
+  margin: 4px 0 0;
+}
+
+.alt2obsidian-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.alt2obsidian-card {
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+}
+
+.alt2obsidian-card h4 {
+  margin: 4px 0;
+}
+
+.alt2obsidian-card .setting-item {
+  padding: 6px 0;
+}
+
+.alt2obsidian-card-status {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.alt2obsidian-card-status.is-ok {
+  color: var(--text-success);
+}
+
+.alt2obsidian-card-status.is-missing {
+  color: var(--text-warning);
+}
+
+.alt2obsidian-mono {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  word-break: break-all;
+}
+
+.alt2obsidian-task-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 12px;
+}
+
+.alt2obsidian-task-table th,
+.alt2obsidian-task-table td {
+  padding: 4px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--background-modifier-border);
+  vertical-align: top;
+}
+
+.alt2obsidian-task-table input[type="text"] {
+  width: 100%;
+  min-width: 120px;
+}

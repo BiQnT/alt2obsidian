@@ -9,10 +9,35 @@ import {
   ConceptData,
   ImportUpdateSummary,
   LectureMaterialContext,
+  CliDetection,
+  CliName,
+  LLMUsage,
+  ProviderId,
+  TaskId,
 } from "./types";
 import { AltScraper } from "./scraper/AltScraper";
 import { PdfProcessor } from "./pdf/PdfProcessor";
-import { createProvider } from "./llm/index";
+import { createTaskProvider } from "./llm/index";
+import {
+  cliNotFoundMessage,
+  createJobDir,
+  readCliVersion,
+  removeJobDir,
+  resolveCliBinary,
+} from "./llm/cli/CliRunner";
+import { UsageTracker, accumulateTotals, formatUsageFrontmatter } from "./llm/usage";
+import {
+  applyClaudeDefaults,
+  isCliProvider,
+  migrateSettings,
+  PROVIDER_LABELS,
+  rememberModel,
+} from "./settings/llmSettings";
+import { analyzeSlides } from "./core/prep/SlideAnalyzer";
+import { DeckPlan, parseExistingSlides, planDeck, withFewerImages } from "./pipeline/batchPlan";
+import { estimateLecture, PipelineStep, runBatchedLecture } from "./pipeline/lecturePipeline";
+import type { BatchProgress, LectureContext } from "./generator/BatchCommentaryGenerator";
+import { BudgetEstimate, exceedsCap } from "./core/budget/estimate";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { NoteGenerator } from "./generator/NoteGenerator";
 import { PerSlideCommentaryGenerator } from "./generator/PerSlideCommentaryGenerator";
@@ -40,6 +65,31 @@ import summaryEnhanceMaterialSystemTemplate from "../prompts/summary-enhance-mat
 import summaryFromMaterialTemplate from "../prompts/summary-from-material.md";
 import summaryFromMaterialSystemTemplate from "../prompts/summary-from-material.system.md";
 import subjectDetectionTemplate from "../prompts/subject-detection.md";
+
+/** A CLI import after prep and estimate, before any LLM call. */
+export interface PreparedImport {
+  url: string;
+  preview: ImportPreview;
+  subject: string;
+  examPeriod?: ExamPeriod;
+  notePath: string;
+  pdfData: ArrayBuffer | null;
+  /** null: no PDF, the lecture-level flow runs instead. */
+  plan: DeckPlan | null;
+  context: LectureContext;
+  estimate: BudgetEstimate;
+  overCap: boolean;
+  fewerImages: boolean;
+}
+
+export interface CliImportHooks {
+  signal?: AbortSignal;
+  onStep?: (step: PipelineStep | "save") => void;
+  onBatch?: (p: BatchProgress) => void;
+  onUsage?: (total: LLMUsage) => void;
+  onProgress?: (stage: string, percent: number) => void;
+  onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
+}
 
 export default class Alt2ObsidianPlugin extends Plugin {
   data: PluginData = DEFAULT_PLUGIN_DATA;
@@ -102,6 +152,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
     // Register settings tab
     this.addSettingTab(new Alt2ObsidianSettingsTab(this.app, this));
+
+    // The login-shell lookup can take a moment: run it after startup.
+    this.app.workspace.onLayoutReady(() => {
+      this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obsidian] CLI default check failed:", e));
+    });
   }
 
   onunload(): void {
@@ -168,8 +223,14 @@ export default class Alt2ObsidianPlugin extends Plugin {
     };
   }
 
+  /** True when slide commentary runs on a CLI provider (batched 2.0 path). */
+  isCliCommentary(): boolean {
+    return isCliProvider(this.data.settings.tasks.commentary.provider);
+  }
+
   /**
-   * Phase 2: Import — process with LLM and save to vault.
+   * Phase 2: Import with the Gemini/Ollama per-slide path (1.x flow,
+   * unchanged prompts).
    */
   async importNote(
     url: string,
@@ -180,21 +241,46 @@ export default class Alt2ObsidianPlugin extends Plugin {
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>
   ): Promise<ImportRecord> {
     const settings = this.data.settings;
-    if (!settings.apiKey) {
+    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
       throw new Error("API 키를 설정에서 입력해주세요");
     }
+    const job = createJobDir();
+    const usage = new UsageTracker();
+    try {
+      const llm = await this.providerFor("commentary", job, usage);
+      const conceptLlm = await this.providerFor("concepts", job, usage);
+      return await this.runLegacyImport(url, preview, subjectOverride, examPeriod, llm, conceptLlm, onProgress, onConfirmUpdate);
+    } finally {
+      removeJobDir(job);
+    }
+  }
 
-    const llm = createProvider(
-      settings.provider,
-      settings.apiKey,
-      settings.geminiModel,
-      settings.rateDelayMs,
-      {
-        ollamaEndpoint: settings.ollamaEndpoint,
-        ollamaModel: settings.ollamaModel,
-      }
-    );
+  private async providerFor(
+    task: TaskId,
+    workDir: string,
+    usage: UsageTracker,
+    signal?: AbortSignal
+  ): Promise<ILLMProvider> {
+    return createTaskProvider(this.data.settings.tasks[task], {
+      settings: this.data.settings,
+      resolveBin: (name) => this.resolveBin(name),
+      workDir,
+      usage,
+      signal,
+      task,
+    });
+  }
 
+  private async runLegacyImport(
+    url: string,
+    preview: ImportPreview,
+    subjectOverride: string | undefined,
+    examPeriod: ExamPeriod | undefined,
+    llm: ILLMProvider,
+    conceptLlm: ILLMProvider,
+    onProgress?: (stage: string, percent: number) => void,
+    onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>
+  ): Promise<ImportRecord> {
     const altData = preview.altData;
     const pdfDataPromise = this.downloadPdfForImport(preview);
     const materialContextPromise = this.extractLectureMaterialContext(
@@ -274,7 +360,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     // setting so Korean lectures don't get English concept fields (the older
     // prompt didn't pass language, which surfaced English concepts in the
     // user's CSED232 vault despite `language: "ko"`).
-    const conceptExtractor = new ConceptExtractor(llm, this.data.settings.language);
+    const conceptExtractor = new ConceptExtractor(conceptLlm, this.data.settings.language);
     const subject = subjectOverride || preview.suggestedSubject;
     const vm = this.vaultManager!;
     const existingConceptNames = await vm.getExistingConceptNames(subject);
@@ -341,6 +427,33 @@ export default class Alt2ObsidianPlugin extends Plugin {
           )
         : await noteGenerator.generate(altData, llmResult, subject);
 
+    return this.saveLecture({
+      url,
+      altData,
+      subject,
+      examPeriod,
+      lectureMarkdown,
+      conceptNotes,
+      pdfData,
+      onProgress,
+      onConfirmUpdate,
+    });
+  }
+
+  /** Writes the lecture note, concept notes and PDF, and records the import. */
+  private async saveLecture(args: {
+    url: string;
+    altData: import("./types").AltNoteData;
+    subject: string;
+    examPeriod?: ExamPeriod;
+    lectureMarkdown: string;
+    conceptNotes: import("./types").ConceptNote[];
+    pdfData: ArrayBuffer | null;
+    onProgress?: (stage: string, percent: number) => void;
+    onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
+  }): Promise<ImportRecord> {
+    const { url, altData, subject, examPeriod, lectureMarkdown, conceptNotes, pdfData, onProgress, onConfirmUpdate } = args;
+    const vm = this.vaultManager!;
     // Save everything to vault
     onProgress?.("Vault에 저장 중...", 90);
 
@@ -392,25 +505,244 @@ export default class Alt2ObsidianPlugin extends Plugin {
     return record;
   }
 
+  // ---- 2.0 CLI path: prepare (no tokens) -> estimate -> run ----
+
+  /**
+   * Download and analyze the deck, plan the batches and estimate the tokens
+   * (spec 5.1 to 5.5). Nothing is sent to an LLM here.
+   */
+  async prepareCliImport(
+    url: string,
+    preview: ImportPreview,
+    subjectOverride: string | undefined,
+    examPeriod: ExamPeriod | undefined,
+    onProgress?: (stage: string, percent: number) => void
+  ): Promise<PreparedImport> {
+    const settings = this.data.settings;
+    // Fail before any work when a configured CLI cannot be found.
+    for (const task of ["commentary", "concepts"] as TaskId[]) {
+      const p = settings.tasks[task].provider;
+      if (p === "claude-cli") await this.resolveBin("claude");
+      if (p === "codex-cli") await this.resolveBin("codex");
+    }
+    const subject = subjectOverride || preview.suggestedSubject;
+    const vm = this.vaultManager!;
+    const altData = preview.altData;
+    const notePath = `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(altData.title)}.md`;
+    const context: LectureContext = {
+      title: altData.title,
+      subjectTags: vm.getSubjectTags(subject),
+      knownConcepts: Array.from(await vm.getExistingConceptNames(subject)),
+    };
+
+    onProgress?.("PDF 내려받는 중...", 10);
+    const pdfData = altData.parseQuality === "partial" ? null : await this.downloadPdfForImport(preview);
+    let plan: DeckPlan | null = null;
+    if (pdfData && this.pdfProcessor) {
+      onProgress?.("슬라이드 분석 중...", 20);
+      const { layouts, grays } = await this.pdfProcessor.analyzeForPrep(pdfData, (page, total) =>
+        onProgress?.(`슬라이드 분석 (${page}/${total})...`, 20 + Math.round((page / total) * 60))
+      );
+      if (layouts.length > 0) {
+        const analysis = await analyzeSlides(layouts, grays, {
+          sourceId: altData.metadata.noteId,
+          imageRule: settings.generation.imageRule,
+        });
+        const existingNote = settings.generation.onlyChangedSlides ? await vm.readNoteIfExists(notePath) : null;
+        plan = planDeck({
+          ...analysis,
+          layouts,
+          transcript: altData.transcript,
+          transcriptCapChars: settings.generation.transcriptCapChars,
+          batchSize: settings.generation.batchSize,
+          deckTitle: altData.title,
+          existing: existingNote ? parseExistingSlides(existingNote) : undefined,
+        });
+      }
+    }
+    onProgress?.("예산 산정 완료", 100);
+    return this.withEstimate({ url, preview, subject, examPeriod, notePath, pdfData, plan, context, fewerImages: false });
+  }
+
+  /** Same plan with visual slides sent as text only (spec 5.5 "fewer images"). */
+  reduceImages(prepared: PreparedImport): PreparedImport {
+    if (!prepared.plan) return prepared;
+    return this.withEstimate({
+      ...prepared,
+      plan: withFewerImages(prepared.plan, this.data.settings.generation.batchSize),
+      fewerImages: true,
+    });
+  }
+
+  private withEstimate(p: Omit<PreparedImport, "estimate" | "overCap">): PreparedImport {
+    const tasks = this.data.settings.tasks;
+    const asProvider = (id: ProviderId | "none"): ProviderId => (id === "none" ? "claude-cli" : id);
+    const estimate: BudgetEstimate = p.plan
+      ? estimateLecture(p.plan, p.context, p.preview.altData.summary, asProvider(tasks.commentary.provider), asProvider(tasks.concepts.provider))
+      : {
+          // No PDF: the 1.x lecture-level flow (summary passes + concepts).
+          calls: 3,
+          inputTokens: Math.ceil(Math.min(p.preview.altData.transcript?.length ?? 0, 15000) + p.preview.altData.summary.length) + 4000,
+          outputTokens: 8000,
+          imagesSent: 0,
+          slidesTotal: 0,
+          slidesGenerated: 0,
+          slidesTemplated: 0,
+          slidesDeduped: 0,
+          slidesReused: 0,
+        };
+    return { ...p, estimate, overCap: exceedsCap(estimate, this.data.settings.generation.tokenCapPerLecture) };
+  }
+
+  /** Run a prepared CLI import. Cancel with `hooks.signal`; nothing is written when cancelled. */
+  async runCliImport(prepared: PreparedImport, hooks: CliImportHooks = {}): Promise<ImportRecord> {
+    const settings = this.data.settings;
+    const job = createJobDir();
+    const usage = new UsageTracker();
+    usage.onChange((total) => hooks.onUsage?.(total));
+    try {
+      const commentaryLlm = await this.providerFor("commentary", job, usage, hooks.signal);
+      const conceptLlm = await this.providerFor("concepts", job, usage, hooks.signal);
+      const { preview, subject, examPeriod, url, plan, pdfData } = prepared;
+      const altData = preview.altData;
+
+      if (!plan || !pdfData) {
+        // No PDF: 1.x lecture-level note, generated by the CLI provider.
+        hooks.onStep?.("overview");
+        const record = await this.runLegacyImport(url, preview, subject, examPeriod, commentaryLlm, conceptLlm, hooks.onProgress, hooks.onConfirmUpdate);
+        await this.recordUsage(usage);
+        return record;
+      }
+
+      const pdfProcessor = this.pdfProcessor!;
+      const run = await runBatchedLecture({
+        plan,
+        context: prepared.context,
+        subject,
+        language: settings.language,
+        altSummary: altData.summary,
+        commentaryLlm,
+        conceptLlm,
+        renderImage: (page) => pdfProcessor.renderPageJpeg(pdfData, page),
+        signal: hooks.signal,
+        onStep: hooks.onStep,
+        onBatch: hooks.onBatch,
+      });
+      if (hooks.signal?.aborted) throw new Error("취소되었습니다");
+
+      hooks.onStep?.("save");
+      const existingConceptNames = new Set(prepared.context.knownConcepts);
+      const concepts = this.normalizeConcepts(run.concepts, existingConceptNames);
+      const tags = examPeriod ? [...run.tags, examPeriod] : run.tags;
+      const commentaryTask = settings.tasks.commentary;
+      const providerLabel = `${PROVIDER_LABELS[commentaryTask.provider]}${commentaryTask.model ? " " + commentaryTask.model : ""}`;
+      const errors = [
+        ...run.slidesResult.errors,
+        ...run.warnings.map((reason) => ({ slideNum: 0, reason })),
+      ];
+      const { lectureMarkdown, conceptNotes } = await new NoteGenerator(commentaryLlm).generatePageAnchored(
+        altData,
+        { ...run.slidesResult, errors },
+        { processedSummary: run.overview, concepts, tags, subjectSuggestion: subject },
+        subject,
+        [formatUsageFrontmatter(usage.total(), providerLabel)]
+      );
+      const record = await this.saveLecture({
+        url,
+        altData,
+        subject,
+        examPeriod,
+        lectureMarkdown,
+        conceptNotes,
+        pdfData,
+        onProgress: hooks.onProgress,
+        onConfirmUpdate: hooks.onConfirmUpdate,
+      });
+      await this.recordUsage(usage);
+      return record;
+    } finally {
+      removeJobDir(job);
+    }
+  }
+
+  /** Cumulative usage and recently used models (spec 5.5, 4.2). */
+  private async recordUsage(usage: UsageTracker): Promise<void> {
+    this.data.usageTotals = accumulateTotals(this.data.usageTotals, usage, formatDate());
+    for (const task of ["commentary", "concepts"] as TaskId[]) {
+      const t = this.data.settings.tasks[task];
+      if (t.provider !== "none") rememberModel(this.data.settings, t.provider, t.model);
+    }
+    await this.savePluginData();
+  }
+
+  // ---- CLI binaries (spec 4.2 rule 1) ----
+
+  /** Last lookup error per CLI, shown in the settings cards. */
+  cliErrors: Partial<Record<CliName, string>> = {};
+
+  /**
+   * Find the CLI and read its version. `force` ignores the cached path (the
+   * settings "다시 찾기" button). Never throws; null when not found.
+   */
+  async detectCli(name: CliName, force = false): Promise<CliDetection | null> {
+    const settings = this.data.settings;
+    try {
+      const resolved = await resolveCliBinary(name, {
+        configuredPath: name === "claude" ? settings.claudePath : settings.codexPath,
+        cachedPath: force ? undefined : this.data.cliDetection[name]?.path,
+      });
+      let version = "";
+      try {
+        version = await readCliVersion(resolved.path);
+      } catch (e) {
+        console.warn(`[Alt2Obsidian] ${name} --version failed:`, e);
+      }
+      const detection = { path: resolved.path, version, detectedAt: new Date().toISOString() };
+      this.data.cliDetection[name] = detection;
+      delete this.cliErrors[name];
+      await this.savePluginData();
+      return detection;
+    } catch (e) {
+      this.cliErrors[name] = e instanceof Error ? e.message : String(e);
+      if (force || this.data.cliDetection[name]) {
+        delete this.data.cliDetection[name];
+        await this.savePluginData();
+      }
+      return null;
+    }
+  }
+
+  async resolveBin(name: CliName): Promise<string> {
+    const found = await this.detectCli(name);
+    if (!found) throw new Error(this.cliErrors[name] || cliNotFoundMessage(name));
+    return found.path;
+  }
+
+  /** 1.x data or a fresh install: use the Claude CLI for the tasks when it is installed. */
+  private async applyCliDefaultOnce(): Promise<void> {
+    if (!this.data.pendingCliDefault) return;
+    const claude = await this.detectCli("claude");
+    delete this.data.pendingCliDefault;
+    if (claude) {
+      applyClaudeDefaults(this.data.settings);
+      new Notice("Alt2Obsidian 2.0: Claude CLI를 찾아 슬라이드 해설과 개념 추출을 Claude CLI로 설정했습니다. 설정에서 바꿀 수 있습니다.");
+    }
+    await this.savePluginData();
+  }
+
   async generateExamSummary(subject: string, period?: ExamPeriod): Promise<string> {
     const settings = this.data.settings;
-    if (!settings.apiKey) {
+    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
       throw new Error("API 키를 설정에서 입력해주세요");
     }
-
-    const llm = createProvider(
-      settings.provider,
-      settings.apiKey,
-      settings.geminiModel,
-      settings.rateDelayMs,
-      {
-        ollamaEndpoint: settings.ollamaEndpoint,
-        ollamaModel: settings.ollamaModel,
-      }
-    );
-
-    const generator = new ExamSummaryGenerator(llm, this.vaultManager!);
-    return generator.generate(subject, period);
+    const job = createJobDir();
+    try {
+      const llm = await this.providerFor("commentary", job, new UsageTracker());
+      const generator = new ExamSummaryGenerator(llm, this.vaultManager!);
+      return await generator.generate(subject, period);
+    } finally {
+      removeJobDir(job);
+    }
   }
 
   private async savePartialNote(
@@ -716,14 +1048,19 @@ export default class Alt2ObsidianPlugin extends Plugin {
   }
 
   async loadPluginData(): Promise<void> {
-    const saved = await this.loadData();
-    this.data = Object.assign({}, DEFAULT_PLUGIN_DATA, saved || {});
-    // Merge settings with defaults
-    this.data.settings = Object.assign(
-      {},
-      DEFAULT_PLUGIN_DATA.settings,
-      this.data.settings || {}
-    );
+    const saved = (await this.loadData()) || {};
+    this.data = Object.assign({}, DEFAULT_PLUGIN_DATA, saved);
+    // Keep every 1.x value; add the 2.0 per-task settings (spec 4.2).
+    const { settings, needsCliDefault } = migrateSettings(saved.settings);
+    this.data.settings = settings;
+    this.data.recentImports = Array.isArray(saved.recentImports) ? saved.recentImports : [];
+    this.data.cliDetection = { ...(saved.cliDetection ?? {}) };
+    this.data.usageTotals = {
+      ...DEFAULT_PLUGIN_DATA.usageTotals,
+      ...(saved.usageTotals ?? {}),
+      byProvider: { ...(saved.usageTotals?.byProvider ?? {}) },
+    };
+    if (needsCliDefault) this.data.pendingCliDefault = true;
   }
 
   async savePluginData(): Promise<void> {

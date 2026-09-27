@@ -1,6 +1,9 @@
 import { ItemView, WorkspaceLeaf, TFile, Modal } from "obsidian";
 import type Alt2ObsidianPlugin from "../main";
-import { ImportPreview, ExamPeriod, ImportUpdateSummary } from "../types";
+import type { PreparedImport } from "../main";
+import { ImportPreview, ExamPeriod, ImportUpdateSummary, LLMUsage } from "../types";
+import { compactTokens } from "../llm/usage";
+import { PROVIDER_LABELS } from "../settings/llmSettings";
 
 export const VIEW_TYPE_SIDEBAR = "alt2obsidian-sidebar";
 
@@ -16,6 +19,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
   private recentListContainer: HTMLElement | null = null;
   private examContainer: HTMLElement | null = null;
   private examPeriodSelect: HTMLSelectElement | null = null;
+  /** Estimate panel and run panel of the CLI path (spec 5.5). */
+  private cliPanel: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: Alt2ObsidianPlugin) {
     super(leaf);
@@ -41,6 +46,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
 
     this.renderInputSection(container);
     this.renderProgressSection(container);
+    this.cliPanel = container.createDiv({ cls: "alt2obsidian-cli-panel" });
+    this.cliPanel.hide();
     this.renderMessageSection(container);
     this.renderRecentSection(container);
     this.renderExamSection(container);
@@ -289,7 +296,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
       return;
     }
 
-    if (!this.plugin.data.settings.apiKey) {
+    const settings = this.plugin.data.settings;
+    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
       this.showError("API 키를 설정에서 입력해주세요");
       return;
     }
@@ -310,13 +318,174 @@ export class Alt2ObsidianSidebarView extends ItemView {
         this.subjectInput.value = preview.suggestedSubject;
       }
 
-      await this.executeImport(url, preview);
+      if (this.plugin.isCliCommentary()) {
+        await this.executeCliImport(url, preview);
+      } else {
+        await this.executeImport(url, preview);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "알 수 없는 오류";
       this.showError(msg);
     } finally {
       this.setLoading(false);
     }
+  }
+
+  // ---- CLI path: estimate, confirm, run with live progress ----
+
+  private async executeCliImport(url: string, preview: ImportPreview): Promise<void> {
+    const periodValue = (this.examPeriodSelect?.value as ExamPeriod | "") || undefined;
+    let prepared = await this.plugin.prepareCliImport(
+      url,
+      preview,
+      this.subjectInput?.value?.trim() || undefined,
+      periodValue || undefined,
+      (stage, pct) => this.updateProgress(pct, stage)
+    );
+    this.hideProgress();
+
+    for (;;) {
+      const choice = await this.showEstimate(prepared);
+      if (choice === "cancel") {
+        this.hideCliPanel();
+        this.showSuccess("가져오기를 취소했습니다. 토큰은 쓰지 않았습니다.");
+        return;
+      }
+      if (choice === "fewer-images") {
+        prepared = this.plugin.reduceImages(prepared);
+        continue;
+      }
+      break;
+    }
+
+    const controller = new AbortController();
+    const view = this.showRunPanel(prepared, () => controller.abort());
+    try {
+      const result = await this.plugin.runCliImport(prepared, {
+        signal: controller.signal,
+        onStep: (step) => view.step(step),
+        onBatch: (p) => view.batch(p.batch, p.batches, p.retry),
+        onUsage: (u) => view.usage(u),
+        onProgress: (stage) => view.detail(stage),
+        onConfirmUpdate: (summary) => this.confirmUpdate(summary),
+      });
+      this.hideCliPanel();
+      await this.afterImport(result);
+    } catch (e) {
+      this.hideCliPanel();
+      if (controller.signal.aborted) {
+        this.showError("가져오기를 취소했습니다. 노트는 바뀌지 않았습니다.");
+        return;
+      }
+      throw e;
+    }
+  }
+
+  private hideCliPanel(): void {
+    this.cliPanel?.empty();
+    this.cliPanel?.hide();
+  }
+
+  /** Pre-run estimate (spec 5.5). Resolves with the user's choice. */
+  private showEstimate(prepared: PreparedImport): Promise<"start" | "fewer-images" | "cancel"> {
+    const panel = this.cliPanel!;
+    panel.empty();
+    panel.show();
+    const e = prepared.estimate;
+    const tasks = this.plugin.data.settings.tasks;
+    const model = tasks.commentary.model || "기본 모델";
+    panel.createEl("h6", { text: "가져오기 전 예상 사용량", cls: "alt2obsidian-section-header" });
+    panel.createDiv({
+      cls: "alt2obsidian-estimate-main",
+      text: `호출 ${e.calls}회 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰 · 이미지 ${e.imagesSent}장`,
+    });
+    const rows = panel.createEl("ul", { cls: "alt2obsidian-estimate-list" });
+    rows.createEl("li", { text: `해설: ${PROVIDER_LABELS[tasks.commentary.provider]} (${model}${tasks.commentary.effort ? ", " + tasks.commentary.effort : ""})` });
+    if (prepared.plan) {
+      const skipped = e.slidesTemplated + e.slidesDeduped + e.slidesReused;
+      rows.createEl("li", {
+        text: `슬라이드 ${e.slidesTotal}장 중 ${e.slidesGenerated}장 생성, ${skipped}장 생략 (표지·목차·마무리 ${e.slidesTemplated}, 중복 ${e.slidesDeduped}, 변경 없음 ${e.slidesReused})`,
+      });
+      const t = prepared.plan.transcriptChars;
+      if (t.before > 0) rows.createEl("li", { text: `전사 ${t.before.toLocaleString()}자를 ${t.after.toLocaleString()}자로 압축` });
+      if (prepared.plan.scanned) rows.createEl("li", { text: "텍스트 레이어가 없는 PDF라 모든 슬라이드를 이미지로 보냅니다." });
+      if (prepared.fewerImages) rows.createEl("li", { text: "이미지 줄이기 적용됨: 텍스트가 있는 도표 슬라이드는 텍스트만 보냅니다." });
+    } else {
+      rows.createEl("li", { text: "PDF가 없어 슬라이드별 해설 없이 강의 요약 노트를 만듭니다." });
+    }
+    rows.createEl("li", { cls: "alt2obsidian-muted", text: "추정치입니다. 모델의 추론 토큰과 재시도는 포함하지 않습니다." });
+
+    return new Promise((resolve) => {
+      const cap = this.plugin.data.settings.generation.tokenCapPerLecture;
+      if (prepared.overCap) {
+        panel.createDiv({
+          cls: "alt2obsidian-error",
+          text: `강의당 토큰 상한(${compactTokens(cap)})을 넘을 것 같아 시작하지 않았습니다. 이미지를 줄이거나 설정에서 상한을 올리세요.`,
+        });
+      }
+      const actions = panel.createDiv({ cls: "alt2obsidian-estimate-actions" });
+      const start = actions.createEl("button", { text: prepared.overCap ? "상한 무시하고 시작" : "시작", cls: prepared.overCap ? "" : "mod-cta" });
+      start.addEventListener("click", () => resolve("start"));
+      if (prepared.plan && e.imagesSent > 0 && !prepared.fewerImages) {
+        const fewer = actions.createEl("button", { text: "이미지 줄이기", cls: prepared.overCap ? "mod-cta" : "" });
+        fewer.addEventListener("click", () => resolve("fewer-images"));
+      }
+      const cancel = actions.createEl("button", { text: "취소" });
+      cancel.addEventListener("click", () => resolve("cancel"));
+    });
+  }
+
+  /** Steps, batch progress, live usage and a cancel button while the CLI runs. */
+  private showRunPanel(prepared: PreparedImport, onCancel: () => void) {
+    const panel = this.cliPanel!;
+    panel.empty();
+    panel.show();
+    panel.createEl("h6", { text: `가져오는 중: ${prepared.preview.altData.title}`, cls: "alt2obsidian-section-header" });
+    const steps = panel.createEl("ol", { cls: "alt2obsidian-steps" });
+    const stepDefs: Array<[string, string]> = [
+      ["prep", "준비 (분석·예산)"],
+      ["commentary", "슬라이드 해설"],
+      ["overview", "전체 요약"],
+      ["concepts", "개념 추출"],
+      ["save", "저장"],
+    ];
+    const items = new Map<string, HTMLElement>();
+    for (const [id, label] of stepDefs) items.set(id, steps.createEl("li", { text: label }));
+    items.get("prep")!.addClass("is-done");
+
+    const barOuter = panel.createDiv({ cls: "alt2obsidian-progress-bar" });
+    const bar = barOuter.createDiv({ cls: "alt2obsidian-progress-bar-fill" });
+    const detail = panel.createDiv({ cls: "alt2obsidian-progress-text" });
+    const usage = panel.createDiv({ cls: "alt2obsidian-usage-line", text: "사용량: 아직 호출 없음" });
+    const cancel = panel.createEl("button", { text: "취소", cls: "alt2obsidian-cancel-btn" });
+    cancel.addEventListener("click", () => {
+      cancel.disabled = true;
+      cancel.textContent = "취소하는 중...";
+      onCancel();
+    });
+
+    let current = "prep";
+    return {
+      step: (id: string) => {
+        items.get(current)?.removeClass("is-active");
+        items.get(current)?.addClass("is-done");
+        current = id;
+        items.get(id)?.addClass("is-active");
+        if (id !== "commentary") bar.style.width = id === "save" ? "100%" : bar.style.width;
+      },
+      batch: (n: number, total: number, retry: boolean) => {
+        bar.style.width = `${Math.round(((retry ? n : n - 1) / Math.max(1, total)) * 100)}%`;
+        detail.textContent = retry ? `배치 ${n}/${total}: 실패한 슬라이드만 다시 요청 중` : `배치 ${n}/${total} 생성 중`;
+      },
+      usage: (u: LLMUsage) => {
+        usage.textContent =
+          `호출 ${u.calls}회 · 입력 ${compactTokens(u.inputTokens)} (캐시 ${compactTokens(u.cachedInputTokens)}) · ` +
+          `출력 ${compactTokens(u.outputTokens)} · 이미지 ${u.imagesSent}장`;
+      },
+      detail: (text: string) => {
+        detail.textContent = text;
+      },
+    };
   }
 
   private async executeImport(url: string, preview: ImportPreview): Promise<void> {
@@ -337,6 +506,10 @@ export class Alt2ObsidianSidebarView extends ItemView {
     );
 
     this.hideProgress();
+    await this.afterImport(result);
+  }
+
+  private async afterImport(result: import("../types").ImportRecord): Promise<void> {
     const actionLabel = result.wasUpdate ? "업데이트 완료" : "가져오기 완료";
     this.showSuccess(`"${result.title}" → ${result.subject} ${actionLabel}!`);
 
@@ -374,7 +547,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
   }
 
   private async handleExamSummary(subject: string, period?: ExamPeriod): Promise<void> {
-    if (!this.plugin.data.settings.apiKey) {
+    const settings = this.plugin.data.settings;
+    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
       this.showError("API 키를 설정에서 입력해주세요");
       return;
     }
