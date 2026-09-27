@@ -60,6 +60,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
   private localSubjectInput: HTMLInputElement | null = null;
   private localPeriodSelect: HTMLSelectElement | null = null;
   private localImportBtn: HTMLButtonElement | null = null;
+  /** Subject and exam period typed for a note, kept while its panel re-renders. */
+  private drafts = new Map<string, { subject?: string; period?: string }>();
   /** Bumped on every refresh so a stale background loop stops. */
   private loadGeneration = 0;
   private busy = false;
@@ -188,7 +190,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
     }
     this.renderList();
     this.renderFooter();
-    void this.loadDetails(gen);
+    void this.loadDetails();
   }
 
   private groupKey(note: AltNoteSummary): string {
@@ -227,7 +229,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
         if (this.expanded.has(key)) this.expanded.delete(key);
         else this.expanded.add(key);
         this.renderList();
-        void this.loadDetails(this.loadGeneration);
+        void this.loadDetails();
       });
       if (!open) continue;
       const notes = groups.get(key)!.sort((a, b) => (b.note.lectureDate ?? "").localeCompare(a.note.lectureDate ?? "") || a.note.title.localeCompare(b.note.title, "ko", { numeric: true }));
@@ -263,11 +265,31 @@ export class Alt2ObsidianSidebarView extends ItemView {
     el.createDiv({ cls: "alt2obsidian-note-meta", text: meta.join(" · ") });
   }
 
+  private detailsLoop: Promise<void> | null = null;
+  private detailsAgain = false;
+
   /**
    * Details (slides, transcript length, page count) and the slide comparison
-   * of imported notes, one note at a time for the open folders.
+   * of imported notes, one note at a time for the open folders. One loop at
+   * a time: a request while it runs makes it scan again when done.
    */
-  private async loadDetails(gen: number): Promise<void> {
+  private loadDetails(): Promise<void> {
+    if (this.detailsLoop) {
+      this.detailsAgain = true;
+      return this.detailsLoop;
+    }
+    this.detailsLoop = (async () => {
+      do {
+        this.detailsAgain = false;
+        await this.loadDetailsOnce(this.loadGeneration);
+      } while (this.detailsAgain);
+    })().finally(() => {
+      this.detailsLoop = null;
+    });
+    return this.detailsLoop;
+  }
+
+  private async loadDetailsOnce(gen: number): Promise<void> {
     const source = this.plugin.getLocalSource();
     if (!source) return;
     for (const it of this.items) {
@@ -324,7 +346,11 @@ export class Alt2ObsidianSidebarView extends ItemView {
     subjectRow.createEl("label", { text: "과목" });
     this.localSubjectInput = subjectRow.createEl("input", { type: "text" });
     const own = it.status.kind === "imported" ? this.vaultNotes.find((v) => v.path === (it.status as { path: string }).path) : undefined;
-    this.localSubjectInput.value = own?.subject || inferSubject(it.note.folderPath, it.note.title);
+    const draft = this.drafts.get(it.note.id) ?? {};
+    this.localSubjectInput.value = draft.subject ?? (own?.subject || inferSubject(it.note.folderPath, it.note.title));
+    this.localSubjectInput.addEventListener("input", () => {
+      this.drafts.set(it.note.id, { ...this.drafts.get(it.note.id), subject: this.localSubjectInput?.value ?? "" });
+    });
     subjectRow.createSpan({ cls: "alt2obsidian-muted", text: own?.subject ? "기존 노트" : it.note.folderPath.length > 0 ? "Alt 폴더에서 추정" : "제목에서 추정" });
 
     const periodRow = footer.createDiv({ cls: "alt2obsidian-footer-row" });
@@ -334,12 +360,16 @@ export class Alt2ObsidianSidebarView extends ItemView {
       const opt = this.localPeriodSelect.createEl("option", { text });
       opt.value = value;
     }
+    this.localPeriodSelect.value = draft.period ?? "";
+    this.localPeriodSelect.addEventListener("change", () => {
+      this.drafts.set(it.note.id, { ...this.drafts.get(it.note.id), period: this.localPeriodSelect?.value ?? "" });
+    });
 
     const align = footer.createDiv({ cls: "alt2obsidian-align-line" });
     const d = it.details;
     if (!d) {
       align.setText("노트 정보를 읽는 중...");
-      void this.loadDetails(this.loadGeneration);
+      void this.loadDetails();
     } else {
       const ok = d.timestamps && d.hasSlides;
       const icon = align.createSpan({ cls: ok ? "alt2obsidian-align-ok" : "alt2obsidian-align-off" });
@@ -405,6 +435,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
       } else {
         await this.executeImport("", preview, subject, period);
       }
+      this.drafts.delete(it.note.id);
     } catch (e) {
       this.showError(e instanceof Error ? e.message : "알 수 없는 오류");
     } finally {
@@ -422,7 +453,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
     }
     this.renderList();
     this.renderFooter();
-    void this.loadDetails(this.loadGeneration);
+    void this.loadDetails();
   }
 
   private renderInputSection(container: Element): void {

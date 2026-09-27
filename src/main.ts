@@ -982,7 +982,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
         { ...run.slidesResult, errors },
         { processedSummary: run.overview, concepts, tags, subjectSuggestion: subject },
         subject,
-        [formatUsageFrontmatter(usage.total(), providerLabel), ...this.localFrontmatter(prepared.notePath, alignment)]
+        [
+          formatUsageFrontmatter(usage.total(), providerLabel),
+          ...(altData.metadata.sourceKind === "alt-local" ? this.localFrontmatter(prepared.notePath, alignment) : []),
+        ]
       );
       return await this.saveLecture({
         url,

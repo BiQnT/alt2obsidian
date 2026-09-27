@@ -202,6 +202,7 @@ try {
   assert.equal(confirmed.isUpdate, true);
   assert.equal(confirmed.slideDrifts.length, 0);
   assert.ok(files.get(record.path).includes("내 메모 유지"));
+  assert.equal((files.get(record.path).match(/^alt_id:/gm) ?? []).length, 1, "one alt_id line");
   console.log("PASS: re-import reuses all unchanged slides (2 calls), keeps the memo");
 
   // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).
@@ -298,6 +299,8 @@ try {
     assert.equal(low > 0 ? 1 : 0, s.calls().slice(n0).filter((c) => c.stdin.includes("current guess")).length);
     const updated = files.get(rec2.path);
     assert.match(updated, /alt_id: "note-7"/, "the public id is kept");
+    assert.equal((updated.match(/^alt_id:/gm) ?? []).length, 1, "one alt_id line");
+    assert.equal((updated.match(/^alt_local_id:/gm) ?? []).length, 1, "one alt_local_id line");
     assert.match(updated, /alt_local_id: "local-2"/);
     assert.ok(updated.includes("내 메모 유지"), "memo kept");
     plugin.data.settings.tasks.alignment = { provider: "none", model: "", effort: "" };
