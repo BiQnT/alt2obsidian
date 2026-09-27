@@ -685,7 +685,7 @@ function componentFromApi(raw) {
     file_ref_id: typeof raw.file_ref_id === "string" ? raw.file_ref_id : null
   };
 }
-var OWNER_RECHECK_MS = 3e4;
+var OWNER_RECHECK_MS = 3e3;
 var AltLocalApiSource = class _AltLocalApiSource {
   constructor(opts) {
     this.mode = "api";
@@ -743,14 +743,14 @@ var AltLocalApiSource = class _AltLocalApiSource {
     };
   }
   /**
-   * Before a request batch: when the last owner check is older than
-   * OWNER_RECHECK_MS, check again, and require the same pid as approved.
-   * On failure nothing is sent and the source is marked failed.
+   * Before a request batch: when the last owner check is `maxAgeMs` old or
+   * older, check again, and require the same pid as approved. On failure
+   * nothing is sent and the source is marked failed.
    */
-  async ensureOwner() {
+  async ensureOwner(maxAgeMs) {
     if (this.failed)
       throw new AltApiError("Alt \uB85C\uCEEC API \uC5F0\uACB0\uC774 \uB04A\uACBC\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD558\uC138\uC694.", null);
-    if (!this.verifyOwner || this.now() - this.lastOwnerCheck < OWNER_RECHECK_MS)
+    if (!this.verifyOwner || this.now() - this.lastOwnerCheck < maxAgeMs)
       return;
     const check = await this.verifyOwner(this.port);
     const samePid = this.ownerPid === null || check.pid === void 0 || check.pid === this.ownerPid;
@@ -790,7 +790,7 @@ var AltLocalApiSource = class _AltLocalApiSource {
     return map;
   }
   async listNotes() {
-    await this.ensureOwner();
+    await this.ensureOwner(0);
     const [rows, folders] = await Promise.all([this.get("/api/lectureNotes"), this.folderMap(true)]);
     if (!Array.isArray(rows))
       throw new AltApiError("Alt \uB85C\uCEEC API\uC758 \uB178\uD2B8 \uBAA9\uB85D \uD615\uC2DD\uC774 \uC608\uC0C1\uACFC \uB2E4\uB985\uB2C8\uB2E4.", 200);
@@ -822,7 +822,7 @@ var AltLocalApiSource = class _AltLocalApiSource {
     return components;
   }
   async noteDetails(id) {
-    await this.ensureOwner();
+    await this.ensureOwner(OWNER_RECHECK_MS);
     return detailsFromComponents(await this.componentsWithPaths(id));
   }
   close() {
@@ -830,7 +830,7 @@ var AltLocalApiSource = class _AltLocalApiSource {
     this.pathDb = null;
   }
   async getBundle(id) {
-    await this.ensureOwner();
+    await this.ensureOwner(0);
     const note = await this.get(`/api/lectureNotes/${encodeURIComponent(id)}`);
     if (!note || typeof note.id !== "string")
       throw new AltApiError("Alt\uC5D0\uC11C \uC774 \uB178\uD2B8\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.", 404);
