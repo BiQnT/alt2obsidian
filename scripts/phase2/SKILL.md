@@ -99,7 +99,7 @@ Concepts are extracted from the enhanced summary `S` (not from the slide comment
 
 **Concept note files:**
 
-1. For each concept, generate a markdown file at `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` using the **plugin's exact template** (mirror `src/vault/VaultManager.ts:250-277`):
+1. For each concept, generate a markdown file at `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` using the **plugin's exact template** (mirror `VaultManager.buildConceptNoteContent` in `src/vault/VaultManager.ts`):
 
    ```markdown
    ---
@@ -126,7 +126,7 @@ Concepts are extracted from the enhanced summary `S` (not from the slide comment
 2. **Skip-if-exists with append behaviour**: if `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` already exists from a prior import:
    - Read it.
    - If `**관련 강의:**` already contains `[[{lectureTitle}]]`, leave the file untouched.
-   - Otherwise append `, [[{lectureTitle}]]` to the existing `**관련 강의:**` line. This matches `VaultManager.appendLectureReference` (`src/vault/VaultManager.ts:295-310`), same lecture cross-linking semantics.
+   - Otherwise append `, [[{lectureTitle}]]` to the existing `**관련 강의:**` line. This matches `VaultManager.appendLectureReference` (`src/vault/VaultManager.ts`), same lecture cross-linking semantics.
    - Optionally enrich missing fields (e.g., the prior concept note has no `**예시:**` and the new lecture has a good one) by appending the new field above the `**관련 강의:**` line. Mirrors `VaultManager.appendMissingConceptField` (`:312-324`).
 
 3. **Filename sanitization**: replace `/`, `\`, `:`, `?`, `*`, `"`, `<`, `>`, `|` with `_` (mirrors `src/utils/helpers.ts:sanitizeFilename`). Korean characters and parentheses are valid in vault filenames.

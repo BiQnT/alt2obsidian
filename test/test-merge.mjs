@@ -241,4 +241,20 @@ async function reimport(oldTexts, newTexts) {
   console.log("PASS: single-block downgrade refused (plugin and merge-note.mjs), error names the cause");
 }
 
+// A 1.0.x single-block note migrating to page-anchored keeps all user text as a backup.
+{
+  const legacy =
+    "---\ntitle: lec\n---\nMY INTRO\n\n<!-- alt2obsidian:start -->\n# lec\n본문\n<!-- alt2obsidian:end -->\n\nMY LEGACY MEMO\n";
+  const next = await note(["alpha", "beta"]);
+  const { md, summary } = await pluginMerge(legacy, next);
+  assert.ok(md.startsWith(next.trimEnd()), "new page-anchored note comes first");
+  assert.match(md, /\n## 이전 노트 백업\n/);
+  assert.ok(md.includes("MY INTRO") && md.includes("MY LEGACY MEMO"), "user text outside the block kept");
+  assert.ok(md.includes("본문"), "old managed body kept");
+  assert.ok((summary.notes ?? []).some((n) => n.includes("이전 노트 백업")), "modal mentions the backup");
+  const again = await pluginMerge(legacy.replace("MY INTRO", "MY INTRO\n\n## 이전 노트 백업\n\nolder"), next);
+  assert.ok(again.md.includes("older") && again.md.includes("MY LEGACY MEMO"), "an older backup section is kept, not dropped");
+  console.log("PASS: 1.0.x single-block note migrating to page-anchored keeps the old note as a backup");
+}
+
 console.log(`PASS: merge-note.mjs matched the plugin merge in all ${cliRuns} merge scenarios`);

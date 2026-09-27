@@ -104,7 +104,6 @@ export class VaultManager {
     const currentContent = await this.app.vault.read(existing as any);
     assertNoPageAnchoredDowngrade(currentContent, nextContent);
     const nextHasMulti = hasMultiManagedMarkers(nextContent);
-    const currentHasMulti = hasMultiManagedMarkers(currentContent);
 
     // Heading + concept diff is always meaningful; compute it once on the
     // managed body (legacy path) or full content (multi path).
@@ -128,8 +127,11 @@ export class VaultManager {
       changedLineCount: this.countChangedLines(currentBody, nextBody),
     };
 
-    // B1 multi-managed details — only when both sides use the new format.
-    if (nextHasMulti && currentHasMulti) {
+    // Page-anchored details whenever the new note uses slide markers. Covers
+    // both a normal re-import and a legacy single-block note migrating to
+    // page-anchored (mergeMultiManagedNote reports every slide as inserted
+    // and adds the backup note), so the modal matches merge-note.mjs.
+    if (nextHasMulti) {
       const merge = mergeMultiManagedNote(currentContent, nextContent);
       summary.slideReorders = merge.reorders;
       summary.slideInsertions = merge.insertions;
@@ -137,16 +139,6 @@ export class VaultManager {
       summary.slideDrifts = merge.drifts;
       summary.confirmDeckReplacement = merge.confirmDeckReplacement;
       if (merge.notes.length > 0) summary.notes = [...(summary.notes ?? []), ...merge.notes];
-    } else if (nextHasMulti && !currentHasMulti) {
-      // Legacy → B1 migration: every incoming section is "new" relative to
-      // the legacy single-block content. Surface it so the user sees the
-      // structural shift.
-      const next = splitMultiManagedNote(nextContent);
-      summary.slideInsertions = next.sections.map((s) => s.slideNum);
-      summary.notes = [
-        ...(summary.notes ?? []),
-        "기존 단일 블록 형식에서 페이지별 구조로 마이그레이션됩니다.",
-      ];
     }
 
     return summary;

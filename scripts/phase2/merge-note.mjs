@@ -10,6 +10,7 @@ var OVERVIEW_BLOCK_START = "<!-- alt2obs:overview start -->";
 var OVERVIEW_BLOCK_END = "<!-- alt2obs:overview end -->";
 
 // src/core/merge.ts
+var LEGACY_MIGRATION_NOTE = "\uAE30\uC874 \uB2E8\uC77C \uBE14\uB85D \uD615\uC2DD\uC5D0\uC11C \uD398\uC774\uC9C0\uBCC4 \uAD6C\uC870\uB85C \uB9C8\uC774\uADF8\uB808\uC774\uC158\uB429\uB2C8\uB2E4. \uAE30\uC874 \uB178\uD2B8 \uC804\uCCB4\uB294 \uB9E8 \uC544\uB798 '\uC774\uC804 \uB178\uD2B8 \uBC31\uC5C5'\uC5D0 \uBCF4\uAD00\uB429\uB2C8\uB2E4.";
 function assertNoPageAnchoredDowngrade(currentContent, nextContent) {
   if (hasMultiManagedMarkers(currentContent) && !hasMultiManagedMarkers(nextContent)) {
     throw new Error(
@@ -28,8 +29,11 @@ function mergeManagedNote(currentContent, nextContent) {
       currentParts.after.trim()
     ].filter(Boolean).join("\n\n").trimEnd() + "\n";
   }
+  return appendPreviousNoteBackup(currentContent, nextContent, { skipIfBackupExists: true });
+}
+function appendPreviousNoteBackup(currentContent, nextContent, opts) {
   const hasExistingBackup = /(^|\n)## 이전 노트 백업\s*\n/.test(currentContent);
-  if (hasExistingBackup) {
+  if (opts.skipIfBackupExists && hasExistingBackup || currentContent.trim().length === 0) {
     return nextContent;
   }
   return [
@@ -146,13 +150,13 @@ function mergeMultiManagedNote(existingContent, nextContent) {
   const next = splitMultiManagedNote(nextContent);
   if (existing.sections.length === 0) {
     return {
-      merged: nextContent,
+      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false }),
       reorders: [],
       insertions: next.sections.map((s) => s.slideNum),
       deletions: [],
       drifts: [],
       confirmDeckReplacement: false,
-      notes: []
+      notes: existingContent.trim() ? [LEGACY_MIGRATION_NOTE] : []
     };
   }
   const used = /* @__PURE__ */ new Set();

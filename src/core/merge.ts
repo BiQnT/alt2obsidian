@@ -15,6 +15,9 @@ import {
  * orphan every slide section. Throws so the import aborts before anything
  * is written; the caller surfaces the message.
  */
+export const LEGACY_MIGRATION_NOTE =
+  "기존 단일 블록 형식에서 페이지별 구조로 마이그레이션됩니다. 기존 노트 전체는 맨 아래 '이전 노트 백업'에 보관됩니다.";
+
 export function assertNoPageAnchoredDowngrade(currentContent: string, nextContent: string): void {
   if (
     hasMultiManagedMarkers(currentContent) &&
@@ -44,12 +47,25 @@ export function mergeManagedNote(currentContent: string, nextContent: string): s
       .trimEnd() + "\n";
   }
 
+  return appendPreviousNoteBackup(currentContent, nextContent, { skipIfBackupExists: true });
+}
+
+/**
+ * Append the whole previous note under "## 이전 노트 백업" so nothing the user
+ * wrote is lost when the new note cannot merge with it (a note without
+ * managed markers, or a 1.0.x single-block note migrating to page-anchored).
+ */
+function appendPreviousNoteBackup(
+  currentContent: string,
+  nextContent: string,
+  opts: { skipIfBackupExists: boolean }
+): string {
   // Plan Task 1.3 backward-compat: skip the "## 이전 노트 백업" write if the
   // current file already has one. Honors Principle 2 (1.0.x notes
   // untouched a second time) by not stacking duplicate backup sections
   // on repeated re-imports of legacy files.
   const hasExistingBackup = /(^|\n)## 이전 노트 백업\s*\n/.test(currentContent);
-  if (hasExistingBackup) {
+  if ((opts.skipIfBackupExists && hasExistingBackup) || currentContent.trim().length === 0) {
     return nextContent;
   }
 
@@ -245,14 +261,18 @@ export function mergeMultiManagedNote(
   const next = splitMultiManagedNote(nextContent);
 
   if (existing.sections.length === 0) {
+    // No slide sections to map onto (1.0.x single-block note migrating to
+    // page-anchored): keep the old note, including user text inside and
+    // outside its managed block, as a backup instead of dropping it. Always
+    // append here, even over an older backup: nesting beats losing text.
     return {
-      merged: nextContent,
+      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false }),
       reorders: [],
       insertions: next.sections.map((s) => s.slideNum),
       deletions: [],
       drifts: [],
       confirmDeckReplacement: false,
-      notes: [],
+      notes: existingContent.trim() ? [LEGACY_MIGRATION_NOTE] : [],
     };
   }
 
