@@ -99,7 +99,7 @@ Concepts are extracted from the enhanced summary `S` (not from the slide comment
 
 **Concept note files:**
 
-2. For each concept, generate a markdown file at `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` using the **plugin's exact template** (mirror `src/vault/VaultManager.ts:250-277`):
+1. For each concept, generate a markdown file at `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` using the **plugin's exact template** (mirror `src/vault/VaultManager.ts:250-277`):
 
    ```markdown
    ---
@@ -123,15 +123,15 @@ Concepts are extracted from the enhanced summary `S` (not from the slide comment
 
    Skip the `**예시:**` line entirely if `example` is empty; same for `**주의:**` and `**관련 개념:**`. Do NOT emit empty-value lines; match how the plugin elides them.
 
-3. **Skip-if-exists with append behaviour**: if `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` already exists from a prior import:
+2. **Skip-if-exists with append behaviour**: if `<vault>/Alt2Obsidian/<subject>/Concepts/<sanitized-name>.md` already exists from a prior import:
    - Read it.
    - If `**관련 강의:**` already contains `[[{lectureTitle}]]`, leave the file untouched.
    - Otherwise append `, [[{lectureTitle}]]` to the existing `**관련 강의:**` line. This matches `VaultManager.appendLectureReference` (`src/vault/VaultManager.ts:295-310`), same lecture cross-linking semantics.
    - Optionally enrich missing fields (e.g., the prior concept note has no `**예시:**` and the new lecture has a good one) by appending the new field above the `**관련 강의:**` line. Mirrors `VaultManager.appendMissingConceptField` (`:312-324`).
 
-4. **Filename sanitization**: replace `/`, `\`, `:`, `?`, `*`, `"`, `<`, `>`, `|` with `_` (mirrors `src/utils/helpers.ts:sanitizeFilename`). Korean characters and parentheses are valid in vault filenames.
+3. **Filename sanitization**: replace `/`, `\`, `:`, `?`, `*`, `"`, `<`, `>`, `|` with `_` (mirrors `src/utils/helpers.ts:sanitizeFilename`). Korean characters and parentheses are valid in vault filenames.
 
-5. After writing all concept notes, append a brief summary in the completion message: "{N} concept notes written to Concepts/: {a few names}".
+4. After writing all concept notes, append a brief summary in the completion message: "{N} concept notes written to Concepts/: {a few names}".
 
 ### 5. Compute the slide hashes
 
@@ -157,7 +157,13 @@ Read(file_path="/tmp/alt-deck-<noteId>.pdf", pages="21-40")
 
 Reading a PDF returns the page contents as images you can see directly. For each page N, generate the commentary with `$REPO/prompts/slide-commentary.system.md` + `slide-commentary.user.md`: `{{slideNum}}` = N, `{{totalSlides}}` = page count, `{{conceptList}}` = the existing concept names from step 4.1 (not the newly extracted ones), `{{transcriptBlock}}` = slide N's transcript chunk. Both fragments are empty when there is nothing to show and are otherwise formatted as in `buildSlidePrompt` in `PerSlideCommentaryGenerator.ts`.
 
-Then link concept names in each commentary the way the plugin does (`linkConceptNames` in `$REPO/src/core/markdown.ts`): wrap every occurrence of an extracted concept name (step 4) in `[[...]]`, case-insensitive, written with the concept's exact name, longest names first, never inside an existing `[[...]]`.
+Save each commentary to `/tmp/alt2obs-<noteId>/slide-<N>.md`, then link the extracted concept names (step 4) in all of them with the plugin's own code (`linkConceptNames` in `$REPO/src/core/markdown.ts`). The files are rewritten in place:
+
+```bash
+node "$REPO/scripts/phase2/link-concepts.mjs" "/tmp/alt2obs-<noteId>/concepts.json" /tmp/alt2obs-<noteId>/slide-*.md
+```
+
+Use the linked files verbatim as the slide bodies in step 7. Do not add or remove wikilinks by hand.
 
 ### 7. Assemble the markdown
 
@@ -212,17 +218,35 @@ Marker format must match exactly:
 
 ### 8. Write to the vault
 
+Save the assembled markdown to `/tmp/alt2obs-<noteId>/note.md` first. The target is `<vault>/Alt2Obsidian/<subject>/<title>.md`.
+
+**If the target does not exist:**
+
 ```
 mkdir -p "<vault>/Alt2Obsidian/<subject>"
 ```
 
-Then `Write` the assembled markdown to:
+Then `Write` `note.md` to the target unchanged.
 
-```
-<vault>/Alt2Obsidian/<subject>/<title>.md
-```
+**If the target already exists (re-import), never overwrite it directly.** Merge with the plugin's own merge code, which keeps every `> [!note] 내 메모` callout on its slide (matched by hash), keeps text outside the managed blocks, and moves memos of deleted slides to a `## 🗑️ 삭제된 슬라이드 (orphan)` section:
 
-And copy the PDF to its sibling location (Task 1.4 layout):
+1. Preview the changes:
+
+   ```bash
+   node "$REPO/scripts/phase2/merge-note.mjs" "<target>" "/tmp/alt2obs-<noteId>/note.md" --summary
+   ```
+
+   It prints `{"mode","reorders","insertions","deletions","drifts","confirmDeckReplacement","notes"}`. Show the user the counts (drift = content changed at the same position, reorder = moved, insertion = new slide, deletion = orphaned slide, with slide numbers) and every entry of `notes`, then ask whether to update. Stop if they decline.
+2. If `confirmDeckReplacement` is `true`, more than half of the existing slides would be orphaned, which usually means a different lecture is being imported onto this note. Say so explicitly and require a separate, explicit confirmation before continuing.
+3. Write the merged note:
+
+   ```bash
+   node "$REPO/scripts/phase2/merge-note.mjs" "<target>" "/tmp/alt2obs-<noteId>/note.md" > "/tmp/alt2obs-<noteId>/merged.md"
+   ```
+
+   then copy `merged.md` over the target (`cp`). If `merge-note.mjs` exits non-zero, relay its message and leave the target untouched.
+
+Copy the PDF to its sibling location (Task 1.4 layout):
 
 ```bash
 cp "/tmp/alt-deck-<noteId>.pdf" "<vault>/Alt2Obsidian/<subject>/<title>.pdf"
@@ -230,11 +254,11 @@ cp "/tmp/alt-deck-<noteId>.pdf" "<vault>/Alt2Obsidian/<subject>/<title>.pdf"
 
 ### 9. Report completion
 
-Tell the user: file path written, slide count, the concept notes written, any slides where you found the content was unusually thin (e.g. a totally blank slide), and a one-line note that the Synced Viewer can be opened from Obsidian's command palette.
+Tell the user: file path written, whether it was a new note or a merge (with the change counts), slide count, the concept notes written, any slides where you found the content was unusually thin (e.g. a totally blank slide), and a one-line note that the Synced Viewer can be opened from Obsidian's command palette.
 
 ## Hash compat caveat (always include in completion message)
 
-The plugin and this Skill produce identical slide hashes: both run `src/core/slideHash.ts` (`sha1(normalized page text)`, first 8 hex, no page number; pages without text use `sha1(noteId + ":" + page)`). Because the hash does not depend on the page number, inserting or deleting slides keeps every `> [!note] 내 메모` callout on its own slide when the lecture is re-imported with either tool.
+The plugin and this Skill produce identical slide hashes: both run `src/core/slideHash.ts` (`sha1(normalized page text)`, first 8 hex, no page number; pages without text use `sha1(noteId + ":" + page)`). Because the hash does not depend on the page number, and both tools merge re-imports with the same code (`src/core/merge.ts`, run by `merge-note.mjs` in step 8), inserting or deleting slides keeps every `> [!note] 내 메모` callout on its own slide when the lecture is re-imported with either tool.
 
 Notes written by 1.x (plugin PNG hash, or the old Skill `sha1(noteId:page)` hash) will show every slide as `slideDrift` once on their first re-import with this version. Memos are still preserved through the N-match-with-drift branch, and the new hashes are stable after that.
 
@@ -248,16 +272,16 @@ If you already imported a lecture via the Skill before this exam-period fix, the
 sed -i '' 's/기말고사범위/final/g; s/기말고사/final/g; s/중간고사범위/midterm/g; s/중간고사/midterm/g' "<vault>/Alt2Obsidian/<subject>/<title>.md"
 ```
 
-Or just re-run the Skill against the same Alt URL with `period=final` (or `midterm`) — the multi-managed merge preserves your `> [!note] 내 메모` callouts via the hash-match path, and the corrected tag gets written.
+Or re-run the Skill against the same Alt URL with `period=final` (or `midterm`). Step 8 merges the re-import with `merge-note.mjs`, which preserves your `> [!note] 내 메모` callouts via the hash-match path, and the corrected tag gets written.
 
 ## Error handling
 
 - `alt-scrape.mjs` exits 1 with stderr message → relay to user, stop.
-- `slide-hashes.mjs`, `lecture-material.mjs` or `overview-block.mjs` exits non-zero → relay its stderr to the user and stop. Do not recreate their output by hand. If a `scripts/phase2/*.mjs` file is missing, run `npm run build:scripts` in `$REPO` first.
+- Any `scripts/phase2/*.mjs` helper exits non-zero → relay its stderr to the user and stop. Do not recreate their output by hand. If a `scripts/phase2/*.mjs` file is missing, run `npm run build:scripts` in `$REPO` first.
 - `parseQuality: "partial"` or `pdfUrl: null` → tell user the Alt note isn't a full lecture and stop.
 - `Read` of a PDF page fails → log the slide as `## ⚠️ 처리 실패 슬라이드 N` footer at the end of the markdown (matches the plugin's failure-footer convention), continue with the rest.
 - Vault path doesn't exist → ask the user; do NOT create it without consent.
-- A file already exists at the target `.md` path → tell the user and ask before overwriting (matches the plugin's confirm-on-update flow).
+- A file already exists at the target `.md` path → merge it as in step 8 (preview, confirm, `merge-note.mjs`); never overwrite it with `Write`.
 
 ## Out of scope (Phase 2 Stage B)
 

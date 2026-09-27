@@ -8,6 +8,8 @@ Skill that imports an Alt lecture into the Obsidian vault using Claude Code Max'
 - `slide-hashes.mjs`: per-page slide hashes for a PDF, `node scripts/phase2/slide-hashes.mjs <pdfPath> <sourceId>` prints `{"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}`. Generated from `scripts/src/slide-hashes.ts` by `npm run build:scripts` (also part of `npm run build`); it imports the plugin's `src/core/slideHash.ts`, so hashes are identical to the plugin's. `pdfjs-dist` is loaded from the repo's `node_modules`, so run `npm install` once.
 - `lecture-material.mjs`: the PDF excerpt for `prompts/summary-enhance-material.md`, computed by the plugin's `src/core/lectureMaterial.ts`. `node scripts/phase2/lecture-material.mjs <pdfPath> <seedTextFile>` prints `{"material":{...}}` or `{"material":null}`.
 - `overview-block.mjs`: the `## 📋 전체 요약` section built by the plugin's `src/core/markdown.ts` (headings demoted one level, concept names linked). `node scripts/phase2/overview-block.mjs <summaryFile> [conceptNamesJsonFile]`.
+- `link-concepts.mjs`: wraps concept names in `[[...]]` with the plugin's `linkConceptNames`. `node scripts/phase2/link-concepts.mjs <conceptNamesJsonFile> <file>...` rewrites the files in place.
+- `merge-note.mjs`: re-import merge with the plugin's `src/core/merge.ts` (memos follow their slides, text outside managed blocks kept, deleted slides orphaned). `node scripts/phase2/merge-note.mjs <existingNote> <newNote>` prints the merged note; with `--summary` it prints the change summary as JSON instead.
 - `SKILL.md` — orchestration. Drives Claude Code through scrape → download PDF → read each slide via `Read(pages: "N-N")` → write Korean commentary → assemble page-anchored markdown → write to vault.
 
 ## Install
@@ -40,4 +42,4 @@ The plugin and the Skill compute the same slide hash from the same code in `src/
 
 Notes written by 1.x (plugin PNG-byte hash or the old Skill `sha1(noteId:page)` hash) show every slide as `slideDrift` once on their first re-import. Memos are preserved through the N-match-with-drift branch, and hashes are stable afterwards.
 
-`node test/test-slide-hash.mjs [pdfPath]` checks that the committed CLI bundles are fresh and that the hash output is deterministic and follows the rule; `node test/test-skill-clis.mjs [pdfPath]` checks that the other two CLIs match the plugin code.
+`node test/test-slide-hash.mjs [pdfPath]` checks that the committed CLI bundles are fresh and that the hash output is deterministic and follows the rule; `node test/test-skill-clis.mjs [pdfPath]` checks that `lecture-material`, `overview-block` and `link-concepts` match the plugin code, and `node test/test-merge.mjs` checks `merge-note` against the plugin merge. The tests use the committed fixture `test/fixtures/text-deck.pdf` and also check a real Alt deck when one is present.
