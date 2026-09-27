@@ -38,10 +38,11 @@ export function insertFrontmatterLine(content: string, line: string): string {
   if (!m) return `${bom}---${eol}${line}${eol}---${eol}${body}`;
   const inner = m[1];
   if (inner !== undefined && key) {
-    const empty = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*(?:""|'')?[ \\t]*$`, "m");
+    // An empty value: nothing, "", '', null or ~ (YAML nulls); a CRLF line keeps its \r.
+    const empty = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*(?:""|''|null|~)?[ \\t]*(\\r?)$`, "m");
     if (empty.test(inner)) {
       const start = body.indexOf(inner);
-      return bom + body.slice(0, start) + inner.replace(empty, line) + body.slice(start + inner.length);
+      return bom + body.slice(0, start) + inner.replace(empty, (_m, cr: string) => `${line}${cr}`) + body.slice(start + inner.length);
     }
   }
   // Insert just before the closing "---".

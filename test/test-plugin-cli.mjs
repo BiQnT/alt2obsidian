@@ -137,6 +137,9 @@ assert.equal(insertFrontmatterLine('---\r\na: 1\r\n---\r\nb', 'k: "v"'), '---\r\
 assert.equal(insertFrontmatterLine('\uFEFF---\na: 1\n---\nb', 'k: "v"'), '\uFEFF---\na: 1\nk: "v"\n---\nb', "BOM kept in front");
 assert.equal(insertFrontmatterLine('---\na: 1\nalt_local_id:\nb: 2\n---\nx', 'alt_local_id: "id"'), '---\na: 1\nalt_local_id: "id"\nb: 2\n---\nx', "an empty key is filled, not duplicated");
 assert.equal(insertFrontmatterLine('---\nalt_local_id: ""\n---\nx', 'alt_local_id: "id"'), '---\nalt_local_id: "id"\n---\nx');
+assert.equal(insertFrontmatterLine('---\r\nalt_local_id:\r\nb: 2\r\n---\r\nx', 'alt_local_id: "id"'), '---\r\nalt_local_id: "id"\r\nb: 2\r\n---\r\nx', "CRLF empty key filled");
+assert.equal(insertFrontmatterLine('---\nalt_local_id: null\n---\nx', 'alt_local_id: "id"'), '---\nalt_local_id: "id"\n---\nx', "null is empty");
+assert.equal(insertFrontmatterLine('---\nalt_local_id: ~\n---\nx', 'alt_local_id: "id"'), '---\nalt_local_id: "id"\n---\nx', "~ is empty");
 console.log("PASS: frontmatter line insert keeps the YAML text as it is");
 
 const s = fakeSession("ok");

@@ -5,6 +5,7 @@ import { ImportPreview, ExamPeriod, ImportUpdateSummary, LLMUsage } from "../typ
 import { compactTokens } from "../llm/usage";
 import { PROVIDER_LABELS } from "../settings/llmSettings";
 import { AltNoteDetails, AltNoteSummary, inferSubject } from "../sources";
+import { AltApiError } from "../sources/AltLocalApiSource";
 import { LocalNoteStatus, statusChip, VaultNoteInfo } from "../core/noteStatus";
 import { alignmentStatus } from "../pipeline/alignment";
 
@@ -305,6 +306,12 @@ export class Alt2ObsidianSidebarView extends ItemView {
           if (it.status.kind === "imported") it.status = { ...it.status, changed };
         }
       } catch (e) {
+        // The source failed mid-scan (connection lost, owner changed): stop
+        // and reconnect instead of marking the remaining notes empty.
+        if (e instanceof AltApiError && e.status === null) {
+          if (gen === this.loadGeneration) void this.refreshLocal();
+          return;
+        }
         console.warn("[Alt2Obsidian] note details failed:", e);
         it.details = { hasSlides: false, slidesTitle: null, pdfPath: null, transcriptMinutes: null, timestamps: false };
       }

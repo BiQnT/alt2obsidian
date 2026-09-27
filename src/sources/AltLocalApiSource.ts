@@ -101,8 +101,12 @@ export interface ApiSourceOptions {
   now?: () => number;
 }
 
-/** The owner is checked again before a request batch when the last check is older than this. */
-export const OWNER_RECHECK_MS = 30000;
+/**
+ * The owner is checked again before every note list and bundle request, and
+ * before a details request when the last check is older than this (the
+ * sidebar asks for details note by note).
+ */
+export const OWNER_RECHECK_MS = 3000;
 
 export interface DetectOptions {
   probeTimeoutMs?: number;
@@ -181,13 +185,13 @@ export class AltLocalApiSource implements AltLocalSource {
   }
 
   /**
-   * Before a request batch: when the last owner check is older than
-   * OWNER_RECHECK_MS, check again, and require the same pid as approved.
-   * On failure nothing is sent and the source is marked failed.
+   * Before a request batch: when the last owner check is `maxAgeMs` old or
+   * older, check again, and require the same pid as approved. On failure
+   * nothing is sent and the source is marked failed.
    */
-  private async ensureOwner(): Promise<void> {
+  private async ensureOwner(maxAgeMs: number): Promise<void> {
     if (this.failed) throw new AltApiError("Alt 로컬 API 연결이 끊겼습니다. 다시 연결하세요.", null);
-    if (!this.verifyOwner || this.now() - this.lastOwnerCheck < OWNER_RECHECK_MS) return;
+    if (!this.verifyOwner || this.now() - this.lastOwnerCheck < maxAgeMs) return;
     const check = await this.verifyOwner(this.port);
     const samePid = this.ownerPid === null || check.pid === undefined || check.pid === this.ownerPid;
     if (!check.ok || !samePid) {
@@ -227,7 +231,7 @@ export class AltLocalApiSource implements AltLocalSource {
   }
 
   async listNotes(): Promise<AltNoteSummary[]> {
-    await this.ensureOwner();
+    await this.ensureOwner(0);
     const [rows, folders] = await Promise.all([this.get<NoteRow[]>("/api/lectureNotes"), this.folderMap(true)]);
     if (!Array.isArray(rows)) throw new AltApiError("Alt 로컬 API의 노트 목록 형식이 예상과 다릅니다.", 200);
     return rows.filter((r) => r && typeof r.id === "string").map((r) => toSummary(r, folders));
@@ -260,7 +264,7 @@ export class AltLocalApiSource implements AltLocalSource {
   }
 
   async noteDetails(id: string): Promise<AltNoteDetails> {
-    await this.ensureOwner();
+    await this.ensureOwner(OWNER_RECHECK_MS);
     return detailsFromComponents(await this.componentsWithPaths(id));
   }
 
@@ -270,7 +274,7 @@ export class AltLocalApiSource implements AltLocalSource {
   }
 
   async getBundle(id: string): Promise<LectureBundle> {
-    await this.ensureOwner();
+    await this.ensureOwner(0);
     const note = await this.get<NoteRow | null>(`/api/lectureNotes/${encodeURIComponent(id)}`);
     if (!note || typeof note.id !== "string") throw new AltApiError("Alt에서 이 노트를 찾지 못했습니다.", 404);
     const [folders, components] = await Promise.all([this.folderMap(), this.componentsWithPaths(id)]);

@@ -460,25 +460,32 @@ try {
     c.source.close();
     assert.equal(copies(), before0, "closed with the source");
 
-    // Owner re-check: after 30 s the owner is checked again before a request
-    // batch; a different pid means the token is not sent and the source fails.
+    // Owner re-check: before every list and bundle request, and before a
+    // details request when the last check is 3 s old; a different pid means
+    // the token is not sent and the source fails.
     let clock = 1000000;
     let ownerPid = 111;
-    const checker = async () => ({ ok: true, reason: "", pid: ownerPid });
+    let checks = 0;
+    const checker = async () => (checks++, { ok: true, reason: "", pid: ownerPid });
     const guarded = (await m.AltLocalApiSource.detect(apiUd, { verifyOwner: checker, now: () => clock })).source;
+    checks = 0;
     await guarded.listNotes();
-    clock += 10000;
-    ownerPid = 222;
+    await guarded.getBundle("n1");
+    assert.equal(checks, 2, "list and bundle each re-check");
+    clock += 1000;
     await guarded.noteDetails("n1");
+    await guarded.noteDetails("n2");
+    assert.equal(checks, 2, "details within 3 s reuse the last check");
+    ownerPid = 222;
     const sentBefore = requests.filter((r) => r.auth).length;
-    clock += 31000;
+    clock += 3000;
     await assert.rejects(guarded.noteDetails("n1"), /프로그램이 바뀌어 토큰을 보내지 않았습니다/);
     assert.equal(requests.filter((r) => r.auth).length, sentBefore, "no token after the owner changed");
     assert.equal(guarded.failed, true);
     await assert.rejects(guarded.listNotes(), /다시 연결하세요/);
     assert.equal(requests.filter((r) => r.auth).length, sentBefore);
     assert.equal(c.label, "Alt 연결됨 · 로컬 API (v0.12.0)");
-    console.log("PASS: API source: token only to a listener verified as Alt (impostor refused), status probe, folders tree, one DB copy for synced paths, owner re-check after 30 s (changed pid: no token), GET only, token never in errors");
+    console.log("PASS: API source: token only to a listener verified as Alt (impostor refused), status probe, folders tree, one DB copy for synced paths, owner re-check per list/bundle and every 3 s for details (changed pid: no token), GET only, token never in errors");
 
     // Skill CLI (alt-local.mjs, same src/sources code) against the same
     // impostor: it refuses to send the token and reads the database copy.
