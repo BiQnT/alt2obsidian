@@ -23,7 +23,7 @@ Parse from the user's message (or ask if missing):
 |---|---|---|
 | `note` | an Alt note on this Mac: title, folder or date, resolved with `alt-local.mjs list` (step 1A) | one of `note` / `url` |
 | `url` | `https://altalt.io/note/b7472c41-…` (fallback, no timestamps) | one of `note` / `url` |
-| `vault` | absolute path of the Obsidian vault | yes — read from `~/Library/Application Support/obsidian/obsidian.json` if a single vault, else ask |
+| `vault` | absolute path of the Obsidian vault | yes: read from `~/Library/Application Support/obsidian/obsidian.json` if a single vault, else ask |
 | `subject` | folder under `<base>/`, e.g. `CSED232` | local notes: the `subject` guessed from the Alt folder (confirm with the user); URL: ask if not in user's message |
 | `title` | filename stem, e.g. `8강` | optional — falls back to scraped Alt note title |
 
