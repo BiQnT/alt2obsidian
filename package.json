@@ -1,13 +1,13 @@
 {
 	"name": "alt2obsidian",
-	"version": "2.0.0-beta.1",
-	"description": "Import Alt lecture notes into Obsidian as page-anchored markdown with per-slide commentary from the Claude Code or Codex CLI (or Gemini/Ollama) and a built-in Synced PDF viewer",
+	"version": "2.0.0-beta.2",
+	"description": "Import Alt lecture notes (local Alt app or share URL) into Obsidian as page-anchored markdown with transcript-to-slide alignment, per-slide commentary from the Claude Code or Codex CLI (or Gemini/Ollama) and a built-in Synced PDF viewer",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "node esbuild.config.mjs production && npm run build:scripts",
 		"build:scripts": "node scripts/build-scripts.mjs",
-		"test": "node test/test-prompts.mjs && node test/test-gemini-prompts.mjs && node test/test-cli-providers.mjs && node test/test-windows.mjs && node test/test-prep.mjs && node test/test-batch.mjs && node test/test-bench.mjs && node test/test-plugin-cli.mjs && node test/test-markdown.mjs && node test/test-merge.mjs && node test/test-slide-hash.mjs && node test/test-skill-clis.mjs"
+		"test": "node test/test-prompts.mjs && node test/test-gemini-prompts.mjs && node test/test-cli-providers.mjs && node test/test-windows.mjs && node test/test-prep.mjs && node test/test-batch.mjs && node test/test-bench.mjs && node test/test-plugin-cli.mjs && node test/test-markdown.mjs && node test/test-merge.mjs && node test/test-slide-hash.mjs && node test/test-skill-clis.mjs && node test/test-alignment.mjs && node test/test-sources.mjs"
 	},
 	"keywords": [
 		"obsidian",
