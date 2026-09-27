@@ -30,6 +30,16 @@ import {
 } from "./ui/SyncedViewerView";
 import { TFile } from "obsidian";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
+import { renderPrompt } from "./prompts/render";
+import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
+import summaryFromTranscriptSystemTemplate from "../prompts/summary-from-transcript.system.md";
+import summaryEnhanceTranscriptTemplate from "../prompts/summary-enhance-transcript.md";
+import summaryEnhanceTranscriptSystemTemplate from "../prompts/summary-enhance-transcript.system.md";
+import summaryEnhanceMaterialTemplate from "../prompts/summary-enhance-material.md";
+import summaryEnhanceMaterialSystemTemplate from "../prompts/summary-enhance-material.system.md";
+import summaryFromMaterialTemplate from "../prompts/summary-from-material.md";
+import summaryFromMaterialSystemTemplate from "../prompts/summary-from-material.system.md";
+import subjectDetectionTemplate from "../prompts/subject-detection.md";
 
 export default class Alt2ObsidianPlugin extends Plugin {
   data: PluginData = DEFAULT_PLUGIN_DATA;
@@ -221,27 +231,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
           : "";
 
         altData.summary = await llm.generateText(
-          `다음은 강의 트랜스크립트입니다. 이 내용을 구조화된 강의 노트로 정리해주세요.
-
-규칙:
-- 마크다운 형식으로, ## 섹션 헤더 사용
-- 핵심 개념은 **볼드**, 전문 용어는 영어 병기 (예: **파이프라인 해저드(Pipeline Hazard)**)
-- 각 섹션에 핵심 포인트를 불릿 리스트로 정리
-- 중요 정의는 Obsidian callout 사용:
-  > [!definition] 개념명
-  > 정의 내용
-- 시험 출제 가능 핵심 포인트는:
-  > [!important] 핵심 포인트 제목
-  > 내용
-- 예시, 의사코드, 수식이 있으면:
-  > [!example] 예시 제목
-  > 내용
-${memoContext}
-
-트랜스크립트:
-${transcriptText}`,
+          renderPrompt(summaryFromTranscriptTemplate, {
+            memoContext,
+            transcript: transcriptText,
+          }),
           {
-            systemPrompt: "You are an academic note-taking assistant. Create well-structured, comprehensive lecture notes in Korean with markdown formatting and Obsidian callout blocks.",
+            systemPrompt: renderPrompt(summaryFromTranscriptSystemTemplate, {}),
             maxOutputTokens: 4096,
           }
         );
@@ -249,26 +244,12 @@ ${transcriptText}`,
         onProgress?.("트랜스크립트로 요약 보강 중...", 10);
 
         altData.summary = await llm.generateText(
-          `다음은 강의 요약본과 실제 강의 트랜스크립트입니다.
-요약본을 기반으로 하되, 트랜스크립트에서 빠진 부연설명, 예시, 세부 내용을 추가하여 더 풍부한 강의 노트를 만들어주세요.
-
-규칙:
-- 기존 요약본의 구조와 핵심 내용을 유지
-- 트랜스크립트에서 추가 설명, 예시, 교수 코멘트 등을 보강
-- 마크다운 형식, ## 섹션 헤더 사용
-- 핵심 개념을 **볼드**로, 전문 용어는 영어 병기
-- 트랜스크립트에만 있는 중요 내용은 새 섹션이나 불릿으로 추가
-- 중요 정의는 > [!definition] 개념명 callout으로 표시
-- 시험 출제 포인트는 > [!important] callout으로 표시
-- 예시/코드는 > [!example] callout으로 표시
-
-[기존 요약본]
-${altData.summary}
-
-[강의 트랜스크립트]
-${transcriptText}`,
+          renderPrompt(summaryEnhanceTranscriptTemplate, {
+            summary: altData.summary,
+            transcript: transcriptText,
+          }),
           {
-            systemPrompt: "You are an academic note-taking assistant. Enhance lecture summaries with additional details from transcripts.",
+            systemPrompt: renderPrompt(summaryEnhanceTranscriptSystemTemplate, {}),
             maxOutputTokens: 8192,
           }
         );
@@ -523,14 +504,7 @@ ${transcriptText}`,
 
     // Fallback to LLM only if no code found
     try {
-      const prompt = `Lecture title: "${title}"
-
-Extract the course code (like "CSED311", "MATH230", "CS101") from this title.
-If there is no course code, return the first meaningful word or abbreviation from the title.
-Rules:
-- Return ONLY the course code or short name (1-10 characters)
-- No explanation, no quotes, no extra text
-- Examples: "CSED311 Lec7-pipeline" → "CSED311", "데이터구조 3강" → "데이터구조"`;
+      const prompt = renderPrompt(subjectDetectionTemplate, { title });
 
       const result = await llm.generateText(prompt, {
         maxOutputTokens: 20,
@@ -547,26 +521,16 @@ Rules:
     summary: string,
     materialContext: LectureMaterialContext
   ): Promise<string> {
-    const prompt = `기존 강의 노트와 PDF 강의자료 발췌가 있습니다.
-기존 노트의 구조와 문체를 유지하되, 강의자료에만 있는 중요한 정의, 공식, 표기법, 예시, 순서를 필요한 위치에 짧게 보강해주세요.
-
-작성 규칙:
-- 결과는 완성된 마크다운 강의 노트 본문만 반환합니다.
-- 기존 노트 내용을 불필요하게 다시 쓰거나 장황하게 늘리지 않습니다.
-- 강의자료에서 보강한 내용은 가능하면 문장 끝에 (p.3)처럼 페이지를 짧게 표시합니다.
-- 슬라이드 원문을 통째로 복사하지 말고 시험/복습에 필요한 정보만 요약합니다.
-- 중복되는 항목은 합치고, 표나 목록은 간결한 불릿으로 정리합니다.
-- PDF 발췌가 노트와 무관하거나 불명확하면 기존 노트를 우선합니다.
-
-[기존 노트]
-${this.truncateForPrompt(summary, 18000)}
-
-[PDF 강의자료 발췌: 총 ${materialContext.pageCount}쪽 중 핵심 ${materialContext.pages.length}쪽, ${materialContext.truncated ? "일부 발췌" : "전체 발췌"}]
-${materialContext.text}`;
+    const prompt = renderPrompt(summaryEnhanceMaterialTemplate, {
+      summary: this.truncateForPrompt(summary, 18000),
+      pageCount: materialContext.pageCount,
+      excerptPageCount: materialContext.pages.length,
+      excerptScope: materialContext.truncated ? "일부 발췌" : "전체 발췌",
+      materialText: materialContext.text,
+    });
 
     return llm.generateText(prompt, {
-      systemPrompt:
-        "You are a concise academic note editor. Improve Korean Obsidian lecture notes using compact lecture material excerpts without copying slides verbatim.",
+      systemPrompt: renderPrompt(summaryEnhanceMaterialSystemTemplate, {}),
       maxOutputTokens: 8192,
     });
   }
@@ -579,21 +543,15 @@ ${materialContext.text}`;
     const memoContext = fallbackSummary
       ? `\n[Alt에서 가져온 제한적 내용]\n${this.truncateForPrompt(fallbackSummary, 4000)}\n`
       : "";
-    const prompt = `Alt 노트 파싱이 제한적이어서 PDF 강의자료 발췌를 바탕으로 강의 노트를 작성해야 합니다.
-
-작성 규칙:
-- 결과는 완성된 마크다운 강의 노트 본문만 반환합니다.
-- 섹션은 ## 헤더를 사용하고, 정의/공식/예시/주의점을 구분합니다.
-- 강의자료에서 온 핵심 내용은 가능하면 (p.3)처럼 페이지를 표시합니다.
-- 슬라이드 원문을 길게 복사하지 말고, 복습 가능한 설명으로 압축합니다.
-- 확실하지 않은 내용은 단정하지 않습니다.
-${memoContext}
-[PDF 강의자료 발췌: 총 ${materialContext.pageCount}쪽 중 핵심 ${materialContext.pages.length}쪽]
-${materialContext.text}`;
+    const prompt = renderPrompt(summaryFromMaterialTemplate, {
+      memoContext,
+      pageCount: materialContext.pageCount,
+      excerptPageCount: materialContext.pages.length,
+      materialText: materialContext.text,
+    });
 
     return llm.generateText(prompt, {
-      systemPrompt:
-        "You are a concise academic note-taking assistant. Build Korean Obsidian lecture notes from compact PDF lecture material excerpts.",
+      systemPrompt: renderPrompt(summaryFromMaterialSystemTemplate, {}),
       maxOutputTokens: 8192,
     });
   }

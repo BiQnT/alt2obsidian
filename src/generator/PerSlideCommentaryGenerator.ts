@@ -18,6 +18,11 @@ import {
 } from "../types";
 import { PdfProcessor } from "../pdf/PdfProcessor";
 import { hashSlidePngBase64 } from "../vault/slideHash";
+import { renderPrompt } from "../prompts/render";
+import slideCommentarySystemTemplate from "../../prompts/slide-commentary.system.md";
+import slideCommentaryUserTemplate from "../../prompts/slide-commentary.user.md";
+
+const SYSTEM_PROMPT = renderPrompt(slideCommentarySystemTemplate, {});
 
 export interface PerSlideGenerationOptions {
   /**
@@ -47,9 +52,6 @@ export interface PerSlideGenerationOptions {
   ) => void;
 }
 
-const SYSTEM_PROMPT =
-  "You are an academic note-taking assistant for Korean university students. Produce concise, well-structured Korean Markdown for studying. Output only the section body — never section headers.";
-
 function buildSlidePrompt(
   slideNum: number,
   totalSlides: number,
@@ -64,16 +66,12 @@ function buildSlidePrompt(
     ? `\n\n[해당 구간 음성 전사 (참고용 — raw 그대로 붙여넣기 금지, 교수님 강조 포인트만 발췌해 큐레이팅하시오)]\n${transcriptChunk.trim()}`
     : "";
 
-  return `다음은 강의 슬라이드 ${slideNum}/${totalSlides}의 이미지입니다. 슬라이드 내용을 보고 학생이 공부하기 좋은 한국어 마크다운 해설을 작성하시오.
-
-규칙:
-- 출력은 마크다운 본문만. 섹션 헤더(\`#\`, \`##\`) 사용 금지 — 호출자가 슬라이드 헤더를 따로 붙입니다.
-- 슬라이드의 핵심 정의는 \`> [!definition] 개념명\` callout으로 표시.
-- 예시/공식/코드는 \`> [!example]\` callout으로 표시.
-- 시험 출제 포인트는 \`> [!important]\` callout으로 표시.
-- 음성 전사가 있으면 교수님이 강조한 1-2개 포인트만 \`> "..."\` 인용 형태로 (raw 덤프 X).
-- 핵심 개념(아래 목록 또는 슬라이드에서 새로 정의된 것)은 \`[[개념명]]\` wikilink로 감싸시오.
-- 분량: 200-500자 한국어. 표지/목차/Thank you 같은 비실질 슬라이드는 한 줄로 짧게.${conceptList}${transcriptBlock}`;
+  return renderPrompt(slideCommentaryUserTemplate, {
+    slideNum,
+    totalSlides,
+    conceptList,
+    transcriptBlock,
+  });
 }
 
 export class PerSlideCommentaryGenerator {
