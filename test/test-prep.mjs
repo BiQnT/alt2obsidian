@@ -245,12 +245,14 @@ async function deck(n, visualPages = []) {
 {
   assert.equal(m.estimateTextTokens("abcd"), 1);
   assert.equal(m.estimateTextTokens("가나다라마"), 5);
-  assert.deepEqual(m.estimateCalls([{ promptText: "a".repeat(400), images: 2, outputTokens: 50 }], "claude-cli"), {
+  assert.deepEqual(m.estimateCalls([{ promptText: "a".repeat(400), images: 2, outputTokens: 50, schema: true }], "claude-cli"), {
     calls: 1,
-    inputTokens: m.PROVIDER_COSTS["claude-cli"].fixedPerCall + 100 + 2 * m.PROVIDER_COSTS["claude-cli"].perImage,
+    // Claude: schema turn + image turn, each re-sending prompt and CLI overhead.
+    inputTokens: 3 * (2200 + 100) + 2 * 1100,
     outputTokens: 50,
     imagesSent: 2,
   });
+  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "codex-cli").inputTokens, 18000 + 100);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 1000), true);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 0), false);
 

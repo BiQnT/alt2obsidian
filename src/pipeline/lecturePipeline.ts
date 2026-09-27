@@ -163,6 +163,7 @@ export function estimateLecture(
     return {
       promptText: system + buildBatchUserPrompt(contextBlock, slides),
       images: slides.filter((s) => s.sendImage).length,
+      schema: true,
       outputTokens: slides.reduce(
         (n, s) => n + (s.kind === "visual" ? OUTPUT_TOKENS_PER_SLIDE.visual : OUTPUT_TOKENS_PER_SLIDE.content),
         0
@@ -178,6 +179,7 @@ export function estimateLecture(
     followUps.push({
       promptText: renderPrompt(overviewSystemTemplate, {}) + buildOverviewPrompt(context.title, altSummary, fakeGists),
       images: 0,
+      schema: false,
       outputTokens: OVERVIEW_OUTPUT_TOKENS,
     });
   }
@@ -192,6 +194,7 @@ export function estimateLecture(
               context.subjectTags.join(", ") +
               gistLines(fakeGists),
             images: 0,
+            schema: true,
             outputTokens: CONCEPTS_OUTPUT_TOKENS,
           },
         ]
