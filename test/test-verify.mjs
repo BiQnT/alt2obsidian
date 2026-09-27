@@ -174,3 +174,83 @@ try {
   m.removeJobDir(job);
   s.cleanup();
 }
+
+// ---- Notion MCP input (fake claude: `mcp list` and the Notion-only call) ----
+{
+  const { mkdtempSync, rmSync, statSync, readdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const listing = [
+    "Checking MCP server health…",
+    "[mcp-sdk] some warning line: with a colon - noise",
+    "claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected",
+    "plugin:vercel-plugin:vercel: https://mcp.vercel.com (HTTP) - ! Needs authentication",
+    "claude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected",
+  ].join("\n");
+  const servers = m.parseMcpList(listing);
+  assert.deepEqual(servers.map((x) => [x.name, x.connected]), [["claude.ai Gmail", true], ["plugin:vercel-plugin:vercel", false], ["claude.ai Notion", true]]);
+  assert.equal(m.mcpToolName(m.findNotionServer(servers).name), "mcp__claude_ai_Notion__notion-fetch");
+  assert.equal(m.mcpToolName("notion"), "mcp__notion__notion-fetch");
+  assert.throws(() => m.buildNotionFetchArgs({ model: "", effort: "", toolName: "--tools" }), /올바르지 않습니다/);
+  const args = m.buildNotionFetchArgs({ model: "sonnet", effort: "low", toolName: "mcp__notion__notion-fetch" });
+  assert.ok(!args.includes("--strict-mcp-config") && !args.includes("--safe-mode"), "user MCP servers stay on for this call");
+  assert.equal(args[args.indexOf("--tools") + 1], "");
+  assert.equal(args[args.indexOf("--allowedTools") + 1], "mcp__notion__notion-fetch");
+  assert.equal(args[args.indexOf("--permission-mode") + 1], "dontAsk");
+  assert.equal(m.notionPageId("https://www.notion.so/me/13-Memory-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d?pvs=4"), "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d");
+  assert.deepEqual(m.parseNotionAnswer("last_edited_time: 2026-01-01T00:00:00Z\n---\n# 제목\n- 내용"), { kind: "page", lastEdited: "2026-01-01T00:00:00Z", markdown: "# 제목\n- 내용\n" });
+  assert.deepEqual(m.parseNotionAnswer("last_edited_time: 2026-01-01T00:00:00Z\nUNCHANGED"), { kind: "unchanged", lastEdited: "2026-01-01T00:00:00Z" });
+  assert.equal(m.parseNotionAnswer("ERROR: no such tool").kind, "error");
+  assert.equal(m.parseNotionAnswer("요약하면 이 페이지는...").kind, "error");
+  console.log("PASS: Notion MCP: server from `claude mcp list`, tool name, Notion-only flags, answer parsing");
+
+  const s2 = fakeSession("ok");
+  const job2 = m.createJobDir();
+  const cacheDir = join(mkdtempSync(join(tmpdir(), "alt2obs-notion-test-")), "notion");
+  const url = "https://www.notion.so/me/13-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d";
+  try {
+    const usage = new m.UsageTracker();
+    const provider = () => new m.NotionFetchProvider({ bin: FAKE_CLAUDE, model: "sonnet", effort: "low", timeoutMs: 20000, workDir: job2, usage, task: "notion-fetch", ownsWorkDir: false });
+    // No Notion MCP: setup guidance, no model call.
+    process.env.FAKE_NOTION_MCP = "none";
+    await assert.rejects(m.fetchNotionPage(provider(), { bin: FAKE_CLAUDE, url, cacheDir, workDir: job2 }), (e) => e instanceof m.NotionMcpMissingError && /claude mcp add/.test(e.message));
+    process.env.FAKE_NOTION_MCP = "failed";
+    await assert.rejects(m.fetchNotionPage(provider(), { bin: FAKE_CLAUDE, url, cacheDir, workDir: job2 }), /연결되어 있지 않습니다/);
+    assert.equal(usage.total().calls, 0, "no model call without a connected Notion MCP");
+    await assert.rejects(m.fetchNotionPage(provider(), { bin: FAKE_CLAUDE, url: "https://example.com/x", cacheDir, workDir: job2 }), /노션 페이지 URL/);
+
+    process.env.FAKE_NOTION_MCP = "connected";
+    const first = await m.fetchNotionPage(provider(), { bin: FAKE_CLAUDE, url, cacheDir, workDir: job2 });
+    assert.equal(first.fromCache, false);
+    assert.match(first.markdown, /DRAM은 SRAM보다 빠르다/);
+    assert.equal(first.server, "notion");
+    const files = readdirSync(cacheDir);
+    assert.deepEqual(files, ["1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d.json"]);
+    assert.equal(statSync(join(cacheDir, files[0])).mode & 0o777, 0o600, "cache file 0600");
+    assert.equal(statSync(cacheDir).mode & 0o777, 0o700);
+    // Unchanged page: the cached markdown, no page text in the answer.
+    const again = await m.fetchNotionPage(provider(), { bin: FAKE_CLAUDE, url, cacheDir, workDir: job2 });
+    assert.equal(again.fromCache, true);
+    assert.equal(again.markdown, first.markdown);
+    // Edited page: fetched again.
+    process.env.FAKE_NOTION_EDITED = "2026-09-27T09:00:00.000Z";
+    process.env.FAKE_NOTION_PAGE = "- 새 내용 문장입니다";
+    const edited = await m.fetchNotionPage(provider(), { bin: FAKE_CLAUDE, url, cacheDir, workDir: job2 });
+    assert.equal(edited.fromCache, false);
+    assert.match(edited.markdown, /새 내용/);
+    const notionCalls = s2.calls().filter((c) => c.argv.includes("--allowedTools"));
+    assert.equal(notionCalls.length, 3);
+    assert.ok(notionCalls[1].stdin.includes("exactly `2026-09-20T10:00:00.000Z`"), "the cached time is sent so an unchanged page is not returned again");
+    assert.equal(usage.total().calls, 3);
+    // A tool name from the settings skips the lookup.
+    const before = s2.calls().length;
+    await m.fetchNotionPage(provider(), { bin: FAKE_CLAUDE, url, cacheDir, workDir: job2, toolName: "mcp__claude_ai_Notion__notion-fetch" });
+    assert.equal(s2.calls().slice(before).filter((c) => c.argv[0] === "mcp").length, 0);
+    console.log("PASS: Notion fetch: setup guidance without MCP, Notion-only call, raw markdown cached outside the vault (0600) with last_edited_time, unchanged page served from the cache");
+  } finally {
+    for (const k of ["FAKE_NOTION_MCP", "FAKE_NOTION_EDITED", "FAKE_NOTION_PAGE"]) delete process.env[k];
+    m.removeJobDir(job2);
+    s2.cleanup();
+    rmSync(join(cacheDir, ".."), { recursive: true, force: true });
+  }
+}

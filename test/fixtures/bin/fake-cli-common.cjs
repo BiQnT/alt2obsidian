@@ -139,7 +139,35 @@ function log(entry) {
 // ---- claude ----
 
 const CLAUDE_BOOL = new Set(["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]);
-const CLAUDE_VALUE = new Set(["--input-format", "--output-format", "--setting-sources", "--system-prompt", "--tools", "--model", "--effort"]);
+const CLAUDE_VALUE = new Set(["--input-format", "--output-format", "--setting-sources", "--system-prompt", "--tools", "--model", "--effort", "--permission-mode", "--allowedTools"]);
+
+// Notion MCP (FAKE_NOTION_MCP=connected|failed|none, default none).
+function runClaudeMcpList() {
+  const state = process.env.FAKE_NOTION_MCP || "none";
+  log({ cli: "claude", argv: ["mcp", "list"], cwd: process.cwd(), stdin: "" });
+  process.stdout.write("Checking MCP server health…\n\n");
+  process.stdout.write("claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected\n");
+  if (state === "connected") process.stdout.write("notion: https://mcp.notion.com/mcp (HTTP) - ✔ Connected\n");
+  if (state === "failed") process.stdout.write("notion: https://mcp.notion.com/mcp (HTTP) - ✘ Failed to connect\n");
+}
+
+/** The Notion fetch call: only the Notion tool, the user's MCP config kept. */
+function checkNotionFlags(flags) {
+  if (flags["--strict-mcp-config"] || flags["--safe-mode"]) fail("the Notion call must keep the user's MCP servers");
+  if (flags["--tools"] !== "") fail("--tools must be \"\" (no built-in tools)");
+  if (flags["--permission-mode"] !== "dontAsk") fail("--permission-mode dontAsk expected");
+  if (!/^mcp__[A-Za-z0-9_-]+__notion-fetch$/.test(flags["--allowedTools"])) fail(`only the Notion fetch tool may be allowed, got ${flags["--allowedTools"]}`);
+  if (flags["--setting-sources"] !== "user") fail("--setting-sources user expected");
+}
+
+function notionAnswer(stdin) {
+  const edited = process.env.FAKE_NOTION_EDITED || "2026-09-20T10:00:00.000Z";
+  const cached = (stdin.match(/exactly `([^`]*)`/) || [])[1];
+  if (process.env.FAKE_NOTION_ERROR) return `ERROR: ${process.env.FAKE_NOTION_ERROR}`;
+  if (cached === edited) return `last_edited_time: ${edited}\nUNCHANGED`;
+  const page = process.env.FAKE_NOTION_PAGE || "# 13강 노트\n\n- 캐시는 SRAM으로 만든다\n- DRAM은 SRAM보다 빠르다 (거짓)";
+  return `last_edited_time: ${edited}\n---\n${page}`;
+}
 
 function runClaude() {
   const argv = process.argv.slice(2);
@@ -147,6 +175,7 @@ function runClaude() {
     process.stdout.write("2.1.283 (Claude Code)\n");
     return;
   }
+  if (argv[0] === "mcp" && argv[1] === "list") return runClaudeMcpList();
   if (argv[0] === "auth" && argv[1] === "status") {
     const loggedIn = process.env.FAKE_CLAUDE_LOGGED_OUT !== "1";
     process.stdout.write(JSON.stringify({ loggedIn, authMethod: loggedIn ? "claude.ai" : "none" }));
@@ -161,12 +190,16 @@ function runClaude() {
       flags[a] = argv[++i];
     } else fail(`unknown option '${a}'`);
   }
-  for (const req of ["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]) {
+  const notion = flags["--allowedTools"] !== undefined;
+  const required = notion ? ["-p", "--verbose", "--no-session-persistence", "--disable-slash-commands"] : ["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"];
+  if (notion) checkNotionFlags(flags);
+  else if (flags["--permission-mode"] !== undefined) fail("--permission-mode is only for the Notion call");
+  for (const req of required) {
     if (!flags[req]) fail(`missing ${req}`);
   }
   if (flags["--input-format"] !== "stream-json") fail("--input-format must be stream-json");
   if (flags["--output-format"] !== "stream-json") fail("--input-format=stream-json requires output-format=stream-json");
-  if (flags["--setting-sources"] !== "") fail("--setting-sources must be empty");
+  if (!notion && flags["--setting-sources"] !== "") fail("--setting-sources must be empty");
   if (flags["--tools"] !== "") fail(`--tools must be "" (no tools), got ${flags["--tools"]}`);
   if (!flags["--system-prompt"]) fail("--system-prompt missing");
   if (flags["--effort"] !== undefined && !["low", "medium", "high", "xhigh", "max"].includes(flags["--effort"])) {
@@ -212,7 +245,9 @@ function runClaude() {
     process.exit(3);
   }
   const a = answer(stdin, schema);
-  const text = ms.includes("badjson")
+  const text = notion
+    ? notionAnswer(stdin)
+    : ms.includes("badjson")
     ? "이건 JSON이 아님"
     : ms.includes("textlimit")
       ? "Sorry, I reached my usage limit on this topic."
