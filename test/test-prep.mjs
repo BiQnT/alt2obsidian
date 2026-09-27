@@ -395,5 +395,8 @@ async function deck(n, visualPages = []) {
   assert.equal(m.stripDiagramEmbed("본문 ![[inline.png]] 뒤"), "본문 ![[inline.png]] 뒤", "only a trailing embed line");
   assert.equal(m.stripDiagramEmbed("본문\n\n![[A/S/Attachments/[OS] 3강-5.png]]"), "본문", "an older embed with brackets is stripped too");
   assert.equal(m.stripDiagramEmbed("본문 ![[x.png]]"), "본문 ![[x.png]]", "an inline embed ending a line is kept");
+  const odd = m.formatDiagramEmbed("A/C#/Attachments/OS 3강-5.png");
+  assert.equal(odd, "![OS 3강-5](A/C%23/Attachments/OS%203%EA%B0%95-5.png)", "a folder with # gets a Markdown image");
+  assert.equal(m.stripDiagramEmbed(`본문\n\n${odd}`), "본문");
   console.log("PASS: key diagrams: visual pages by ink share, capped, no templates, build steps or scans; embed stripped from reused bodies");
 }

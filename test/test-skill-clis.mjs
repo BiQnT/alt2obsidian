@@ -125,6 +125,12 @@ try {
         e2.plan.slides.map((s) => [s.imageRatio, s.imageSignal, s.kind, s.sendImage])
       );
       assert.deepEqual(out.keyDiagrams, prepMod.selectKeyDiagrams(e2.plan.slides, e2.plan.scanned), "same key diagram pages");
+      const named = JSON.parse(cli("prep", [...args, "--renders", pgmDir, "--note-path", "V/C#/Lectures/[OS] 3강.md"]));
+      assert.deepEqual(named.keyDiagramFiles.map((f) => f.page), out.keyDiagrams);
+      for (const f of named.keyDiagramFiles) {
+        assert.equal(f.path, `V/C#/Attachments/OS 3강-${f.page}.png`, "image named after the target note, without [ ] #");
+        assert.equal(f.embed, prepMod.formatDiagramEmbed(f.path));
+      }
     }
     console.log(`PASS: prep.mjs matches the plugin prep on ${label} (${noRender.pages.length} pages, ${noRender.batches.length} batches${rendered ? ", " + rendered : ""})`);
   }

@@ -4,7 +4,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 
 // src/core/slideHash.ts
 function normalizePageText(text) {
@@ -962,7 +962,13 @@ function parseSlideMeta(managed) {
 function stripSlideMeta(managed) {
   return managed.replace(META_RE, "");
 }
-var DIAGRAM_RE = /(^|\n+)!\[\[[^\n]+?\.png\]\]\s*$/;
+var DIAGRAM_RE = /(^|\n+)(?:!\[\[[^\n]+?\.png\]\]|!\[[^\]\n]*\]\([^\n]+?\.png\))\s*$/;
+function formatDiagramEmbed(vaultPath) {
+  if (!/[#^[\]|]/.test(vaultPath))
+    return `![[${vaultPath}]]`;
+  const alt = (vaultPath.split("/").pop() ?? "").replace(/\.png$/, "").replace(/[#^[\]|]/g, " ").replace(/\s+/g, " ").trim();
+  return `![${alt}](${vaultPath.split("/").map(encodeURIComponent).join("/")})`;
+}
 function stripDiagramEmbed(body) {
   return body.replace(DIAGRAM_RE, "");
 }
@@ -1188,6 +1194,34 @@ function makeBatches(slides, batchSize) {
   return batches;
 }
 
+// src/utils/helpers.ts
+function sanitizeFilename(name) {
+  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").trim();
+}
+
+// src/vault/layout.ts
+var LECTURES_DIR = "Lectures";
+var ATTACHMENTS_DIR = "Attachments";
+function join(...parts) {
+  return parts.filter((p) => p.length > 0).join("/").replace(/\/{2,}/g, "/");
+}
+function attachmentStem(lectureStem) {
+  return sanitizeFilename(lectureStem).replace(/[[\]#^|]/g, "").replace(/\s+/g, " ").trim() || "lecture";
+}
+function stemOf(path) {
+  return (path.split("/").pop() ?? path).replace(/\.[^.]+$/, "");
+}
+function subjectFolderOfNote(notePath) {
+  const parts = notePath.split("/");
+  parts.pop();
+  if (parts.length > 0 && parts[parts.length - 1] === LECTURES_DIR)
+    parts.pop();
+  return parts.join("/");
+}
+function attachmentPathForNote(notePath, page) {
+  return join(subjectFolderOfNote(notePath), ATTACHMENTS_DIR, `${attachmentStem(stemOf(notePath))}-${page}.png`);
+}
+
 // scripts/src/cli-common.ts
 import { readFile } from "node:fs/promises";
 import { webcrypto } from "node:crypto";
@@ -1219,14 +1253,14 @@ function readPgmDir(dir, pageCount) {
       continue;
     const page = parseInt(m[1], 10);
     if (page >= 1 && page <= pageCount)
-      grays[page - 1] = parsePgm(new Uint8Array(readFileSync(join(dir, f))));
+      grays[page - 1] = parsePgm(new Uint8Array(readFileSync(join2(dir, f))));
   }
   return grays;
 }
 function renderWithPdftoppm(pdfPath, pageCount) {
-  const dir = mkdtempSync(join(tmpdir(), "alt2obs-prep-"));
+  const dir = mkdtempSync(join2(tmpdir(), "alt2obs-prep-"));
   try {
-    const r = spawnSync("pdftoppm", ["-gray", "-scale-to", String(ANALYSIS_LONG_EDGE), pdfPath, join(dir, "p")], {
+    const r = spawnSync("pdftoppm", ["-gray", "-scale-to", String(ANALYSIS_LONG_EDGE), pdfPath, join2(dir, "p")], {
       stdio: ["ignore", "ignore", "pipe"]
     });
     if (r.status !== 0) {
@@ -1249,6 +1283,7 @@ async function main() {
   const transcriptFile = option(args, "--transcript");
   const existingFile = option(args, "--existing");
   const rendersDir = option(args, "--renders");
+  const notePath = option(args, "--note-path");
   const pdf = await openPdf(pdfPath);
   try {
     const layouts = await extractPageLayouts(pdf);
@@ -1290,6 +1325,10 @@ async function main() {
         batches: plan.batches.map((b) => b.pages),
         // Pages to save as images and embed (spec 4.8); empty without renders.
         keyDiagrams: selectKeyDiagrams(plan.slides, plan.scanned),
+        keyDiagramFiles: notePath ? selectKeyDiagrams(plan.slides, plan.scanned).map((page) => {
+          const path = attachmentPathForNote(notePath, page);
+          return { page, path, embed: formatDiagramEmbed(path) };
+        }) : null,
         alignment: alignment ? {
           value: alignment.value,
           spans: alignment.result.spans.map((s) => ({ slide: s.slide, startMs: s.startMs, endMs: s.endMs, confidence: s.confidence })),

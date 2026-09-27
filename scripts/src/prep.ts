@@ -18,7 +18,10 @@
 //   --no-render             or skips rendering (image ratio and image signal null)
 //   --existing <note.md>    previous note: slides with the same text hash and
 //                           image signal are marked "reuse"
-// Prints {"scanned","transcriptChars","pages":[...],"batches":[[...]],"keyDiagrams":[...],"alignment"}.
+//   --note-path <path>      vault path of the target note (e.g. Alt2Obsidian/S/Lectures/lec.md):
+//                           keyDiagramFiles then gives each key diagram's image path
+//                           and embed line, named after the note like the plugin
+// Prints {"scanned","transcriptChars","pages":[...],"batches":[[...]],"keyDiagrams":[...],"keyDiagramFiles":[...],"alignment"}.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -29,6 +32,8 @@ import { ANALYSIS_LONG_EDGE, extractPageLayouts, layoutAlignmentText, parsePgm }
 import { alignLecture } from "../../src/pipeline/alignment";
 import { TranscriptSegment } from "../../src/sources/types";
 import { parseExistingSlides, planDeck } from "../../src/pipeline/batchPlan";
+import { attachmentPathForNote } from "../../src/vault/layout";
+import { formatDiagramEmbed } from "../../src/core/slideMeta";
 import { fail, openPdf } from "./cli-common";
 
 function option(args: string[], name: string): string | undefined {
@@ -75,6 +80,7 @@ async function main(): Promise<void> {
   const transcriptFile = option(args, "--transcript");
   const existingFile = option(args, "--existing");
   const rendersDir = option(args, "--renders");
+  const notePath = option(args, "--note-path");
 
   const pdf = await openPdf(pdfPath);
   try {
@@ -121,6 +127,12 @@ async function main(): Promise<void> {
         batches: plan.batches.map((b) => b.pages),
         // Pages to save as images and embed (spec 4.8); empty without renders.
         keyDiagrams: selectKeyDiagrams(plan.slides, plan.scanned),
+        keyDiagramFiles: notePath
+          ? selectKeyDiagrams(plan.slides, plan.scanned).map((page) => {
+              const path = attachmentPathForNote(notePath, page);
+              return { page, path, embed: formatDiagramEmbed(path) };
+            })
+          : null,
         alignment: alignment
           ? {
               value: alignment.value,

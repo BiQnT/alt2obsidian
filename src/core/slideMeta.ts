@@ -44,10 +44,16 @@ export function stripSlideMeta(managed: string): string {
 // Key diagram image (spec 4.8): an embed on its own line at the end of the
 // commentary, before the metadata line, inside the managed block. It is
 // rebuilt on every import, so it is stripped when a previous body is reused.
-const DIAGRAM_RE = /(^|\n+)!\[\[[^\n]+?\.png\]\]\s*$/;
+const DIAGRAM_RE = /(^|\n+)(?:!\[\[[^\n]+?\.png\]\]|!\[[^\]\n]*\]\([^\n]+?\.png\))\s*$/;
 
+/**
+ * `![[<path>]]`, or, when the path holds # ^ [ ] | (a wikilink target
+ * cannot), a Markdown image with the path percent-encoded.
+ */
 export function formatDiagramEmbed(vaultPath: string): string {
-  return `![[${vaultPath}]]`;
+  if (!/[#^[\]|]/.test(vaultPath)) return `![[${vaultPath}]]`;
+  const alt = (vaultPath.split("/").pop() ?? "").replace(/\.png$/, "").replace(/[#^[\]|]/g, " ").replace(/\s+/g, " ").trim();
+  return `![${alt}](${vaultPath.split("/").map(encodeURIComponent).join("/")})`;
 }
 
 /** Commentary without a trailing diagram embed. */
