@@ -88,6 +88,22 @@ function answer(stdin, schema) {
       parts.push({ id: Number(head[1]), slide: other ?? Number(head[2]) });
     }
     result = { parts };
+  } else if (schema && schema.properties && schema.properties.results) {
+    // Note verification: "틀림" for claims that say 거짓, "전사 불확실" for 잡음, else "맞음".
+    const results = [];
+    const re = /^### 주장 (\d+)\n(.*)$/gm;
+    let m;
+    while ((m = re.exec(stdin)) !== null) {
+      const id = Number(m[1]);
+      const seen = (state.seen[`c${id}`] = (state.seen[`c${id}`] || 0) + 1);
+      if (ms.includes(`dropclaim:${id}`) && seen === 1) continue;
+      const v = /거짓/.test(m[2]) ? "틀림" : /잡음/.test(m[2]) ? "전사 불확실" : "맞음";
+      results.push({ id, v, r: `근거와 비교함 (${v})` });
+    }
+    result = { results };
+  } else if (schema && schema.properties && schema.properties.missing) {
+    const first = stdin.match(/^- 슬라이드 (\d+):/m);
+    result = { missing: first ? [{ s: Number(first[1]), r: "노트에 없음" }] : [] };
   } else if (schema) {
     result = { ok: true };
   } else {

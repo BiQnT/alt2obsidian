@@ -1,0 +1,176 @@
+/**
+ * Test: the note verifier (spec 4.6) with the fake claude (no tokens):
+ * claim splitting, BM25 evidence (slides top 2, aligned transcript top 2),
+ * script-only "근거 없음", likely-true claims last, batches of 20, the
+ * estimate from the exact prompts, the shared retry rules, the missing-slide
+ * call, the verification note and its re-run merge.
+ * Run: node test/test-verify.mjs
+ */
+
+import assert from "node:assert/strict";
+import { importTs } from "./helpers/bundle-ts.mjs";
+import { FAKE_CLAUDE, fakeSession } from "./helpers/fake-cli.mjs";
+
+const m = await importTs("test/helpers/verify-entry.ts");
+
+// ---- claims ----
+{
+  const note = [
+    "---",
+    "title: 13강 노트",
+    "---",
+    "# 메모리 계층",
+    "",
+    "캐시는 SRAM으로 만든다. DRAM은 SRAM보다 느리다! 예: e.g. L1 cache는 3.5 ns 정도.",
+    "",
+    "- [ ] **Temporal locality**: 최근 접근한 데이터는 곧 다시 접근된다",
+    "  * 공간 지역성은 가까운 주소를 곧 접근하는 성질",
+    "> [!note] 콜아웃",
+    "> 콜아웃 안의 문장도 주장이다.",
+    "[[다른 노트]]",
+    "https://example.com/page",
+    "![img](a.png)",
+    "```",
+    "code line is not a claim",
+    "```",
+    "| 계층 | 속도 |",
+    "|---|---|",
+    "| 레지스터 | 가장 빠름 |",
+    "<aside>",
+    "Notion 콜아웃의 설명 문장입니다.",
+    "</aside>",
+    "---",
+    "짧음",
+    "캐시는 SRAM으로 만든다.",
+  ].join("\n");
+  const claims = m.splitClaims(note);
+  assert.deepEqual(
+    claims.map((c) => c.text),
+    [
+      "캐시는 SRAM으로 만든다.",
+      "DRAM은 SRAM보다 느리다!",
+      "예: e.g. L1 cache는 3.5 ns 정도.",
+      "Temporal locality: 최근 접근한 데이터는 곧 다시 접근된다",
+      "공간 지역성은 가까운 주소를 곧 접근하는 성질",
+      "콜아웃 안의 문장도 주장이다.",
+      "레지스터 · 가장 빠름",
+      "Notion 콜아웃의 설명 문장입니다.",
+    ]
+  );
+  assert.deepEqual(claims.map((c) => c.id), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(claims[3].line, 8);
+  console.log("PASS: claims: sentences and bullets; headings, links, code, images, rules, short and repeated lines dropped");
+}
+
+// ---- plan, evidence, estimate ----
+const slides = [
+  "Lecture 13 Memory Hierarchy\nProf. Kim, Department of CSE, University",
+  "Ideal memory\nZero access time (latency)\nInfinite capacity\nZero cost\nInfinite bandwidth",
+  "The problem\nBigger is slower: SRAM < 1 ns, DRAM ~ 100 ns, disk ~ 10 ms\nFaster is more expensive",
+  "Locality\nTemporal locality: a recently accessed item is likely to be accessed again soon\nSpatial locality: nearby addresses are likely to be accessed soon",
+  "Cache basics\nA cache holds recently used blocks in SRAM close to the processor\nHit and miss",
+  "Write policies\nWrite-through updates memory on every write\nWrite-back writes a dirty block when it is evicted",
+  "Course logistics\nHomework 4 due Friday",
+  "Thank you",
+];
+const seg = (sec, text) => ({ startMs: sec * 1000, endMs: sec * 1000 + 4000, text });
+const segments = [
+  seg(0, "welcome to lecture thirteen memory hierarchy"),
+  seg(60, "an ideal memory would have zero access time and infinite capacity"),
+  seg(125, "SRAM is fast but expensive, DRAM is slower but dense"),
+  seg(200, "temporal locality means we access the same item again soon"),
+  seg(300, "a cache keeps recently used blocks in SRAM near the processor"),
+  seg(400, "with write back we only write the dirty block on eviction"),
+];
+const spans = m.parseAlignment("1:0-50 2:50-120 3:120-190 4:190-290 5:290-390 6:390-500");
+const note = [
+  "- 이상적인 메모리는 access time이 0이고 capacity가 무한하다",
+  "- DRAM은 SRAM보다 빠르다 (거짓)",
+  "- Temporal locality: 최근에 access한 item은 곧 다시 access된다",
+  "- cache는 최근 쓴 block을 processor 가까운 SRAM에 둔다",
+  "- write back은 dirty block을 evict할 때 쓴다",
+  "- 양자 컴퓨터는 큐비트를 쓴다",
+].join("\n");
+const plan = m.planVerification({ lecture: "13강", noteMarkdown: note, slideTexts: slides, transcript: { segments, spans } }, 3);
+assert.equal(plan.claims.length, 6);
+const byText = (t) => plan.claims.find((c) => c.claim.text.includes(t));
+assert.equal(byText("이상적인").slides[0].slide, 2, "ideal memory claim finds slide 2 first");
+assert.equal(byText("DRAM은").slides[0].slide, 3);
+assert.equal(byText("Temporal").slides[0].slide, 4);
+assert.equal(byText("Temporal").transcript[0].slide, 4, "transcript chunk carries its aligned slide");
+assert.equal(byText("Temporal").transcript[0].startMs, 200000);
+assert.ok(byText("Temporal").slides.length <= 2 && byText("Temporal").transcript.length <= 2);
+assert.equal(byText("양자").noEvidence, true, "no shared term: script verdict");
+assert.equal(byText("DRAM은").likelyTrue, false, "comparisons with numbers or negation are never likely true");
+const likely = plan.claims.filter((c) => c.likelyTrue).map((c) => c.claim.id);
+assert.ok(likely.length > 0, "a claim that copies the slide terms is a likely-true candidate");
+assert.deepEqual(plan.judged.slice(-likely.length).map((c) => c.claim.id), likely, "likely-true claims are judged last");
+assert.equal(plan.judged.length, 5);
+assert.deepEqual(plan.batches.map((b) => b.length), [3, 2]);
+assert.ok(plan.uncovered.some((u) => u.slide === 7), "logistics slide has no claim");
+assert.ok(!plan.uncovered.some((u) => u.slide === 1 || u.slide === 8), "cover and closing slides are not missing candidates");
+const est = m.estimateVerification(plan, "claude-cli");
+assert.equal(est.claims, 6);
+assert.equal(est.judged, 5);
+assert.equal(est.scriptOnly, 1);
+assert.equal(est.calls, 3, "2 judge batches + 1 missing call");
+assert.ok(est.inputTokens > 0 && est.outputTokens > 0);
+const prompt = m.buildJudgePrompt("13강", plan.batches[0]);
+assert.match(prompt, /### 주장 \d+\n/);
+assert.match(prompt, /- 슬라이드 \d+: /);
+assert.match(prompt, /- 전사 \[\d\d:\d\d\] \(슬라이드 \d+ 구간\): /);
+assert.equal(m.formatTimestamp(723000), "12:03");
+assert.equal(m.formatTimestamp(3723000), "1:02:03");
+console.log(`PASS: evidence (slides top 2, aligned transcript top 2), script-only claim, likely-true last, batches, estimate (${est.calls} calls, ${est.inputTokens} input tokens)`);
+
+// ---- run with the fake claude ----
+const s = fakeSession("ok,dropclaim:2");
+const job = m.createJobDir();
+try {
+  const usage = new m.UsageTracker();
+  const llm = new m.ClaudeCliProvider({ bin: FAKE_CLAUDE, model: "sonnet", effort: "medium", timeoutMs: 20000, workDir: job, usage, task: "verification", ownsWorkDir: false });
+  const progress = [];
+  const result = await m.runVerification(plan, llm, { onProgress: (p) => progress.push(p) });
+  const calls = s.calls();
+  assert.equal(calls.length, 4, "2 batches + 1 retry of the dropped claim + 1 missing call");
+  assert.match(calls[1].stdin, /주장 번호: 2$/m, "the missing claim is asked for once more, alone");
+  assert.ok(calls.every((c) => !c.stdin.includes("양자")), "the script-only claim is never sent");
+  const v = Object.fromEntries(result.items.map((i) => [i.evidence.claim.id, i.verdict]));
+  assert.equal(v[2], "틀림");
+  assert.equal(v[1], "맞음");
+  assert.equal(result.items.find((i) => i.evidence.noEvidence).verdict, "근거 없음");
+  assert.equal(result.items.find((i) => i.evidence.noEvidence).byScript, true);
+  assert.deepEqual(result.missing.map((x) => x.slide), [plan.uncovered[0].slide]);
+  assert.equal(usage.total().calls, 4);
+  assert.ok(progress.some((p) => p.step === "missing"));
+
+  const md = m.renderVerificationNote(result, { source: "[[13강 내 노트]]", date: "2026-09-28", usageLine: m.formatUsageFrontmatter(usage.total(), "Claude CLI sonnet"), model: "Claude CLI sonnet" });
+  assert.match(md, /^---\nlecture: "\[\[13강\]\]"\n/);
+  assert.match(md, /verdicts: \{"맞음": 4, "틀림": 1, "근거 없음": 1, "전사 불확실": 0, "누락 후보": 1\}/);
+  assert.match(md, /alt2obs_usage: \{provider: "Claude CLI sonnet", calls: 4,/);
+  assert.match(md, /> 맞음 4 · 틀림 1 · 근거 없음 1 · 전사 불확실 0 · 누락 후보 1\n/);
+  assert.match(md, /## ❌ 틀림 \(1\)\n\n> \[!failure\] 틀림\n> "DRAM은 SRAM보다 빠르다 \(거짓\)"\n> 근거와 비교함 \(틀림\)\n> 근거: \[\[13강#📚 슬라이드 3\]\]/);
+  assert.match(md, /> 근거: .*\[02:05\] \(슬라이드 3\)/, "transcript time links");
+  assert.match(md, /> \[!success\]- 맞음/, "correct claims folded");
+  assert.match(md, /## 📭 누락 후보 \(1\)\n\n- \[\[13강#📚 슬라이드 \d+\]\]/);
+  assert.ok(md.indexOf("## ❌ 틀림") < md.indexOf("## ❔ 근거 없음") && md.indexOf("## ❔ 근거 없음") < md.indexOf("## ✅ 맞음"));
+  assert.ok(!/[\u2013\u2014]/.test(md), "no dashes");
+
+  // Re-run keeps what the user wrote below the block, replaces the rest.
+  const edited = md.replace("## 내 메모\n", "## 내 메모\n시험 전에 슬라이드 3 다시 보기\n");
+  const next = md.replace("맞음 4 ·", "맞음 5 ·");
+  const merged = m.mergeVerificationNote(edited, next);
+  assert.ok(merged.includes("맞음 5 ·") && merged.includes("시험 전에 슬라이드 3 다시 보기"));
+  assert.equal(m.mergeVerificationNote(null, next), next);
+  console.log("PASS: run: batches through the shared retry rules, script verdicts never sent, missing call, note rendering and re-run merge");
+
+  // Usage limit: the run stops, every remaining claim reported, nothing thrown.
+  process.env.FAKE_CLI_MODE = "limit";
+  const stopped = await m.runVerification(plan, llm);
+  assert.ok(stopped.items.filter((i) => !i.byScript).every((i) => i.verdict === null && /usage limit|사용 한도/.test(i.reason)));
+  assert.ok(stopped.warnings.some((w) => /판정하지 못했습니다/.test(w)));
+  console.log("PASS: a usage limit stops the verification and reports every remaining claim");
+} finally {
+  m.removeJobDir(job);
+  s.cleanup();
+}

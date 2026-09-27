@@ -27,6 +27,11 @@ Single source for every LLM prompt used by the Alt2Obsidian plugin and the alt2o
 | `summary-enhance-material.md` (+ `.system.md`) | overview enrichment from PDF excerpts | `summary`, `pageCount`, `excerptPageCount`, `excerptScope`, `materialText` |
 | `summary-from-material.md` (+ `.system.md`) | overview from PDF excerpts when Alt parsing is partial | `memoContext`, `pageCount`, `excerptPageCount`, `materialText` |
 | `subject-detection.md` | subject code fallback | `title` |
+| `note-verify.system.md` | note verification (system): verdict rules and answer format | none |
+| `note-verify.user.md` | note verification: one batch of up to 20 claims | `title`, `claimCount`, `idList`, `claimBlocks` |
+| `note-verify.claim.md` | one claim with its evidence inside `claimBlocks` | `id`, `claim`, `evidence` |
+| `note-verify-missing.md` | note verification: slides no claim covers, the model picks the missing candidates | `title`, `slides` |
+| `notion-fetch.md` | Notion MCP fetch (Claude CLI with only the Notion fetch tool): raw markdown or `UNCHANGED` | `url`, `cachedEdited` |
 | `alignment-check.md` | optional LLM check of low-confidence transcript alignment spans (task "전사 정렬 확인", off by default) | `title`, `parts` |
 
 ## Batched prompt order (CLI path, spec 5.3)
