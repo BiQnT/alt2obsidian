@@ -810,22 +810,6 @@ var KO_EN_TERMS = {
   \uBBF8\uC2A4\uC728: "miss rate",
   \uC801\uC911\uB960: "hit rate",
   \uC5F0\uAD00\uB3C4: "associativity",
-  \uD1B5\uD569: "unified",
-  \uC544\uD2C0\uB77C\uC2A4: "atlas",
-  \uC778\uD154: "intel",
-  \uB0B4\uC6A9: "content",
-  \uC124\uACC4: "design",
-  \uC694\uC18C: "factor",
-  \uC601\uD5A5: "effect",
-  \uCC28\uC801: "order",
-  \uC6CC\uB4DC: "word",
-  \uBAA8\uC74C: "collection",
-  \uD65C\uBC1C: "actively",
-  \uCCB4\uAC10: "perceived",
-  \uC790\uB3D9: "automatic",
-  \uAD00\uB9AC: "management manage",
-  \uB3D9\uC2DC: "simultaneously",
-  \uAC80\uC0C9: "search",
   \uC6A9\uB7C9\uBBF8\uC2A4: "capacity miss",
   \uBA54\uBAA8\uB9AC: "memory",
   \uAE30\uC5B5\uC7A5\uCE58: "memory",
@@ -836,7 +820,6 @@ var KO_EN_TERMS = {
   \uACF5\uAC04\uC801: "spatial",
   \uACF5\uAC04: "spatial space",
   \uD504\uB85C\uC138\uC11C: "processor",
-  \uC2DC\uAC04: "time temporal",
   \uB808\uC9C0\uC2A4\uD130: "register",
   \uD30C\uC774\uD504\uB77C\uC778: "pipeline",
   \uBA85\uB839\uC5B4: "instruction",
@@ -894,16 +877,6 @@ var KO_EN_TERMS = {
   \uB370\uC774\uD130\uBCA0\uC774\uC2A4: "database",
   \uCFFC\uB9AC: "query",
   \uD2B8\uB79C\uC7AD\uC158: "transaction",
-  \uBE44\uC6A9: "cost",
-  \uAC00\uACA9: "cost price",
-  \uBE60\uB974: "fast faster",
-  \uBE60\uB978: "fast faster",
-  \uB290\uB9AC: "slow slower",
-  \uB290\uB9B0: "slow slower",
-  \uBE44\uC2F8: "expensive",
-  \uC800\uB834: "cheap cheaper",
-  \uC791\uC740: "small",
-  \uD070: "large bigger",
   \uD3C9\uADE0: "average",
   \uD655\uB960: "probability",
   \uD589\uB82C: "matrix",
@@ -925,33 +898,22 @@ var KO_EN_TERMS = {
   \uD3EC\uC6CC\uB529: "forwarding",
   \uC131\uB2A5: "performance",
   \uCC98\uB9AC\uB7C9: "throughput",
-  \uCD5C\uADFC: "recent recently",
-  \uAC00\uB2A5\uC131: "likely likelihood",
-  \uB2E4\uC2DC: "again",
-  \uAC00\uAE4C: "near nearby close",
   \uCC38\uC870: "reference referenced",
   \uC811\uADFC: "access",
   \uC800\uC7A5: "storage store",
   \uD558\uB4DC\uC6E8\uC5B4: "hardware",
   \uC18C\uD504\uD2B8\uC6E8\uC5B4: "software",
   \uD504\uB85C\uADF8\uB7A8: "program",
-  \uBC18\uBCF5: "loop repeat",
   \uB8E8\uD504: "loop",
   \uCDA9\uB3CC: "conflict collision",
-  \uAC15\uC81C: "compulsory",
   \uC4F0\uAE30: "write",
   \uC77D\uAE30: "read",
-  \uC989\uC2DC: "immediately",
-  \uBB34\uD55C: "infinite",
-  \uC774\uC0C1\uC801: "ideal",
   \uC791\uC5C5\uC9D1\uD569: "working set",
   \uC6CC\uD0B9\uC14B: "working set",
   \uD504\uB9AC\uD398\uCE58: "prefetch prefetching",
   \uC120\uC778\uCD9C: "prefetch prefetching",
-  \uC9C1\uC811: "direct",
   \uC0AC\uC0C1: "mapped mapping",
   \uB9E4\uD551: "mapped mapping",
-  \uC644\uC804: "fully",
   \uBE44\uAD50\uAE30: "comparator",
   \uBA40\uD2F0\uD50C\uB809\uC11C: "multiplexer",
   \uC720\uD6A8: "valid",
@@ -994,6 +956,11 @@ var TRANSCRIPT_EXCERPT_CHARS = 260;
 var CHUNK_CHARS = 420;
 var LIKELY_TRUE_COVERAGE = 0.8;
 var LINK_COVERAGE = 0.3;
+var MIN_SHARED_TERMS = 2;
+var MIN_DIRECT_SCORE = 8;
+function strongHit(h) {
+  return !!h && (h.shared >= MIN_SHARED_TERMS || h.score >= MIN_DIRECT_SCORE);
+}
 function termCounts(tokens) {
   const m = /* @__PURE__ */ new Map();
   for (const t of tokens)
@@ -1113,6 +1080,7 @@ function slideHits(scores, terms, index, k = TOP_SLIDES) {
     return {
       slide: i + 1,
       score: Math.round(scores[i] * 100) / 100,
+      shared,
       coverage: terms.size > 0 ? Math.round(shared / terms.size * 100) / 100 : 0,
       excerpt: slideExcerpt(index.slideTexts[i], terms)
     };
@@ -1129,13 +1097,14 @@ function findEvidence(claim, index) {
     score: Math.round(chunkScores[i] * 100) / 100,
     excerpt: bestExcerpt(index.chunks[i].text, terms, TRANSCRIPT_EXCERPT_CHARS)
   }));
-  const likelyTrue = terms.size >= 3 && (slides[0]?.coverage ?? 0) >= LIKELY_TRUE_COVERAGE && !NUMBER_OR_FORMULA.test(claim.text) && !NEGATION.test(claim.text);
-  return { claim, slides, transcript, source: "direct", likelyTrue, unmatched: slides.length === 0 && transcript.length === 0 };
+  const strong = strongHit(slides[0]);
+  const likelyTrue = strong && terms.size >= 3 && (slides[0]?.coverage ?? 0) >= LIKELY_TRUE_COVERAGE && !NUMBER_OR_FORMULA.test(claim.text) && !NEGATION.test(claim.text);
+  return { claim, slides, transcript, source: slides.length > 0 && !strong ? "weak" : "direct", likelyTrue, unmatched: slides.length === 0 && transcript.length === 0 };
 }
 var NEIGHBOUR_WINDOW = 3;
 function withContextEvidence(evidence, index) {
   const out = evidence.map((e) => ({ ...e }));
-  const direct = evidence.map((e) => !e.unmatched && e.slides.length > 0);
+  const direct = evidence.map((e) => e.source === "direct" && e.slides.length > 0);
   const transcriptFor = (slides) => {
     const hits = [];
     for (const n of slides) {
@@ -1149,12 +1118,12 @@ function withContextEvidence(evidence, index) {
   };
   const fromSlides = (e, pages, source) => {
     const terms = new Set(retrievalTerms(e.claim.text));
-    const slides = pages.slice(0, TOP_SLIDES).map((n) => ({ slide: n, score: 0, coverage: 0, excerpt: slideExcerpt(index.slideTexts[n - 1] ?? "", terms) }));
+    const slides = pages.slice(0, TOP_SLIDES).map((n) => ({ slide: n, score: 0, shared: 0, coverage: 0, excerpt: slideExcerpt(index.slideTexts[n - 1] ?? "", terms) }));
     return { ...e, slides, transcript: e.transcript.length > 0 ? e.transcript : transcriptFor(slides.map((h) => h.slide)), source, likelyTrue: false, unmatched: false };
   };
   for (let i = 0; i < out.length; i++) {
     const e = out[i];
-    if (e.slides.length > 0)
+    if (e.slides.length > 0 && e.source === "direct")
       continue;
     const weight = /* @__PURE__ */ new Map();
     for (let d = 1; d <= NEIGHBOUR_WINDOW; d++) {
@@ -1168,15 +1137,20 @@ function withContextEvidence(evidence, index) {
       out[i] = fromSlides(e, [...weight.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([n]) => n), "neighbour");
       continue;
     }
+    const strongPages = (text) => {
+      const t = retrievalTerms(text);
+      const hits = slideHits(bm252(t, index.slides), new Set(t), index);
+      return strongHit(hits[0]) ? hits.map((h) => h.slide) : [];
+    };
     if (e.claim.section) {
-      const heading = topK(bm252(retrievalTerms(e.claim.section), index.slides), TOP_SLIDES).map((k) => k + 1);
+      const heading = strongPages(e.claim.section);
       if (heading.length > 0) {
         out[i] = fromSlides(e, heading, "heading");
         continue;
       }
     }
     const sectionText = evidence.filter((x) => x.claim.sectionIndex === e.claim.sectionIndex).map((x) => x.claim.text).join(" ");
-    const section = topK(bm252(retrievalTerms(sectionText), index.slides), TOP_SLIDES).map((k) => k + 1);
+    const section = strongPages(sectionText);
     if (section.length > 0)
       out[i] = fromSlides(e, section, "section");
   }

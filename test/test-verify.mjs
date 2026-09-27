@@ -162,15 +162,17 @@ console.log(`PASS: evidence (slides top 2, aligned transcript top 2), unmatched 
   const k = (t) => kp.claims.find((c) => c.claim.text.includes(t));
   assert.equal(kp.unmatched.length, 0, "every Korean claim reaches the judge");
   assert.equal(kp.judged.length, 5);
-  assert.equal(k("최근에 참조").source, "direct");
-  assert.equal(k("최근에 참조").slides[0].slide, 4, "Korean terms find the English slide through the glossary");
+  assert.equal(k("공간 지역성").source, "direct", "technical Korean terms find the English slide through the glossary");
   assert.equal(k("공간 지역성").slides[0].slide, 4);
+  assert.equal(k("최근에 참조").source, "neighbour", "one shared term is weak: the neighbour's strong match is used");
+  assert.equal(k("최근에 참조").slides[0].slide, 4);
   assert.equal(k("캐시는").slides[0].slide, 5);
   assert.equal(k("그림으로").source, "neighbour", "no shared term: the nearby claims' slides");
   assert.deepEqual(k("그림으로").slides.map((h) => h.slide).sort(), k("캐시는").slides.map((h) => h.slide).sort());
   assert.equal(k("두 가지").source, "heading", "alone in its section: the heading's slides");
   assert.equal(k("두 가지").slides[0].slide, 6);
   assert.deepEqual(m.englishHints("캐시메모리의 지역성은"), ["memory", "cache", "locality"]);
+  assert.deepEqual(m.englishHints("최근에 빠른 시간 안에"), [], "everyday words give no hints");
   const kprompt = kp.batches.map((b) => m.buildJudgePrompt("13강", b)).join("\n");
   assert.match(kprompt, /그림으로 보면 이해가 쉽다\n근거 \(주장과 겹치는 용어가 없어 같은 절의 문맥으로 찾은 후보\):\n- 슬라이드 \d+: /);
   const ks = fakeSession("ok");
@@ -185,6 +187,26 @@ console.log(`PASS: evidence (slides top 2, aligned transcript top 2), unmatched 
     m.removeJobDir(kjob);
     ks.cleanup();
   }
+  // A filler sentence with one generic hit never lends slides to its neighbours
+  // (a physics deck: "exam" is on the schedule slide only).
+  const thermo = [
+    "Thermodynamics lecture 3\nProf. Park, Department of Physics",
+    "First law\nThe internal energy change equals heat added minus work done: dU = Q - W",
+    "Second law\nThe entropy of an isolated system never decreases",
+    "Schedule\nMidterm exam next week, homework due Friday",
+  ];
+  const tp = m.planVerification({
+    lecture: "열역학 3강",
+    noteMarkdown: ["# 열역학", "- exam 준비를 슬슬 해야겠다", "- 고립계의 무질서도는 줄어들지 않는다"].join("\n"),
+    slideTexts: thermo,
+    transcript: null,
+  });
+  const filler = tp.claims.find((c) => c.claim.text.includes("exam"));
+  const entropy = tp.claims.find((c) => c.claim.text.includes("무질서도"));
+  assert.equal(filler.source, "weak", "one generic shared word is not a direct match");
+  assert.ok(entropy.source !== "neighbour" && !entropy.slides.some((h) => h.slide === 4), "the filler's schedule slide is never the entropy claim's evidence");
+  assert.equal(entropy.unmatched, true, "no route found evidence: listed apart");
+
   // Nothing matches at all: every claim unmatched, the estimate warns.
   const none = m.planVerification({ lecture: "13강", noteMarkdown: "- 주말에는 영화를 보았다\n- 날씨가 맑았다", slideTexts: slides, transcript: null });
   const ne = m.estimateVerification(none, "claude-cli");

@@ -30,6 +30,8 @@ export interface TranscriptChunk {
 export interface SlideHit {
   slide: number;
   score: number;
+  /** Distinct claim terms found in the slide. */
+  shared: number;
   /** Share of the claim's distinct terms found in the slide. */
   coverage: number;
   excerpt: string;
@@ -47,7 +49,20 @@ export interface TranscriptHit {
  * shares no term with any slide (a Korean note on English slides), the
  * nearby claims of its section, its heading, or the whole section.
  */
-export type EvidenceSource = "direct" | "neighbour" | "heading" | "section";
+export type EvidenceSource = "direct" | "weak" | "neighbour" | "heading" | "section";
+
+/**
+ * A direct match counts (and may lend its slides to neighbours) only with
+ * at least 2 distinct shared terms or this BM25 score: one generic word in
+ * common is no evidence. A weaker match is "weak" and looks for context
+ * evidence first.
+ */
+export const MIN_SHARED_TERMS = 2;
+export const MIN_DIRECT_SCORE = 8;
+
+function strongHit(h: SlideHit | undefined): boolean {
+  return !!h && (h.shared >= MIN_SHARED_TERMS || h.score >= MIN_DIRECT_SCORE);
+}
 
 export interface ClaimEvidence {
   claim: Claim;
@@ -223,6 +238,7 @@ function slideHits(scores: number[], terms: Set<string>, index: EvidenceIndex, k
     return {
       slide: i + 1,
       score: Math.round(scores[i] * 100) / 100,
+      shared,
       coverage: terms.size > 0 ? Math.round((shared / terms.size) * 100) / 100 : 0,
       excerpt: slideExcerpt(index.slideTexts[i], terms),
     };
@@ -241,12 +257,14 @@ export function findEvidence(claim: Claim, index: EvidenceIndex): ClaimEvidence 
     score: Math.round(chunkScores[i] * 100) / 100,
     excerpt: bestExcerpt(index.chunks[i].text, terms, TRANSCRIPT_EXCERPT_CHARS),
   }));
+  const strong = strongHit(slides[0]);
   const likelyTrue =
+    strong &&
     terms.size >= 3 &&
     (slides[0]?.coverage ?? 0) >= LIKELY_TRUE_COVERAGE &&
     !NUMBER_OR_FORMULA.test(claim.text) &&
     !NEGATION.test(claim.text);
-  return { claim, slides, transcript, source: "direct", likelyTrue, unmatched: slides.length === 0 && transcript.length === 0 };
+  return { claim, slides, transcript, source: slides.length > 0 && !strong ? "weak" : "direct", likelyTrue, unmatched: slides.length === 0 && transcript.length === 0 };
 }
 
 /** How far (in claims) a neighbour may be. */
@@ -264,7 +282,8 @@ const NEIGHBOUR_WINDOW = 3;
  */
 export function withContextEvidence(evidence: ClaimEvidence[], index: EvidenceIndex): ClaimEvidence[] {
   const out = evidence.map((e) => ({ ...e }));
-  const direct = evidence.map((e) => !e.unmatched && e.slides.length > 0);
+  // Only strong direct matches lend their slides.
+  const direct = evidence.map((e) => e.source === "direct" && e.slides.length > 0);
   const transcriptFor = (slides: number[]): TranscriptHit[] => {
     const hits: TranscriptHit[] = [];
     for (const n of slides) {
@@ -276,12 +295,12 @@ export function withContextEvidence(evidence: ClaimEvidence[], index: EvidenceIn
   };
   const fromSlides = (e: ClaimEvidence, pages: number[], source: EvidenceSource): ClaimEvidence => {
     const terms = new Set(retrievalTerms(e.claim.text));
-    const slides = pages.slice(0, TOP_SLIDES).map((n) => ({ slide: n, score: 0, coverage: 0, excerpt: slideExcerpt(index.slideTexts[n - 1] ?? "", terms) }));
+    const slides = pages.slice(0, TOP_SLIDES).map((n) => ({ slide: n, score: 0, shared: 0, coverage: 0, excerpt: slideExcerpt(index.slideTexts[n - 1] ?? "", terms) }));
     return { ...e, slides, transcript: e.transcript.length > 0 ? e.transcript : transcriptFor(slides.map((h) => h.slide)), source, likelyTrue: false, unmatched: false };
   };
   for (let i = 0; i < out.length; i++) {
     const e = out[i];
-    if (e.slides.length > 0) continue;
+    if (e.slides.length > 0 && e.source === "direct") continue;
     // 1. Neighbours in the same section.
     const weight = new Map<number, number>();
     for (let d = 1; d <= NEIGHBOUR_WINDOW; d++) {
@@ -295,17 +314,23 @@ export function withContextEvidence(evidence: ClaimEvidence[], index: EvidenceIn
       continue;
     }
     // 2. The section heading.
+    const strongPages = (text: string): number[] => {
+      const t = retrievalTerms(text);
+      const hits = slideHits(bm25(t, index.slides), new Set(t), index);
+      return strongHit(hits[0]) ? hits.map((h) => h.slide) : [];
+    };
     if (e.claim.section) {
-      const heading = topK(bm25(retrievalTerms(e.claim.section), index.slides), TOP_SLIDES).map((k) => k + 1);
+      const heading = strongPages(e.claim.section);
       if (heading.length > 0) {
         out[i] = fromSlides(e, heading, "heading");
         continue;
       }
     }
-    // 3. The whole section.
+    // 3. The whole section (its strong matches only).
     const sectionText = evidence.filter((x) => x.claim.sectionIndex === e.claim.sectionIndex).map((x) => x.claim.text).join(" ");
-    const section = topK(bm25(retrievalTerms(sectionText), index.slides), TOP_SLIDES).map((k) => k + 1);
+    const section = strongPages(sectionText);
     if (section.length > 0) out[i] = fromSlides(e, section, "section");
+    // Otherwise a weak claim keeps its own weak hits.
   }
   return out;
 }

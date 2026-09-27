@@ -36,7 +36,7 @@ const opt = (name) => {
 };
 const dataDir = args.find((a, i) => !a.startsWith("--") && !["--out", "--model", "--effort", "--bin", "--fixture"].includes(args[i - 1])) || process.env.ALT2OBS_VERIFY_DATA;
 const fixture = JSON.parse(readFileSync(join(repo, `test/fixtures/verify/${opt("--fixture") ?? "lec13"}.json`), "utf8"));
-if (!dataDir || !existsSync(join(dataDir, fixture.inputs.pdf)) || !existsSync(join(dataDir, fixture.inputs.transcript))) {
+if (!dataDir || !existsSync(join(dataDir, fixture.inputs.pdf)) || (fixture.inputs.transcript && !existsSync(join(dataDir, fixture.inputs.transcript)))) {
   console.log("INFO: verifier eval skipped (lecture data is the user's own and not committed; pass its folder or set ALT2OBS_VERIFY_DATA)");
   process.exit(0);
 }
@@ -47,16 +47,25 @@ const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(join(dataDir, fixture.inputs.pdf))), verbosity: 0 }).promise;
 const slideTexts = (await a.extractPageLayouts(doc)).map(a.layoutAlignmentText);
 await doc.destroy();
-const raw = JSON.parse(readFileSync(join(dataDir, fixture.inputs.transcript), "utf8"));
+const raw = fixture.inputs.transcript ? JSON.parse(readFileSync(join(dataDir, fixture.inputs.transcript), "utf8")) : [];
 const segmentsRaw = raw.flatMap((e) => (e.segments ?? []).map((s) => ({ startMs: s.start, endMs: s.end, text: s.text ?? "", speaker: s.speaker ?? "" })));
 const alignment = a.alignLecture(slideTexts, segmentsRaw);
 const segments = a.timedSegments(segmentsRaw);
-const note = `# ${fixture.lecture} 정리\n\n` + fixture.statements.map((s) => `- ${s.text}`).join("\n") + "\n";
+// Statements with a section go under that heading, like a student's note.
+let note = `# ${fixture.lecture} 정리\n\n`;
+let lastSection = null;
+for (const st of fixture.statements) {
+  if (st.section && st.section !== lastSection) {
+    note += `\n## ${st.section}\n`;
+    lastSection = st.section;
+  }
+  note += `- ${st.text}\n`;
+}
 const plan = m.planVerification({
   lecture: fixture.lecture,
   noteMarkdown: note,
   slideTexts,
-  transcript: args.includes("--no-transcript") ? null : { segments, spans: alignment ? m.parseAlignment(alignment.value) : null },
+  transcript: args.includes("--no-transcript") || !segments ? null : { segments, spans: alignment ? m.parseAlignment(alignment.value) : null },
 });
 const byText = new Map(fixture.statements.map((s) => [s.text, s]));
 const unmatched = plan.claims.filter((c) => !byText.has(c.claim.text));
@@ -68,6 +77,18 @@ if (plan.claims.length !== fixture.statements.length || unmatched.length > 0) {
 plan.uncovered = [];
 const est = m.estimateVerification(plan, "claude-cli");
 const hitAt = plan.claims.filter((c) => c.slides.some((h) => h.slide === byText.get(c.claim.text).slide)).length;
+const pct = (n) => `${Math.round((n / plan.claims.length) * 100)}%`;
+const bySource = (src) => plan.claims.filter((c) => !c.unmatched && (src === "context" ? ["neighbour", "heading", "section"].includes(c.source) : c.source === src));
+const hitIn = (list) => list.filter((c) => c.slides.some((h) => h.slide === byText.get(c.claim.text).slide)).length;
+const direct = bySource("direct");
+const weak = bySource("weak");
+const context = bySource("context");
+const unmatchedList = plan.claims.filter((c) => c.unmatched);
+console.log(
+  `Evidence: direct ${direct.length} (${pct(direct.length)}, labelled slide in top 2 for ${hitIn(direct)}), ` +
+    `weak ${weak.length} (${pct(weak.length)}, ${hitIn(weak)}), context ${context.length} (${pct(context.length)}, ${hitIn(context)}), ` +
+    `unmatched ${unmatchedList.length} (${pct(unmatchedList.length)})` + (fixture.heldOut ? " [held-out set]" : "")
+);
 const sources = {};
 for (const c of plan.claims) sources[c.unmatched ? "unmatched" : c.source] = (sources[c.unmatched ? "unmatched" : c.source] ?? 0) + 1;
 console.log(
