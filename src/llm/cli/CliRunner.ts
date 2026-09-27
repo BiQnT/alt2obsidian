@@ -623,9 +623,14 @@ async function resolveNewest(name: CliName, opts: ResolveOptions): Promise<Resol
     const [version, help] = await Promise.all([readVersion(c.path).catch(() => ""), readHelp(c.path, name).catch(() => "")]);
     return { ...c, version, missing: help ? missingCliFeatures(name, help) : ["--help"] };
   };
-  const finish = (c: Omit<ResolvedCli, "version"> & { version: string }): ResolvedCli => {
+  // A help text can omit a flag the CLI still has (help layouts change):
+  // at or above the tested version that is only a warning, and the
+  // unknown-option mapping at run time is the backstop.
+  const usable = (c: { version: string; missing: string[] }) => c.missing.length === 0 || versionAtLeast(c.version, TESTED_CLI_VERSION[name]);
+  const finish = (c: Omit<ResolvedCli, "version"> & { version: string; missing: string[] }): ResolvedCli => {
     const out: ResolvedCli = { path: c.path, source: c.source, version: c.version };
-    if (!versionAtLeast(c.version, TESTED_CLI_VERSION[name])) out.warning = cliUntestedWarning(name, c.version);
+    if (c.missing.length > 0) out.warning = `${name} CLI ${c.version} 도움말에 ${c.missing.join(" ")} 옵션이 보이지 않지만, 시험한 버전 이상이라 그대로 씁니다. 실행 중 옵션 오류가 나면 업데이트하세요.`;
+    else if (!versionAtLeast(c.version, TESTED_CLI_VERSION[name])) out.warning = cliUntestedWarning(name, c.version);
     return out;
   };
   const configured = opts.configuredPath.trim();
@@ -634,7 +639,7 @@ async function resolveNewest(name: CliName, opts: ResolveOptions): Promise<Resol
       throw new CliRunError("not-found", `설정한 ${name} 경로에서 실행 파일을 찾지 못했습니다: ${configured}`);
     }
     const own = await inspect({ path: configured, source: "settings" });
-    if (own.missing.length === 0) return finish(own);
+    if (usable(own)) return finish(own);
     const others = (await allCandidates(name, { ...opts, cachedPath: undefined })).filter((c) => c.path !== configured);
     const found = [own, ...(await Promise.all(others.map(inspect)))];
     throw new CliRunError("not-found", cliUnusableMessage(name, found));
@@ -642,10 +647,10 @@ async function resolveNewest(name: CliName, opts: ResolveOptions): Promise<Resol
   const candidates = await allCandidates(name, opts);
   if (candidates.length === 0) throw new CliRunError("not-found", cliNotFoundMessage(name, platform));
   const inspected = await Promise.all(candidates.map(inspect));
-  const usable = inspected.filter((c) => c.missing.length === 0);
-  if (usable.length === 0) throw new CliRunError("not-found", cliUnusableMessage(name, inspected));
-  let best = usable[0];
-  for (const c of usable) if (versionAtLeast(c.version, best.version) && !versionAtLeast(best.version, c.version)) best = c;
+  const ok = inspected.filter(usable);
+  if (ok.length === 0) throw new CliRunError("not-found", cliUnusableMessage(name, inspected));
+  let best = ok[0];
+  for (const c of ok) if (versionAtLeast(c.version, best.version) && !versionAtLeast(best.version, c.version)) best = c;
   return finish(best);
 }
 

@@ -156,6 +156,11 @@ const quiet = async (fn) => {
     process.env.FAKE_SHELL_RESULT = "";
     await assert.rejects(m.resolveCliBinary("claude", { ...opts, configuredPath: lacking, extraDirs: [join(dir, "nvm")] }), (e) => e.message.includes(lacking) && e.message.includes(cur));
     assert.equal((await m.resolveCliBinary("claude", { ...opts, configuredPath: olderFull, extraDirs: [] })).source, "settings");
+    // A help text missing a flag at or above the tested version: used, with a warning.
+    const terseNew = mk("terse", "2.3.0", fullHelp.replace("--disable-slash-commands", ""));
+    const terse = await m.resolveCliBinary("claude", { ...opts, configuredPath: terseNew, extraDirs: [] });
+    assert.equal(terse.path, terseNew);
+    assert.match(terse.warning, /--disable-slash-commands 옵션이 보이지 않지만/);
     // An "unknown option" exit at run time becomes the update message, fatal for the run.
     const provider = new m.ClaudeCliProvider({ bin: lacking, model: "", effort: "", timeoutMs: 10000, workDir: dir, ownsWorkDir: false });
     await assert.rejects(provider.generateText("hi"), (e) => e.kind === "spawn" && /업데이트/.test(e.message) && m.isFatalCliError(e));
