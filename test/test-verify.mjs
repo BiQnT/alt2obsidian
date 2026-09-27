@@ -59,7 +59,24 @@ const m = await importTs("test/helpers/verify-entry.ts");
   );
   assert.deepEqual(claims.map((c) => c.id), [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.equal(claims[3].line, 8);
-  console.log("PASS: claims: sentences and bullets; headings, links, code, images, rules, short and repeated lines dropped");
+  assert.equal(claims[0].section, "메모리 계층");
+  const extra = m.splitClaims([
+    "# 절",
+    "$$",
+    "T_i = t_i + m_i T_{i+1} 수식 안의 줄",
+    "$$",
+    "$$ x = 1 한 줄 수식 $$",
+    "    indented code line here",
+    "- 목록 항목입니다",
+    "    목록 안의 들여쓴 줄입니다",
+    "| 헤더 칸 | 헤더 둘 |",
+    "|---|---|",
+    "| 레지스터 | 가장 빠름 |",
+    "캐시 적중",
+    "ok fine",
+  ].join("\n"));
+  assert.deepEqual(extra.map((c) => c.text), ["목록 항목입니다", "목록 안의 들여쓴 줄입니다", "레지스터 · 가장 빠름", "캐시 적중"], "math blocks, indented code, table headers and short Latin lines skipped; 4 Hangul characters are enough");
+  console.log("PASS: claims: sentences and bullets with their section; headings, links, code, math, table headers, images, rules, short and repeated lines dropped");
 }
 
 // ---- plan, evidence, estimate ----
@@ -84,15 +101,18 @@ const segments = [
 ];
 const spans = m.parseAlignment("1:0-50 2:50-120 3:120-190 4:190-290 5:290-390 6:390-500");
 const note = [
+  "# Memory",
   "- 이상적인 메모리는 access time이 0이고 capacity가 무한하다",
   "- DRAM은 SRAM보다 빠르다 (거짓)",
   "- Temporal locality: 최근에 access한 item은 곧 다시 access된다",
   "- cache는 최근 쓴 block을 processor 가까운 SRAM에 둔다",
   "- write back은 dirty block을 evict할 때 쓴다",
+  "# 잡담",
   "- 양자 컴퓨터는 큐비트를 쓴다",
+  "- 주말에는 영화를 보았다",
 ].join("\n");
-const plan = m.planVerification({ lecture: "13강", noteMarkdown: note, slideTexts: slides, transcript: { segments, spans } }, 3);
-assert.equal(plan.claims.length, 6);
+const plan = m.planVerification({ lecture: "13강", notePath: "Alt2Obsidian/CS/Lectures/13강.md", noteMarkdown: note, slideTexts: slides, transcript: { segments, spans } }, 3);
+assert.equal(plan.claims.length, 7);
 const byText = (t) => plan.claims.find((c) => c.claim.text.includes(t));
 assert.equal(byText("이상적인").slides[0].slide, 2, "ideal memory claim finds slide 2 first");
 assert.equal(byText("DRAM은").slides[0].slide, 3);
@@ -100,7 +120,9 @@ assert.equal(byText("Temporal").slides[0].slide, 4);
 assert.equal(byText("Temporal").transcript[0].slide, 4, "transcript chunk carries its aligned slide");
 assert.equal(byText("Temporal").transcript[0].startMs, 200000);
 assert.ok(byText("Temporal").slides.length <= 2 && byText("Temporal").transcript.length <= 2);
-assert.equal(byText("양자").noEvidence, true, "no shared term: script verdict");
+assert.equal(byText("Temporal").slides[0].excerpt, slides[3].replace(/\s+/g, " "), "a short slide is sent whole");
+assert.equal(byText("양자").unmatched, true, "no evidence by any route: not judged");
+assert.equal(byText("주말").unmatched, true);
 assert.equal(byText("DRAM은").likelyTrue, false, "comparisons with numbers or negation are never likely true");
 const likely = plan.claims.filter((c) => c.likelyTrue).map((c) => c.claim.id);
 assert.ok(likely.length > 0, "a claim that copies the slide terms is a likely-true candidate");
@@ -110,9 +132,10 @@ assert.deepEqual(plan.batches.map((b) => b.length), [3, 2]);
 assert.ok(plan.uncovered.some((u) => u.slide === 7), "logistics slide has no claim");
 assert.ok(!plan.uncovered.some((u) => u.slide === 1 || u.slide === 8), "cover and closing slides are not missing candidates");
 const est = m.estimateVerification(plan, "claude-cli");
-assert.equal(est.claims, 6);
+assert.equal(est.claims, 7);
 assert.equal(est.judged, 5);
-assert.equal(est.scriptOnly, 1);
+assert.equal(est.unmatched, 2);
+assert.equal(est.unmatchedWarning, false, "2 of 7 is under 30%");
 assert.equal(est.calls, 3, "2 judge batches + 1 missing call");
 assert.ok(est.inputTokens > 0 && est.outputTokens > 0);
 const prompt = m.buildJudgePrompt("13강", plan.batches[0]);
@@ -121,7 +144,73 @@ assert.match(prompt, /- 슬라이드 \d+: /);
 assert.match(prompt, /- 전사 \[\d\d:\d\d\] \(슬라이드 \d+ 구간\): /);
 assert.equal(m.formatTimestamp(723000), "12:03");
 assert.equal(m.formatTimestamp(3723000), "1:02:03");
-console.log(`PASS: evidence (slides top 2, aligned transcript top 2), script-only claim, likely-true last, batches, estimate (${est.calls} calls, ${est.inputTokens} input tokens)`);
+console.log(`PASS: evidence (slides top 2, aligned transcript top 2), unmatched claims apart, likely-true last, batches, estimate (${est.calls} calls, ${est.inputTokens} input tokens)`);
+
+// ---- pure Korean notes on English slides, no transcript (the main case) ----
+{
+  const ko = [
+    "# 지역성",
+    "- 최근에 참조한 항목은 곧 다시 참조될 가능성이 높다",
+    "- 공간 지역성은 가까운 주소를 곧 접근하는 성질이다",
+    "# 캐시",
+    "- 캐시는 최근에 쓴 블록을 프로세서 가까이에 둔다",
+    "- 그림으로 보면 이해가 쉽다",
+    "# 쓰기 정책",
+    "- 두 가지 방식이 있다",
+  ].join("\n");
+  const kp = m.planVerification({ lecture: "13강", noteMarkdown: ko, slideTexts: slides, transcript: null });
+  const k = (t) => kp.claims.find((c) => c.claim.text.includes(t));
+  assert.equal(kp.unmatched.length, 0, "every Korean claim reaches the judge");
+  assert.equal(kp.judged.length, 5);
+  assert.equal(k("최근에 참조").source, "direct");
+  assert.equal(k("최근에 참조").slides[0].slide, 4, "Korean terms find the English slide through the glossary");
+  assert.equal(k("공간 지역성").slides[0].slide, 4);
+  assert.equal(k("캐시는").slides[0].slide, 5);
+  assert.equal(k("그림으로").source, "neighbour", "no shared term: the nearby claims' slides");
+  assert.deepEqual(k("그림으로").slides.map((h) => h.slide).sort(), k("캐시는").slides.map((h) => h.slide).sort());
+  assert.equal(k("두 가지").source, "heading", "alone in its section: the heading's slides");
+  assert.equal(k("두 가지").slides[0].slide, 6);
+  assert.deepEqual(m.englishHints("캐시메모리의 지역성은"), ["memory", "cache", "locality"]);
+  const kprompt = kp.batches.map((b) => m.buildJudgePrompt("13강", b)).join("\n");
+  assert.match(kprompt, /그림으로 보면 이해가 쉽다\n근거 \(주장과 겹치는 용어가 없어 같은 절의 문맥으로 찾은 후보\):\n- 슬라이드 \d+: /);
+  const ks = fakeSession("ok");
+  const kjob = m.createJobDir();
+  try {
+    const kllm = new m.ClaudeCliProvider({ bin: FAKE_CLAUDE, model: "sonnet", effort: "medium", timeoutMs: 20000, workDir: kjob, ownsWorkDir: false });
+    const kres = await m.runVerification(kp, kllm);
+    assert.equal(kres.items.length, 5);
+    assert.ok(kres.items.every((i) => i.verdict !== null), "the (fake) judge gave every Korean claim a verdict");
+    assert.equal(kres.unmatched.length, 0);
+  } finally {
+    m.removeJobDir(kjob);
+    ks.cleanup();
+  }
+  // Nothing matches at all: every claim unmatched, the estimate warns.
+  const none = m.planVerification({ lecture: "13강", noteMarkdown: "- 주말에는 영화를 보았다\n- 날씨가 맑았다", slideTexts: slides, transcript: null });
+  const ne = m.estimateVerification(none, "claude-cli");
+  assert.equal(ne.unmatched, 2);
+  assert.equal(ne.unmatchedWarning, true);
+  console.log("PASS: pure Korean claims over English slides without a transcript reach the judge (glossary terms, neighbour and heading evidence); nothing-matches warns");
+}
+
+// ---- links, verdict spacing, merge ----
+{
+  assert.equal(m.lectureLink({ title: "13강", path: "A/CS/Lectures/13강.md" }, 3), "[[A/CS/Lectures/13강#📚 슬라이드 3|13강 · 슬라이드 3]]");
+  assert.equal(m.lectureLink({ title: "13강", path: "A/CS/Lectures/13강.md" }), "[[A/CS/Lectures/13강|13강]]");
+  assert.equal(m.lectureLink({ title: "13강", path: null }, 3), "[[13강#📚 슬라이드 3|13강 · 슬라이드 3]]");
+  assert.equal(
+    m.lectureLink({ title: "[OS] 3강 #2", path: "A/C#/Lectures/[OS] 3강 #2.md" }, 5),
+    "[OS 3강 2 · 슬라이드 5](A/C%23/Lectures/%5BOS%5D%203%EA%B0%95%20%232.md#%F0%9F%93%9A%20%EC%8A%AC%EB%9D%BC%EC%9D%B4%EB%93%9C%205)",
+    "a name with # [ ] becomes a percent-encoded Markdown link"
+  );
+  const batch = plan.batches[0];
+  const ok = m.checkJudgeAnswer({ results: batch.map((e) => ({ id: e.claim.id, v: "근거없음", r: " 이유 " })) }, batch);
+  assert.ok([...ok.ok.values()].every((x) => x.v === "근거 없음"), "verdicts match without spaces");
+  const md = "---\n---\n# x\n<!-- alt2obs:verify start -->\n> \"&lt;!-- alt2obs:verify end -->\"\n<!-- alt2obs:verify end -->\n\n## 내 메모\n내 줄\n";
+  const merged = m.mergeVerificationNote(md, md.replace("# x", "# y"));
+  assert.ok(merged.includes("# y") && merged.includes("내 줄") && merged.split("내 줄").length === 2);
+  console.log("PASS: path-qualified links with alias (encoded Markdown link for # ^ [ ] |), verdicts without spaces, merge at the last end marker");
+}
 
 // ---- run with the fake claude ----
 const s = fakeSession("ok,dropclaim:2");
@@ -134,26 +223,27 @@ try {
   const calls = s.calls();
   assert.equal(calls.length, 4, "2 batches + 1 retry of the dropped claim + 1 missing call");
   assert.match(calls[1].stdin, /주장 번호: 2$/m, "the missing claim is asked for once more, alone");
-  assert.ok(calls.every((c) => !c.stdin.includes("양자")), "the script-only claim is never sent");
+  assert.ok(calls.every((c) => !c.stdin.includes("양자")), "an unmatched claim is never sent");
   const v = Object.fromEntries(result.items.map((i) => [i.evidence.claim.id, i.verdict]));
   assert.equal(v[2], "틀림");
   assert.equal(v[1], "맞음");
-  assert.equal(result.items.find((i) => i.evidence.noEvidence).verdict, "근거 없음");
-  assert.equal(result.items.find((i) => i.evidence.noEvidence).byScript, true);
+  assert.equal(result.items.length, 5);
+  assert.equal(result.unmatched.length, 2);
   assert.deepEqual(result.missing.map((x) => x.slide), [plan.uncovered[0].slide]);
   assert.equal(usage.total().calls, 4);
   assert.ok(progress.some((p) => p.step === "missing"));
 
   const md = m.renderVerificationNote(result, { source: "[[13강 내 노트]]", date: "2026-09-28", usageLine: m.formatUsageFrontmatter(usage.total(), "Claude CLI sonnet"), model: "Claude CLI sonnet" });
-  assert.match(md, /^---\nlecture: "\[\[13강\]\]"\n/);
-  assert.match(md, /verdicts: \{"맞음": 4, "틀림": 1, "근거 없음": 1, "전사 불확실": 0, "누락 후보": 1\}/);
+  assert.match(md, /^---\nlecture: "\[\[Alt2Obsidian\/CS\/Lectures\/13강\|13강\]\]"\n/);
+  assert.match(md, /verdicts: \{"맞음": 4, "틀림": 1, "근거 없음": 0, "전사 불확실": 0, "누락 후보": 1\}/);
   assert.match(md, /alt2obs_usage: \{provider: "Claude CLI sonnet", calls: 4,/);
-  assert.match(md, /> 맞음 4 · 틀림 1 · 근거 없음 1 · 전사 불확실 0 · 누락 후보 1\n/);
-  assert.match(md, /## ❌ 틀림 \(1\)\n\n> \[!failure\] 틀림\n> "DRAM은 SRAM보다 빠르다 \(거짓\)"\n> 근거와 비교함 \(틀림\)\n> 근거: \[\[13강#📚 슬라이드 3\]\]/);
+  assert.match(md, /> 맞음 4 · 틀림 1 · 근거 없음 0 · 전사 불확실 0 · 누락 후보 1 · 근거 검색 실패 2\n/);
+  assert.match(md, /## ❌ 틀림 \(1\)\n\n> \[!failure\] 틀림\n> "DRAM은 SRAM보다 빠르다 \(거짓\)"\n> 근거와 비교함 \(틀림\)\n> 근거: \[\[Alt2Obsidian\/CS\/Lectures\/13강#📚 슬라이드 3\|13강 · 슬라이드 3\]\]/);
   assert.match(md, /> 근거: .*\[02:05\] \(슬라이드 3\)/, "transcript time links");
   assert.match(md, /> \[!success\]- 맞음/, "correct claims folded");
-  assert.match(md, /## 📭 누락 후보 \(1\)\n\n- \[\[13강#📚 슬라이드 \d+\]\]/);
-  assert.ok(md.indexOf("## ❌ 틀림") < md.indexOf("## ❔ 근거 없음") && md.indexOf("## ❔ 근거 없음") < md.indexOf("## ✅ 맞음"));
+  assert.match(md, /## 📭 누락 후보 \(1\)\n\n- \[\[Alt2Obsidian\/CS\/Lectures\/13강#📚 슬라이드 \d+\|13강 · 슬라이드 \d+\]\]/);
+  assert.match(md, /## 🔎 용어 불일치로 근거 검색 실패 \(2\)\n\n판정이 아닙니다[^\n]*\n\n- "양자 컴퓨터는 큐비트를 쓴다"\n- "주말에는 영화를 보았다"/);
+  assert.ok(md.indexOf("## ❌ 틀림") < md.indexOf("## ✅ 맞음"));
   assert.ok(!/[\u2013\u2014]/.test(md), "no dashes");
 
   // Re-run keeps what the user wrote below the block, replaces the rest.
@@ -165,12 +255,12 @@ try {
   const userFile = "# 내가 만든 파일\n지우면 안 됨\n";
   const kept = m.mergeVerificationNote(userFile, next);
   assert.ok(kept.startsWith(next.trimEnd()) && kept.includes("지우면 안 됨"), "a file without the managed block is kept in full");
-  console.log("PASS: run: batches through the shared retry rules, script verdicts never sent, missing call, note rendering and re-run merge");
+  console.log("PASS: run: batches through the shared retry rules, unmatched claims never sent, missing call, note rendering and re-run merge");
 
   // Usage limit: the run stops, every remaining claim reported, nothing thrown.
   process.env.FAKE_CLI_MODE = "limit";
   const stopped = await m.runVerification(plan, llm);
-  assert.ok(stopped.items.filter((i) => !i.byScript).every((i) => i.verdict === null && /usage limit|사용 한도/.test(i.reason)));
+  assert.ok(stopped.items.every((i) => i.verdict === null && /usage limit|사용 한도/.test(i.reason)));
   assert.ok(stopped.warnings.some((w) => /판정하지 못했습니다/.test(w)));
   console.log("PASS: a usage limit stops the verification and reports every remaining claim");
 } finally {

@@ -7,6 +7,7 @@ import { alignTokens, segmentInSpan, StoredSpan, TimedSegment } from "../core/pr
 import { classifySlide, slideTitle } from "../core/prep/SlideAnalyzer";
 import { normalizePageText } from "../core/slideHash";
 import { Claim } from "./claims";
+import { englishHints } from "./glossary";
 
 export const TOP_SLIDES = 2;
 export const TOP_TRANSCRIPT = 2;
@@ -41,14 +42,22 @@ export interface TranscriptHit {
   excerpt: string;
 }
 
+/**
+ * How the slides were found: the claim's own terms ("direct"), or, when it
+ * shares no term with any slide (a Korean note on English slides), the
+ * nearby claims of its section, its heading, or the whole section.
+ */
+export type EvidenceSource = "direct" | "neighbour" | "heading" | "section";
+
 export interface ClaimEvidence {
   claim: Claim;
   slides: SlideHit[];
   transcript: TranscriptHit[];
+  source: EvidenceSource;
   /** High slide coverage and no number, formula or negation: judged last (spec 4.6 "맞음 후보"). */
   likelyTrue: boolean;
-  /** No term shared with any slide or transcript chunk: "근거 없음" without an LLM call. */
-  noEvidence: boolean;
+  /** No evidence found by any route: listed apart, not judged (never a verdict). */
+  unmatched: boolean;
 }
 
 // ---- BM25 ----
@@ -102,32 +111,52 @@ function topK(scores: number[], k: number): number[] {
 
 // ---- excerpts ----
 
-/** The part of `text` around its lines (or sentences) richest in the claim's terms, at most `max` characters. */
+/** A slide text this short is sent whole instead of an excerpt. */
+export const WHOLE_SLIDE_CHARS = 700;
+
+/**
+ * The part of `text` around its lines (or sentences) richest in the
+ * claim's distinct terms, at most `max` characters. Grows toward the
+ * richer neighbour, and tries the other side when that one does not fit.
+ */
 export function bestExcerpt(text: string, terms: Set<string>, max: number): string {
   const units = text
     .split(/\n+|(?<=[.!?])\s+/)
     .map((u) => u.replace(/\s+/g, " ").trim())
     .filter((u) => u.length > 0);
   if (units.length === 0) return "";
-  const hits = units.map((u) => alignTokens(u).filter((t) => terms.has(t)).length);
+  const hits = units.map((u) => new Set(alignTokens(u).filter((t) => terms.has(t))).size);
   let best = 0;
   for (let i = 1; i < units.length; i++) if (hits[i] > hits[best]) best = i;
   let from = best;
   let to = best + 1;
   let len = units[best].length;
-  // Grow toward the richer neighbour while it fits.
   for (;;) {
     const left = from > 0 ? units[from - 1].length + 1 : Infinity;
     const right = to < units.length ? units[to].length + 1 : Infinity;
     const preferLeft = from > 0 && (to >= units.length || hits[from - 1] > hits[to]);
-    const step = preferLeft ? left : right;
-    if (step === Infinity || len + step > max) break;
-    if (preferLeft) from--;
-    else to++;
-    len += step;
+    if (preferLeft && len + left <= max) {
+      from--;
+      len += left;
+    } else if (!preferLeft && len + right <= max) {
+      to++;
+      len += right;
+    } else if (preferLeft && len + right <= max) {
+      to++;
+      len += right;
+    } else if (!preferLeft && len + left <= max) {
+      from--;
+      len += left;
+    } else break;
   }
   const out = units.slice(from, to).join(" ");
   return out.length > max ? `${out.slice(0, max - 3)}...` : out;
+}
+
+/** Slide evidence text: the whole slide when it is short, else the best excerpt. */
+export function slideExcerpt(text: string, terms: Set<string>): string {
+  const whole = text.replace(/\s+/g, " ").trim();
+  return whole.length <= WHOLE_SLIDE_CHARS ? whole : bestExcerpt(text, terms, SLIDE_EXCERPT_CHARS);
 }
 
 // ---- transcript chunks ----
@@ -175,21 +204,36 @@ export function buildEvidenceIndex(slideTexts: string[], chunks: TranscriptChunk
   return { slides: buildIndex(slideTexts), slideTexts, chunks, chunkIndex: buildIndex(chunks.map((c) => c.text)) };
 }
 
-export function findEvidence(claim: Claim, index: EvidenceIndex): ClaimEvidence {
-  const tokens = alignTokens(claim.text);
-  const terms = new Set(tokens);
-  const slideScores = bm25(tokens, index.slides);
-  const slides: SlideHit[] = topK(slideScores, TOP_SLIDES).map((i) => {
+/**
+ * Retrieval terms of a text: its own tokens (English words, numbers,
+ * Korean stems; English in parentheses is already in the text) plus the
+ * English hint words of its Korean terms (glossary.ts). No tokens.
+ */
+export function retrievalTerms(text: string): string[] {
+  const own = alignTokens(text);
+  const hints = alignTokens(englishHints(text).join(" "));
+  return [...own, ...hints];
+}
+
+function slideHits(scores: number[], terms: Set<string>, index: EvidenceIndex, k = TOP_SLIDES): SlideHit[] {
+  return topK(scores, k).map((i) => {
     const docTerms = index.slides.tf[i];
     let shared = 0;
     for (const t of terms) if (docTerms.has(t)) shared++;
     return {
       slide: i + 1,
-      score: Math.round(slideScores[i] * 100) / 100,
+      score: Math.round(scores[i] * 100) / 100,
       coverage: terms.size > 0 ? Math.round((shared / terms.size) * 100) / 100 : 0,
-      excerpt: bestExcerpt(index.slideTexts[i], terms, SLIDE_EXCERPT_CHARS),
+      excerpt: slideExcerpt(index.slideTexts[i], terms),
     };
   });
+}
+
+/** Direct evidence of one claim: BM25 over the slides and the transcript chunks with its retrieval terms. */
+export function findEvidence(claim: Claim, index: EvidenceIndex): ClaimEvidence {
+  const tokens = retrievalTerms(claim.text);
+  const terms = new Set(tokens);
+  const slides = slideHits(bm25(tokens, index.slides), terms, index);
   const chunkScores = bm25(tokens, index.chunkIndex);
   const transcript: TranscriptHit[] = topK(chunkScores, TOP_TRANSCRIPT).map((i) => ({
     slide: index.chunks[i].slide,
@@ -202,7 +246,68 @@ export function findEvidence(claim: Claim, index: EvidenceIndex): ClaimEvidence 
     (slides[0]?.coverage ?? 0) >= LIKELY_TRUE_COVERAGE &&
     !NUMBER_OR_FORMULA.test(claim.text) &&
     !NEGATION.test(claim.text);
-  return { claim, slides, transcript, likelyTrue, noEvidence: slides.length === 0 && transcript.length === 0 };
+  return { claim, slides, transcript, source: "direct", likelyTrue, unmatched: slides.length === 0 && transcript.length === 0 };
+}
+
+/** How far (in claims) a neighbour may be. */
+const NEIGHBOUR_WINDOW = 3;
+
+/**
+ * Evidence for claims that share no term with any slide or transcript
+ * chunk, from their context, in this order:
+ *   1. neighbour: the slides the nearest claims of the same section found
+ *      directly (up to 3 claims away, nearer ones weigh more);
+ *   2. heading: the slides that match the section heading's terms;
+ *   3. section: the slides that match all claims of the section together.
+ * The transcript evidence is then the first chunks aligned to those slides.
+ * A claim that still has nothing stays `unmatched`.
+ */
+export function withContextEvidence(evidence: ClaimEvidence[], index: EvidenceIndex): ClaimEvidence[] {
+  const out = evidence.map((e) => ({ ...e }));
+  const direct = evidence.map((e) => !e.unmatched && e.slides.length > 0);
+  const transcriptFor = (slides: number[]): TranscriptHit[] => {
+    const hits: TranscriptHit[] = [];
+    for (const n of slides) {
+      const c = index.chunks.find((ch) => ch.slide === n);
+      if (c) hits.push({ slide: c.slide, startMs: c.startMs, score: 0, excerpt: c.text.length > TRANSCRIPT_EXCERPT_CHARS ? `${c.text.slice(0, TRANSCRIPT_EXCERPT_CHARS - 3)}...` : c.text });
+      if (hits.length >= TOP_TRANSCRIPT) break;
+    }
+    return hits;
+  };
+  const fromSlides = (e: ClaimEvidence, pages: number[], source: EvidenceSource): ClaimEvidence => {
+    const terms = new Set(retrievalTerms(e.claim.text));
+    const slides = pages.slice(0, TOP_SLIDES).map((n) => ({ slide: n, score: 0, coverage: 0, excerpt: slideExcerpt(index.slideTexts[n - 1] ?? "", terms) }));
+    return { ...e, slides, transcript: e.transcript.length > 0 ? e.transcript : transcriptFor(slides.map((h) => h.slide)), source, likelyTrue: false, unmatched: false };
+  };
+  for (let i = 0; i < out.length; i++) {
+    const e = out[i];
+    if (e.slides.length > 0) continue;
+    // 1. Neighbours in the same section.
+    const weight = new Map<number, number>();
+    for (let d = 1; d <= NEIGHBOUR_WINDOW; d++) {
+      for (const j of [i - d, i + d]) {
+        if (j < 0 || j >= evidence.length || !direct[j] || evidence[j].claim.sectionIndex !== e.claim.sectionIndex) continue;
+        evidence[j].slides.forEach((h, rank) => weight.set(h.slide, (weight.get(h.slide) ?? 0) + (NEIGHBOUR_WINDOW + 1 - d) / (rank + 1)));
+      }
+    }
+    if (weight.size > 0) {
+      out[i] = fromSlides(e, [...weight.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([n]) => n), "neighbour");
+      continue;
+    }
+    // 2. The section heading.
+    if (e.claim.section) {
+      const heading = topK(bm25(retrievalTerms(e.claim.section), index.slides), TOP_SLIDES).map((k) => k + 1);
+      if (heading.length > 0) {
+        out[i] = fromSlides(e, heading, "heading");
+        continue;
+      }
+    }
+    // 3. The whole section.
+    const sectionText = evidence.filter((x) => x.claim.sectionIndex === e.claim.sectionIndex).map((x) => x.claim.text).join(" ");
+    const section = topK(bm25(retrievalTerms(sectionText), index.slides), TOP_SLIDES).map((k) => k + 1);
+    if (section.length > 0) out[i] = fromSlides(e, section, "section");
+  }
+  return out;
 }
 
 export interface UncoveredSlide {
@@ -215,7 +320,8 @@ export interface UncoveredSlide {
 /** Slides not covering at least 30% of any claim among its top 2, without cover, contents, closing and textless pages. */
 export function uncoveredSlides(slideTexts: string[], evidence: ClaimEvidence[], maxSlides = 40): UncoveredSlide[] {
   const linked = new Set<number>();
-  for (const e of evidence) for (const h of e.slides) if (h.coverage >= LINK_COVERAGE) linked.add(h.slide);
+  // Only direct matches count: context evidence is a guess.
+  for (const e of evidence) if (e.source === "direct") for (const h of e.slides) if (h.coverage >= LINK_COVERAGE) linked.add(h.slide);
   const out: UncoveredSlide[] = [];
   slideTexts.forEach((text, i) => {
     if (linked.has(i + 1)) return;

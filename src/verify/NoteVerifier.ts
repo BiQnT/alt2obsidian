@@ -21,7 +21,7 @@ import { isAbortError } from "../llm/cli/CliRunner";
 import { estimateCalls } from "../core/budget/estimate";
 import { StoredSpan, TimedSegment } from "../core/prep/TranscriptAligner";
 import { Claim, splitClaims } from "./claims";
-import { buildEvidenceIndex, ClaimEvidence, findEvidence, transcriptChunks, UncoveredSlide, uncoveredSlides } from "./evidence";
+import { buildEvidenceIndex, ClaimEvidence, findEvidence, transcriptChunks, UncoveredSlide, uncoveredSlides, withContextEvidence } from "./evidence";
 import systemTemplate from "../../prompts/note-verify.system.md";
 import userTemplate from "../../prompts/note-verify.user.md";
 import claimTemplate from "../../prompts/note-verify.claim.md";
@@ -37,8 +37,10 @@ export const MISSING_OUTPUT_TOKENS = 400;
 const REASON_MAX = 120;
 
 export interface VerifyInput {
-  /** Lecture note name (link target of `[[<lecture>#📚 슬라이드 N]]`). */
+  /** Lecture note title (shown, and the link alias). */
   lecture: string;
+  /** Vault path of the lecture note (`.md`): links are path-qualified with it. */
+  notePath?: string | null;
   noteMarkdown: string;
   /** Page texts, index 0 = slide 1. */
   slideTexts: string[];
@@ -48,12 +50,13 @@ export interface VerifyInput {
 
 export interface VerifyPlan {
   lecture: string;
+  notePath: string | null;
   claims: ClaimEvidence[];
-  /** Claims sent to the LLM, likely-true ones last. */
+  /** Claims sent to the LLM, likely-true ones last. Every claim with any evidence is judged. */
   judged: ClaimEvidence[];
   batches: ClaimEvidence[][];
-  /** Claims with no evidence at all (script verdict "근거 없음"). */
-  unsupported: ClaimEvidence[];
+  /** Claims no route found evidence for: listed apart, never given a verdict by the script. */
+  unmatched: ClaimEvidence[];
   uncovered: UncoveredSlide[];
   hasTranscript: boolean;
 }
@@ -62,17 +65,18 @@ export function planVerification(input: VerifyInput, perCall = CLAIMS_PER_CALL):
   const claims = splitClaims(input.noteMarkdown);
   const chunks = input.transcript ? transcriptChunks(input.transcript.segments, input.transcript.spans) : [];
   const index = buildEvidenceIndex(input.slideTexts, chunks);
-  const evidence = claims.map((c) => findEvidence(c, index));
-  const unsupported = evidence.filter((e) => e.noEvidence);
-  const judged = [...evidence.filter((e) => !e.noEvidence && !e.likelyTrue), ...evidence.filter((e) => !e.noEvidence && e.likelyTrue)];
+  const evidence = withContextEvidence(claims.map((c) => findEvidence(c, index)), index);
+  const unmatched = evidence.filter((e) => e.unmatched);
+  const judged = [...evidence.filter((e) => !e.unmatched && !e.likelyTrue), ...evidence.filter((e) => !e.unmatched && e.likelyTrue)];
   const batches: ClaimEvidence[][] = [];
   for (let i = 0; i < judged.length; i += perCall) batches.push(judged.slice(i, i + perCall));
   return {
     lecture: input.lecture,
+    notePath: input.notePath ?? null,
     claims: evidence,
     judged,
     batches,
-    unsupported,
+    unmatched,
     uncovered: uncoveredSlides(input.slideTexts, evidence),
     hasTranscript: chunks.length > 0,
   };
@@ -98,7 +102,8 @@ function claimBlock(e: ClaimEvidence): string {
     ...e.slides.map((h) => `- 슬라이드 ${h.slide}: ${h.excerpt}`),
     ...e.transcript.map((h) => `- 전사 [${formatTimestamp(h.startMs)}]${h.slide ? ` (슬라이드 ${h.slide} 구간)` : ""}: ${h.excerpt}`),
   ];
-  return renderPrompt(claimTemplate, { id: e.claim.id, claim: e.claim.text, evidence: lines.join("\n") || "- (없음)" });
+  const evidenceNote = e.source === "direct" ? "" : " (주장과 겹치는 용어가 없어 같은 절의 문맥으로 찾은 후보)";
+  return renderPrompt(claimTemplate, { id: e.claim.id, claim: e.claim.text, evidenceNote, evidence: lines.join("\n") || "- (없음)" });
 }
 
 export function buildJudgePrompt(lecture: string, batch: ClaimEvidence[]): string {
@@ -156,11 +161,18 @@ export const MISSING_SCHEMA: Record<string, unknown> = {
 
 // ---- estimate ----
 
+/** Share of claims without any evidence above which the estimate warns (terms of note and slides do not meet). */
+export const UNMATCHED_WARN_SHARE = 0.3;
+
 export interface VerifyEstimate {
   claims: number;
   judged: number;
-  /** Claims decided by the script ("근거 없음", no shared term). */
-  scriptOnly: number;
+  /** Judged with context evidence (no shared term: neighbours, heading, section). */
+  contextEvidence: number;
+  /** Not judged: no evidence by any route. */
+  unmatched: number;
+  /** More than 30% of the claims are unmatched. */
+  unmatchedWarning: boolean;
   likelyTrue: number;
   uncoveredSlides: number;
   calls: number;
@@ -183,7 +195,9 @@ export function estimateVerification(plan: VerifyPlan, provider: ProviderId): Ve
   return {
     claims: plan.claims.length,
     judged: plan.judged.length,
-    scriptOnly: plan.unsupported.length,
+    contextEvidence: plan.judged.filter((c) => c.source !== "direct").length,
+    unmatched: plan.unmatched.length,
+    unmatchedWarning: plan.claims.length > 0 && plan.unmatched.length / plan.claims.length > UNMATCHED_WARN_SHARE,
     likelyTrue: plan.judged.filter((c) => c.likelyTrue).length,
     uncoveredSlides: plan.uncovered.length,
     calls: e.calls,
@@ -199,8 +213,6 @@ export interface VerifiedClaim {
   /** null: no verdict (the call failed or the run stopped). */
   verdict: Verdict | null;
   reason: string;
-  /** Decided by the script, not the model. */
-  byScript: boolean;
 }
 
 export interface MissingCandidate {
@@ -211,7 +223,11 @@ export interface MissingCandidate {
 
 export interface VerifyResult {
   lecture: string;
+  notePath: string | null;
+  /** Judged claims, in note order. */
   items: VerifiedClaim[];
+  /** Claims no route found evidence for (not judged). */
+  unmatched: ClaimEvidence[];
   missing: MissingCandidate[];
   warnings: string[];
 }
@@ -248,13 +264,15 @@ export function checkJudgeAnswer(raw: unknown, batch: ClaimEvidence[]): { ok: Ma
       failed.set(e.claim.id, Array.isArray(items) ? "응답에 이 주장이 없음" : "응답 JSON 형식 오류");
       continue;
     }
-    const v = typeof it.v === "string" ? it.v.trim() : "";
-    if (!(VERDICTS as readonly string[]).includes(v)) {
+    // "근거없음" and "근거 없음" are the same verdict.
+    const raw = typeof it.v === "string" ? it.v.replace(/\s+/g, "") : "";
+    const v = VERDICTS.find((x) => x.replace(/\s+/g, "") === raw);
+    if (!v) {
       failed.set(e.claim.id, `판정 값이 올바르지 않음 (${String(it.v).slice(0, 20)})`);
       continue;
     }
     const r = typeof it.r === "string" ? it.r.replace(/\s+/g, " ").trim() : "";
-    ok.set(e.claim.id, { v: v as Verdict, r: r.length > REASON_MAX ? `${r.slice(0, REASON_MAX - 3)}...` : r });
+    ok.set(e.claim.id, { v, r: r.length > REASON_MAX ? `${r.slice(0, REASON_MAX - 3)}...` : r });
   }
   return { ok, failed };
 }
@@ -307,23 +325,24 @@ export function checkMissingAnswer(raw: unknown, plan: VerifyPlan): MissingCandi
   for (const it of list as Array<{ s?: unknown; r?: unknown }>) {
     const u = allowed.get(Number(it?.s));
     if (!u || out.some((o) => o.slide === u.slide)) continue;
-    out.push({ slide: u.slide, title: u.title, reason: typeof it.r === "string" ? it.r.trim().slice(0, REASON_MAX) : "" });
+    out.push({ slide: u.slide, title: u.title, reason: typeof it.r === "string" ? it.r.replace(/\s+/g, " ").trim().slice(0, REASON_MAX) : "" });
   }
   return out.sort((a, b) => a.slide - b.slide);
 }
 
-/** Verdict per claim: the script's, the model's, or none with the failure reason. */
+/** The model's verdict per judged claim, or none with the failure reason; unmatched claims apart. */
 function assembleResult(plan: VerifyPlan, done: Map<number, JudgeItem>, failures: Map<number, string>, missing: MissingCandidate[], warnings: string[]): VerifyResult {
-  const items: VerifiedClaim[] = plan.claims.map((e) => {
-    if (e.noEvidence) return { evidence: e, verdict: "근거 없음", reason: "슬라이드와 전사에서 겹치는 용어를 찾지 못했습니다 (스크립트 판정).", byScript: true };
-    const d = done.get(e.claim.id);
-    if (d) return { evidence: e, verdict: d.v, reason: d.r, byScript: false };
-    return { evidence: e, verdict: null, reason: failures.get(e.claim.id) ?? "응답에 이 주장이 없음", byScript: false };
-  });
+  const items: VerifiedClaim[] = plan.claims
+    .filter((e) => !e.unmatched)
+    .map((e) => {
+      const d = done.get(e.claim.id);
+      if (d) return { evidence: e, verdict: d.v, reason: d.r };
+      return { evidence: e, verdict: null, reason: failures.get(e.claim.id) ?? "응답에 이 주장이 없음" };
+    });
   const failedCount = items.filter((i) => i.verdict === null).length;
   const out = [...warnings];
   if (failedCount > 0) out.push(`주장 ${failedCount}개는 판정하지 못했습니다.`);
-  return { lecture: plan.lecture, items, missing, warnings: out };
+  return { lecture: plan.lecture, notePath: plan.notePath, items, unmatched: plan.unmatched, missing, warnings: out };
 }
 
 /**
@@ -366,25 +385,55 @@ const SECTIONS: Array<{ key: Verdict | "failed"; icon: string; callout: string; 
   { key: "맞음", icon: "✅", callout: "success", fold: true },
 ];
 
-export function verdictCounts(result: VerifyResult): Record<Verdict | "failed" | "missing", number> {
-  const counts = { 맞음: 0, 틀림: 0, "근거 없음": 0, "전사 불확실": 0, failed: 0, missing: result.missing.length } as Record<Verdict | "failed" | "missing", number>;
+export function verdictCounts(result: VerifyResult): Record<Verdict | "failed" | "missing" | "unmatched", number> {
+  const counts = { 맞음: 0, 틀림: 0, "근거 없음": 0, "전사 불확실": 0, failed: 0, missing: result.missing.length, unmatched: result.unmatched.length } as Record<Verdict | "failed" | "missing" | "unmatched", number>;
   for (const it of result.items) counts[it.verdict ?? "failed"]++;
   return counts;
 }
 
-function slideLink(lecture: string, slide: number): string {
-  return `[[${lecture}#📚 슬라이드 ${slide}]]`;
+export interface LectureRef {
+  title: string;
+  /** Vault path of the lecture note (".md"), or null (title-only links). */
+  path: string | null;
 }
 
-function evidenceLinks(lecture: string, e: ClaimEvidence): string {
-  const parts = e.slides.map((h) => slideLink(lecture, h.slide));
+/** Characters a wikilink target or alias cannot hold. */
+const LINK_UNSAFE = /[#^[\]|]/;
+
+function aliasText(text: string): string {
+  return text.replace(/[#^[\]|]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Link to a lecture note (and a slide heading): path-qualified with an
+ * alias, `[[<path>#📚 슬라이드 3|<title> · 슬라이드 3]]`, so two lectures with
+ * the same title never mix. A path holding # ^ [ ] | (Obsidian cannot put
+ * those in a wikilink target) becomes a Markdown link with the path
+ * percent-encoded.
+ */
+export function lectureLink(ref: LectureRef, slide?: number): string {
+  const heading = slide ? `📚 슬라이드 ${slide}` : "";
+  const alias = aliasText(slide ? `${ref.title} · 슬라이드 ${slide}` : ref.title);
+  const target = ref.path ? ref.path.replace(/\.md$/, "") : ref.title;
+  if (!LINK_UNSAFE.test(target)) return `[[${target}${heading ? `#${heading}` : ""}|${alias}]]`;
+  const file = ref.path ?? `${ref.title}.md`;
+  const url = file.split("/").map(encodeURIComponent).join("/") + (heading ? `#${encodeURIComponent(heading)}` : "");
+  return `[${alias}](${url})`;
+}
+
+function refOf(result: VerifyResult): LectureRef {
+  return { title: result.lecture, path: result.notePath };
+}
+
+function evidenceLinks(ref: LectureRef, e: ClaimEvidence): string {
+  const parts = e.slides.map((h) => lectureLink(ref, h.slide));
   for (const t of e.transcript) parts.push(`[${formatTimestamp(t.startMs)}]${t.slide ? ` (슬라이드 ${t.slide})` : ""}`);
   return parts.join(" · ");
 }
 
 /** Quote safe inside a callout: one line, no leading callout syntax. */
 function quote(text: string): string {
-  return text.replace(/\s+/g, " ").replace(/^\[!/, "[\\!").trim();
+  return text.replace(/\s+/g, " ").replace(/^\[!/, "[\\!").replace(/<!--/g, "&lt;!--").trim();
 }
 
 export interface VerificationMeta {
@@ -399,13 +448,14 @@ export interface VerificationMeta {
 export function renderVerificationNote(result: VerifyResult, meta: VerificationMeta): string {
   const c = verdictCounts(result);
   const lecture = result.lecture;
+  const ref = refOf(result);
   const fm = [
     "---",
-    `lecture: ${JSON.stringify(`[[${lecture}]]`)}`,
+    `lecture: ${JSON.stringify(lectureLink(ref))}`,
     `verified_source: ${JSON.stringify(meta.source)}`,
     `date: "${meta.date}"`,
     `source: "alt2obsidian-verify"`,
-    `claims: ${result.items.length}`,
+    `claims: ${result.items.length + result.unmatched.length}`,
     `verdicts: {"맞음": ${c["맞음"]}, "틀림": ${c["틀림"]}, "근거 없음": ${c["근거 없음"]}, "전사 불확실": ${c["전사 불확실"]}, "누락 후보": ${c.missing}}`,
     ...(meta.usageLine ? [meta.usageLine] : []),
     "---",
@@ -416,8 +466,8 @@ export function renderVerificationNote(result: VerifyResult, meta: VerificationM
     "",
     VERIFY_BLOCK_START,
     `> [!abstract] 판정 요약`,
-    `> 맞음 ${c["맞음"]} · 틀림 ${c["틀림"]} · 근거 없음 ${c["근거 없음"]} · 전사 불확실 ${c["전사 불확실"]} · 누락 후보 ${c.missing}${c.failed ? ` · 판정 실패 ${c.failed}` : ""}`,
-    `> 대상 노트: ${meta.source} · 강의: [[${lecture}]] · ${meta.model} · ${meta.date}`,
+    `> 맞음 ${c["맞음"]} · 틀림 ${c["틀림"]} · 근거 없음 ${c["근거 없음"]} · 전사 불확실 ${c["전사 불확실"]} · 누락 후보 ${c.missing}${c.failed ? ` · 판정 실패 ${c.failed}` : ""}${c.unmatched ? ` · 근거 검색 실패 ${c.unmatched}` : ""}`,
+    `> 대상 노트: ${meta.source} · 강의: ${lectureLink(ref)} · ${meta.model} · ${meta.date}`,
     "> 근거 검색은 스크립트로 했고, 판정만 모델이 했습니다. 원본 노트는 바꾸지 않았습니다.",
     "",
   ];
@@ -428,9 +478,9 @@ export function renderVerificationNote(result: VerifyResult, meta: VerificationM
     const label = sec.key === "failed" ? "판정 실패" : sec.key;
     body.push(`## ${sec.icon} ${label} (${items.length})`, "");
     for (const it of items) {
-      const links = evidenceLinks(lecture, it.evidence);
+      const links = evidenceLinks(ref, it.evidence);
       body.push(
-        `> [!${sec.callout}]${sec.fold ? "-" : ""} ${label}${it.byScript ? " (스크립트)" : ""}`,
+        `> [!${sec.callout}]${sec.fold ? "-" : ""} ${label}${it.evidence.source !== "direct" ? " (문맥 근거)" : ""}`,
         `> "${quote(it.evidence.claim.text)}"`,
         `> ${it.reason || "(이유 없음)"}`,
         ...(links ? [`> 근거: ${links}`] : []),
@@ -440,7 +490,12 @@ export function renderVerificationNote(result: VerifyResult, meta: VerificationM
   }
   if (result.missing.length > 0) {
     body.push(`## 📭 ${MISSING_LABEL} (${result.missing.length})`, "");
-    for (const m of result.missing) body.push(`- ${slideLink(lecture, m.slide)} ${m.title}${m.reason ? `: ${m.reason}` : ""}`);
+    for (const m of result.missing) body.push(`- ${lectureLink(ref, m.slide)} ${m.title}${m.reason ? `: ${m.reason}` : ""}`);
+    body.push("");
+  }
+  if (result.unmatched.length > 0) {
+    body.push(`## 🔎 용어 불일치로 근거 검색 실패 (${result.unmatched.length})`, "", "판정이 아닙니다. 슬라이드와 전사, 같은 절의 문맥 어디에서도 근거 후보를 찾지 못해 모델에 보내지 않았습니다.", "");
+    for (const e of result.unmatched) body.push(`- "${quote(e.claim.text)}"`);
     body.push("");
   }
   body.push(VERIFY_BLOCK_END, "", "## 내 메모", "");
@@ -454,14 +509,15 @@ export function renderVerificationNote(result: VerifyResult, meta: VerificationM
  */
 export function mergeVerificationNote(existing: string | null, next: string): string {
   if (!existing || !existing.trim()) return next;
-  const end = existing.indexOf(VERIFY_BLOCK_END);
+  // The last marker: an end marker quoted from the checked note inside the block does not cut it short.
+  const end = existing.lastIndexOf(VERIFY_BLOCK_END);
   if (end < 0) {
     // No managed block (the marker was removed, or a user file sits at this
     // path): nothing of it is dropped; it follows the new block in full.
     return `${next.trimEnd()}\n\n## 이전 내용 (Alt2Obsidian이 관리하지 않음)\n\n${existing.trim()}\n`;
   }
   const userPart = existing.slice(end + VERIFY_BLOCK_END.length);
-  const nextEnd = next.indexOf(VERIFY_BLOCK_END);
+  const nextEnd = next.lastIndexOf(VERIFY_BLOCK_END);
   return next.slice(0, nextEnd + VERIFY_BLOCK_END.length) + userPart;
 }
 

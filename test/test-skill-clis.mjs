@@ -169,16 +169,18 @@ try {
       const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(FIXTURE_PATH)), verbosity: 0 }).promise;
       const slideTexts = (await prepMod.extractPageLayouts(doc)).map(prepMod.layoutAlignmentText);
       await doc.destroy();
-      const res = JSON.parse(cli("verify-prep", ["prep", FIXTURE_PATH, noteFile, "--lecture", "Deck", "--out", out, "--bundle", bundleFile, "--alignment", al.value]));
+      const res = JSON.parse(cli("verify-prep", ["prep", FIXTURE_PATH, noteFile, "--lecture", "Deck", "--out", out, "--note-path", "Vault/S/Lectures/Deck.md", "--bundle", bundleFile, "--alignment", al.value]));
       const plan = v.planVerification({
         lecture: "Deck",
+        notePath: "Vault/S/Lectures/Deck.md",
         noteMarkdown: note,
         slideTexts,
         transcript: { segments: transcript.map((t) => ({ startMs: t.startMs, endMs: t.endMs, text: t.text })), spans: v.parseAlignment(al.value) },
       });
       const est = v.estimateVerification(plan, "claude-cli");
       assert.equal(res.claims, 4);
-      assert.equal(res.scriptOnly, 1);
+      assert.equal(res.unmatched, 0);
+      assert.equal(res.contextEvidence, 1, "the off-topic claim is judged with context evidence");
       assert.equal(res.transcript, true);
       assert.deepEqual(res.estimate, { calls: est.calls, inputTokens: est.inputTokens, outputTokens: est.outputTokens }, "same estimate as the plugin");
       assert.deepEqual(res.batches.map((b) => b.ids), plan.batches.map((b) => b.map((e) => e.claim.id)));
@@ -193,6 +195,10 @@ try {
       const expected = v.renderVerificationNote(v.resultFromAnswers(plan, answers), { source: "[[my-note]]", date: new Date().toISOString().slice(0, 10), usageLine: null, model: "Claude Code" });
       assert.equal(md, expected);
       assert.match(md, /## ❌ 틀림 \(1\)/);
+      assert.match(md, /\[\[Vault\/S\/Lectures\/Deck#📚 슬라이드 \d\|Deck · 슬라이드 \d\]\]/, "path-qualified links from --note-path");
+      // --existing: a missing file is a first run; anything else unreadable stops.
+      assert.ok(cli("verify-prep", ["render", out, "--answers", join(dir, "answers.json"), "--source", "x", "--existing", join(dir, "nope.md")]).includes("alt2obs:verify end"));
+      assert.throws(() => execFileSync("node", [join(repo, "scripts/phase2/verify-prep.mjs"), "render", out, "--answers", join(dir, "answers.json"), "--source", "x", "--existing", dir], { stdio: "pipe" }), "a folder as --existing is an error, not a first run");
       writeFileSync(join(dir, "old.md"), md.replace("## 내 메모\n", "## 내 메모\n내가 쓴 줄\n"));
       const again = cli("verify-prep", ["render", out, "--answers", join(dir, "answers.json"), "--source", "[[my-note]]", "--existing", join(dir, "old.md")]);
       assert.ok(again.includes("내가 쓴 줄"));

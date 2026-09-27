@@ -208,12 +208,19 @@ export class VerifyPanel {
     panel.createDiv({ cls: "alt2obsidian-estimate-main", text: `주장 ${e.claims}개 → 판정 ${e.judged}개` });
     const rows = panel.createEl("ul", { cls: "alt2obsidian-estimate-list" });
     rows.createEl("li", { text: `근거 검색 (스크립트): 토큰 0 · 슬라이드 상위 2개${prepared.plan.hasTranscript ? ", 전사 상위 2개" : " (전사 없음)"}` });
-    if (e.scriptOnly > 0) rows.createEl("li", { text: `겹치는 용어가 없는 ${e.scriptOnly}개는 호출 없이 '근거 없음'` });
+    if (e.contextEvidence > 0) rows.createEl("li", { text: `슬라이드와 겹치는 용어가 없는 ${e.contextEvidence}개는 같은 절의 문맥(주변 주장, 제목)으로 근거 후보를 찾아 판정` });
+    if (e.unmatched > 0) rows.createEl("li", { text: `근거 후보를 전혀 찾지 못한 ${e.unmatched}개는 판정하지 않고 결과 노트에 따로 적음` });
     if (e.likelyTrue > 0) rows.createEl("li", { text: `맞음 후보 ${e.likelyTrue}개는 묶음 뒤쪽에서 판정` });
     rows.createEl("li", { text: `누락 확인: 주장과 이어지지 않은 슬라이드 ${e.uncoveredSlides}장${e.uncoveredSlides > 0 ? " (제목과 핵심 문장만, 1회)" : ""}` });
     rows.createEl("li", { text: `예상: 호출 ${e.calls}회 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰` });
     rows.createEl("li", { text: `판정: ${PROVIDER_LABELS[task.provider]} (${task.model || "기본 모델"}${task.effort ? ", " + task.effort : ""})` });
     rows.createEl("li", { text: `결과: ${prepared.outPath}` });
+    if (e.unmatchedWarning) {
+      panel.createDiv({
+        cls: "alt2obsidian-error",
+        text: `주장의 ${Math.round((e.unmatched / Math.max(1, e.claims)) * 100)}%가 슬라이드와 용어가 맞지 않아 근거를 찾지 못했습니다. 대상 강의가 맞는지, 노트에 영어 용어(괄호 병기)가 있는지 확인하세요.`,
+      });
+    }
     if (prepared.overCap) panel.createDiv({ cls: "alt2obsidian-error", text: "강의당 토큰 상한을 넘을 것 같습니다. 한 번 더 누르면 그래도 시작합니다." });
     const actions = panel.createDiv({ cls: "alt2obsidian-estimate-actions" });
     const run = actions.createEl("button", { text: "검증 실행", cls: "mod-cta" });

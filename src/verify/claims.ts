@@ -12,10 +12,22 @@ export interface Claim {
   text: string;
   /** 1-based line of the note it came from. */
   line: number;
+  /** Text of the nearest heading above it ("" before the first heading). */
+  section: string;
+  /** 0 before the first heading, then 1, 2, ... per heading: claims of one section share it. */
+  sectionIndex: number;
 }
 
 /** Shorter claims carry no checkable statement. */
 export const MIN_CLAIM_CHARS = 8;
+/** With Hangul a short sentence says more: at least this many non-space characters. */
+export const MIN_HANGUL_CLAIM_CHARS = 4;
+
+function longEnough(text: string): boolean {
+  const content = text.replace(/[\s\p{P}\p{S}]/gu, "");
+  if (/[가-힣]/.test(text)) return text.replace(/\s+/g, "").length >= MIN_HANGUL_CLAIM_CHARS && content.length >= 2;
+  return text.length >= MIN_CLAIM_CHARS && content.length >= MIN_CLAIM_CHARS / 2;
+}
 /** Longer sentences are cut at a clause break so one claim stays one statement. */
 export const MAX_CLAIM_CHARS = 300;
 
@@ -91,17 +103,24 @@ export function splitClaims(markdown: string): Claim[] {
     if (close > 0) i = close + 1;
   }
   let fence: string | null = null;
+  let math = false;
+  let section = "";
+  let sectionIndex = 0;
+  /** The last non-blank line was a list item or its indented continuation. */
+  let inList = false;
+  const isTableRow = (l: string | undefined) => !!l && /^\s*\|.*\|\s*$/.test(l);
+  const isTableRule = (l: string | undefined) => !!l && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(l) && /-/.test(l);
   // Each line is taken alone: notes put one thought per line, and a Notion
   // export never hard-wraps a paragraph.
   const addLine = (body: string, line: number) => {
     for (const sentence of splitSentences(body)) {
       for (const part of capLength(sentence)) {
         const text = part.trim();
-        if (text.replace(/[\s\p{P}\p{S}]/gu, "").length < MIN_CLAIM_CHARS / 2 || text.length < MIN_CLAIM_CHARS) continue;
+        if (!longEnough(text)) continue;
         const key = text.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        claims.push({ id: claims.length + 1, text, line });
+        claims.push({ id: claims.length + 1, text, line, section, sectionIndex });
       }
     }
   };
@@ -118,10 +137,30 @@ export function splitClaims(markdown: string): Claim[] {
       continue;
     }
     const trimmed = raw.trim();
-    if (!trimmed || /^#{1,6}\s/.test(trimmed) || /^([-*_=]\s*){3,}$/.test(trimmed) || /^\|?[\s:|-]+\|[\s:|-]*$/.test(trimmed)) {
+    // $$ math blocks (a one-line $$...$$ too).
+    if (math) {
+      if (/\$\$\s*$/.test(trimmed)) math = false;
       continue;
     }
-    if (/^\$\$/.test(trimmed) || (/^<\/?(aside|details|summary)\b/i.test(trimmed) && stripInline(trimmed) === "")) {
+    if (/^\$\$/.test(trimmed)) {
+      if (!(trimmed.length > 2 && /\$\$\s*$/.test(trimmed.slice(2)))) math = true;
+      continue;
+    }
+    if (!trimmed) continue;
+    const heading = trimmed.match(/^#{1,6}\s+(.*)$/);
+    if (heading) {
+      section = stripInline(heading[1]).replace(/\s+#+\s*$/, "");
+      sectionIndex++;
+      inList = false;
+      continue;
+    }
+    // Indented code (4 spaces or a tab) outside a list.
+    if (/^( {4}|\t)/.test(raw) && !inList) continue;
+    if (/^([-*_=]\s*){3,}$/.test(trimmed) || isTableRule(trimmed)) continue;
+    // A table's header row is the row right above its |---| rule.
+    if (isTableRow(raw) && isTableRule(lines[i + 1])) continue;
+    inList = /^\s*([-*+]|\d+[.)])\s+/.test(raw) || (inList && /^\s+/.test(raw));
+    if (/^<\/?(aside|details|summary)\b/i.test(trimmed) && stripInline(trimmed) === "") {
       continue;
     }
     if (onlyLinks(trimmed)) {

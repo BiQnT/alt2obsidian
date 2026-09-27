@@ -4,14 +4,15 @@
 //
 // Usage:
 //   node scripts/phase2/verify-prep.mjs prep <pdfPath> <noteFile> --lecture <name> --out <dir>
-//        [--bundle <bundle.json>] [--alignment "<alt_alignment value>"]
+//        [--note-path <vault path of the lecture note>] [--bundle <bundle.json>] [--alignment "<alt_alignment value>"]
 //     Writes into <dir> (created 0700): plan.json, system.md (the judge
 //     instructions), batch-<n>.md (one judge prompt per 20 claims) and
 //     missing.md (the missing-slide prompt, when any slide is uncovered).
 //     --bundle is an alt-local.mjs export: its timestamped transcript is the
 //     secondary evidence, grouped by --alignment (the lecture note's
 //     alt_alignment) or, without it, by a fresh alignment. Prints
-//     {"claims","judged","scriptOnly","likelyTrue","uncoveredSlides","batches":[{"file","ids"}],
+//     --note-path makes the links path-qualified ([[<path>#📚 슬라이드 N|<lecture> · 슬라이드 N]]).
+//     {"claims","judged","contextEvidence","unmatched","unmatchedWarning","likelyTrue","uncoveredSlides","batches":[{"file","ids"}],
 //      "missing","estimate":{"calls","inputTokens","outputTokens"}}.
 //   node scripts/phase2/verify-prep.mjs render <dir> --answers <answers.json> --source <label>
 //        [--missing <missing.json>] [--model <label>] [--existing <verification note>]
@@ -82,7 +83,8 @@ async function prep(args: string[]): Promise<void> {
       transcript = { segments, spans: spans.length > 0 ? spans : null };
     }
   }
-  const plan = planVerification({ lecture, noteMarkdown: readFileSync(noteFile, "utf8"), slideTexts, transcript });
+  const plan = planVerification({ lecture, notePath: option(args, "--note-path") ?? null, noteMarkdown: readFileSync(noteFile, "utf8"), slideTexts, transcript });
+  // A fresh private folder (the Skill passes one from `mktemp -d`): an existing file there is never read.
   mkdirSync(out, { recursive: true, mode: 0o700 });
   chmodSync(out, 0o700);
   writePrivate(join(out, "plan.json"), JSON.stringify(plan));
@@ -100,7 +102,9 @@ async function prep(args: string[]): Promise<void> {
     JSON.stringify({
       claims: e.claims,
       judged: e.judged,
-      scriptOnly: e.scriptOnly,
+      contextEvidence: e.contextEvidence,
+      unmatched: e.unmatched,
+      unmatchedWarning: e.unmatchedWarning,
       likelyTrue: e.likelyTrue,
       uncoveredSlides: e.uncoveredSlides,
       transcript: plan.hasTranscript,
@@ -126,7 +130,9 @@ function render(args: string[]): void {
   if (existingFile) {
     try {
       existing = readFileSync(existingFile, "utf8");
-    } catch {
+    } catch (e) {
+      // Only a missing file means "no previous note"; anything else stops before the note is replaced.
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
       existing = null;
     }
   }

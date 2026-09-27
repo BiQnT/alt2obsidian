@@ -16,7 +16,12 @@
  * change). The missing-slide call is left out (not part of the criterion)
  * and a guard stops at 3 calls, retries included.
  *
- * Run: node test/eval-verify.mjs [dataDir] [--run] [--bin <claude>] [--out results.json]
+ * --fixture lec13-ko uses the same statements in Korean without English
+ * terms (a Korean note on English slides); --no-transcript leaves the
+ * transcript out; --fake judges with the fake claude of test/fixtures/bin
+ * (no tokens) to show every claim reaches the judge.
+ *
+ * Run: node test/eval-verify.mjs [dataDir] [--fixture lec13|lec13-ko] [--no-transcript] [--run | --fake] [--bin <claude>] [--out results.json]
  */
 
 import { execFileSync } from "node:child_process";
@@ -29,8 +34,8 @@ const opt = (name) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 };
-const dataDir = args.find((a, i) => !a.startsWith("--") && !["--out", "--model", "--effort", "--bin"].includes(args[i - 1])) || process.env.ALT2OBS_VERIFY_DATA;
-const fixture = JSON.parse(readFileSync(join(repo, "test/fixtures/verify/lec13.json"), "utf8"));
+const dataDir = args.find((a, i) => !a.startsWith("--") && !["--out", "--model", "--effort", "--bin", "--fixture"].includes(args[i - 1])) || process.env.ALT2OBS_VERIFY_DATA;
+const fixture = JSON.parse(readFileSync(join(repo, `test/fixtures/verify/${opt("--fixture") ?? "lec13"}.json`), "utf8"));
 if (!dataDir || !existsSync(join(dataDir, fixture.inputs.pdf)) || !existsSync(join(dataDir, fixture.inputs.transcript))) {
   console.log("INFO: verifier eval skipped (lecture data is the user's own and not committed; pass its folder or set ALT2OBS_VERIFY_DATA)");
   process.exit(0);
@@ -51,7 +56,7 @@ const plan = m.planVerification({
   lecture: fixture.lecture,
   noteMarkdown: note,
   slideTexts,
-  transcript: { segments, spans: alignment ? m.parseAlignment(alignment.value) : null },
+  transcript: args.includes("--no-transcript") ? null : { segments, spans: alignment ? m.parseAlignment(alignment.value) : null },
 });
 const byText = new Map(fixture.statements.map((s) => [s.text, s]));
 const unmatched = plan.claims.filter((c) => !byText.has(c.claim.text));
@@ -63,10 +68,28 @@ if (plan.claims.length !== fixture.statements.length || unmatched.length > 0) {
 plan.uncovered = [];
 const est = m.estimateVerification(plan, "claude-cli");
 const hitAt = plan.claims.filter((c) => c.slides.some((h) => h.slide === byText.get(c.claim.text).slide)).length;
+const sources = {};
+for (const c of plan.claims) sources[c.unmatched ? "unmatched" : c.source] = (sources[c.unmatched ? "unmatched" : c.source] ?? 0) + 1;
 console.log(
-  `Plan: ${est.claims} claims, ${est.judged} judged (${est.likelyTrue} likely true, last), ${est.scriptOnly} script-only; ` +
+  `Plan: ${est.claims} claims, ${est.judged} judged (${est.likelyTrue} likely true, last; evidence ${JSON.stringify(sources)}), ${est.unmatched} unmatched${est.unmatchedWarning ? " (over 30%: warned)" : ""}; ` +
     `labelled slide in the top 2 for ${hitAt}/${plan.claims.length}; estimate ${est.calls} calls, ${est.inputTokens} input, ${est.outputTokens} output tokens`
 );
+
+if (args.includes("--fake")) {
+  const { FAKE_CLAUDE, fakeSession } = await import("./helpers/fake-cli.mjs");
+  const session = fakeSession("ok");
+  const job = m.createJobDir();
+  try {
+    const llm = new m.ClaudeCliProvider({ bin: FAKE_CLAUDE, model: "sonnet", effort: "low", timeoutMs: 60000, workDir: job, ownsWorkDir: false });
+    const result = await m.runVerification(plan, llm);
+    const judged = result.items.filter((i) => i.verdict !== null).length;
+    console.log(`Fake judge: ${judged}/${plan.claims.length} claims got a verdict, ${result.unmatched.length} listed as unmatched, ${session.calls().length} fake calls (no tokens)`);
+  } finally {
+    m.removeJobDir(job);
+    session.cleanup();
+  }
+  process.exit(0);
+}
 
 if (!args.includes("--run")) {
   console.log("INFO: dry run (no model call). Add --run to judge with the Claude CLI.");

@@ -259,8 +259,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
       return;
     }
     const pdfPath = active.path.replace(/\.md$/, ".pdf");
-    const pdfFile = this.app.vault.getAbstractFileByPath(pdfPath);
-    if (!(pdfFile instanceof TFile)) {
+    const pdfFile = this.siblingPdf(active.path);
+    if (!pdfFile) {
       new Notice(
         `사이블링 PDF가 없습니다: ${pdfPath} — 강의를 import하면 PDF가 함께 저장됩니다.`
       );
@@ -270,7 +270,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     await leaf.setViewState({
       type: VIEW_TYPE_SYNCED_VIEWER,
       active: true,
-      state: { mdPath: active.path, pdfPath },
+      state: { mdPath: active.path, pdfPath: pdfFile.path },
     });
     this.app.workspace.revealLeaf(leaf);
   }
@@ -1290,6 +1290,16 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
   // ---- note verification (spec 4.6) ----
 
+  /** The lecture note's PDF next to it: `<stem>.pdf`, or `<stem>.PDF`. */
+  siblingPdf(notePath: string): TFile | null {
+    const stem = notePath.replace(/\.md$/, "");
+    for (const ext of [".pdf", ".PDF", ".Pdf"]) {
+      const f = this.app.vault.getAbstractFileByPath(stem + ext);
+      if (f instanceof TFile) return f;
+    }
+    return null;
+  }
+
   /** Lecture notes the verifier can check against: the vault's Alt lecture notes. */
   verifyTargets(): VaultNoteInfo[] {
     return this.vaultLectureNotes().sort((a, b) => a.path.localeCompare(b.path, "ko", { numeric: true }));
@@ -1365,9 +1375,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
     if (input.sourcePath && (input.sourcePath === input.targetPath || input.sourcePath === outPath)) {
       throw new Error("강의 노트나 검증 결과 노트는 검증할 노트로 고를 수 없습니다.");
     }
-    const pdfPath = input.targetPath.replace(/\.md$/, ".pdf");
-    const pdf = this.app.vault.getAbstractFileByPath(pdfPath);
-    if (!(pdf instanceof TFile) || !this.pdfProcessor) throw new Error(`강의 PDF가 없어 슬라이드와 대조할 수 없습니다: ${pdfPath}`);
+    const pdf = this.siblingPdf(input.targetPath);
+    if (!pdf || !this.pdfProcessor) throw new Error(`강의 PDF가 없어 슬라이드와 대조할 수 없습니다: ${input.targetPath.replace(/\.md$/, ".pdf")}`);
     const layouts = await this.pdfProcessor.getPageLayouts(await this.app.vault.readBinary(pdf));
     const slideTexts = layouts.map(layoutAlignmentText);
     const fm = this.app.metadataCache.getFileCache(target)?.frontmatter;
@@ -1379,7 +1388,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         transcript = { segments, spans: spans.length > 0 ? spans : null };
       }
     }
-    const plan = planVerification({ lecture: target.basename, noteMarkdown: input.markdown, slideTexts, transcript });
+    const plan = planVerification({ lecture: target.basename, notePath: target.path, noteMarkdown: input.markdown, slideTexts, transcript });
     const task = this.data.settings.tasks.verification;
     const estimate = estimateVerification(plan, task.provider === "none" ? "claude-cli" : task.provider);
     return {
@@ -1414,7 +1423,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       const result = await runNoteVerification(prepared.plan, llm, { signal: controller.signal, onProgress: hooks.onProgress });
       if (controller.signal.aborted) throw new CliRunError("aborted", "취소되었습니다");
       // Nothing judged at all (usage limit, CLI failure): keep the previous result note.
-      const judged = result.items.filter((i) => !i.byScript);
+      const judged = result.items;
       if (judged.length > 0 && judged.every((i) => i.verdict === null)) {
         throw new Error(`주장을 하나도 판정하지 못해 결과 노트를 쓰지 않았습니다: ${judged[0].reason}`);
       }
