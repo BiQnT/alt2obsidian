@@ -129,6 +129,12 @@ const segments = spoken.map(([, text], i) => ({ startMs: i * 5000, endMs: i * 50
   assert.equal(m.alignLecture(slides, timed.map((s) => ({ ...s, startMs: null, endMs: null }))), null, "URL source: even split");
   assert.equal(m.alignLecture(slides, []), null);
   assert.equal(m.alignLecture([], timed), null);
+  // Joined components are sorted; an untimed segment keeps its text on a slide.
+  const mixed = [...timed.slice(11).reverse(), ...timed.slice(0, 10), { ...timed[10], startMs: null, endMs: null, text: "untimed line" }];
+  const fixed = m.timedSegments(mixed);
+  assert.equal(fixed.length, timed.length);
+  assert.ok(fixed.every((x, i) => i === 0 || x.startMs >= fixed[i - 1].startMs), "sorted by time");
+  assert.ok(fixed.some((x) => x.text === "untimed line"), "untimed text kept");
   assert.equal(m.alignmentStatus(true, true), "전사 타임스탬프 있음 · 슬라이드에 자동 정렬");
   assert.equal(m.alignmentStatus(false, true), "전사 타임스탬프 없음 · 균등 분할");
   console.log("PASS: alignment runs only with timestamps; the status line says which");

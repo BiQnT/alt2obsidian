@@ -32,9 +32,19 @@ export interface LectureAlignment {
 /** Segments with timestamps, or null when the transcript has none (URL source). */
 export function timedSegments(segments: TranscriptSegment[] | undefined): TimedSegment[] | null {
   if (!segments || segments.length === 0) return null;
-  const timed = segments.filter((s): s is TranscriptSegment & { startMs: number; endMs: number } => s.startMs !== null && s.endMs !== null);
-  if (timed.length === 0 || timed.length < segments.length * 0.9) return null;
-  return timed.map((s) => ({ startMs: s.startMs, endMs: Math.max(s.endMs, s.startMs), text: s.text }));
+  const timedCount = segments.filter((s) => s.startMs !== null && s.endMs !== null).length;
+  if (timedCount === 0 || timedCount < segments.length * 0.9) return null;
+  // An untimed segment takes the previous segment's time, so its text still
+  // reaches a slide. Sorted: several transcript components are joined.
+  const out: TimedSegment[] = [];
+  let last = 0;
+  for (const s of segments) {
+    const start = s.startMs ?? last;
+    const end = s.endMs ?? start;
+    out.push({ startMs: start, endMs: Math.max(end, start), text: s.text });
+    last = Math.max(end, start);
+  }
+  return out.sort((a, b) => a.startMs - b.startMs);
 }
 
 function finish(result: AlignmentResult, segments: TimedSegment[], slideCount: number, llmChanged: number): LectureAlignment {

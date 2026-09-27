@@ -152,10 +152,23 @@ export class AltLocalDbSource implements AltLocalSource {
           fallback?.close();
           throw e;
         }
+        // The best store failed (for example a copy torn by a checkpoint):
+        // say so instead of silently reading an older store.
+        if (file === candidates[0]) {
+          throw new AltDbError(`Alt 데이터베이스 사본을 열지 못했습니다 (${basename(file)}): ${e instanceof Error ? e.message : String(e)}. 잠시 뒤 다시 시도하세요.`);
+        }
         lastError = e;
         continue;
       }
-      if (source.noteCount() > 0) {
+      let count: number;
+      try {
+        count = source.noteCount();
+      } catch (e) {
+        source.close();
+        fallback?.close();
+        throw new AltDbError(`Alt 데이터베이스 사본을 읽지 못했습니다 (${basename(file)}): ${e instanceof Error ? e.message : String(e)}. 잠시 뒤 다시 시도하세요.`);
+      }
+      if (count > 0) {
         fallback?.close();
         return source;
       }

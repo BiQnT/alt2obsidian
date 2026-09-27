@@ -648,10 +648,21 @@ var AltLocalDbSource = class _AltLocalDbSource {
           fallback?.close();
           throw e;
         }
+        if (file === candidates[0]) {
+          throw new AltDbError(`Alt \uB370\uC774\uD130\uBCA0\uC774\uC2A4 \uC0AC\uBCF8\uC744 \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4 (${basename(file)}): ${e instanceof Error ? e.message : String(e)}. \uC7A0\uC2DC \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.`);
+        }
         lastError = e;
         continue;
       }
-      if (source.noteCount() > 0) {
+      let count;
+      try {
+        count = source.noteCount();
+      } catch (e) {
+        source.close();
+        fallback?.close();
+        throw new AltDbError(`Alt \uB370\uC774\uD130\uBCA0\uC774\uC2A4 \uC0AC\uBCF8\uC744 \uC77D\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4 (${basename(file)}): ${e instanceof Error ? e.message : String(e)}. \uC7A0\uC2DC \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uC138\uC694.`);
+      }
+      if (count > 0) {
         fallback?.close();
         return source;
       }
@@ -781,7 +792,14 @@ async function connect(userData, mode) {
 }
 async function main() {
   const args = process.argv.slice(2);
-  const cmd = args[0];
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith("--"))
+      i++;
+    else
+      pos.push(args[i]);
+  }
+  const cmd = pos[0];
   const userData = option(args, "--alt-dir") ?? altUserDataDir();
   const mode = option(args, "--source") ?? "auto";
   if (!["status", "list", "export"].includes(cmd) || !["auto", "api", "db"].includes(mode)) {
@@ -803,8 +821,8 @@ async function main() {
       process.stdout.write(JSON.stringify({ mode: source.mode, notes }) + "\n");
       return;
     }
-    const [, id, outDir] = args;
-    if (!id || !outDir || id.startsWith("--") || outDir.startsWith("--"))
+    const [, id, outDir] = pos;
+    if (!id || !outDir)
       throw new Error("export needs <noteId> <outDir>");
     const bundle = await source.getBundle(id);
     mkdirSync(outDir, { recursive: true });

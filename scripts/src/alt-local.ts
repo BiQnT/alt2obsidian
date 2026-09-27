@@ -47,7 +47,13 @@ async function connect(userData: string, mode: string): Promise<{ source: AltLoc
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const cmd = args[0];
+  // Positional arguments, wherever the --options are.
+  const pos: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith("--")) i++;
+    else pos.push(args[i]);
+  }
+  const cmd = pos[0];
   const userData = option(args, "--alt-dir") ?? altUserDataDir();
   const mode = option(args, "--source") ?? "auto";
   if (!["status", "list", "export"].includes(cmd) || !["auto", "api", "db"].includes(mode)) {
@@ -70,8 +76,8 @@ async function main(): Promise<void> {
       process.stdout.write(JSON.stringify({ mode: source.mode, notes }) + "\n");
       return;
     }
-    const [, id, outDir] = args;
-    if (!id || !outDir || id.startsWith("--") || outDir.startsWith("--")) throw new Error("export needs <noteId> <outDir>");
+    const [, id, outDir] = pos;
+    if (!id || !outDir) throw new Error("export needs <noteId> <outDir>");
     const bundle = await source.getBundle(id);
     mkdirSync(outDir, { recursive: true });
     const { pdf: _pdf, ...rest } = bundle;

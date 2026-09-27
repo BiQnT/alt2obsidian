@@ -260,12 +260,21 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * its database. Replaces (and closes) the previous source.
    */
   async connectLocal(): Promise<ConnectResult> {
-    this.localSource?.close?.();
-    this.localSource = null;
-    const result = await connectAltLocal(this.altUserData());
-    this.localSource = result.source;
-    return result;
+    // Overlapping calls (refresh clicks, the viewer) share one connect, so
+    // no database copy is opened twice and left behind.
+    if (this.connecting) return this.connecting;
+    this.connecting = (async () => {
+      this.localSource?.close?.();
+      this.localSource = null;
+      const result = await connectAltLocal(this.altUserData());
+      this.localSource = result.source;
+      return result;
+    })().finally(() => {
+      this.connecting = null;
+    });
+    return this.connecting;
   }
+  private connecting: Promise<ConnectResult> | null = null;
 
   getLocalSource(): AltLocalSource | null {
     return this.localSource;
@@ -302,10 +311,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
   /** Lecture notes under the base folder with their Alt identity (frontmatter). */
   vaultLectureNotes(): VaultNoteInfo[] {
-    const base = this.data.settings.baseFolderPath.replace(/\/+$/, "") + "/";
+    // The whole vault: a lecture note may have been moved out of the base folder.
     const out: VaultNoteInfo[] = [];
     for (const file of this.app.vault.getMarkdownFiles()) {
-      if (!file.path.startsWith(base)) continue;
       const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
       if (!fm || (!fm.alt_local_id && !fm.alt_id)) continue;
       out.push({
@@ -793,7 +801,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
   ): Promise<PreparedImport> {
     const settings = this.data.settings;
     // Fail before any work when a configured CLI cannot be found.
-    for (const task of ["commentary", "concepts", "alignment"] as TaskId[]) {
+    // The alignment check is optional: a missing CLI for it is handled at run time.
+    for (const task of ["commentary", "concepts"] as TaskId[]) {
       const p = settings.tasks[task].provider;
       if (p === "claude-cli") await this.resolveBin("claude");
       if (p === "codex-cli") await this.resolveBin("codex");

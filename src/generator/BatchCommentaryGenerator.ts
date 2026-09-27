@@ -245,7 +245,7 @@ export class BatchCommentaryGenerator {
     const record = (invalid: Map<number, string>) => {
       for (const [page, reason] of invalid) failures.set(page, reason);
     };
-    /** Slides missing or invalid in an answer are asked for once more, alone. */
+    /** Slides missing or invalid in an answer are asked for once more, together in one call. */
     const retryInvalid = async (slides: PlannedSlide[], invalid: Map<number, string>, batch: number) => {
       if (invalid.size === 0 || stopReason) {
         record(invalid);

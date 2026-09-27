@@ -281,7 +281,7 @@ try {
     assert.equal((await src.listNotes()).length, 3);
     src.close();
     assert.throws(() => m.AltLocalDbSource.open({ userData: join(root, "nothing"), tmpRoot: root }), /찾지 못했습니다/);
-    assert.throws(() => m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root, sqlite: { DatabaseSync: class { constructor() { throw new Error("boom"); } } } }), /열지 못했습니다: boom/);
+    assert.throws(() => m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root, sqlite: { DatabaseSync: class { constructor() { throw new Error("boom"); } } } }), /사본을 열지 못했습니다 \(.*\): boom/);
     console.log("PASS: DB source fails clearly on an unknown schema, labels an unverified schema version");
   }
 
@@ -365,7 +365,7 @@ try {
     assert.equal(bundleJson.pdf, undefined, "no PDF bytes in bundle.json");
     assert.equal(bundleJson.transcript[3].startMs, 15000);
     assert.equal(readFileSync(join(out, "transcript.txt"), "utf8").split("\n").length, 6);
-    const dbList = await cli(["list", "--source", "db"]);
+    const dbList = JSON.parse((await promisify(execFile)("node", [join(repo, "scripts/phase2/alt-local.mjs"), "--source", "db", "--alt-dir", apiUd, "list"], { encoding: "utf8" })).stdout);
     assert.equal(dbList.mode, "db");
     const allOut = (await run(["status"])) + (await run(["list"])) + readFileSync(exp.bundle, "utf8");
     assert.ok(!allOut.includes(FAKE_TOKEN), "the CLI never prints the token");

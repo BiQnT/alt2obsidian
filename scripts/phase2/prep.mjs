@@ -711,10 +711,18 @@ function formatAlignment(spans) {
 function timedSegments(segments) {
   if (!segments || segments.length === 0)
     return null;
-  const timed = segments.filter((s) => s.startMs !== null && s.endMs !== null);
-  if (timed.length === 0 || timed.length < segments.length * 0.9)
+  const timedCount = segments.filter((s) => s.startMs !== null && s.endMs !== null).length;
+  if (timedCount === 0 || timedCount < segments.length * 0.9)
     return null;
-  return timed.map((s) => ({ startMs: s.startMs, endMs: Math.max(s.endMs, s.startMs), text: s.text }));
+  const out = [];
+  let last = 0;
+  for (const s of segments) {
+    const start = s.startMs ?? last;
+    const end = s.endMs ?? start;
+    out.push({ startMs: start, endMs: Math.max(end, start), text: s.text });
+    last = Math.max(end, start);
+  }
+  return out.sort((a, b) => a.startMs - b.startMs);
 }
 function finish(result, segments, slideCount, llmChanged) {
   return {
