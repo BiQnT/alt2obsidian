@@ -4,7 +4,8 @@
  *
  * The labels hold slide boundaries only. The decks and transcripts are the
  * user's own lecture data and are not committed: pass the folder holding
- * them (`<lecture>.pdf` and the transcript JSON named in each label file),
+ * them (`<lecture>.pdf` and `<lecture>-transcript.json`, the transcript
+ * component's content_text as Alt stores it, as named in each label file),
  * or set ALT2OBS_ALIGN_DATA. Without the data the script says so and exits 0.
  *
  * Accuracy = share of transcript segments whose predicted slide equals the

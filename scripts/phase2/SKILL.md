@@ -63,10 +63,10 @@ node "$REPO/scripts/phase2/alt-local.mjs" list --query "<words from the user's m
 `list` prints `{"mode","notes":[{id,title,type,lectureDate,folderPath,subject}]}`. Pick the note with the user (title, folder, date); ask when several match. Then export it:
 
 ```bash
-node "$REPO/scripts/phase2/alt-local.mjs" export "<id>" "/tmp/alt2obs-<id>"
+node "$REPO/scripts/phase2/alt-local.mjs" export "<id>"
 ```
 
-It prints `{"bundle","pdfPath","segments","timestamps","warnings"}` and writes `/tmp/alt2obs-<id>/bundle.json` (title, lectureDate, folderPath, subject, summaryMarkdown, memoMarkdown, transcript segments with ms timestamps) and `transcript.txt`. Use `<id>` wherever this document says `<noteId>`, `pdfPath` instead of the downloaded deck (read it in place; copy it to the vault in step 8), `summaryMarkdown` (plus `memoMarkdown` under `## Alt 메모`, like the plugin) as the scraped `summary`, and `transcript.txt` as `transcript`. If `pdfPath` is null, stop and tell the user (relay `warnings`). Skip steps 1 and 2.
+It prints `{"dir","bundle","pdfPath","segments","timestamps","warnings"}` and writes, into a private folder `dir` it creates under the OS temp folder (mode 0700, files 0600), `bundle.json` (title, lectureDate, folderPath, subject, summaryMarkdown, memoMarkdown, transcript segments with ms timestamps) and `transcript.txt`. Use `<id>` wherever this document says `<noteId>`, `<dir>/bundle.json` and `<dir>/transcript.txt` for the exported files, `pdfPath` instead of the downloaded deck (read it in place; copy it to the vault in step 8), `summaryMarkdown` (plus `memoMarkdown` under `## Alt 메모`, like the plugin) as the scraped `summary`, and `transcript.txt` as `transcript`. If `pdfPath` is null, stop and tell the user (relay `warnings`). Skip steps 1 and 2.
 
 ### 1. Scrape Alt metadata (URL fallback)
 
@@ -181,7 +181,7 @@ Reading a PDF returns the page contents as images you can see directly. For each
 node "$REPO/scripts/phase2/prep.mjs" "/tmp/alt-deck-<noteId>.pdf" "<noteId>" --title "<title>" --transcript "/tmp/alt2obs-<noteId>/transcript.txt"
 ```
 
-For a local note use `--bundle "/tmp/alt2obs-<id>/bundle.json"` instead of `--transcript`: the transcript segments are aligned to the slides by their timestamps (spec 4.3, the plugin's `TranscriptAligner`), not split evenly.
+For a local note use `--bundle "<dir>/bundle.json"` instead of `--transcript`: the transcript segments are aligned to the slides by their timestamps (spec 4.3, the plugin's `TranscriptAligner`), not split evenly.
 
 It prints `{"pages":[{"page","hash","kind","dupOf","mode","template","transcript",...}],"batches":[[...]],"alignment"}` (renders with `pdftoppm` when installed; add `--no-render` to skip). With `--bundle`, `alignment.value` is the frontmatter value of `alt_alignment` (step 7). For every page with `"mode":"template"` (cover, table of contents, closing slide, or an animation step whose `dupOf` page carries the explanation) use its `template` string verbatim as the slide body and do not generate or read it. For `"mode":"llm"` pages use their `transcript` field (fillers and repeats removed, capped, preferring sentences that match the slide) as the transcript chunk instead of the even split above. The `hash` values equal `slide-hashes.mjs`.
 
@@ -293,7 +293,15 @@ Copy the PDF to its sibling location (Task 1.4 layout):
 cp "/tmp/alt-deck-<noteId>.pdf" "<vault>/Alt2Obsidian/<subject>/<title>.pdf"
 ```
 
-### 9. Report completion
+### 9. Clean up
+
+The export folder holds the lecture's transcript and summary. When the note is written (or the import is abandoned), delete it and the scratch folder:
+
+```bash
+rm -rf "<dir>" "/tmp/alt2obs-<noteId>"
+```
+
+### 10. Report completion
 
 Tell the user: file path written, whether it was a new note or a merge (with the change counts), slide count, the concept notes written, any slides where you found the content was unusually thin (e.g. a totally blank slide), and a one-line note that the Synced Viewer can be opened from Obsidian's command palette.
 
