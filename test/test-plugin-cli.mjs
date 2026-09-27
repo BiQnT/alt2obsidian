@@ -200,12 +200,13 @@ try {
   assert.deepEqual(steps, ["commentary", "overview", "concepts", "save"]);
   assert.equal(s.calls().length, prepared.estimate.calls, "estimated call count");
   const note = files.get(record.path);
+  assert.equal(record.path, "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.md", "2.0 layout: Lectures/ (spec 4.5)");
   assert.ok(note.startsWith("---\n"));
   assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
   assert.match(note, /tags: \[csed311, cache, memory, midterm\]/);
   assert.equal((note.match(/<!-- alt2obs:meta img:/g) ?? []).length, 6);
   assert.ok(files.has("Alt2Obsidian/CSED311/Concepts/캐시.md"));
-  assert.ok(files.has("Alt2Obsidian/CSED311/Lec7 Caches.pdf"));
+  assert.ok(files.has("Alt2Obsidian/CSED311/Lectures/Lec7 Caches.pdf"));
   assert.equal(plugin.data.usageTotals.lectures, 1);
   assert.equal(plugin.data.usageTotals.calls, lastUsage.calls);
   assert.deepEqual(plugin.data.settings.recentModels["claude-cli"], ["haiku", "sonnet"]);
@@ -282,7 +283,7 @@ try {
     const prep = await plugin.prepareCliImport("", pv, "CSED311");
     assert.equal(s.calls().length, callsBefore, "prepare spends no tokens");
     assert.ok(prep.alignment, "timestamps: aligned");
-    assert.equal(prep.notePath, "Alt2Obsidian/CSED311/Lec7 Caches (2026-04-21).md", "the URL import with the same title is not merged into");
+    assert.equal(prep.notePath, "Alt2Obsidian/CSED311/Lectures/Lec7 Caches (2026-04-21).md", "the URL import with the same title is not merged into");
     const p5 = prep.plan.slides.find((x) => x.page === 5);
     const own = (p5.transcript.match(/slide 5 /g) ?? []).length;
     assert.ok(own >= 6 && !p5.transcript.includes("slide 7") && !p5.transcript.includes("slide 2"), `aligned chunk for slide 5: ${p5.transcript}`);
@@ -293,7 +294,7 @@ try {
     assert.match(local, /alt_local_id: "local-1"\nalt_source: "alt-local"/);
     assert.ok(!/alt_id:/.test(local), "no public id for a local note");
     assert.match(local, /alt_alignment: "(\d+:[\d.]+-[\d.]+\??)( \d+:[\d.]+-[\d.]+\??)*"/);
-    assert.ok(files.has("Alt2Obsidian/CSED311/Lec7 Caches (2026-04-21).pdf"), "PDF next to the note");
+    assert.ok(files.has("Alt2Obsidian/CSED311/Lectures/Lec7 Caches (2026-04-21).pdf"), "PDF next to the note");
     const cacheFiles = readdirSync(cacheRoot, { recursive: true }).filter((f) => String(f).endsWith("local-1.json"));
     assert.equal(cacheFiles.length, 1, "transcript cached outside the vault");
     const cached = JSON.parse(readFileSync(join(cacheRoot, String(cacheFiles[0])), "utf8"));

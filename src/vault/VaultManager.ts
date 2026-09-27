@@ -6,6 +6,7 @@ import {
 } from "../types";
 import { sanitizeFilename } from "../utils/helpers";
 import { ConceptRegistry } from "./ConceptRegistry";
+import { CONCEPTS_DIR, conceptsFolder as conceptsFolderOf, EXAM_DIR, subjectFolder } from "./layout";
 import {
   assertNoPageAnchoredDowngrade,
   findOverviewBlock,
@@ -151,8 +152,8 @@ export class VaultManager {
   ): Promise<string[]> {
     // Organize concepts inside subject folder: Alt2Obsidian/{subject}/Concepts/
     const conceptsFolder = subject
-      ? normalizePath(`${this.basePath}/${sanitizeFilename(subject)}/Concepts`)
-      : normalizePath(`${this.basePath}/Concepts`);
+      ? normalizePath(conceptsFolderOf(this.basePath, subject))
+      : normalizePath(`${this.basePath}/${CONCEPTS_DIR}`);
     await this.ensureFolder(conceptsFolder);
 
     const acquiredNames: string[] = [];
@@ -194,7 +195,7 @@ export class VaultManager {
    * model reuses tags instead of inventing new spellings.
    */
   getSubjectTags(subject: string, limit = 60): string[] {
-    const prefix = normalizePath(`${this.basePath}/${sanitizeFilename(subject)}`) + "/";
+    const prefix = normalizePath(subjectFolder(this.basePath, subject)) + "/";
     const counts = new Map<string, number>();
     const skip = new Set(["concept", "midterm", "final", subject.toLowerCase()]);
     for (const file of this.app.vault.getMarkdownFiles()) {
@@ -225,9 +226,7 @@ export class VaultManager {
     const cached = this.conceptNameCache.get(cacheKey);
     if (cached) return new Set(cached);
 
-    const conceptsFolder = normalizePath(
-      `${this.basePath}/${sanitizeFilename(subject)}/Concepts`
-    );
+    const conceptsFolder = normalizePath(conceptsFolderOf(this.basePath, subject));
     const folder = this.app.vault.getAbstractFileByPath(conceptsFolder);
     const names = new Set<string>();
 
@@ -295,8 +294,8 @@ export class VaultManager {
       .filter(
         (child) =>
           child instanceof TFolder &&
-          child.name !== "Concepts" &&
-          child.name !== "Exam"
+          child.name !== CONCEPTS_DIR &&
+          child.name !== EXAM_DIR
       )
       .map((child) => child.name);
   }

@@ -71,6 +71,7 @@ import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
 import { pluginCacheDir } from "./sources/altPaths";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
+import { lecturePath } from "./vault/layout";
 import { renderPrompt } from "./prompts/render";
 import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
 import summaryFromTranscriptSystemTemplate from "../prompts/summary-from-transcript.system.md";
@@ -476,7 +477,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
   resolveNotePath(preview: ImportPreview, subject: string): string {
     const vm = this.vaultManager!;
     const alt = preview.altData;
-    const base = `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(alt.title)}`;
+    const base = lecturePath(vm.getBasePath(), subject, alt.title).replace(/\.md$/, "");
     if (alt.metadata.sourceKind !== "alt-local") return `${base}.md`;
     const own = this.vaultLectureNotes().find((v) => v.altLocalId === alt.metadata.noteId);
     if (own) return own.path;
@@ -842,7 +843,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     lectureMarkdown: string;
     conceptNotes: import("./types").ConceptNote[];
     pdfData: ArrayBuffer | null;
-    /** Default: <base>/<subject>/<title>.md (URL imports). */
+    /** Default: <base>/<subject>/Lectures/<title>.md (URL imports). */
     notePath?: string;
     /** Local sources: its timestamped transcript is cached for the viewer. */
     bundle?: LectureBundle;
@@ -857,7 +858,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     onProgress?.("Vault에 저장 중...", 90);
 
     const noteFilename = sanitizeFilename(altData.title);
-    const notePath = args.notePath ?? `${vm.getBasePath()}/${sanitizeFilename(subject)}/${noteFilename}.md`;
+    const notePath = args.notePath ?? lecturePath(vm.getBasePath(), subject, altData.title);
     const noteStem = notePath.replace(/\.md$/, "");
     const updateSummary = await vm.buildManagedNoteUpdateSummary(
       notePath,
@@ -1297,7 +1298,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
 
     const vm = this.vaultManager!;
-    notePath = notePath ?? `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(altData.title)}.md`;
+    notePath = notePath ?? lecturePath(vm.getBasePath(), subject, altData.title);
     const noteGenerator = new NoteGenerator(llm);
     const { lectureMarkdown } = await noteGenerator.generate(
       altData,
