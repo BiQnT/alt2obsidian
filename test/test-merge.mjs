@@ -1,11 +1,17 @@
 /**
  * Test: re-import merge keeps memos on their slides (content-only hash),
- * splices only the overview body, and refuses a single-block downgrade.
+ * refreshes only the overview section, and refuses a single-block downgrade.
+ * Every scenario also runs the Skill CLI scripts/phase2/merge-note.mjs and
+ * checks it produces the same note and change summary as the plugin.
  * Run: node test/test-merge.mjs
  */
 
 import assert from "node:assert/strict";
-import { importTs } from "./helpers/bundle-ts.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { importTs, repo } from "./helpers/bundle-ts.mjs";
 
 const { VaultManager, NoteGenerator, computeSlideHash, notices } = await importTs(
   "test/helpers/merge-entry.ts"
@@ -74,13 +80,48 @@ function sections(md) {
   return { out, orphans };
 }
 
-async function reimport(oldTexts, newTexts) {
+const tmp = mkdtempSync(join(tmpdir(), "merge-test-"));
+process.on("exit", () => rmSync(tmp, { recursive: true, force: true }));
+let cliRuns = 0;
+
+// Skill CLI on the same inputs; returns { merged, summary } or { error }.
+function mergeCli(existing, next) {
+  writeFileSync(join(tmp, "existing.md"), existing);
+  writeFileSync(join(tmp, "next.md"), next);
+  const args = [join(repo, "scripts/phase2/merge-note.mjs"), join(tmp, "existing.md"), join(tmp, "next.md")];
+  try {
+    const merged = execFileSync("node", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const summary = JSON.parse(execFileSync("node", [...args, "--summary"], { encoding: "utf8" }));
+    return { merged, summary };
+  } catch (e) {
+    return { error: String(e.stderr) };
+  }
+}
+
+// Plugin re-import of `next` onto `existing`, checked against the Skill CLI.
+async function pluginMerge(existing, next) {
   const { vm, files } = makeVault();
-  files.set(PATH, addMemos(await note(oldTexts)));
-  const next = await note(newTexts);
+  files.set(PATH, existing);
   const summary = await vm.buildManagedNoteUpdateSummary(PATH, next, []);
   await vm.saveManagedNote(next, PATH);
-  return { md: files.get(PATH), summary };
+  const md = files.get(PATH);
+
+  const cli = mergeCli(existing, next);
+  assert.equal(cli.error, undefined, `merge-note.mjs failed: ${cli.error}`);
+  assert.equal(cli.merged, md, "merge-note.mjs output equals the plugin merge");
+  assert.equal(cli.summary.mode, "multi");
+  assert.deepEqual(cli.summary.reorders, summary.slideReorders);
+  assert.deepEqual(cli.summary.insertions, summary.slideInsertions);
+  assert.deepEqual(cli.summary.deletions, summary.slideDeletions);
+  assert.deepEqual(cli.summary.drifts, summary.slideDrifts);
+  assert.equal(cli.summary.confirmDeckReplacement, summary.confirmDeckReplacement);
+  assert.deepEqual(cli.summary.notes, summary.notes ?? []);
+  cliRuns++;
+  return { md, summary };
+}
+
+async function reimport(oldTexts, newTexts) {
+  return pluginMerge(addMemos(await note(oldTexts)), await note(newTexts));
 }
 
 // Sanity: memos were attached.
@@ -131,16 +172,11 @@ async function reimport(oldTexts, newTexts) {
 
 // Overview: only the body between the markers is replaced; user text outside is kept.
 {
-  const { vm, files } = makeVault();
   const old = addMemos(await note(["alpha"], "## 옛 개요\n옛 요약"));
   const withUserText = old
     .replace("# lec\n\n", "# lec\n\n내가 쓴 머리말\n\n")
     .replace("<!-- alt2obs:overview end -->\n", "<!-- alt2obs:overview end -->\n\n개요 아래 내 메모\n");
-  files.set(PATH, withUserText);
-  const next = await note(["alpha"], "## 새 개요\n새 요약");
-  const summary = await vm.buildManagedNoteUpdateSummary(PATH, next, []);
-  await vm.saveManagedNote(next, PATH);
-  const md = files.get(PATH);
+  const { md, summary } = await pluginMerge(withUserText, await note(["alpha"], "## 새 개요\n새 요약"));
   assert.ok(md.includes("내가 쓴 머리말"), "user text above the overview kept");
   assert.ok(md.includes("개요 아래 내 메모"), "user text below the overview kept");
   assert.ok(md.includes("### 새 개요\n새 요약"), "new overview body with demoted heading");
@@ -153,6 +189,43 @@ async function reimport(oldTexts, newTexts) {
   console.log("PASS: overview body spliced, text outside kept, overview headings not diffed");
 }
 
+// 1.x note without an overview block: preamble text kept, overview inserted after the title.
+{
+  const old = addMemos(await note(["alpha"], ""));
+  assert.ok(!old.includes("alt2obs:overview"));
+  const withUserText = old.replace("# lec\n\n", "# lec\n\n내가 쓴 머리말\n\n");
+  const { md } = await pluginMerge(withUserText, await note(["alpha"], "새 요약"));
+  assert.ok(
+    md.includes("# lec\n\n## 📋 전체 요약\n\n<!-- alt2obs:overview start -->\n새 요약\n<!-- alt2obs:overview end -->\n\n내가 쓴 머리말\n\n## 📚 슬라이드 1"),
+    "overview inserted right after the title, user text kept below it"
+  );
+  assert.deepEqual(sections(md).out.map((s) => s.memo), ["memo alpha"]);
+  console.log("PASS: note without overview block keeps its preamble, overview inserted after title");
+}
+
+// Start marker survived but the end marker was deleted: keep text before the heading, replace from there.
+{
+  const old = addMemos(await note(["alpha"], "옛 요약"));
+  const broken = old
+    .replace("# lec\n\n", "# lec\n\n내가 쓴 머리말\n\n")
+    .replace("<!-- alt2obs:overview end -->\n", "사용자가 지운 끝 마커 뒤 텍스트\n");
+  const { md } = await pluginMerge(broken, await note(["alpha"], "새 요약"));
+  assert.ok(md.includes("# lec\n\n내가 쓴 머리말\n\n## 📋 전체 요약\n\n<!-- alt2obs:overview start -->\n새 요약\n<!-- alt2obs:overview end -->\n\n## 📚 슬라이드 1"));
+  assert.ok(!md.includes("옛 요약"));
+  assert.equal(md.match(/<!-- alt2obs:overview start -->/g).length, 1);
+  console.log("PASS: overview with a missing end marker is replaced from its heading, text above kept");
+}
+
+// New summary empty: the old overview stays and the change summary says so.
+{
+  const old = addMemos(await note(["alpha"], "옛 요약"));
+  const { md, summary } = await pluginMerge(old, await note(["alpha"], ""));
+  assert.ok(md.includes("<!-- alt2obs:overview start -->\n옛 요약\n<!-- alt2obs:overview end -->"));
+  assert.equal(summary.notes.length, 1);
+  assert.match(summary.notes[0], /기존 전체 요약을 그대로/);
+  console.log("PASS: empty new summary keeps the old overview and adds a note");
+}
+
 // A single-block note must not overwrite a page-anchored note.
 {
   const { vm, files } = makeVault();
@@ -160,9 +233,12 @@ async function reimport(oldTexts, newTexts) {
   files.set(PATH, old);
   const single = "---\ntitle: x\n---\n<!-- alt2obsidian:start -->\n# lec\n본문\n<!-- alt2obsidian:end -->\n";
   const before = notices.length;
-  await assert.rejects(vm.buildManagedNoteUpdateSummary(PATH, single, []), /덮어쓰지 않고/);
+  await assert.rejects(vm.buildManagedNoteUpdateSummary(PATH, single, []), /덮어쓰지 않고.*멀티모달/);
   await assert.rejects(vm.saveManagedNote(single, PATH), /덮어쓰지 않고/);
   assert.equal(files.get(PATH), old, "existing note untouched");
-  assert.equal(notices.length, before + 2, "a Notice is shown");
-  console.log("PASS: single-block downgrade refused with a Notice");
+  assert.equal(notices.length, before, "no separate Notice; the caller shows the error once");
+  assert.match(mergeCli(old, single).error ?? "", /merge-note: .*덮어쓰지 않고/);
+  console.log("PASS: single-block downgrade refused (plugin and merge-note.mjs), error names the cause");
 }
+
+console.log(`PASS: merge-note.mjs matched the plugin merge in all ${cliRuns} merge scenarios`);

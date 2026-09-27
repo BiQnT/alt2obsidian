@@ -8,7 +8,7 @@
 
 import { readFile } from "node:fs/promises";
 import { buildOverviewSection } from "../../src/core/markdown";
-import { fail } from "./node-pdf";
+import { fail } from "./cli-common";
 
 async function main(): Promise<void> {
   const [summaryFile, namesFile] = process.argv.slice(2);

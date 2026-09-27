@@ -30,7 +30,7 @@ async function extractPageTexts(pdf) {
   return texts;
 }
 
-// scripts/src/node-pdf.ts
+// scripts/src/cli-common.ts
 import { readFile } from "node:fs/promises";
 import { webcrypto } from "node:crypto";
 async function openPdf(pdfPath) {

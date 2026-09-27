@@ -14,7 +14,7 @@ import {
   extractPageTexts,
   normalizePageText,
 } from "../../src/core/slideHash";
-import { fail, openPdf } from "./node-pdf";
+import { fail, openPdf } from "./cli-common";
 
 async function main(): Promise<void> {
   const [pdfPath, sourceId] = process.argv.slice(2);

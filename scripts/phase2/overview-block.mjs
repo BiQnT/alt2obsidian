@@ -28,21 +28,48 @@ function linkConceptNames(text, conceptNames) {
   return text.split(/(\[\[[^\]\n]*\]\])/).map((part, i) => i % 2 === 1 ? part : link(part)).join("");
 }
 function demoteHeadings(markdown) {
+  const out = [];
   let fence = null;
-  return markdown.split("\n").map((line) => {
-    const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})/);
-    if (fenceMatch) {
-      const marker = fenceMatch[1][0];
-      if (fence === null)
-        fence = marker;
-      else if (fence === marker)
+  let paragraphLines = 0;
+  for (const line of markdown.split("\n")) {
+    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (fenceMatch && fenceMatch[1][0] === fence.char && fenceMatch[1].length >= fence.len && fenceMatch[2].trim() === "") {
         fence = null;
-      return line;
+      }
+      out.push(line);
+      continue;
     }
-    if (fence !== null)
-      return line;
-    return /^#{1,5}(\s|$)/.test(line) ? `#${line}` : line;
-  }).join("\n");
+    if (fenceMatch && !(fenceMatch[1][0] === "`" && fenceMatch[2].includes("`"))) {
+      fence = { char: fenceMatch[1][0], len: fenceMatch[1].length };
+      out.push(line);
+      paragraphLines = 0;
+      continue;
+    }
+    const setext = line.match(/^ {0,3}(=+|-+)[ \t]*$/);
+    if (setext && paragraphLines > 0) {
+      const text = out.splice(out.length - paragraphLines, paragraphLines).map((l) => l.trim()).join(" ");
+      out.push(`${setext[1][0] === "=" ? "##" : "###"} ${text}`);
+      paragraphLines = 0;
+      continue;
+    }
+    const atx = line.match(/^( {0,3})(#{1,6})(?=[ \t]|$)/);
+    if (atx) {
+      out.push(atx[2].length < 6 ? `${atx[1]}#${line.slice(atx[1].length)}` : line);
+      paragraphLines = 0;
+      continue;
+    }
+    out.push(line);
+    paragraphLines = isParagraphLine(line) ? paragraphLines + 1 : 0;
+  }
+  return out.join("\n");
+}
+function isParagraphLine(line) {
+  if (line.trim() === "")
+    return false;
+  if (/^ {4,}/.test(line))
+    return false;
+  return !/^ {0,3}([>|]|[-*+][ \t]|\d{1,9}[.)][ \t]|<!--)/.test(line);
 }
 function buildOverviewSection(summary, conceptNames) {
   const trimmed = (summary || "").trim();
@@ -60,7 +87,7 @@ function buildOverviewSection(summary, conceptNames) {
   ].join("\n");
 }
 
-// scripts/src/node-pdf.ts
+// scripts/src/cli-common.ts
 function fail(e, name) {
   process.stderr.write(`${name}: ${e instanceof Error ? e.message : String(e)}
 `);

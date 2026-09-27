@@ -1,9 +1,12 @@
-// Opens a PDF with the pdfjs-dist legacy build (the build the plugin uses)
-// for the Node CLIs. Keeps stdout clean for their JSON output.
+// Shared helpers for the Node CLIs in scripts/src.
 
 import { readFile } from "node:fs/promises";
 import { webcrypto } from "node:crypto";
 
+/**
+ * Opens a PDF with the pdfjs-dist legacy build (the build the plugin uses).
+ * Keeps stdout clean for the CLI's JSON output.
+ */
 export async function openPdf(pdfPath: string) {
   // Node 18 has no global Web Crypto; 19+ does.
   if (!globalThis.crypto) {

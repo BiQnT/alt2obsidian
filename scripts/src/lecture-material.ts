@@ -10,7 +10,7 @@
 
 import { readFile } from "node:fs/promises";
 import { extractLectureMaterialContext } from "../../src/core/lectureMaterial";
-import { fail, openPdf } from "./node-pdf";
+import { fail, openPdf } from "./cli-common";
 
 async function main(): Promise<void> {
   const [pdfPath, seedFile] = process.argv.slice(2);

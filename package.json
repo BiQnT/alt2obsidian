@@ -6,7 +6,8 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "node esbuild.config.mjs production && npm run build:scripts",
-		"build:scripts": "node scripts/build-scripts.mjs"
+		"build:scripts": "node scripts/build-scripts.mjs",
+		"test": "node test/test-prompts.mjs && node test/test-markdown.mjs && node test/test-merge.mjs && node test/test-slide-hash.mjs && node test/test-skill-clis.mjs"
 	},
 	"keywords": [
 		"obsidian",
