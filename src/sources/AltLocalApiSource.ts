@@ -87,18 +87,29 @@ export interface ApiSourceOptions {
   version?: string;
   timeoutMs?: number;
   /**
-   * Local path of a synced slides file the API gives no path for (the
-   * components route joins file_metadata by inode only): read from a copy
-   * of Alt's database.
+   * Opens a copy of Alt's database for the local path of a synced slides
+   * file the API gives no path for (the components route joins
+   * file_metadata by inode only). Opened once, on first need, and closed
+   * with this source.
    */
-  resolvePdfPath?: (noteId: string) => Promise<string | null>;
+  openPathDb?: () => AltLocalSource;
+  /** Re-checks who listens on the port (see `verifyOwner` in DetectOptions). */
+  verifyOwner?: OwnerVerifier;
+  /** The pid approved by the first check. */
+  ownerPid?: number | null;
+  /** Clock for the re-check interval (tests). */
+  now?: () => number;
 }
+
+/** The owner is checked again before a request batch when the last check is older than this. */
+export const OWNER_RECHECK_MS = 30000;
 
 export interface DetectOptions {
   probeTimeoutMs?: number;
   /** Who listens on the port; the token is sent only when this says Alt. */
   verifyOwner?: OwnerVerifier;
-  resolvePdfPath?: (noteId: string) => Promise<string | null>;
+  openPathDb?: () => AltLocalSource;
+  now?: () => number;
 }
 
 export class AltLocalApiSource implements AltLocalSource {
@@ -108,10 +119,22 @@ export class AltLocalApiSource implements AltLocalSource {
   private readonly token: string;
   private readonly timeoutMs: number;
   private folders: Map<string, FolderRow> | null = null;
-  private readonly resolvePdfPath?: (noteId: string) => Promise<string | null>;
+  private readonly openPathDb?: () => AltLocalSource;
+  private pathDb: AltLocalSource | null = null;
+  private readonly pathMemo = new Map<string, string | null>();
+  private readonly verifyOwner?: OwnerVerifier;
+  private readonly ownerPid: number | null;
+  private readonly now: () => number;
+  private lastOwnerCheck: number;
+  /** Set on a connection or ownership failure: the caller should connect again. */
+  failed = false;
 
   constructor(opts: ApiSourceOptions) {
-    this.resolvePdfPath = opts.resolvePdfPath;
+    this.openPathDb = opts.openPathDb;
+    this.verifyOwner = opts.verifyOwner;
+    this.ownerPid = opts.ownerPid ?? null;
+    this.now = opts.now ?? Date.now;
+    this.lastOwnerCheck = this.now();
     this.port = opts.port;
     this.token = opts.token;
     this.timeoutMs = opts.timeoutMs ?? 15000;
@@ -127,14 +150,16 @@ export class AltLocalApiSource implements AltLocalSource {
     const { port, enabled } = readHttpServerConfig(userData);
     const verify = opts.verifyOwner ?? systemOwnerVerifier();
     // The configured port first, then the ones Alt falls back to. The token
-    // goes only to a listener verified as Alt run by this user; if that
-    // cannot be verified, the database copy is used and the token is never sent.
+    // goes only to a listener verified as Alt run by this user; an
+    // unverified port is skipped and never sees the token.
+    let refused = "";
     for (let p = port; p < port + ALT_PORT_TRIES; p++) {
       const status = await probeAltStatus(p, opts.probeTimeoutMs ?? 800);
       if (!status) continue;
       const owner = await verify(p);
       if (!owner.ok) {
-        return { source: null, reason: `로컬 API가 Alt인지 확인하지 못해 토큰을 보내지 않았습니다: ${owner.reason}` };
+        refused = refused || owner.reason;
+        continue;
       }
       let token: string;
       try {
@@ -143,12 +168,33 @@ export class AltLocalApiSource implements AltLocalSource {
         return { source: null, reason: "Alt는 실행 중이지만 로컬 API 토큰 파일을 읽지 못했습니다." };
       }
       if (!token) return { source: null, reason: "Alt 로컬 API 토큰 파일이 비어 있습니다." };
-      return { source: new AltLocalApiSource({ port: p, token, version: status.version, resolvePdfPath: opts.resolvePdfPath }), reason: "" };
+      return {
+        source: new AltLocalApiSource({ port: p, token, version: status.version, openPathDb: opts.openPathDb, verifyOwner: verify, ownerPid: owner.pid ?? null, now: opts.now }),
+        reason: "",
+      };
     }
+    if (refused) return { source: null, reason: `로컬 API가 Alt인지 확인하지 못해 토큰을 보내지 않았습니다: ${refused}` };
     return {
       source: null,
       reason: enabled === false ? "Alt 설정에서 로컬 HTTP 서버가 꺼져 있습니다." : "Alt가 실행 중이 아니거나 로컬 API가 응답하지 않습니다.",
     };
+  }
+
+  /**
+   * Before a request batch: when the last owner check is older than
+   * OWNER_RECHECK_MS, check again, and require the same pid as approved.
+   * On failure nothing is sent and the source is marked failed.
+   */
+  private async ensureOwner(): Promise<void> {
+    if (this.failed) throw new AltApiError("Alt 로컬 API 연결이 끊겼습니다. 다시 연결하세요.", null);
+    if (!this.verifyOwner || this.now() - this.lastOwnerCheck < OWNER_RECHECK_MS) return;
+    const check = await this.verifyOwner(this.port);
+    const samePid = this.ownerPid === null || check.pid === undefined || check.pid === this.ownerPid;
+    if (!check.ok || !samePid) {
+      this.failed = true;
+      throw new AltApiError(`로컬 API 포트의 프로그램이 바뀌어 토큰을 보내지 않았습니다${check.ok ? "" : `: ${check.reason}`}`, null);
+    }
+    this.lastOwnerCheck = this.now();
   }
 
   private async get<T>(path: string): Promise<T> {
@@ -156,6 +202,7 @@ export class AltLocalApiSource implements AltLocalSource {
     try {
       res = await request(this.port, path, this.token, this.timeoutMs);
     } catch (e) {
+      this.failed = true;
       throw new AltApiError(`Alt 로컬 API에 연결하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`, null);
     }
     if (res.status === 401) throw new AltApiError("Alt 로컬 API가 토큰을 거부했습니다. Alt를 다시 시작한 뒤 새로고침하세요.", 401);
@@ -180,6 +227,7 @@ export class AltLocalApiSource implements AltLocalSource {
   }
 
   async listNotes(): Promise<AltNoteSummary[]> {
+    await this.ensureOwner();
     const [rows, folders] = await Promise.all([this.get<NoteRow[]>("/api/lectureNotes"), this.folderMap(true)]);
     if (!Array.isArray(rows)) throw new AltApiError("Alt 로컬 API의 노트 목록 형식이 예상과 다릅니다.", 200);
     return rows.filter((r) => r && typeof r.id === "string").map((r) => toSummary(r, folders));
@@ -195,21 +243,34 @@ export class AltLocalApiSource implements AltLocalSource {
   private async componentsWithPaths(id: string): Promise<ComponentRow[]> {
     const components = await this.components(id);
     const slides = pickSlides(components);
-    if (slides && !slides.file_path && slides.file_ref_id && this.resolvePdfPath) {
-      try {
-        slides.file_path = await this.resolvePdfPath(id);
-      } catch (e) {
-        console.warn("[Alt2Obsidian] slides path lookup in the database failed:", e);
+    if (slides && !slides.file_path && slides.file_ref_id && this.openPathDb) {
+      if (!this.pathMemo.has(id)) {
+        let path: string | null = null;
+        try {
+          this.pathDb ??= this.openPathDb();
+          path = (await this.pathDb.noteDetails(id)).pdfPath;
+        } catch (e) {
+          console.warn("[Alt2Obsidian] slides path lookup in the database failed:", e);
+        }
+        this.pathMemo.set(id, path);
       }
+      slides.file_path = this.pathMemo.get(id) ?? null;
     }
     return components;
   }
 
   async noteDetails(id: string): Promise<AltNoteDetails> {
+    await this.ensureOwner();
     return detailsFromComponents(await this.componentsWithPaths(id));
   }
 
+  close(): void {
+    this.pathDb?.close?.();
+    this.pathDb = null;
+  }
+
   async getBundle(id: string): Promise<LectureBundle> {
+    await this.ensureOwner();
     const note = await this.get<NoteRow | null>(`/api/lectureNotes/${encodeURIComponent(id)}`);
     if (!note || typeof note.id !== "string") throw new AltApiError("Alt에서 이 노트를 찾지 못했습니다.", 404);
     const [folders, components] = await Promise.all([this.folderMap(), this.componentsWithPaths(id)]);

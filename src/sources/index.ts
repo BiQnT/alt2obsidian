@@ -26,15 +26,8 @@ export async function connectAltLocal(
   const api = await AltLocalApiSource.detect(userData, {
     probeTimeoutMs: opts.probeTimeoutMs,
     verifyOwner: opts.verifyOwner,
-    // Synced slides: the API has no path for them, a short-lived DB copy does.
-    resolvePdfPath: async (noteId) => {
-      const db = AltLocalDbSource.open(dbOpts);
-      try {
-        return (await db.noteDetails(noteId)).pdfPath;
-      } finally {
-        db.close();
-      }
-    },
+    // Synced slides: the API has no path for them; one DB copy per connect does.
+    openPathDb: () => AltLocalDbSource.open(dbOpts),
   });
   if (api.source) return { source: api.source, label: api.source.label, detail: "" };
   try {

@@ -60,6 +60,7 @@ function makeApp() {
       },
     },
     metadataCache: {
+      on: () => ({}),
       getFileCache: (f) => {
         const fm = frontmatterOf(files.get(f.path));
         return fm ? { frontmatter: fm } : null;
@@ -91,6 +92,7 @@ async function makePlugin(saved) {
     loadData: async () => stored,
     saveData: async (d) => void (stored = JSON.parse(JSON.stringify(d))),
     registerView: () => {},
+    registerEvent: () => {},
     addRibbonIcon: () => {},
     addCommand: () => {},
     addSettingTab: () => {},
@@ -131,7 +133,10 @@ const preview = () => ({
 assert.equal(insertFrontmatterLine('---\ntitle: "x"\ntags: [a,  b]   # kept\n---\nbody\n', 'alt_local_id: "id"'), '---\ntitle: "x"\ntags: [a,  b]   # kept\nalt_local_id: "id"\n---\nbody\n');
 assert.equal(insertFrontmatterLine("body only\n", 'k: "v"'), '---\nk: "v"\n---\nbody only\n');
 assert.equal(insertFrontmatterLine("---\n---\nbody", 'k: "v"'), '---\nk: "v"\n---\nbody');
-assert.equal(insertFrontmatterLine('---\r\na: 1\r\n---\r\nb', 'k: "v"'), '---\r\na: 1\r\nk: "v"\n---\r\nb');
+assert.equal(insertFrontmatterLine('---\r\na: 1\r\n---\r\nb', 'k: "v"'), '---\r\na: 1\r\nk: "v"\r\n---\r\nb', "the file's CRLF is reused");
+assert.equal(insertFrontmatterLine('\uFEFF---\na: 1\n---\nb', 'k: "v"'), '\uFEFF---\na: 1\nk: "v"\n---\nb', "BOM kept in front");
+assert.equal(insertFrontmatterLine('---\na: 1\nalt_local_id:\nb: 2\n---\nx', 'alt_local_id: "id"'), '---\na: 1\nalt_local_id: "id"\nb: 2\n---\nx', "an empty key is filled, not duplicated");
+assert.equal(insertFrontmatterLine('---\nalt_local_id: ""\n---\nx', 'alt_local_id: "id"'), '---\nalt_local_id: "id"\n---\nx');
 console.log("PASS: frontmatter line insert keeps the YAML text as it is");
 
 const s = fakeSession("ok");

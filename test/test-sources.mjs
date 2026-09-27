@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import * as http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -246,6 +246,7 @@ function makeUserData(name, opts = {}) {
   const digest = createHash("sha256").update(userId).digest("hex").slice(0, 16);
   const store = join(dbDir, `powersync-store.account-${digest}.db`);
   const db = buildStore(store, { ...opts, pdfPath });
+  if (opts.dropTable) db.exec(`DROP TABLE ${opts.dropTable}`);
   db.close();
   // Another account's store on this computer: never read while the signed-in user is known.
   const other = new DatabaseSync(join(dbDir, "powersync-store.account-ffffffffffffffff.db"));
@@ -351,7 +352,12 @@ try {
     m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root }).close();
     assert.ok(!existsSync(stale) && existsSync(fresh), "stale copy removed, recent one kept");
     rmSync(fresh, { recursive: true });
-    console.log("PASS: DB source account scoping: unknown account named in the status; stale private copies swept");
+    // A store with channels but a missing membership table: only rows without a channel.
+    const { ud: ud4 } = makeUserData("db-partial-scope", { dropTable: "workspace_members" });
+    const src4 = m.AltLocalDbSource.open({ userData: ud4, tmpRoot: root });
+    assert.deepEqual((await src4.listNotes()).map((n) => n.id).sort(), ["n1", "n2", "n4"], "no team rows without the membership tables");
+    src4.close();
+    console.log("PASS: DB source account scoping: channel-only fallback, unknown account named in the status; stale private copies swept");
   }
 
   // ---- HTTP API source (fake Alt) ----
@@ -396,7 +402,11 @@ try {
     assert.deepEqual(m.parseProcNetTcp("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0100007F:B3AF 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 98765 1\n   1: 0100007F:B3B0 00000000:0000 01 0 0 0 1000 0 11111 1\n", 45999), ["98765"]);
     assert.equal(m.parseNetstat("  TCP    127.0.0.1:45623        0.0.0.0:0              LISTENING       7788\r\n  TCP    127.0.0.1:45623        127.0.0.1:50000        ESTABLISHED     7788\r\n", 45623), 7788);
     assert.equal(m.parseNetstat("  TCP    127.0.0.1:45624  0.0.0.0:0  LISTENING  1", 45623), null);
-    assert.equal(m.parseTasklist('"Alt.exe","7788","Console","1","250,000 K"'), "Alt.exe");
+    assert.deepEqual(m.parseTasklist('"Alt.exe","7788","Console","1","250,000 K","Running","PC\\kim","0:00:10","Alt"'), { image: "Alt.exe", user: "PC\\kim" });
+    assert.equal(m.parseTasklist('"Alt.exe","7788","Console"'), null);
+    assert.equal(m.isSameWindowsUser("PC\\Kim", "kim"), true);
+    assert.equal(m.isSameWindowsUser("N/A", "kim"), false, "N/A is not verified");
+    assert.equal(m.isSameWindowsUser("PC\\other", "kim"), false);
     assert.equal(m.isAltExecutable("/Applications/Alt.app/Contents/MacOS/Alt", "darwin"), true);
     assert.equal(m.isAltExecutable("/opt/homebrew/bin/node", "darwin"), false);
     assert.equal(m.isAltExecutable("/tmp/Alt.app.fake/node", "darwin"), false);
@@ -441,9 +451,34 @@ try {
     const c = await m.connectAltLocal(apiUd, { tmpRoot: root, verifyOwner: alt });
     assert.equal(c.source.mode, "api");
     // A synced slides file (file_ref_id, no file in the API answer): its path comes from a DB copy.
+    // One DB copy per connection, however many synced paths are looked up; closed with the source.
+    const copies = () => readdirSync(root).filter((d) => d.startsWith("alt2obs-altdb-")).length;
+    const before0 = copies();
     assert.equal((await c.source.noteDetails("n4")).pdfPath, apiPdf);
+    assert.equal((await c.source.noteDetails("n4")).pdfPath, apiPdf);
+    assert.equal(copies() - before0, 1, "one DB copy for path lookups");
+    c.source.close();
+    assert.equal(copies(), before0, "closed with the source");
+
+    // Owner re-check: after 30 s the owner is checked again before a request
+    // batch; a different pid means the token is not sent and the source fails.
+    let clock = 1000000;
+    let ownerPid = 111;
+    const checker = async () => ({ ok: true, reason: "", pid: ownerPid });
+    const guarded = (await m.AltLocalApiSource.detect(apiUd, { verifyOwner: checker, now: () => clock })).source;
+    await guarded.listNotes();
+    clock += 10000;
+    ownerPid = 222;
+    await guarded.noteDetails("n1");
+    const sentBefore = requests.filter((r) => r.auth).length;
+    clock += 31000;
+    await assert.rejects(guarded.noteDetails("n1"), /프로그램이 바뀌어 토큰을 보내지 않았습니다/);
+    assert.equal(requests.filter((r) => r.auth).length, sentBefore, "no token after the owner changed");
+    assert.equal(guarded.failed, true);
+    await assert.rejects(guarded.listNotes(), /다시 연결하세요/);
+    assert.equal(requests.filter((r) => r.auth).length, sentBefore);
     assert.equal(c.label, "Alt 연결됨 · 로컬 API (v0.12.0)");
-    console.log("PASS: API source: token only to a listener verified as Alt (impostor refused), status probe, folders tree, synced slides path from the DB, GET only, token never in errors");
+    console.log("PASS: API source: token only to a listener verified as Alt (impostor refused), status probe, folders tree, one DB copy for synced paths, owner re-check after 30 s (changed pid: no token), GET only, token never in errors");
 
     // Skill CLI (alt-local.mjs, same src/sources code) against the same
     // impostor: it refuses to send the token and reads the database copy.
@@ -471,14 +506,59 @@ try {
     rmSync(exp.dir, { recursive: true, force: true });
     const out = join(root, "export");
     const exp2 = JSON.parse((await promisify(execFile)("node", [join(repo, "scripts/phase2/alt-local.mjs"), "--source", "db", "--alt-dir", apiUd, "export", "n1", out], { encoding: "utf8" })).stdout);
-    assert.equal(exp2.dir, out);
-    assert.equal(statSync(out).mode & 0o777, 0o700);
+    assert.ok(exp2.dir.startsWith(join(out, "alt2obs-export-")), "a new private folder inside the given one");
+    assert.equal(statSync(exp2.dir).mode & 0o777, 0o700);
     const allOut = JSON.stringify(st) + (await run(["list"])) + readFileSync(exp2.bundle, "utf8");
     assert.ok(!allOut.includes(FAKE_TOKEN), "the CLI never prints the token");
     assert.ok(requests.slice(before).every((r) => r.auth === null), "the CLI never sent the token to the impostor");
     console.log("PASS: alt-local.mjs refuses the impostor, lists and exports from the DB copy into a private folder, token never printed");
   } finally {
     await new Promise((r) => server.close(r));
+  }
+
+  // An unverified port is skipped (never sent the token); the next verified one is used.
+  {
+    const seen = [];
+    const make = (label) =>
+      http.createServer((req, res) => {
+        seen.push({ label, url: req.url, auth: req.headers.authorization ?? null });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        if (req.url === "/api/status") return res.end(JSON.stringify({ ok: true, data: { ok: true, version: "0.12.0" } }));
+        res.end(JSON.stringify({ ok: true, data: [] }));
+      });
+    let a;
+    let b;
+    let p0 = 0;
+    for (let tries = 0; tries < 20 && !b; tries++) {
+      a = make("impostor");
+      await new Promise((r) => a.listen(0, "127.0.0.1", r));
+      p0 = a.address().port;
+      b = make("alt");
+      const okListen = await new Promise((r) => {
+        b.once("error", () => r(false));
+        b.listen(p0 + 1, "127.0.0.1", () => r(true));
+      });
+      if (!okListen) {
+        a.close();
+        b = null;
+      }
+    }
+    assert.ok(b, "two adjacent ports");
+    const ud5 = join(root, "api-next");
+    mkdirSync(ud5, { recursive: true });
+    writeFileSync(join(ud5, "storage-httpServer.json"), JSON.stringify({ enabled: true, port: p0 }));
+    writeFileSync(m.tokenFilePath(ud5), FAKE_TOKEN);
+    const det = await m.AltLocalApiSource.detect(ud5, { verifyOwner: async (port) => (port === p0 + 1 ? { ok: true, reason: "", pid: 5 } : { ok: false, reason: "not Alt" }) });
+    assert.ok(det.source, det.reason);
+    await det.source.listNotes();
+    assert.ok(seen.filter((x) => x.label === "impostor").every((x) => x.auth === null), "the unverified port never got the token");
+    assert.ok(seen.some((x) => x.label === "alt" && x.auth === `Bearer ${FAKE_TOKEN}`));
+    // A connection error marks the source failed, so the plugin connects again.
+    await new Promise((r) => b.close(r));
+    await assert.rejects(det.source.listNotes(), /연결하지 못했습니다/);
+    assert.equal(det.source.failed, true);
+    await new Promise((r) => a.close(r));
+    console.log("PASS: detect skips an unverified port and uses the next verified one; a connection error marks the source failed");
   }
 
   // Alt not running: the database copy is used; neither: "연결 안 됨".

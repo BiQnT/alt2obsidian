@@ -16,11 +16,12 @@
 // export  writes <outDir>/bundle.json (the LectureBundle without PDF bytes,
 //         plus "subject" and "pdfPath") and <outDir>/transcript.txt (one
 //         segment per line), and prints {"dir","bundle","pdfPath","segments","timestamps"}.
-//         Without <outDir> a private folder is made under the OS temp folder.
+//         The files go into a new private folder made inside <outDir>, or
+//         inside the OS temp folder without it.
 //         The folder is 0700 and the files 0600 (lecture text); remove the
 //         folder when done. The PDF is not copied: read it from pdfPath.
 
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AltLocalApiSource } from "../../src/sources/AltLocalApiSource";
@@ -82,14 +83,10 @@ async function main(): Promise<void> {
     const [, id, outArg] = pos;
     if (!id) throw new Error("export needs <noteId>");
     const bundle = await source.getBundle(id);
-    let outDir: string;
-    if (outArg) {
-      mkdirSync(outArg, { recursive: true, mode: 0o700 });
-      chmodSync(outArg, 0o700);
-      outDir = outArg;
-    } else {
-      outDir = mkdtempSync(join(tmpdir(), "alt2obs-export-"));
-    }
+    // A new private folder (0700): inside the given folder, else in the OS
+    // temp folder. The given folder itself is left as it is.
+    if (outArg) mkdirSync(outArg, { recursive: true });
+    const outDir = mkdtempSync(join(outArg ?? tmpdir(), "alt2obs-export-"));
     const { pdf: _pdf, ...rest } = bundle;
     const out = { ...rest, subject: inferSubject(bundle.folderPath ?? [], bundle.title) };
     const bundlePath = join(outDir, "bundle.json");

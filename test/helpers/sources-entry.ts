@@ -8,3 +8,4 @@ export { plateToMarkdown, componentTextToMarkdown } from "../../src/sources/plat
 export { untimedSegments, bundleFromAltData } from "../../src/sources/AltPublicUrlSource";
 export * from "../../src/core/noteStatus";
 export { parseLsof, parseProcNetTcp, parseNetstat, parseTasklist, isAltExecutable, systemOwnerVerifier } from "../../src/sources/altOwnership";
+export { isSameWindowsUser } from "../../src/sources/altOwnership";

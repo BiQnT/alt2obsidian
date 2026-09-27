@@ -67,4 +67,6 @@ export interface AltLocalSource {
   noteDetails(id: string): Promise<AltNoteDetails>;
   getBundle(id: string): Promise<LectureBundle>;
   close?(): void;
+  /** True after a connection or ownership failure: connect again before the next use. */
+  failed?: boolean;
 }

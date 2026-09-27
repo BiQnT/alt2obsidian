@@ -181,8 +181,18 @@ export default class Alt2ObsidianPlugin extends Plugin {
     // The login-shell lookup can take a moment: run it after startup.
     this.app.workspace.onLayoutReady(() => {
       this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obsidian] CLI default check failed:", e));
-      this.pruneTranscriptCache().catch((e) => console.warn("[Alt2Obsidian] transcript cache prune failed:", e));
     });
+    // Prune the transcript cache once the metadata cache has indexed every
+    // note: before that, a note's alt_local_id may be missing and its
+    // transcript would be dropped.
+    let pruned = false;
+    this.registerEvent(
+      this.app.metadataCache.on("resolved", () => {
+        if (pruned) return;
+        pruned = true;
+        this.pruneTranscriptCache().catch((e) => console.warn("[Alt2Obsidian] transcript cache prune failed:", e));
+      })
+    );
   }
 
   onunload(): void {
@@ -288,14 +298,28 @@ export default class Alt2ObsidianPlugin extends Plugin {
   }
   private connecting: Promise<ConnectResult> | null = null;
 
+  /**
+   * The current source, or null after a connection or ownership failure
+   * (it is closed and dropped, so the next use goes through connectLocal).
+   */
   getLocalSource(): AltLocalSource | null {
+    if (this.localSource?.failed) {
+      this.localSource.close?.();
+      this.localSource = null;
+    }
     return this.localSource;
+  }
+
+  /** The current source, connecting again when there is none. */
+  private async usableSource(): Promise<AltLocalSource | null> {
+    return this.getLocalSource() ?? (await this.connectLocal()).source;
   }
 
   /** Import preview for a local note: the whole bundle, PDF read from disk. */
   async previewLocal(id: string): Promise<ImportPreview> {
-    if (!this.localSource) throw new Error("Alt에 연결되어 있지 않습니다. 새로고침을 눌러 다시 연결하세요.");
-    const bundle = await this.localSource.getBundle(id);
+    const source = await this.usableSource();
+    if (!source) throw new Error("Alt에 연결하지 못했습니다. 상태 표시를 눌러 다시 확인하세요.");
+    const bundle = await source.getBundle(id);
     return this.previewFromBundle(bundle);
   }
 
@@ -558,7 +582,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
     // Not cached (imported elsewhere, or cache cleared): ask Alt.
     try {
-      const source = this.localSource ?? (await this.connectLocal()).source;
+      const source = await this.usableSource();
       if (!source) return null;
       const bundle = await source.getBundle(localId);
       await this.cacheTranscript(bundle);

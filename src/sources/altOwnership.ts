@@ -8,23 +8,30 @@
 // Linux:   /proc/net/tcp{,6} for the listening socket inode, the /proc/<pid>/fd
 //          entry that holds it, /proc/<pid>/status for the uid, and
 //          /proc/<pid>/exe for the executable.
-// Windows: netstat -ano -p TCP for the pid, tasklist for the image name
-//          (Alt.exe). netstat shows no user; the pid check stands alone.
+// Windows: %SystemRoot%\System32\netstat.exe -ano -p TCP for the pid, then
+//          tasklist.exe /V for the image name (Alt.exe) and the user name
+//          (must be this user; "N/A" means not verified).
 // Every tool runs with an argument array, never through a shell.
 
 import { execFile } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import { userInfo } from "node:os";
+import { join } from "node:path";
 
 export interface Owner {
   pid: number;
   uid: number | null;
   /** Executable path (macOS, Linux) or image name (Windows). */
   exe: string;
+  /** Windows: the process's user name from tasklist ("DOMAIN\\user" or "N/A"). */
+  user?: string;
 }
 
 export interface OwnerCheck {
   ok: boolean;
   reason: string;
+  /** The listener's pid when known. */
+  pid?: number;
 }
 
 export type OwnerVerifier = (port: number) => Promise<OwnerCheck>;
@@ -83,10 +90,19 @@ export function parseNetstat(out: string, port: number): number | null {
   return null;
 }
 
-/** `tasklist /FO CSV /NH` first field (image name). */
-export function parseTasklist(out: string): string | null {
-  const m = out.trim().match(/^"([^"]+)"/);
-  return m ? m[1] : null;
+/** `tasklist /V /FO CSV /NH`: image name (field 1) and user name (field 7). */
+export function parseTasklist(out: string): { image: string; user: string } | null {
+  const line = out.trim().split(/\r?\n/)[0] ?? "";
+  const fields = [...line.matchAll(/"((?:[^"]|"")*)"/g)].map((m) => m[1].replace(/""/g, '"'));
+  if (fields.length < 7) return null;
+  return { image: fields[0], user: fields[6] };
+}
+
+/** A tasklist user name ("DOMAIN\\user") matches this account; "N/A" never does. */
+export function isSameWindowsUser(user: string, me: string): boolean {
+  if (!user || /^n\/a$/i.test(user.trim())) return false;
+  const name = user.split("\\").pop() ?? "";
+  return name.toLowerCase() === me.toLowerCase();
 }
 
 /** Alt's executable: inside an Alt.app bundle (macOS), Alt.exe (Windows), or an alt binary (Linux). */
@@ -138,11 +154,15 @@ function ownerLinux(port: number): Owner | null {
   return null;
 }
 
+function system32(exe: string): string {
+  return join(process.env.SystemRoot || "C:\\Windows", "System32", exe);
+}
+
 async function ownerWindows(port: number): Promise<Owner | null> {
-  const pid = parseNetstat(await run("netstat", ["-ano", "-p", "TCP"]), port);
+  const pid = parseNetstat(await run(system32("netstat.exe"), ["-ano", "-p", "TCP"]), port);
   if (pid === null) return null;
-  const image = parseTasklist(await run("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"]));
-  return image ? { pid, uid: null, exe: image } : null;
+  const task = parseTasklist(await run(system32("tasklist.exe"), ["/V", "/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"]));
+  return task ? { pid, uid: null, exe: task.image, user: task.user } : null;
 }
 
 export async function portOwner(port: number, platform: NodeJS.Platform = process.platform): Promise<Owner | null> {
@@ -161,9 +181,14 @@ export function systemOwnerVerifier(platform: NodeJS.Platform = process.platform
       return { ok: false, reason: `포트 ${port}의 프로그램을 확인하지 못했습니다 (${e instanceof Error ? e.message : String(e)})` };
     }
     if (!owner) return { ok: false, reason: `포트 ${port}를 연 프로그램을 확인하지 못했습니다` };
-    const myUid = typeof process.getuid === "function" ? process.getuid() : null;
-    if (owner.uid !== null && myUid !== null && owner.uid !== myUid) return { ok: false, reason: `포트 ${port}는 다른 사용자의 프로그램입니다` };
-    if (!isAltExecutable(owner.exe, platform)) return { ok: false, reason: `포트 ${port}의 프로그램이 Alt가 아닙니다 (${owner.exe.split(/[\\/]/).pop()})` };
-    return { ok: true, reason: "" };
+    if (platform === "win32") {
+      if (!isSameWindowsUser(owner.user ?? "", userInfo().username)) return { ok: false, reason: `포트 ${port}의 프로그램이 이 사용자로 실행됐는지 확인하지 못했습니다` };
+    } else {
+      // An unknown uid is not a match.
+      const myUid = typeof process.getuid === "function" ? process.getuid() : null;
+      if (owner.uid === null || myUid === null || owner.uid !== myUid) return { ok: false, reason: `포트 ${port}의 프로그램이 이 사용자로 실행됐는지 확인하지 못했습니다` };
+    }
+    if (!isAltExecutable(owner.exe, platform)) return { ok: false, reason: `포트 ${port}의 프로그램이 Alt가 아닙니다 (${owner.exe.split(/[\\/]/).pop()})`, pid: owner.pid };
+    return { ok: true, reason: "", pid: owner.pid };
   };
 }

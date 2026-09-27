@@ -115,11 +115,19 @@ const SCOPE_TABLES = ["channel_members", "channels", "workspace_members", "works
  * and in the workspace access snapshot when there is one). The device
  * store (account null) shows only rows without a channel.
  */
-export function activeContentSql(alias: string, accountId: string | null | undefined, canScope: boolean): string {
+export type ScopeSupport = "full" | "channel-only" | "none";
+
+/**
+ * `support`: "full" with channels and the membership tables, "channel-only"
+ * when a store has channel_id but lacks a membership table (then only rows
+ * without a channel are shown, never unchecked team rows), "none" without
+ * channels (pre-sync store).
+ */
+export function activeContentSql(alias: string, accountId: string | null | undefined, support: ScopeSupport): string {
   const active = `${alias}.deleted_at IS NULL`;
-  if (accountId === undefined || !canScope) return active;
+  if (accountId === undefined || support === "none") return active;
   const space = `${alias}.channel_id`;
-  if (accountId === null) return `${active} AND ${space} IS NULL`;
+  if (accountId === null || support === "channel-only") return `${active} AND ${space} IS NULL`;
   const actor = `'${accountId.replace(/'/g, "''")}'`;
   const snapshot = `(NOT EXISTS(SELECT 1 FROM workspace_access_snapshot_state) OR ${space} IN (SELECT id FROM workspace_access_snapshot WHERE kind='team'))`;
   return `${active} AND (${space} IS NULL OR (${snapshot} AND ${space} IN (
@@ -174,7 +182,7 @@ export class AltLocalDbSource implements AltLocalSource {
   /** Status detail naming the store when the signed-in account is unknown ("" otherwise). */
   storeDetail = "";
   private accountId: string | null | undefined = undefined;
-  private canScope = false;
+  private support: ScopeSupport = "none";
 
   private constructor(
     private db: Database,
@@ -191,8 +199,8 @@ export class AltLocalDbSource implements AltLocalSource {
   private setScope(c: DbCandidate, userKnown: boolean): void {
     this.accountId = c.accountId;
     // Stores without channels (pre-sync) have nothing to scope.
-    this.canScope =
-      ["lecture_notes", "folders", "note_components"].every((t) => hasColumn(this.db, t, "channel_id")) && SCOPE_TABLES.every((t) => this.tableExists(t));
+    const channels = ["lecture_notes", "folders", "note_components"].every((t) => hasColumn(this.db, t, "channel_id"));
+    this.support = !channels ? "none" : SCOPE_TABLES.every((t) => this.tableExists(t)) ? "full" : "channel-only";
     if (!userKnown) this.storeDetail = `로그인 계정을 알 수 없어 가장 최근 저장소를 읽었습니다: ${this.storeName}`;
   }
 
@@ -201,7 +209,7 @@ export class AltLocalDbSource implements AltLocalSource {
   }
 
   private scope(alias: string): string {
-    return activeContentSql(alias, this.accountId, this.canScope);
+    return activeContentSql(alias, this.accountId, this.support);
   }
 
   /**

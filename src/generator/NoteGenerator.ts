@@ -23,15 +23,30 @@ function identityLines(altData: AltNoteData): string[] {
 }
 
 /**
- * Adds one line at the end of a note's frontmatter as text (creating a
- * frontmatter block when there is none), leaving every other byte alone.
+ * Sets one `key: value` line in a note's frontmatter as text, leaving every
+ * other byte alone: an existing empty `key:` line is filled in, otherwise
+ * the line is added at the end of the block (a block is created when there
+ * is none). A UTF-8 BOM is kept in front, and the file's own line ending
+ * (LF or CRLF) is used.
  */
 export function insertFrontmatterLine(content: string, line: string): string {
-  if (/^---\r?\n---(\r?\n|$)/.test(content)) return content.replace(/^---\r?\n/, (open) => `${open}${line}\n`);
-  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/);
-  if (!m) return `---\n${line}\n---\n${content}`;
-  const end = m[0].length - m[2].length - 3;
-  return `${content.slice(0, end)}${line}\n${content.slice(end)}`;
+  const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const body = content.slice(bom.length);
+  const eol = /\r\n/.test(body) ? "\r\n" : "\n";
+  const key = line.slice(0, line.indexOf(":") + 1);
+  const m = body.match(/^---\r?\n(?:([\s\S]*?)\r?\n)?---(\r?\n|$)/);
+  if (!m) return `${bom}---${eol}${line}${eol}---${eol}${body}`;
+  const inner = m[1];
+  if (inner !== undefined && key) {
+    const empty = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*(?:""|'')?[ \\t]*$`, "m");
+    if (empty.test(inner)) {
+      const start = body.indexOf(inner);
+      return bom + body.slice(0, start) + inner.replace(empty, line) + body.slice(start + inner.length);
+    }
+  }
+  // Insert just before the closing "---".
+  const close = m[0].length - m[2].length - 3;
+  return `${bom}${body.slice(0, close)}${line}${eol}${body.slice(close)}`;
 }
 
 export class NoteGenerator {
