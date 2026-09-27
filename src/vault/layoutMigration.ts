@@ -61,7 +61,8 @@ export function planLayoutMigration(baseFolder: string, files: VaultFileEntry[])
   const prefix = base ? `${base}/` : "";
   // Case-insensitive: macOS and Windows vaults are.
   const taken = new Set(files.map((f) => f.path.toLowerCase()));
-  const byPath = new Map(files.map((f) => [f.path, f]));
+  // Sibling PDFs by lowercased path (".PDF" too).
+  const pdfByLower = new Map(files.filter((f) => /\.pdf$/i.test(f.path)).map((f) => [f.path.toLowerCase(), f.path]));
   const plan: MigrationPlan = { base, moves: [], skipped: [], otherNotes: [], examFiles: 0 };
   const skipped = new Set<string>(SUBJECT_SUBDIRS);
 
@@ -83,9 +84,10 @@ export function planLayoutMigration(baseFolder: string, files: VaultFileEntry[])
     }
     const stem = name.slice(0, -3);
     const target = `${prefix}${subject}/${LECTURES_DIR}/${name}`;
-    const pdf = `${prefix}${subject}/${stem}.pdf`;
-    const pdfTarget = `${prefix}${subject}/${LECTURES_DIR}/${stem}.pdf`;
-    const hasPdf = byPath.has(pdf);
+    const found = pdfByLower.get(`${prefix}${subject}/${stem}.pdf`.toLowerCase());
+    const hasPdf = found !== undefined;
+    const pdf = found ?? `${prefix}${subject}/${stem}.pdf`;
+    const pdfTarget = `${prefix}${subject}/${LECTURES_DIR}/${pdf.slice(pdf.lastIndexOf("/") + 1)}`;
     if (taken.has(target.toLowerCase())) {
       plan.skipped.push({ from: f.path, to: target, reason: COLLISION_REASON });
       if (hasPdf) plan.skipped.push({ from: pdf, to: pdfTarget, reason: NOTE_SKIPPED_REASON });
@@ -121,7 +123,7 @@ export async function applyLayoutMigration(plan: MigrationPlan, io: MigrationIO)
   const result: MigrationResult = { moved: [], skipped: [...plan.skipped] };
   const skippedNotes = new Set<string>();
   for (const move of plan.moves) {
-    const noteOfPdf = move.kind === "pdf" ? move.from.replace(/\.pdf$/, ".md") : null;
+    const noteOfPdf = move.kind === "pdf" ? move.from.replace(/\.pdf$/i, ".md") : null;
     if (noteOfPdf && skippedNotes.has(noteOfPdf)) {
       result.skipped.push({ from: move.from, to: move.to, reason: NOTE_SKIPPED_REASON });
       continue;

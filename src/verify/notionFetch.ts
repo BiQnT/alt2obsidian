@@ -6,6 +6,9 @@
 //   --permission-mode dontAsk        every tool not pre-approved is denied
 //   --allowedTools mcp__<server>__notion-fetch
 //                                    the one tool that may run
+//   --disallowedTools <the server's write tools>
+//                                    denied even if the user's settings
+//                                    allow them (a deny wins)
 //   --setting-sources user           the user's own MCP servers and their
 //                                    login stay available; project and local
 //                                    settings are skipped (cwd is a temp folder)
@@ -71,6 +74,27 @@ export function mcpToolName(server: string, tool = NOTION_FETCH_TOOL): string {
   return `mcp__${server.replace(/[^A-Za-z0-9_-]/g, "_")}__${tool}`;
 }
 
+/** The Notion MCP's writing and session tools: denied by name on the fetch call (a deny wins over any allow rule). */
+export const NOTION_WRITE_TOOLS = [
+  "notion-create-pages",
+  "notion-update-page",
+  "notion-move-pages",
+  "notion-duplicate-page",
+  "notion-create-comment",
+  "notion-create-database",
+  "notion-update-data-source",
+  "notion-create-view",
+  "notion-update-view",
+  "notion-create-folder",
+  "notion-update-folder",
+  "notion-create-attachment",
+  "notion-create-file-upload",
+  "notion-upload-skill",
+  "notion-spawn-session",
+  "notion-send-message-to-session",
+  "notion-stop-session",
+];
+
 export function isSafeToolName(name: string): boolean {
   return /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/.test(name);
 }
@@ -96,6 +120,8 @@ export function buildNotionFetchArgs(input: { model: string; effort: string; too
     "dontAsk",
     "--allowedTools",
     input.toolName,
+    "--disallowedTools",
+    NOTION_WRITE_TOOLS.map((t) => input.toolName.slice(0, input.toolName.lastIndexOf("__") + 2) + t).join(","),
   ];
   if (input.model) args.push("--model", input.model);
   if (input.effort) args.push("--effort", input.effort);

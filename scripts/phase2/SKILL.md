@@ -253,7 +253,7 @@ The rest of the note is the same for both sources:
 <!-- alt2obs:slide:N hash:<8-hex> end -->
 ```
 
-The image file is written in step 8.
+The image file is written in step 8. In the image file name, `<title>` has the characters `[ ] # ^ |` removed (an embed target cannot hold them; the plugin's `attachmentStem`).
 
 Marker format must match exactly:
 

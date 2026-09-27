@@ -1214,11 +1214,17 @@ function renderVerificationNote(result, meta) {
   return fm.join("\n") + body.join("\n");
 }
 function mergeVerificationNote(existing, next) {
-  if (!existing)
+  if (!existing || !existing.trim())
     return next;
   const end = existing.indexOf(VERIFY_BLOCK_END);
-  if (end < 0)
-    return next;
+  if (end < 0) {
+    return `${next.trimEnd()}
+
+## \uC774\uC804 \uB0B4\uC6A9 (Alt2Obsidian\uC774 \uAD00\uB9AC\uD558\uC9C0 \uC54A\uC74C)
+
+${existing.trim()}
+`;
+  }
   const userPart = existing.slice(end + VERIFY_BLOCK_END.length);
   const nextEnd = next.indexOf(VERIFY_BLOCK_END);
   return next.slice(0, nextEnd + VERIFY_BLOCK_END.length) + userPart;

@@ -962,7 +962,7 @@ function parseSlideMeta(managed) {
 function stripSlideMeta(managed) {
   return managed.replace(META_RE, "");
 }
-var DIAGRAM_RE = /\n+!\[\[[^\]\n]+\.png\]\]\s*$/;
+var DIAGRAM_RE = /(^|\n+)!\[\[[^\n]+?\.png\]\]\s*$/;
 function stripDiagramEmbed(body) {
   return body.replace(DIAGRAM_RE, "");
 }

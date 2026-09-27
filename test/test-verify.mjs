@@ -162,6 +162,9 @@ try {
   const merged = m.mergeVerificationNote(edited, next);
   assert.ok(merged.includes("맞음 5 ·") && merged.includes("시험 전에 슬라이드 3 다시 보기"));
   assert.equal(m.mergeVerificationNote(null, next), next);
+  const userFile = "# 내가 만든 파일\n지우면 안 됨\n";
+  const kept = m.mergeVerificationNote(userFile, next);
+  assert.ok(kept.startsWith(next.trimEnd()) && kept.includes("지우면 안 됨"), "a file without the managed block is kept in full");
   console.log("PASS: run: batches through the shared retry rules, script verdicts never sent, missing call, note rendering and re-run merge");
 
   // Usage limit: the run stops, every remaining claim reported, nothing thrown.
@@ -197,6 +200,8 @@ try {
   assert.equal(args[args.indexOf("--tools") + 1], "");
   assert.equal(args[args.indexOf("--allowedTools") + 1], "mcp__notion__notion-fetch");
   assert.equal(args[args.indexOf("--permission-mode") + 1], "dontAsk");
+  const denied = args[args.indexOf("--disallowedTools") + 1].split(",");
+  assert.ok(denied.includes("mcp__notion__notion-update-page") && denied.includes("mcp__notion__notion-create-pages") && !denied.some((t) => t.endsWith("notion-fetch")), "Notion write tools denied by name");
   assert.equal(m.notionPageId("https://www.notion.so/me/13-Memory-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d?pvs=4"), "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d");
   assert.deepEqual(m.parseNotionAnswer("last_edited_time: 2026-01-01T00:00:00Z\n---\n# 제목\n- 내용"), { kind: "page", lastEdited: "2026-01-01T00:00:00Z", markdown: "# 제목\n- 내용\n" });
   assert.deepEqual(m.parseNotionAnswer("last_edited_time: 2026-01-01T00:00:00Z\nUNCHANGED"), { kind: "unchanged", lastEdited: "2026-01-01T00:00:00Z" });

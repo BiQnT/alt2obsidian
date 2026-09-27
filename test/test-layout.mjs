@@ -22,6 +22,7 @@ assert.equal(L.conceptsFolder("Alt2Obsidian/", "CSED311"), "Alt2Obsidian/CSED311
 assert.equal(L.verificationPathForNote("A/S/Lectures/lec 1.md"), "A/S/Verification/lec 1 verification.md");
 assert.equal(L.verificationPathForNote("A/S/lec 1.md"), "A/S/Verification/lec 1 verification.md", "1.x note: sibling folders of its own folder");
 assert.equal(L.attachmentPathForNote("A/S/Lectures/lec 1.md", 3), "A/S/Attachments/lec 1-3.png");
+assert.equal(L.attachmentPathForNote("A/S/Lectures/[OS] 3강 #2.md", 5), "A/S/Attachments/OS 3강 2-5.png", "no [ ] # ^ | in an embed target");
 console.log("PASS: layout paths (Lectures, Concepts, Verification, Attachments)");
 
 // ---- plan ----
@@ -38,6 +39,7 @@ const files = [
   { path: "Alt2Obsidian/CSED311/Concepts/캐시.md", isLectureNote: false },
   { path: "Alt2Obsidian/Exam/CSED311 시험요약.md", isLectureNote: false },
   { path: "Alt2Obsidian/EE201/회로 1강.md", isLectureNote: true },
+  { path: "Alt2Obsidian/EE201/회로 1강.PDF" },
   { path: "Other/Lec9.md", isLectureNote: true },
 ];
 const plan = M.planLayoutMigration("Alt2Obsidian", files);
@@ -46,6 +48,7 @@ assert.deepEqual(plan.moves, [
   { from: "Alt2Obsidian/CSED311/Lec1.pdf", to: "Alt2Obsidian/CSED311/Lectures/Lec1.pdf", kind: "pdf" },
   { from: "Alt2Obsidian/CSED311/Lec3.md", to: "Alt2Obsidian/CSED311/Lectures/Lec3.md", kind: "note" },
   { from: "Alt2Obsidian/EE201/회로 1강.md", to: "Alt2Obsidian/EE201/Lectures/회로 1강.md", kind: "note" },
+  { from: "Alt2Obsidian/EE201/회로 1강.PDF", to: "Alt2Obsidian/EE201/Lectures/회로 1강.PDF", kind: "pdf" },
 ]);
 assert.deepEqual(
   plan.skipped.map((s) => [s.from, s.reason]),

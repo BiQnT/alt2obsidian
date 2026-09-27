@@ -554,7 +554,15 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const vm = this.vaultManager!;
     const alt = preview.altData;
     const base = lecturePath(vm.getBasePath(), subject, alt.title).replace(/\.md$/, "");
-    if (alt.metadata.sourceKind !== "alt-local") return `${base}.md`;
+    if (alt.metadata.sourceKind !== "alt-local") {
+      // A URL re-import updates the note with this public id wherever it is,
+      // or a 1.x note still at <subject>/<title>.md (vault not migrated).
+      const own = alt.metadata.noteId ? this.vaultLectureNotes().find((v) => v.altId === alt.metadata.noteId) : undefined;
+      if (own) return own.path;
+      const legacy = `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(alt.title)}.md`;
+      if (this.app.vault.getAbstractFileByPath(legacy)) return legacy;
+      return `${base}.md`;
+    }
     const own = this.vaultLectureNotes().find((v) => v.altLocalId === alt.metadata.noteId);
     if (own) return own.path;
     const taken = (path: string) => !!this.app.vault.getAbstractFileByPath(path);
@@ -1394,6 +1402,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
       const llm = await this.providerFor("verification", job, usage, controller.signal);
       const result = await runNoteVerification(prepared.plan, llm, { signal: controller.signal, onProgress: hooks.onProgress });
       if (controller.signal.aborted) throw new CliRunError("aborted", "취소되었습니다");
+      // Nothing judged at all (usage limit, CLI failure): keep the previous result note.
+      const judged = result.items.filter((i) => !i.byScript);
+      if (judged.length > 0 && judged.every((i) => i.verdict === null)) {
+        throw new Error(`주장을 하나도 판정하지 못해 결과 노트를 쓰지 않았습니다: ${judged[0].reason}`);
+      }
       const label = `${PROVIDER_LABELS[task.provider]}${task.model ? " " + task.model : ""}`;
       const next = renderVerificationNote(result, {
         source: prepared.source,

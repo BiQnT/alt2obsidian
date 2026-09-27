@@ -453,9 +453,13 @@ export function renderVerificationNote(result: VerifyResult, meta: VerificationM
  * is kept.
  */
 export function mergeVerificationNote(existing: string | null, next: string): string {
-  if (!existing) return next;
+  if (!existing || !existing.trim()) return next;
   const end = existing.indexOf(VERIFY_BLOCK_END);
-  if (end < 0) return next;
+  if (end < 0) {
+    // No managed block (the marker was removed, or a user file sits at this
+    // path): nothing of it is dropped; it follows the new block in full.
+    return `${next.trimEnd()}\n\n## 이전 내용 (Alt2Obsidian이 관리하지 않음)\n\n${existing.trim()}\n`;
+  }
   const userPart = existing.slice(end + VERIFY_BLOCK_END.length);
   const nextEnd = next.indexOf(VERIFY_BLOCK_END);
   return next.slice(0, nextEnd + VERIFY_BLOCK_END.length) + userPart;

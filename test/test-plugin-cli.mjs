@@ -240,6 +240,18 @@ try {
   assert.equal((files.get(record.path).match(/^alt_id:/gm) ?? []).length, 1, "one alt_id line");
   assert.equal((files.get(record.path).match(/!\[\[[^\]]+\.png\]\]/g) ?? []).length, 1, "the diagram embed is not duplicated by a re-import");
   assert.equal([...files.keys()].filter((k) => k.includes("/Attachments/")).length, 1, "the image is replaced in place");
+  // A URL import of a lecture whose 1.x note was never migrated updates that note in place.
+  {
+    const legacy = "Alt2Obsidian/CSED311/Old Lec.md";
+    files.set(legacy, '---\ntitle: "Old Lec"\nalt_id: "note-old"\n---\n# Old Lec\n');
+    const pv = preview();
+    pv.altData = { ...pv.altData, title: "Old Lec", metadata: { ...pv.altData.metadata, noteId: "note-old" } };
+    assert.equal(plugin.resolveNotePath(pv, "CSED311"), legacy, "found by alt_id");
+    files.set(legacy, '---\ntitle: "Old Lec"\n---\n# Old Lec\n');
+    assert.equal(plugin.resolveNotePath(pv, "CSED311"), legacy, "1.x path kept before migration");
+    files.delete(legacy);
+    assert.equal(plugin.resolveNotePath(pv, "CSED311"), "Alt2Obsidian/CSED311/Lectures/Old Lec.md");
+  }
   console.log("PASS: re-import reuses all unchanged slides (2 calls), keeps the memo");
 
   // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).
@@ -357,6 +369,12 @@ try {
       files.set(pv.outPath, out.replace("## 내 메모\n", "## 내 메모\n다시 볼 것\n"));
       await plugin.runVerification(await plugin.prepareVerification({ targetPath: rec.path, markdown: mine, source: `[[노션/7강 정리]]`, sourcePath: src }));
       assert.ok(files.get(pv.outPath).includes("다시 볼 것"));
+      // Nothing judged (usage limit): the previous result note stays as it is.
+      const kept = files.get(pv.outPath);
+      process.env.FAKE_CLI_MODE = "limit";
+      await assert.rejects(plugin.runVerification(await plugin.prepareVerification({ targetPath: rec.path, markdown: mine, source: "x", sourcePath: src })), /하나도 판정하지 못해/);
+      process.env.FAKE_CLI_MODE = "ok";
+      assert.equal(files.get(pv.outPath), kept);
       files.delete(src);
       console.log("PASS: verification: sources and targets, estimate without tokens, Verification/<lecture> verification.md written, source untouched, re-run keeps the user's section");
     }

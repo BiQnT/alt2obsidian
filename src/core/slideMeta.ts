@@ -44,7 +44,7 @@ export function stripSlideMeta(managed: string): string {
 // Key diagram image (spec 4.8): an embed on its own line at the end of the
 // commentary, before the metadata line, inside the managed block. It is
 // rebuilt on every import, so it is stripped when a previous body is reused.
-const DIAGRAM_RE = /\n+!\[\[[^\]\n]+\.png\]\]\s*$/;
+const DIAGRAM_RE = /(^|\n+)!\[\[[^\n]+?\.png\]\]\s*$/;
 
 export function formatDiagramEmbed(vaultPath: string): string {
   return `![[${vaultPath}]]`;

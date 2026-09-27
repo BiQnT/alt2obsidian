@@ -139,7 +139,7 @@ function log(entry) {
 // ---- claude ----
 
 const CLAUDE_BOOL = new Set(["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]);
-const CLAUDE_VALUE = new Set(["--input-format", "--output-format", "--setting-sources", "--system-prompt", "--tools", "--model", "--effort", "--permission-mode", "--allowedTools"]);
+const CLAUDE_VALUE = new Set(["--input-format", "--output-format", "--setting-sources", "--system-prompt", "--tools", "--model", "--effort", "--permission-mode", "--allowedTools", "--disallowedTools"]);
 
 // Notion MCP (FAKE_NOTION_MCP=connected|failed|none, default none).
 function runClaudeMcpList() {
@@ -158,6 +158,9 @@ function checkNotionFlags(flags) {
   if (flags["--permission-mode"] !== "dontAsk") fail("--permission-mode dontAsk expected");
   if (!/^mcp__[A-Za-z0-9_-]+__notion-fetch$/.test(flags["--allowedTools"])) fail(`only the Notion fetch tool may be allowed, got ${flags["--allowedTools"]}`);
   if (flags["--setting-sources"] !== "user") fail("--setting-sources user expected");
+  const server = flags["--allowedTools"].slice(0, flags["--allowedTools"].lastIndexOf("__") + 2);
+  const denied = (flags["--disallowedTools"] || "").split(",");
+  for (const t of ["notion-update-page", "notion-create-pages", "notion-move-pages"]) if (!denied.includes(server + t)) fail(`${server + t} must be denied`);
 }
 
 function notionAnswer(stdin) {

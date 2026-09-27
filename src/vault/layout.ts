@@ -50,8 +50,16 @@ export function verificationPath(base: string, subject: string, lectureStem: str
   return join(subjectFolder(base, subject), VERIFICATION_DIR, `${sanitizeFilename(lectureStem)} verification.md`);
 }
 
+/**
+ * Attachment file stem: the lecture stem without the characters an
+ * Obsidian embed target cannot hold ([ ] # ^ |).
+ */
+export function attachmentStem(lectureStem: string): string {
+  return sanitizeFilename(lectureStem).replace(/[[\]#^|]/g, "").replace(/\s+/g, " ").trim() || "lecture";
+}
+
 export function attachmentPath(base: string, subject: string, lectureStem: string, page: number): string {
-  return join(subjectFolder(base, subject), ATTACHMENTS_DIR, `${sanitizeFilename(lectureStem)}-${page}.png`);
+  return join(subjectFolder(base, subject), ATTACHMENTS_DIR, `${attachmentStem(lectureStem)}-${page}.png`);
 }
 
 /** File name without folder and extension. */
@@ -78,5 +86,5 @@ export function verificationPathForNote(notePath: string): string {
 
 /** Diagram image of a lecture note's page: `<subject folder>/Attachments/<stem>-<page>.png`. */
 export function attachmentPathForNote(notePath: string, page: number): string {
-  return join(subjectFolderOfNote(notePath), ATTACHMENTS_DIR, `${stemOf(notePath)}-${page}.png`);
+  return join(subjectFolderOfNote(notePath), ATTACHMENTS_DIR, `${attachmentStem(stemOf(notePath))}-${page}.png`);
 }
