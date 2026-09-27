@@ -15,7 +15,13 @@ import {
   ProviderId,
   TaskId,
 } from "./types";
-import { AltScraper } from "./scraper/AltScraper";
+import { AltPublicUrlSource, bundleFromAltData } from "./sources/AltPublicUrlSource";
+import { AltLocalSource, altUserDataDir, connectAltLocal, ConnectResult, inferSubject, LectureBundle } from "./sources";
+import { alignLecture, buildAlignmentCheckPrompt, checkAlignmentWithLlm, LectureAlignment } from "./pipeline/alignment";
+import { layoutAlignmentText } from "./core/prep/pageLayout";
+import { computeSlideHash } from "./core/slideHash";
+import { splitMultiManagedNote } from "./core/merge";
+import { isLinkCandidate, LocalNoteStatus, slideChangeCount, VaultNoteInfo } from "./core/noteStatus";
 import { PdfProcessor } from "./pdf/PdfProcessor";
 import { createTaskProvider } from "./llm/index";
 import {
@@ -39,7 +45,7 @@ import {
   rememberModel,
 } from "./settings/llmSettings";
 import { analyzeSlides } from "./core/prep/SlideAnalyzer";
-import { DeckPlan, parseExistingSlides, planDeck, withFewerImages } from "./pipeline/batchPlan";
+import { DeckPlan, parseExistingSlides, planDeck, withFewerImages, withTranscriptChunks } from "./pipeline/batchPlan";
 import { estimateLecture, PipelineStep, runBatchedLecture } from "./pipeline/lecturePipeline";
 import type { BatchProgress, LectureContext } from "./generator/BatchCommentaryGenerator";
 import { BudgetEstimate, CallShape, estimateCalls, exceedsCap } from "./core/budget/estimate";
@@ -60,6 +66,7 @@ import {
   VIEW_TYPE_SYNCED_VIEWER,
 } from "./ui/SyncedViewerView";
 import { TFile } from "obsidian";
+import { readFileSync, statSync } from "node:fs";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
 import { renderPrompt } from "./prompts/render";
 import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
@@ -86,6 +93,10 @@ export interface PreparedImport {
   estimate: BudgetEstimate;
   overCap: boolean;
   fewerImages: boolean;
+  /** Timestamped transcript aligned to the slides (spec 4.3); null = even split. */
+  alignment: LectureAlignment | null;
+  /** Page texts the alignment used (alignment check prompt). */
+  slideTexts: string[];
 }
 
 export interface CliImportHooks {
@@ -101,8 +112,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
   data: PluginData = DEFAULT_PLUGIN_DATA;
   vaultManager: VaultManager | null = null;
 
-  private scraper = new AltScraper();
+  private urlSource = new AltPublicUrlSource();
   private pdfProcessor: PdfProcessor | null = null;
+  /** Current Alt local source (API or database copy); see `connectLocal`. */
+  private localSource: AltLocalSource | null = null;
+  /** Slide hashes of local PDFs by path + size + mtime (sidebar status). */
+  private hashCache = new Map<string, string[]>();
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -129,7 +144,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
     // Register Synced Viewer (Task 1.5 — A2 default)
     this.registerView(VIEW_TYPE_SYNCED_VIEWER, (leaf) => {
-      return new SyncedViewerView(leaf);
+      return new SyncedViewerView(leaf, (id) => this.loadTranscript(id));
     });
 
     // Add ribbon icon
@@ -146,7 +161,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
     this.addCommand({
       id: "import-note",
-      name: "Import Alt note from URL",
+      name: "Import Alt note (local list or URL)",
       callback: () => this.activateSidebarView(),
     });
 
@@ -168,6 +183,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
   onunload(): void {
     // Kill running CLI processes; their finally blocks remove the temp folders.
     this.abortAllJobs();
+    this.localSource?.close?.();
+    this.localSource = null;
   }
 
   /**
@@ -211,7 +228,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     onProgress?: (stage: string, percent: number) => void
   ): Promise<ImportPreview> {
     onProgress?.("Alt 노트 페이지 가져오는 중...", 10);
-    const altData = await this.scraper.fetch(url);
+    const { altData, bundle } = await this.urlSource.fetch(url);
     onProgress?.("Alt 노트 파싱 완료", 30);
 
     // Quick subject detection from title
@@ -227,7 +244,227 @@ export default class Alt2ObsidianPlugin extends Plugin {
       pdfData: null,
       pdfUrl: altData.pdfUrl,
       suggestedSubject,
+      bundle,
     };
+  }
+
+  // ---- Alt local sources (spec 4.1, 2.2) ----
+
+  /** Alt's data folder: the settings override, else the platform default. */
+  altUserData(): string {
+    return this.data.settings.altDataDir.trim() || altUserDataDir();
+  }
+
+  /**
+   * Connect to Alt: the local API when Alt answers, else a private copy of
+   * its database. Replaces (and closes) the previous source.
+   */
+  async connectLocal(): Promise<ConnectResult> {
+    this.localSource?.close?.();
+    this.localSource = null;
+    const result = await connectAltLocal(this.altUserData());
+    this.localSource = result.source;
+    return result;
+  }
+
+  getLocalSource(): AltLocalSource | null {
+    return this.localSource;
+  }
+
+  /** Import preview for a local note: the whole bundle, PDF read from disk. */
+  async previewLocal(id: string): Promise<ImportPreview> {
+    if (!this.localSource) throw new Error("Alt에 연결되어 있지 않습니다. 새로고침을 눌러 다시 연결하세요.");
+    const bundle = await this.localSource.getBundle(id);
+    return this.previewFromBundle(bundle);
+  }
+
+  previewFromBundle(bundle: LectureBundle): ImportPreview {
+    const transcript = bundle.transcript.map((s) => s.text).join("\n");
+    const summaryParts = [bundle.summaryMarkdown ?? ""];
+    if (bundle.memoMarkdown) summaryParts.push(`## Alt 메모\n\n${bundle.memoMarkdown}`);
+    const summary = summaryParts.filter((p) => p.trim()).join("\n\n");
+    const hasContent = !!bundle.pdf || transcript.length > 0 || summary.length > 0;
+    return {
+      altData: {
+        title: bundle.title,
+        summary,
+        pdfUrl: null,
+        transcript: transcript || null,
+        metadata: { noteId: bundle.sourceId, createdAt: bundle.lectureDate ?? null, visibility: null, sourceKind: bundle.sourceKind },
+        parseQuality: hasContent ? "full" : "partial",
+      },
+      pdfData: bundle.pdf,
+      pdfUrl: null,
+      suggestedSubject: inferSubject(bundle.folderPath ?? [], bundle.title),
+      bundle,
+    };
+  }
+
+  /** Lecture notes under the base folder with their Alt identity (frontmatter). */
+  vaultLectureNotes(): VaultNoteInfo[] {
+    const base = this.data.settings.baseFolderPath.replace(/\/+$/, "") + "/";
+    const out: VaultNoteInfo[] = [];
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!file.path.startsWith(base)) continue;
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      if (!fm || (!fm.alt_local_id && !fm.alt_id)) continue;
+      out.push({
+        path: file.path,
+        title: typeof fm.title === "string" ? fm.title : file.basename,
+        subject: typeof fm.subject === "string" ? fm.subject : undefined,
+        altLocalId: typeof fm.alt_local_id === "string" ? fm.alt_local_id : undefined,
+        altId: typeof fm.alt_id === "string" ? fm.alt_id : undefined,
+        altCreated: typeof fm.alt_created === "string" ? fm.alt_created : undefined,
+      });
+    }
+    return out;
+  }
+
+  /** New / imported / link candidate, without the (slower) slide comparison. */
+  localNoteStatus(note: { id: string; title: string; lectureDate: string | null }, vault: VaultNoteInfo[], slidesTitle?: string | null): LocalNoteStatus {
+    const own = vault.find((v) => v.altLocalId === note.id);
+    if (own) return { kind: "imported", path: own.path, changed: null };
+    const candidates = vault.filter((v) => isLinkCandidate(v, note, slidesTitle));
+    return candidates.length > 0 ? { kind: "link", candidates } : { kind: "new" };
+  }
+
+  /**
+   * Slides of the Alt PDF whose text hash is not in the imported note (spec
+   * 4.7 hashes). Null when the note has no slide markers or the PDF cannot
+   * be read.
+   */
+  async slideChanges(notePath: string, pdfPath: string, sourceId: string): Promise<number | null> {
+    const noteFile = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(noteFile instanceof TFile) || !this.pdfProcessor) return null;
+    const sections = splitMultiManagedNote(await this.app.vault.cachedRead(noteFile)).sections;
+    if (sections.length === 0) return null;
+    const hashes = await this.pdfSlideHashes(pdfPath, sourceId);
+    return hashes ? slideChangeCount(hashes, sections.map((s) => s.hash)) : null;
+  }
+
+  private async pdfSlideHashes(pdfPath: string, sourceId: string): Promise<string[] | null> {
+    let key: string;
+    try {
+      const st = statSync(pdfPath);
+      key = `${pdfPath}:${st.size}:${st.mtimeMs}:${sourceId}`;
+    } catch {
+      return null;
+    }
+    const cached = this.hashCache.get(key);
+    if (cached) return cached;
+    try {
+      const buf = readFileSync(pdfPath);
+      const data = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+      const texts = await this.pdfProcessor!.getPageTexts(data);
+      const hashes: string[] = [];
+      for (let i = 0; i < texts.length; i++) hashes.push(await computeSlideHash(texts[i], i + 1, sourceId));
+      this.hashCache.set(key, hashes);
+      return hashes;
+    } catch (e) {
+      console.warn("[Alt2Obsidian] slide hash check failed:", e);
+      return null;
+    }
+  }
+
+  /** Page count of a local PDF (sidebar meta line); null when unreadable. */
+  async localPdfPageCount(pdfPath: string): Promise<number | null> {
+    if (!this.pdfProcessor) return null;
+    try {
+      const buf = readFileSync(pdfPath);
+      const n = await this.pdfProcessor.getPageCount(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer);
+      return n > 0 ? n : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * One-time link of a 1.x or URL-imported note to its Alt local note: adds
+   * `alt_local_id` to the frontmatter. Nothing else in the note changes; the
+   * user confirmed the match in the sidebar.
+   */
+  async linkLocalNote(path: string, localId: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) throw new Error(`노트를 찾지 못했습니다: ${path}`);
+    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      fm.alt_local_id = localId;
+    });
+  }
+
+  /**
+   * Where a local import is written: the note already linked to this Alt
+   * note (wherever the user moved it), else <base>/<subject>/<title>.md. A
+   * different lecture at that path (another id, or an unlinked 1.x note)
+   * is never merged into: the lecture date is added to the file name.
+   */
+  resolveNotePath(preview: ImportPreview, subject: string): string {
+    const vm = this.vaultManager!;
+    const alt = preview.altData;
+    const base = `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(alt.title)}`;
+    if (alt.metadata.sourceKind !== "alt-local") return `${base}.md`;
+    const own = this.vaultLectureNotes().find((v) => v.altLocalId === alt.metadata.noteId);
+    if (own) return own.path;
+    const taken = (path: string) => !!this.app.vault.getAbstractFileByPath(path);
+    if (!taken(`${base}.md`)) return `${base}.md`;
+    const suffix = alt.metadata.createdAt || alt.metadata.noteId.slice(-6);
+    let path = `${base} (${sanitizeFilename(suffix)}).md`;
+    for (let n = 2; taken(path); n++) path = `${base} (${sanitizeFilename(suffix)} ${n}).md`;
+    return path;
+  }
+
+  /** Frontmatter kept or added on a local import: alignment, and a linked note's public id. */
+  private localFrontmatter(notePath: string, alignment: LectureAlignment | null): string[] {
+    const lines: string[] = [];
+    const file = this.app.vault.getAbstractFileByPath(notePath);
+    const fm = file instanceof TFile ? this.app.metadataCache.getFileCache(file)?.frontmatter : undefined;
+    if (typeof fm?.alt_id === "string" && fm.alt_id) lines.push(`alt_id: "${fm.alt_id}"`);
+    if (alignment && alignment.value) lines.push(`alt_alignment: "${alignment.value}"`);
+    return lines;
+  }
+
+  /** Folder (inside the plugin folder) with cached timestamped transcripts for the viewer panel. */
+  private transcriptCachePath(localId: string): string {
+    return `${this.manifest.dir}/transcripts/${localId.replace(/[^0-9A-Za-z-]/g, "")}.json`;
+  }
+
+  private async cacheTranscript(bundle: LectureBundle | undefined): Promise<void> {
+    if (!bundle || bundle.sourceKind !== "alt-local") return;
+    const timed = bundle.transcript.filter((s) => s.startMs !== null);
+    if (timed.length === 0) return;
+    const adapter = this.app.vault.adapter;
+    const dir = `${this.manifest.dir}/transcripts`;
+    if (!(await adapter.exists(dir))) await adapter.mkdir(dir);
+    const body = JSON.stringify({ v: 1, id: bundle.sourceId, segments: timed.map((s) => [s.startMs, s.endMs, s.text]) });
+    await adapter.write(this.transcriptCachePath(bundle.sourceId), body);
+  }
+
+  /** Timestamped transcript of a local note for the Synced Viewer panel; null when unknown. */
+  async loadTranscript(localId: string): Promise<Array<{ startMs: number; endMs: number; text: string }> | null> {
+    const adapter = this.app.vault.adapter;
+    const path = this.transcriptCachePath(localId);
+    try {
+      if (await adapter.exists(path)) {
+        const json = JSON.parse(await adapter.read(path));
+        if (Array.isArray(json?.segments)) {
+          return (json.segments as Array<[number, number, string]>).map(([startMs, endMs, text]) => ({ startMs, endMs, text }));
+        }
+      }
+    } catch (e) {
+      console.warn("[Alt2Obsidian] transcript cache unreadable:", e);
+    }
+    // Not cached (imported elsewhere, or cache cleared): ask Alt.
+    try {
+      const source = this.localSource ?? (await this.connectLocal()).source;
+      if (!source) return null;
+      const bundle = await source.getBundle(localId);
+      await this.cacheTranscript(bundle);
+      return bundle.transcript
+        .filter((s) => s.startMs !== null && s.endMs !== null)
+        .map((s) => ({ startMs: s.startMs as number, endMs: s.endMs as number, text: s.text }));
+    } catch (e) {
+      console.warn("[Alt2Obsidian] transcript load failed:", e);
+      return null;
+    }
   }
 
   /** True when slide commentary runs on a CLI provider (batched 2.0 path). */
@@ -287,7 +524,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
     conceptLlm: ILLMProvider,
     onProgress?: (stage: string, percent: number) => void,
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    notePathOverride?: string
   ): Promise<ImportRecord> {
     const altData = preview.altData;
     const pdfDataPromise = this.downloadPdfForImport(preview);
@@ -309,7 +547,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
         materialContextPromise,
         onProgress,
         onConfirmUpdate,
-        signal
+        signal,
+        notePathOverride ?? this.resolveNotePath(preview, subject)
       );
     }
 
@@ -391,13 +630,24 @@ export default class Alt2ObsidianPlugin extends Plugin {
     // slidesResult stays null and we fall back to the lecture-level
     // single-block generator below.
     const pdfData = await pdfDataPromise;
+    const notePath = notePathOverride ?? this.resolveNotePath(preview, subject);
     let slidesResult: PerSlideGenerationResult | null = null;
+    let alignment: LectureAlignment | null = null;
     if (pdfData && this.pdfProcessor) {
+      // Timestamped transcript (local sources): per-slide chunks by alignment (spec 4.3).
+      if (preview.bundle?.transcript.some((s) => s.startMs !== null)) {
+        try {
+          alignment = alignLecture((await this.pdfProcessor.getPageLayouts(pdfData)).map(layoutAlignmentText), preview.bundle.transcript);
+        } catch (e) {
+          console.warn("[Alt2Obsidian] alignment skipped, even split used:", e);
+        }
+      }
       onProgress?.("PDF 슬라이드 해설 생성 중...", 55);
       const slideGen = new PerSlideCommentaryGenerator(llm, this.pdfProcessor);
       try {
         slidesResult = await slideGen.generate(pdfData, {
           transcript: altData.transcript,
+          transcriptChunks: alignment?.chunks,
           existingConceptNames: Array.from(existingConceptNames),
           sourceId: altData.metadata.noteId,
           onProgress: (slideNum, total) => {
@@ -426,15 +676,18 @@ export default class Alt2ObsidianPlugin extends Plugin {
     };
 
     const noteGenerator = new NoteGenerator(llm);
+    const withSlides = !!slidesResult && slidesResult.slides.length > 0;
+    const extraFrontmatter = altData.metadata.sourceKind === "alt-local" ? this.localFrontmatter(notePath, withSlides ? alignment : null) : [];
     const { lectureMarkdown, conceptNotes } =
-      slidesResult && slidesResult.slides.length > 0
+      slidesResult && withSlides
         ? await noteGenerator.generatePageAnchored(
             altData,
             slidesResult,
             llmResult,
-            subject
+            subject,
+            extraFrontmatter
           )
-        : await noteGenerator.generate(altData, llmResult, subject);
+        : await noteGenerator.generate(altData, llmResult, subject, extraFrontmatter);
 
     return this.saveLecture({
       url,
@@ -444,6 +697,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
       lectureMarkdown,
       conceptNotes,
       pdfData,
+      notePath,
+      bundle: preview.bundle,
       onProgress,
       onConfirmUpdate,
       signal,
@@ -459,6 +714,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
     lectureMarkdown: string;
     conceptNotes: import("./types").ConceptNote[];
     pdfData: ArrayBuffer | null;
+    /** Default: <base>/<subject>/<title>.md (URL imports). */
+    notePath?: string;
+    /** Local sources: its timestamped transcript is cached for the viewer. */
+    bundle?: LectureBundle;
     onProgress?: (stage: string, percent: number) => void;
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
     /** A cancelled import must not write anything. */
@@ -469,10 +728,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
     // Save everything to vault
     onProgress?.("Vault에 저장 중...", 90);
 
-    const subjectFolder = `${vm.getBasePath()}/${sanitizeFilename(subject)}`;
-
     const noteFilename = sanitizeFilename(altData.title);
-    const notePath = `${subjectFolder}/${noteFilename}.md`;
+    const notePath = args.notePath ?? `${vm.getBasePath()}/${sanitizeFilename(subject)}/${noteFilename}.md`;
+    const noteStem = notePath.replace(/\.md$/, "");
     const updateSummary = await vm.buildManagedNoteUpdateSummary(
       notePath,
       lectureMarkdown,
@@ -492,13 +750,14 @@ export default class Alt2ObsidianPlugin extends Plugin {
     let pdfPath: string | undefined;
     if (pdfData) {
       onProgress?.("PDF 저장 중...", 95);
-      const pdfFilename = sanitizeFilename(altData.title);
-      const rawPdfPath = `${subjectFolder}/${pdfFilename}.pdf`;
-      pdfPath = await vm.saveRawFile(pdfData, rawPdfPath);
+      // Sibling of the note (the Synced Viewer looks for <note>.pdf).
+      pdfPath = await vm.saveRawFile(pdfData, `${noteStem}.pdf`);
     }
+    await this.cacheTranscript(args.bundle).catch((e) => console.warn("[Alt2Obsidian] transcript cache write failed:", e));
 
     onProgress?.("완료!", 100);
 
+    const local = altData.metadata.sourceKind === "alt-local";
     const record: ImportRecord = {
       url,
       title: altData.title,
@@ -506,7 +765,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
       path: notePath,
       date: formatDate(),
       parseQuality: "full",
-      altId: altData.metadata.noteId || undefined,
+      altId: local ? undefined : altData.metadata.noteId || undefined,
+      altLocalId: local ? altData.metadata.noteId : undefined,
       examPeriod,
       pdfPath,
       wasUpdate: saveResult.wasUpdate,
@@ -533,7 +793,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
   ): Promise<PreparedImport> {
     const settings = this.data.settings;
     // Fail before any work when a configured CLI cannot be found.
-    for (const task of ["commentary", "concepts"] as TaskId[]) {
+    for (const task of ["commentary", "concepts", "alignment"] as TaskId[]) {
       const p = settings.tasks[task].provider;
       if (p === "claude-cli") await this.resolveBin("claude");
       if (p === "codex-cli") await this.resolveBin("codex");
@@ -541,7 +801,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const subject = subjectOverride || preview.suggestedSubject;
     const vm = this.vaultManager!;
     const altData = preview.altData;
-    const notePath = `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(altData.title)}.md`;
+    const notePath = this.resolveNotePath(preview, subject);
     const context: LectureContext = {
       title: altData.title,
       subjectTags: vm.getSubjectTags(subject),
@@ -551,6 +811,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
     onProgress?.("PDF 내려받는 중...", 10);
     const pdfData = altData.parseQuality === "partial" ? null : await this.downloadPdfForImport(preview);
     let plan: DeckPlan | null = null;
+    let alignment: LectureAlignment | null = null;
+    let slideTexts: string[] = [];
     if (pdfData && this.pdfProcessor) {
       onProgress?.("슬라이드 분석 중...", 20);
       const { layouts, grays } = await this.pdfProcessor.analyzeForPrep(pdfData, (page, total) =>
@@ -562,10 +824,14 @@ export default class Alt2ObsidianPlugin extends Plugin {
           imageRule: settings.generation.imageRule,
         });
         const existingNote = settings.generation.onlyChangedSlides ? await vm.readNoteIfExists(notePath) : null;
+        // Timestamped transcript (local sources): aligned to the slides, no tokens (spec 4.3).
+        slideTexts = layouts.map(layoutAlignmentText);
+        alignment = alignLecture(slideTexts, preview.bundle?.transcript);
         plan = planDeck({
           ...analysis,
           layouts,
           transcript: altData.transcript,
+          transcriptChunks: alignment?.chunks,
           transcriptCapChars: settings.generation.transcriptCapChars,
           batchSize: batchSizeFor(settings.tasks.commentary.provider, settings.generation.batchSize),
           deckTitle: altData.title,
@@ -574,7 +840,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       }
     }
     onProgress?.("예산 산정 완료", 100);
-    return this.withEstimate({ url, preview, subject, examPeriod, notePath, pdfData, plan, context, fewerImages: false });
+    return this.withEstimate({ url, preview, subject, examPeriod, notePath, pdfData, plan, context, fewerImages: false, alignment, slideTexts });
   }
 
   /** Same plan with visual slides sent as text only (spec 5.5 "fewer images"). */
@@ -593,9 +859,15 @@ export default class Alt2ObsidianPlugin extends Plugin {
   private withEstimate(p: Omit<PreparedImport, "estimate" | "overCap">): PreparedImport {
     const tasks = this.data.settings.tasks;
     const asProvider = (id: ProviderId | "none"): ProviderId => (id === "none" ? "claude-cli" : id);
-    const estimate: BudgetEstimate = p.plan
+    let estimate: BudgetEstimate = p.plan
       ? estimateLecture(p.plan, p.context, p.preview.altData.summary, asProvider(tasks.commentary.provider), asProvider(tasks.concepts.provider))
       : this.estimateLectureLevel(p.preview, asProvider(tasks.commentary.provider), asProvider(tasks.concepts.provider));
+    // Optional alignment check (spec 4.3 step 3): one small text call.
+    const checkPrompt = p.alignment && tasks.alignment.provider !== "none" ? buildAlignmentCheckPrompt(p.preview.altData.title, p.alignment, p.slideTexts) : null;
+    if (checkPrompt && tasks.alignment.provider !== "none") {
+      const check = estimateCalls([{ promptText: checkPrompt, images: 0, schema: true, outputTokens: 200 }], tasks.alignment.provider);
+      estimate = { ...estimate, calls: estimate.calls + check.calls, inputTokens: estimate.inputTokens + check.inputTokens, outputTokens: estimate.outputTokens + check.outputTokens };
+    }
     return { ...p, estimate, overCap: exceedsCap(estimate, this.data.settings.generation.tokenCapPerLecture) };
   }
 
@@ -656,13 +928,21 @@ export default class Alt2ObsidianPlugin extends Plugin {
     try {
       const commentaryLlm = await this.providerFor("commentary", job, usage, signal);
       const conceptLlm = await this.providerFor("concepts", job, usage, signal);
-      const { preview, subject, examPeriod, url, plan, pdfData } = prepared;
+      const { preview, subject, examPeriod, url, pdfData } = prepared;
+      let { plan, alignment } = prepared;
       const altData = preview.altData;
 
       if (!plan || !pdfData) {
         // No PDF: 1.x lecture-level note, generated by the CLI provider.
         hooks.onStep?.("overview");
-        return await this.runLegacyImport(url, preview, subject, examPeriod, commentaryLlm, conceptLlm, hooks.onProgress, hooks.onConfirmUpdate, signal);
+        return await this.runLegacyImport(url, preview, subject, examPeriod, commentaryLlm, conceptLlm, hooks.onProgress, hooks.onConfirmUpdate, signal, prepared.notePath);
+      }
+
+      // Optional LLM check of the uncertain alignment spans (spec 4.3 step 3).
+      if (alignment && alignment.lowSpans.length > 0 && settings.tasks.alignment.provider !== "none") {
+        hooks.onProgress?.("전사 정렬 확인 중...", 0);
+        alignment = await this.checkAlignment(alignment, prepared.slideTexts, altData.title, job, usage, signal);
+        if (alignment.llmChanged > 0) plan = withTranscriptChunks(plan, alignment.chunks, settings.generation.transcriptCapChars);
       }
 
       const pdfProcessor = this.pdfProcessor!;
@@ -702,7 +982,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         { ...run.slidesResult, errors },
         { processedSummary: run.overview, concepts, tags, subjectSuggestion: subject },
         subject,
-        [formatUsageFrontmatter(usage.total(), providerLabel)]
+        [formatUsageFrontmatter(usage.total(), providerLabel), ...this.localFrontmatter(prepared.notePath, alignment)]
       );
       return await this.saveLecture({
         url,
@@ -712,6 +992,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
         lectureMarkdown,
         conceptNotes,
         pdfData,
+        notePath: prepared.notePath,
+        bundle: preview.bundle,
         onProgress: hooks.onProgress,
         onConfirmUpdate: hooks.onConfirmUpdate,
         signal,
@@ -723,6 +1005,25 @@ export default class Alt2ObsidianPlugin extends Plugin {
       if (usage.total().calls > 0) {
         await this.recordUsage(usage).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
       }
+    }
+  }
+
+  /** The alignment check call; a failure keeps the script alignment. */
+  private async checkAlignment(
+    alignment: LectureAlignment,
+    slideTexts: string[],
+    title: string,
+    job: string,
+    usage: UsageTracker,
+    signal?: AbortSignal
+  ): Promise<LectureAlignment> {
+    try {
+      const llm = await this.providerFor("alignment", job, usage, signal);
+      return await checkAlignmentWithLlm(llm, title, alignment, slideTexts, signal);
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      console.warn("[Alt2Obsidian] alignment check failed, keeping the script alignment:", e);
+      return alignment;
     }
   }
 
@@ -847,7 +1148,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
     materialContextPromise: Promise<LectureMaterialContext | null>,
     onProgress?: (stage: string, percent: number) => void,
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    notePath?: string
   ): Promise<ImportRecord> {
     onProgress?.("부분 노트 생성 중...", 50);
 
@@ -874,9 +1176,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     );
 
     const vm = this.vaultManager!;
-    const subjectFolder = `${vm.getBasePath()}/${sanitizeFilename(subject)}`;
-    const noteFilename = sanitizeFilename(altData.title);
-    const notePath = `${subjectFolder}/${noteFilename}.md`;
+    notePath = notePath ?? `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(altData.title)}.md`;
     const updateSummary = await vm.buildManagedNoteUpdateSummary(
       notePath,
       lectureMarkdown,
@@ -894,9 +1194,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     let pdfPath: string | undefined;
     const pdfData = await pdfDataPromise;
     if (pdfData) {
-      const pdfFilename = sanitizeFilename(altData.title);
-      const rawPdfPath = `${subjectFolder}/${pdfFilename}.pdf`;
-      pdfPath = await vm.saveRawFile(pdfData, rawPdfPath);
+      pdfPath = await vm.saveRawFile(pdfData, notePath.replace(/\.md$/, ".pdf"));
     }
 
     onProgress?.("완료!", 100);
@@ -908,7 +1206,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
       path: notePath,
       date: formatDate(),
       parseQuality: "partial",
-      altId: altData.metadata.noteId || undefined,
+      altId: altData.metadata.sourceKind === "alt-local" ? undefined : altData.metadata.noteId || undefined,
+      altLocalId: altData.metadata.sourceKind === "alt-local" ? altData.metadata.noteId : undefined,
       pdfPath,
       wasUpdate: saveResult.wasUpdate,
       updateSummary,
@@ -1104,7 +1403,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
     const seen = new Set<string>();
     this.data.recentImports = this.data.recentImports.filter((item) => {
-      const key = item.altId || item.url || item.path;
+      const key = item.altLocalId || item.altId || item.url || item.path;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -1118,6 +1417,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
   }
 
   private isSameImportRecord(a: ImportRecord, b: ImportRecord): boolean {
+    if (a.altLocalId && b.altLocalId) return a.altLocalId === b.altLocalId;
     if (a.altId && b.altId) return a.altId === b.altId;
     if (a.url && b.url) return a.url === b.url;
     return a.path === b.path;

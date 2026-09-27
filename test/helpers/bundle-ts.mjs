@@ -21,6 +21,7 @@ export class PluginSettingTab {}
 export class Setting {}
 export class Component {}
 export const MarkdownRenderer = { render: async () => {} };
+export const setIcon = () => {};
 export const normalizePath = (p) => p;
 export const requestUrl = () => { throw new Error("requestUrl is not available in tests"); };
 `;

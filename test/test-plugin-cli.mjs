@@ -14,38 +14,72 @@ import { FAKE_CLAUDE, fakeSession } from "./helpers/fake-cli.mjs";
 // pdfjs (bundled via PdfProcessor) warns about missing canvas polyfills on load.
 const quiet = { log: console.log, warn: console.warn };
 console.log = console.warn = () => {};
-const { default: Plugin } = await importTs("src/main.ts");
+const { default: Plugin, TFile } = await importTs("test/helpers/plugin-entry.ts");
 Object.assign(console, quiet);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
+/** Frontmatter of a stored note: `key: "value"` lines and the tags list. */
+function frontmatterOf(content) {
+  const block = (content ?? "").match(/^---\n([\s\S]*?)\n---/);
+  if (!block) return null;
+  const fm = {};
+  for (const line of block[1].split("\n")) {
+    const kv = line.match(/^(\w+): (.*)$/);
+    if (!kv) continue;
+    const v = kv[2].trim();
+    fm[kv[1]] = kv[1] === "tags" ? v.replace(/^\[|\]$/g, "").split(",").map((t) => t.trim()) : v.replace(/^"(.*)"$/, "$1");
+  }
+  return fm;
+}
+
 function makeApp() {
   const files = new Map();
+  const config = new Map();
+  const tfile = (path) => Object.assign(new TFile(), { path, basename: path.split("/").pop().replace(/\.md$/, "") });
   const app = {
     vault: {
-      getAbstractFileByPath: (p) => (files.has(p) ? { path: p } : null),
+      getAbstractFileByPath: (p) => (files.has(p) ? tfile(p) : null),
       createFolder: async () => {},
       create: async (p, c) => void files.set(p, c),
       read: async (f) => files.get(f.path),
       modify: async (f, c) => void files.set(f.path, c),
-      getMarkdownFiles: () => [...files.keys()].filter((p) => p.endsWith(".md")).map((path) => ({ path })),
+      cachedRead: async (f) => files.get(f.path),
+      getMarkdownFiles: () => [...files.keys()].filter((p) => p.endsWith(".md")).map(tfile),
       createBinary: async (p) => void files.set(p, "<binary>"),
       modifyBinary: async (f) => void files.set(f.path, "<binary>"),
-      adapter: { getResourcePath: (p) => p },
+      adapter: {
+        getResourcePath: (p) => p,
+        exists: async (p) => config.has(p) || [...config.keys()].some((k) => k.startsWith(p + "/")),
+        mkdir: async () => {},
+        write: async (p, c) => void config.set(p, c),
+        read: async (p) => config.get(p),
+      },
     },
     metadataCache: {
       getFileCache: (f) => {
-        const m = (files.get(f.path) ?? "").match(/^---\n[\s\S]*?tags: \[([^\]]*)\]/);
-        return m ? { frontmatter: { tags: m[1].split(",").map((t) => t.trim()) } } : null;
+        const fm = frontmatterOf(files.get(f.path));
+        return fm ? { frontmatter: fm } : null;
+      },
+    },
+    fileManager: {
+      // Obsidian's processFrontMatter, enough for adding one key.
+      processFrontMatter: async (f, fn) => {
+        const content = files.get(f.path);
+        const fm = frontmatterOf(content);
+        const before = { ...fm };
+        fn(fm);
+        const added = Object.keys(fm).filter((k) => !(k in before)).map((k) => `${k}: ${JSON.stringify(fm[k])}`);
+        files.set(f.path, content.replace(/\n---\n/, `\n${added.join("\n")}\n---\n`));
       },
     },
     workspace: { onLayoutReady: () => {} },
   };
-  return { app, files };
+  return { app, files, config };
 }
 
 async function makePlugin(saved) {
-  const { app, files } = makeApp();
+  const { app, files, config } = makeApp();
   const plugin = new Plugin();
   let stored = saved;
   Object.assign(plugin, {
@@ -59,7 +93,7 @@ async function makePlugin(saved) {
     addSettingTab: () => {},
   });
   await plugin.onload();
-  return { plugin, files, stored: () => stored };
+  return { plugin, files, config, stored: () => stored };
 }
 
 // Deck: cover, 6 content slides (one visual), closing slide.
@@ -108,7 +142,7 @@ try {
   }
 
   // 1.x data with a Gemini key: kept, the switch is only offered (review H2).
-  const { plugin, files, stored } = await makePlugin({
+  const { plugin, files, config, stored } = await makePlugin({
     settings: { apiKey: "old-key", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Alt2Obsidian", language: "ko", rateDelayMs: 5000 },
     recentImports: [],
   });
@@ -191,6 +225,83 @@ try {
     assert.ok(plugin.data.usageTotals.calls > before2);
     assert.equal(files.get(record.path), snap);
     console.log("PASS: a run with no generated slide writes nothing; usage is recorded even when the update is declined");
+  }
+
+  // Alt local note (spec 4.1, 4.3): timestamped transcript aligned to the
+  // slides, alt_local_id identity, a same-titled URL import never merged
+  // into, one-time link of that note, transcript cached for the viewer.
+  {
+    process.env.FAKE_CLI_MODE = "ok";
+    plugin.data.settings.generation.onlyChangedSlides = true;
+    const seg = (i, text) => ({ startMs: i * 5000, endMs: i * 5000 + 4800, text, speaker: "" });
+    const talk = [];
+    for (const i of [2, 3, 4, 5, 6, 7]) for (let k = 0; k < 8; k++) talk.push(i === 4 ? "look at this diagram here" : `now slide ${i} cache topic ${i} details ${i * 7919}`);
+    const bundle = (id) => ({
+      sourceId: id,
+      sourceKind: "alt-local",
+      title: "Lec7 Caches",
+      lectureDate: "2026-04-21",
+      folderPath: ["CSED311 컴퓨터구조"],
+      pdf: new ArrayBuffer(8),
+      pdfPath: "/alt/slides/Lec7.pdf",
+      slideTexts: null,
+      transcript: talk.map((t, i) => seg(i, t)),
+      summaryMarkdown: "## 요약\n\n캐시",
+      memoMarkdown: "### 슬라이드 2 메모\n\n외우기",
+      warnings: [],
+    });
+    const urlNotePath = record.path;
+    const pv = plugin.previewFromBundle(bundle("local-1"));
+    assert.equal(pv.suggestedSubject, "CSED311");
+    assert.equal(pv.altData.metadata.sourceKind, "alt-local");
+    assert.ok(pv.altData.summary.includes("## Alt 메모"));
+    const callsBefore = s.calls().length;
+    const prep = await plugin.prepareCliImport("", pv, "CSED311");
+    assert.equal(s.calls().length, callsBefore, "prepare spends no tokens");
+    assert.ok(prep.alignment, "timestamps: aligned");
+    assert.equal(prep.notePath, "Alt2Obsidian/CSED311/Lec7 Caches (2026-04-21).md", "the URL import with the same title is not merged into");
+    const p5 = prep.plan.slides.find((x) => x.page === 5);
+    const own = (p5.transcript.match(/slide 5 /g) ?? []).length;
+    assert.ok(own >= 6 && !p5.transcript.includes("slide 7") && !p5.transcript.includes("slide 2"), `aligned chunk for slide 5: ${p5.transcript}`);
+    const rec = await plugin.runCliImport(prep);
+    const local = files.get(rec.path);
+    assert.equal(rec.path, prep.notePath);
+    assert.equal(rec.altLocalId, "local-1");
+    assert.match(local, /alt_local_id: "local-1"\nalt_source: "alt-local"/);
+    assert.ok(!/alt_id:/.test(local), "no public id for a local note");
+    assert.match(local, /alt_alignment: "(\d+:\d+-\d+\??)( \d+:\d+-\d+\??)*"/);
+    assert.ok(files.has("Alt2Obsidian/CSED311/Lec7 Caches (2026-04-21).pdf"), "PDF next to the note");
+    const cached = JSON.parse(config.get(".obsidian/plugins/alt2obsidian/transcripts/local-1.json"));
+    assert.equal(cached.segments.length, talk.length);
+    assert.deepEqual(await plugin.loadTranscript("local-1").then((t) => t[0]), { startMs: 0, endMs: 4800, text: talk[0] });
+    const vault = plugin.vaultLectureNotes();
+    assert.deepEqual(plugin.localNoteStatus({ id: "local-1", title: "Lec7 Caches", lectureDate: "2026-04-21" }, vault), { kind: "imported", path: rec.path, changed: null });
+    console.log("PASS: local import: aligned chunks, alt_local_id and alt_alignment frontmatter, no merge into a same-titled URL note, transcript cached");
+
+    // Another Alt local note with the URL note's title: offered as a link, linked on confirmation.
+    const st = plugin.localNoteStatus({ id: "local-2", title: "Lec7 Caches", lectureDate: "2026-04-21" }, vault);
+    assert.equal(st.kind, "link");
+    assert.deepEqual(st.candidates.map((c) => c.path), [urlNotePath]);
+    const beforeLink = files.get(urlNotePath);
+    await plugin.linkLocalNote(urlNotePath, "local-2");
+    const linked = files.get(urlNotePath);
+    assert.equal(linked.replace('alt_local_id: "local-2"\n', ""), beforeLink, "only alt_local_id added");
+    const pv2 = plugin.previewFromBundle(bundle("local-2"));
+    assert.equal(plugin.resolveNotePath(pv2, "CSED311"), urlNotePath, "the linked note is updated from now on");
+    // With the alignment check on, uncertain spans cost one more (small) call.
+    plugin.data.settings.tasks.alignment = { provider: "claude-cli", model: "haiku", effort: "low" };
+    const prep2 = await plugin.prepareCliImport("", pv2, "CSED311");
+    const low = prep2.alignment.lowSpans.length;
+    const n0 = s.calls().length;
+    const rec2 = await plugin.runCliImport(prep2, { onConfirmUpdate: async () => true });
+    assert.equal(s.calls().length - n0, prep2.estimate.calls, "estimate includes the check call");
+    assert.equal(low > 0 ? 1 : 0, s.calls().slice(n0).filter((c) => c.stdin.includes("current guess")).length);
+    const updated = files.get(rec2.path);
+    assert.match(updated, /alt_id: "note-7"/, "the public id is kept");
+    assert.match(updated, /alt_local_id: "local-2"/);
+    assert.ok(updated.includes("내 메모 유지"), "memo kept");
+    plugin.data.settings.tasks.alignment = { provider: "none", model: "", effort: "" };
+    console.log(`PASS: link offer and confirmed link keep the note and its public id; the optional alignment check (${low} uncertain spans) is estimated and run once`);
   }
 
   // Unload aborts running jobs (review M2).

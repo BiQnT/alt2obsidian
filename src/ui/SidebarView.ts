@@ -1,9 +1,28 @@
-import { ItemView, WorkspaceLeaf, TFile, Modal } from "obsidian";
+import { ItemView, WorkspaceLeaf, TFile, Modal, setIcon } from "obsidian";
 import type Alt2ObsidianPlugin from "../main";
 import type { PreparedImport } from "../main";
 import { ImportPreview, ExamPeriod, ImportUpdateSummary, LLMUsage } from "../types";
 import { compactTokens } from "../llm/usage";
 import { PROVIDER_LABELS } from "../settings/llmSettings";
+import { AltNoteDetails, AltNoteSummary, inferSubject } from "../sources";
+import { LocalNoteStatus, statusChip, VaultNoteInfo } from "../core/noteStatus";
+import { alignmentStatus } from "../pipeline/alignment";
+
+type Tab = "local" | "url";
+
+/** Per-note list state: details and slide comparison load in the background. */
+interface LocalItem {
+  note: AltNoteSummary;
+  details?: AltNoteDetails;
+  pageCount?: number | null;
+  status: LocalNoteStatus;
+  el?: HTMLElement;
+}
+
+function formatLectureDate(date: string | null): string {
+  const m = date?.match(/^\d{4}-(\d{2})-(\d{2})/);
+  return m ? `${Number(m[1])}월 ${Number(m[2])}일` : "날짜 없음";
+}
 
 export const VIEW_TYPE_SIDEBAR = "alt2obsidian-sidebar";
 
@@ -23,6 +42,27 @@ export class Alt2ObsidianSidebarView extends ItemView {
   private cliPanel: HTMLElement | null = null;
   /** The running CLI import, aborted when the view closes (review M2). */
   private runController: AbortController | null = null;
+
+  // ---- Alt local notes tab (spec 4.1, mockup "1. 가져오기 사이드바") ----
+  private tab: Tab = "local";
+  private statusChipEl: HTMLElement | null = null;
+  private statusDetailEl: HTMLElement | null = null;
+  private localPane: HTMLElement | null = null;
+  private urlPane: HTMLElement | null = null;
+  private tabButtons = new Map<Tab, HTMLButtonElement>();
+  private searchInput: HTMLInputElement | null = null;
+  private listEl: HTMLElement | null = null;
+  private footerEl: HTMLElement | null = null;
+  private items: LocalItem[] = [];
+  private vaultNotes: VaultNoteInfo[] = [];
+  private expanded = new Set<string>();
+  private selectedId: string | null = null;
+  private localSubjectInput: HTMLInputElement | null = null;
+  private localPeriodSelect: HTMLSelectElement | null = null;
+  private localImportBtn: HTMLButtonElement | null = null;
+  /** Bumped on every refresh so a stale background loop stops. */
+  private loadGeneration = 0;
+  private busy = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: Alt2ObsidianPlugin) {
     super(leaf);
@@ -46,13 +86,343 @@ export class Alt2ObsidianSidebarView extends ItemView {
     container.empty();
     container.addClass("alt2obsidian-sidebar");
 
-    this.renderInputSection(container);
+    this.renderHeader(container);
+    this.localPane = container.createDiv({ cls: "alt2obsidian-local-pane" });
+    this.renderLocalPane(this.localPane);
+    this.urlPane = container.createDiv({ cls: "alt2obsidian-url-pane" });
+    this.renderInputSection(this.urlPane);
     this.renderProgressSection(container);
     this.cliPanel = container.createDiv({ cls: "alt2obsidian-cli-panel" });
     this.cliPanel.hide();
     this.renderMessageSection(container);
     this.renderRecentSection(container);
     this.renderExamSection(container);
+    this.switchTab(this.tab);
+    void this.refreshLocal();
+  }
+
+  // ---- header, tabs, Alt connection ----
+
+  private renderHeader(container: Element): void {
+    const head = container.createDiv({ cls: "alt2obsidian-head" });
+    const row = head.createDiv({ cls: "alt2obsidian-head-row" });
+    row.createDiv({ cls: "alt2obsidian-head-title", text: "Alt2Obsidian" });
+    this.statusChipEl = row.createEl("button", { cls: "alt2obsidian-status-chip", text: "Alt 확인 중..." });
+    this.statusChipEl.setAttr("aria-label", "Alt 연결 다시 확인");
+    this.statusChipEl.addEventListener("click", () => void this.refreshLocal());
+    this.statusDetailEl = head.createDiv({ cls: "alt2obsidian-muted alt2obsidian-status-detail" });
+    this.statusDetailEl.hide();
+    const tabs = head.createDiv({ cls: "alt2obsidian-tabs" });
+    for (const [id, label] of [["local", "Alt 노트 목록"], ["url", "URL 붙여넣기"]] as Array<[Tab, string]>) {
+      const b = tabs.createEl("button", { text: label, cls: "alt2obsidian-tab" });
+      b.addEventListener("click", () => this.switchTab(id));
+      this.tabButtons.set(id, b);
+    }
+  }
+
+  private switchTab(tab: Tab): void {
+    this.tab = tab;
+    for (const [id, b] of this.tabButtons) b.toggleClass("is-active", id === tab);
+    this.localPane?.toggle(tab === "local");
+    this.urlPane?.toggle(tab === "url");
+  }
+
+  private setConnection(label: string, kind: "api" | "db" | "none" | "busy", detail: string): void {
+    if (!this.statusChipEl) return;
+    this.statusChipEl.empty();
+    this.statusChipEl.className = `alt2obsidian-status-chip is-${kind}`;
+    this.statusChipEl.createSpan({ cls: "alt2obsidian-status-dot" });
+    this.statusChipEl.appendText(label);
+    if (this.statusDetailEl) {
+      this.statusDetailEl.setText(detail);
+      this.statusDetailEl.toggle(!!detail && kind !== "api");
+    }
+  }
+
+  // ---- local notes list ----
+
+  private renderLocalPane(pane: HTMLElement): void {
+    const search = pane.createEl("label", { cls: "alt2obsidian-search" });
+    const icon = search.createSpan({ cls: "alt2obsidian-search-icon" });
+    setIcon(icon, "search");
+    this.searchInput = search.createEl("input", { type: "text", placeholder: "강의 제목 검색" });
+    this.searchInput.setAttr("aria-label", "Alt 노트 검색");
+    this.searchInput.addEventListener("input", () => this.renderList());
+    this.listEl = pane.createDiv({ cls: "alt2obsidian-note-list" });
+    this.footerEl = pane.createDiv({ cls: "alt2obsidian-note-footer" });
+    this.footerEl.hide();
+  }
+
+  /** Reconnect (API, else database copy) and reload the note list. */
+  async refreshLocal(): Promise<void> {
+    const gen = ++this.loadGeneration;
+    this.setConnection("Alt 확인 중...", "busy", "");
+    let result;
+    try {
+      result = await this.plugin.connectLocal();
+    } catch (e) {
+      result = { source: null, label: "연결 안 됨", detail: e instanceof Error ? e.message : String(e) };
+    }
+    if (gen !== this.loadGeneration) return;
+    const kind = result.source ? result.source.mode : "none";
+    this.setConnection(result.label, kind, result.detail);
+    this.items = [];
+    if (!result.source) {
+      this.renderList("Alt 노트를 읽지 못했습니다. Alt를 실행한 뒤 상태 표시를 눌러 다시 확인하거나, URL 붙여넣기 탭을 쓰세요.");
+      this.renderFooter();
+      return;
+    }
+    try {
+      const notes = await result.source.listNotes();
+      if (gen !== this.loadGeneration) return;
+      this.vaultNotes = this.plugin.vaultLectureNotes();
+      this.items = notes.map((note) => ({ note, status: this.plugin.localNoteStatus(note, this.vaultNotes) }));
+      if (this.expanded.size === 0 && this.items.length > 0) {
+        // Open the folder of the most recent lecture, like the mockup.
+        const recent = [...this.items].sort((a, b) => (b.note.lectureDate ?? "").localeCompare(a.note.lectureDate ?? ""))[0];
+        this.expanded.add(this.groupKey(recent.note));
+      }
+    } catch (e) {
+      this.renderList(`노트 목록을 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    this.renderList();
+    this.renderFooter();
+    void this.loadDetails(gen);
+  }
+
+  private groupKey(note: AltNoteSummary): string {
+    return note.folderPath.length > 0 ? note.folderPath.join(" / ") : "폴더 없음";
+  }
+
+  private renderList(emptyText?: string): void {
+    const list = this.listEl;
+    if (!list) return;
+    list.empty();
+    if (emptyText) {
+      list.createDiv({ cls: "alt2obsidian-empty", text: emptyText });
+      return;
+    }
+    const q = (this.searchInput?.value ?? "").trim().toLowerCase();
+    const shown = this.items.filter((it) => !q || it.note.title.toLowerCase().includes(q) || this.groupKey(it.note).toLowerCase().includes(q));
+    if (shown.length === 0) {
+      list.createDiv({ cls: "alt2obsidian-empty", text: this.items.length === 0 ? "Alt에 노트가 없습니다" : "검색 결과가 없습니다" });
+      return;
+    }
+    const groups = new Map<string, LocalItem[]>();
+    for (const it of shown) {
+      const key = this.groupKey(it.note);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(it);
+    }
+    const keys = Array.from(groups.keys()).sort((a, b) => (a === "폴더 없음" ? 1 : b === "폴더 없음" ? -1 : a.localeCompare(b, "ko", { numeric: true })));
+    for (const key of keys) {
+      const open = !!q || this.expanded.has(key);
+      const head = list.createDiv({ cls: "alt2obsidian-folder" });
+      const caret = head.createSpan({ cls: "alt2obsidian-folder-caret" });
+      setIcon(caret, open ? "chevron-down" : "chevron-right");
+      head.createSpan({ text: key });
+      head.createSpan({ cls: "alt2obsidian-folder-count", text: String(groups.get(key)!.length) });
+      head.addEventListener("click", () => {
+        if (this.expanded.has(key)) this.expanded.delete(key);
+        else this.expanded.add(key);
+        this.renderList();
+        void this.loadDetails(this.loadGeneration);
+      });
+      if (!open) continue;
+      const notes = groups.get(key)!.sort((a, b) => (b.note.lectureDate ?? "").localeCompare(a.note.lectureDate ?? "") || a.note.title.localeCompare(b.note.title, "ko", { numeric: true }));
+      for (const it of notes) this.renderItem(list, it);
+    }
+  }
+
+  private renderItem(list: HTMLElement, it: LocalItem): void {
+    const el = list.createDiv({ cls: "alt2obsidian-note-item" });
+    el.toggleClass("is-selected", it.note.id === this.selectedId);
+    it.el = el;
+    this.fillItem(it);
+    el.addEventListener("click", () => {
+      this.selectedId = it.note.id;
+      this.listEl?.querySelectorAll(".alt2obsidian-note-item").forEach((n) => n.removeClass("is-selected"));
+      el.addClass("is-selected");
+      this.renderFooter();
+    });
+  }
+
+  private fillItem(it: LocalItem): void {
+    const el = it.el;
+    if (!el) return;
+    el.empty();
+    const top = el.createDiv({ cls: "alt2obsidian-note-row" });
+    top.createSpan({ cls: "alt2obsidian-note-title", text: it.note.title });
+    const chip = statusChip(it.status);
+    top.createSpan({ cls: `alt2obsidian-chip ${chip.cls}`, text: chip.text });
+    const meta: string[] = [formatLectureDate(it.note.lectureDate)];
+    if (it.pageCount) meta.push(`슬라이드 ${it.pageCount}장`);
+    else if (it.details && !it.details.hasSlides) meta.push("슬라이드 없음");
+    if (it.details?.transcriptMinutes) meta.push(`전사 ${it.details.transcriptMinutes}분`);
+    el.createDiv({ cls: "alt2obsidian-note-meta", text: meta.join(" · ") });
+  }
+
+  /**
+   * Details (slides, transcript length, page count) and the slide comparison
+   * of imported notes, one note at a time for the open folders.
+   */
+  private async loadDetails(gen: number): Promise<void> {
+    const source = this.plugin.getLocalSource();
+    if (!source) return;
+    for (const it of this.items) {
+      if (gen !== this.loadGeneration) return;
+      if (!this.expanded.has(this.groupKey(it.note)) && !(this.searchInput?.value ?? "").trim() && it.note.id !== this.selectedId) continue;
+      if (it.details) continue;
+      try {
+        it.details = await source.noteDetails(it.note.id);
+        if (it.details.pdfPath) it.pageCount = await this.plugin.localPdfPageCount(it.details.pdfPath);
+        if (it.status.kind === "new") it.status = this.plugin.localNoteStatus(it.note, this.vaultNotes, it.details.slidesTitle);
+        if (it.status.kind === "imported" && it.details.pdfPath) {
+          const changed = await this.plugin.slideChanges(it.status.path, it.details.pdfPath, it.note.id);
+          if (it.status.kind === "imported") it.status = { ...it.status, changed };
+        }
+      } catch (e) {
+        console.warn("[Alt2Obsidian] note details failed:", e);
+        it.details = { hasSlides: false, slidesTitle: null, pdfPath: null, transcriptMinutes: null, timestamps: false };
+      }
+      if (gen !== this.loadGeneration) return;
+      this.fillItem(it);
+      if (it.note.id === this.selectedId) this.renderFooter();
+    }
+  }
+
+  private selectedItem(): LocalItem | null {
+    return this.items.find((it) => it.note.id === this.selectedId) ?? null;
+  }
+
+  /** Subject, alignment line, link offer and the import button for the selected note. */
+  private renderFooter(): void {
+    const footer = this.footerEl;
+    if (!footer) return;
+    footer.empty();
+    const it = this.selectedItem();
+    if (!it) {
+      footer.hide();
+      return;
+    }
+    footer.show();
+    footer.createDiv({ cls: "alt2obsidian-footer-title", text: it.note.title });
+
+    if (it.status.kind === "link") {
+      const box = footer.createDiv({ cls: "alt2obsidian-link-offer" });
+      box.createDiv({ text: "이미 가져온 노트와 같은 강의로 보입니다. 연결하면 다시 가져올 때 그 노트를 업데이트하고 메모를 보존합니다." });
+      for (const c of it.status.candidates) {
+        const row = box.createDiv({ cls: "alt2obsidian-link-row" });
+        row.createSpan({ cls: "alt2obsidian-muted", text: c.path });
+        const b = row.createEl("button", { text: "연결" });
+        b.addEventListener("click", () => this.confirmLink(it, c));
+      }
+    }
+
+    const subjectRow = footer.createDiv({ cls: "alt2obsidian-footer-row" });
+    subjectRow.createEl("label", { text: "과목" });
+    this.localSubjectInput = subjectRow.createEl("input", { type: "text" });
+    const own = it.status.kind === "imported" ? this.vaultNotes.find((v) => v.path === (it.status as { path: string }).path) : undefined;
+    this.localSubjectInput.value = own?.subject || inferSubject(it.note.folderPath, it.note.title);
+    subjectRow.createSpan({ cls: "alt2obsidian-muted", text: own?.subject ? "기존 노트" : it.note.folderPath.length > 0 ? "Alt 폴더에서 추정" : "제목에서 추정" });
+
+    const periodRow = footer.createDiv({ cls: "alt2obsidian-footer-row" });
+    periodRow.createEl("label", { text: "시험" });
+    this.localPeriodSelect = periodRow.createEl("select", { cls: "alt2obsidian-period-select" }) as HTMLSelectElement;
+    for (const [value, text] of [["", "없음"], ["midterm", "중간고사"], ["final", "기말고사"]]) {
+      const opt = this.localPeriodSelect.createEl("option", { text });
+      opt.value = value;
+    }
+
+    const align = footer.createDiv({ cls: "alt2obsidian-align-line" });
+    const d = it.details;
+    if (!d) {
+      align.setText("노트 정보를 읽는 중...");
+      void this.loadDetails(this.loadGeneration);
+    } else {
+      const ok = d.timestamps && d.hasSlides;
+      const icon = align.createSpan({ cls: ok ? "alt2obsidian-align-ok" : "alt2obsidian-align-off" });
+      setIcon(icon, ok ? "check" : "minus");
+      const hasTranscript = d.transcriptMinutes !== null;
+      align.appendText(d.hasSlides ? alignmentStatus(d.timestamps, hasTranscript) : hasTranscript ? "슬라이드 없음 · 강의 요약 노트로 가져옴" : "슬라이드와 전사 없음");
+    }
+
+    const actions = footer.createDiv({ cls: "alt2obsidian-footer-actions" });
+    if (it.status.kind === "imported") {
+      const open = actions.createEl("button", { text: "노트 열기" });
+      const path = it.status.path;
+      open.addEventListener("click", () => this.app.workspace.openLinkText(path, "", false));
+    }
+    this.localImportBtn = actions.createEl("button", {
+      text: it.status.kind === "imported" ? "다시 가져오기" : "가져오기",
+      cls: "mod-cta alt2obsidian-footer-import",
+    });
+    this.localImportBtn.disabled = this.busy;
+    this.localImportBtn.addEventListener("click", () => void this.handleLocalImport(it));
+  }
+
+  private confirmLink(it: LocalItem, candidate: VaultNoteInfo): void {
+    new ConfirmModal(
+      this.app,
+      "기존 노트와 연결",
+      `"${candidate.path}" 노트를 Alt 노트 "${it.note.title}"와 연결합니다. 노트 내용은 바뀌지 않고, frontmatter에 alt_local_id만 추가됩니다. 다음에 가져오면 이 노트를 업데이트합니다.`,
+      "연결",
+      async () => {
+        try {
+          await this.plugin.linkLocalNote(candidate.path, it.note.id);
+          // metadataCache updates asynchronously: record the link locally too.
+          const v = this.vaultNotes.find((n) => n.path === candidate.path);
+          if (v) v.altLocalId = it.note.id;
+          it.status = { kind: "imported", path: candidate.path, changed: null };
+          it.details = undefined;
+          this.fillItem(it);
+          this.renderFooter();
+          this.showSuccess("노트를 연결했습니다.");
+        } catch (e) {
+          this.showError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    ).open();
+  }
+
+  private async handleLocalImport(it: LocalItem): Promise<void> {
+    const settings = this.plugin.data.settings;
+    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
+      this.showError("API 키를 설정에서 입력해주세요");
+      return;
+    }
+    const subject = this.localSubjectInput?.value.trim() || inferSubject(it.note.folderPath, it.note.title);
+    const period = ((this.localPeriodSelect?.value as ExamPeriod | "") || undefined) as ExamPeriod | undefined;
+    this.setLoading(true);
+    this.clearMessage();
+    try {
+      this.updateProgress(5, "Alt에서 노트 읽는 중...");
+      const preview = await this.plugin.previewLocal(it.note.id);
+      for (const w of preview.bundle?.warnings ?? []) this.showNotice(w);
+      if (this.plugin.isCliCommentary()) {
+        await this.executeCliImport("", preview, subject, period);
+      } else {
+        await this.executeImport("", preview, subject, period);
+      }
+    } catch (e) {
+      this.showError(e instanceof Error ? e.message : "알 수 없는 오류");
+    } finally {
+      this.setLoading(false);
+    }
+  }
+
+  /** After an import: statuses of the list change (new -> imported). */
+  private refreshStatuses(): void {
+    this.vaultNotes = this.plugin.vaultLectureNotes();
+    for (const it of this.items) {
+      const next = this.plugin.localNoteStatus(it.note, this.vaultNotes, it.details?.slidesTitle);
+      if (next.kind === "imported" && it.details?.pdfPath) it.details = undefined;
+      it.status = next;
+    }
+    this.renderList();
+    this.renderFooter();
+    void this.loadDetails(this.loadGeneration);
   }
 
   private renderInputSection(container: Element): void {
@@ -320,10 +690,12 @@ export class Alt2ObsidianSidebarView extends ItemView {
         this.subjectInput.value = preview.suggestedSubject;
       }
 
+      const subject = this.subjectInput?.value?.trim() || undefined;
+      const period = ((this.examPeriodSelect?.value as ExamPeriod | "") || undefined) as ExamPeriod | undefined;
       if (this.plugin.isCliCommentary()) {
-        await this.executeCliImport(url, preview);
+        await this.executeCliImport(url, preview, subject, period);
       } else {
-        await this.executeImport(url, preview);
+        await this.executeImport(url, preview, subject, period);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "알 수 없는 오류";
@@ -335,15 +707,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
 
   // ---- CLI path: estimate, confirm, run with live progress ----
 
-  private async executeCliImport(url: string, preview: ImportPreview): Promise<void> {
-    const periodValue = (this.examPeriodSelect?.value as ExamPeriod | "") || undefined;
-    let prepared = await this.plugin.prepareCliImport(
-      url,
-      preview,
-      this.subjectInput?.value?.trim() || undefined,
-      periodValue || undefined,
-      (stage, pct) => this.updateProgress(pct, stage)
-    );
+  private async executeCliImport(url: string, preview: ImportPreview, subject: string | undefined, period: ExamPeriod | undefined): Promise<void> {
+    let prepared = await this.plugin.prepareCliImport(url, preview, subject, period, (stage, pct) => this.updateProgress(pct, stage));
     this.hideProgress();
 
     for (;;) {
@@ -413,6 +778,13 @@ export class Alt2ObsidianSidebarView extends ItemView {
       });
       const t = prepared.plan.transcriptChars;
       if (t.before > 0) rows.createEl("li", { text: `전사 ${t.before.toLocaleString()}자를 ${t.after.toLocaleString()}자로 압축` });
+      if (prepared.alignment) {
+        const low = prepared.alignment.lowSpans.length;
+        const check = tasks.alignment.provider !== "none" && low > 0 ? `, 불확실한 ${low}개는 ${PROVIDER_LABELS[tasks.alignment.provider]}로 확인` : low > 0 ? `, 불확실 ${low}개` : "";
+        rows.createEl("li", { text: `전사 정렬: 슬라이드별 구간 ${prepared.alignment.result.spans.length}개${check}` });
+      } else if (prepared.preview.altData.transcript) {
+        rows.createEl("li", { text: "전사 타임스탬프가 없어 슬라이드마다 균등 분할합니다." });
+      }
       if (prepared.plan.scanned) rows.createEl("li", { text: "텍스트 레이어가 없는 PDF라 모든 슬라이드를 이미지로 보냅니다." });
       if (prepared.fewerImages) rows.createEl("li", { text: "이미지 줄이기 적용됨: 텍스트가 있는 도표 슬라이드는 텍스트만 보냅니다." });
     } else {
@@ -508,16 +880,13 @@ export class Alt2ObsidianSidebarView extends ItemView {
     };
   }
 
-  private async executeImport(url: string, preview: ImportPreview): Promise<void> {
+  private async executeImport(url: string, preview: ImportPreview, subject: string | undefined, examPeriod: ExamPeriod | undefined): Promise<void> {
     this.updateProgress(0, "LLM 처리 시작...");
-
-    const periodValue = this.examPeriodSelect?.value as ExamPeriod | "" || undefined;
-    const examPeriod = periodValue || undefined;
 
     const result = await this.plugin.importNote(
       url,
       preview,
-      this.subjectInput?.value?.trim() || undefined,
+      subject,
       examPeriod,
       (stage, pct) => {
         this.updateProgress(pct, stage);
@@ -542,6 +911,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
 
     this.refreshRecentList();
     this.refreshExamSection();
+    this.refreshStatuses();
 
     // Open note and PDF side by side
     await this.openSideBySide(result.path, result.pdfPath);
@@ -592,6 +962,8 @@ export class Alt2ObsidianSidebarView extends ItemView {
   }
 
   private setLoading(loading: boolean): void {
+    this.busy = loading;
+    if (this.localImportBtn) this.localImportBtn.disabled = loading;
     if (this.importBtn) {
       this.importBtn.disabled = loading;
       this.importBtn.textContent = loading ? "가져오는 중..." : "가져오기";
@@ -646,6 +1018,10 @@ export class Alt2ObsidianSidebarView extends ItemView {
     this.messageContainer?.empty();
   }
 
+  private showNotice(msg: string): void {
+    this.messageContainer?.createDiv({ text: msg, cls: "alt2obsidian-muted" });
+  }
+
   private confirmUpdate(summary: ImportUpdateSummary): Promise<boolean> {
     this.hideProgress();
     return new Promise((resolve) => {
@@ -656,6 +1032,32 @@ export class Alt2ObsidianSidebarView extends ItemView {
   async onClose(): Promise<void> {
     // Closing the view stops a running CLI import; its temp folder is removed.
     this.runController?.abort();
+  }
+}
+
+class ConfirmModal extends Modal {
+  constructor(
+    app: import("obsidian").App,
+    private heading: string,
+    private body: string,
+    private confirmText: string,
+    private onConfirm: () => void | Promise<void>
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: this.heading });
+    contentEl.createEl("p", { text: this.body });
+    const actions = contentEl.createDiv({ cls: "alt2obsidian-update-actions" });
+    actions.createEl("button", { text: "취소" }).addEventListener("click", () => this.close());
+    const ok = actions.createEl("button", { text: this.confirmText, cls: "mod-cta" });
+    ok.addEventListener("click", () => {
+      this.close();
+      void this.onConfirm();
+    });
   }
 }
 

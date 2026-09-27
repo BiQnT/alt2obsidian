@@ -443,3 +443,260 @@
   color: var(--text-error);
   font-size: var(--font-ui-smaller);
 }
+
+/* ---- 2.0.0-beta.2: Alt local notes (mockup "1. 가져오기 사이드바") ---- */
+.alt2obsidian-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 10px;
+}
+.alt2obsidian-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.alt2obsidian-head-title {
+  font-weight: 700;
+  font-size: var(--font-ui-medium);
+}
+.alt2obsidian-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  height: auto;
+  border-radius: 999px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 500;
+  box-shadow: none;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.alt2obsidian-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.alt2obsidian-status-chip.is-api {
+  background: rgba(var(--color-green-rgb), 0.15);
+  color: var(--color-green);
+}
+.alt2obsidian-status-chip.is-api .alt2obsidian-status-dot {
+  background: var(--color-green);
+}
+.alt2obsidian-status-chip.is-db {
+  background: rgba(var(--color-yellow-rgb), 0.15);
+  color: var(--color-yellow);
+}
+.alt2obsidian-status-chip.is-db .alt2obsidian-status-dot {
+  background: var(--color-yellow);
+}
+.alt2obsidian-status-detail {
+  font-size: var(--font-ui-smaller);
+}
+.alt2obsidian-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 7px;
+  background: var(--background-primary);
+}
+.alt2obsidian-tab {
+  flex: 1;
+  height: 28px;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+}
+.alt2obsidian-tab.is-active {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  font-weight: 600;
+}
+.alt2obsidian-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  margin-bottom: 8px;
+}
+.alt2obsidian-search input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+.alt2obsidian-search-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+.alt2obsidian-note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.alt2obsidian-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.alt2obsidian-folder:hover {
+  background: var(--background-modifier-hover);
+}
+.alt2obsidian-folder-caret {
+  display: inline-flex;
+}
+.alt2obsidian-folder-caret svg {
+  width: 12px;
+  height: 12px;
+}
+.alt2obsidian-folder-count {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+.alt2obsidian-note-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-left: 14px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.alt2obsidian-note-item:hover {
+  background: var(--background-modifier-hover);
+}
+.alt2obsidian-note-item.is-selected {
+  background: var(--background-modifier-active-hover);
+}
+.alt2obsidian-note-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.alt2obsidian-note-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.alt2obsidian-note-item.is-selected .alt2obsidian-note-title {
+  font-weight: 600;
+}
+.alt2obsidian-note-meta {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.alt2obsidian-chip {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+.alt2obsidian-chip.is-new {
+  background: rgba(var(--color-blue-rgb), 0.18);
+  color: var(--color-blue);
+}
+.alt2obsidian-chip.is-changed {
+  background: rgba(var(--color-yellow-rgb), 0.18);
+  color: var(--color-yellow);
+}
+.alt2obsidian-chip.is-link {
+  background: rgba(var(--color-purple-rgb), 0.18);
+  color: var(--color-purple);
+}
+.alt2obsidian-note-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+.alt2obsidian-footer-title {
+  font-weight: 600;
+}
+.alt2obsidian-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.alt2obsidian-footer-row label {
+  width: 36px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.alt2obsidian-footer-row input {
+  flex: 1;
+  min-width: 0;
+}
+.alt2obsidian-footer-row .alt2obsidian-muted {
+  font-size: 11px;
+}
+.alt2obsidian-align-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.alt2obsidian-align-ok,
+.alt2obsidian-align-off {
+  display: inline-flex;
+}
+.alt2obsidian-align-ok {
+  color: var(--color-green);
+}
+.alt2obsidian-align-ok svg,
+.alt2obsidian-align-off svg {
+  width: 14px;
+  height: 14px;
+}
+.alt2obsidian-footer-actions {
+  display: flex;
+  gap: 8px;
+}
+.alt2obsidian-footer-import {
+  flex: 2;
+}
+.alt2obsidian-link-offer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: var(--font-ui-smaller);
+  background: rgba(var(--color-purple-rgb), 0.1);
+}
+.alt2obsidian-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}

@@ -244,8 +244,8 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     const row = body.createEl("tr");
     const nameCell = row.createEl("td");
     nameCell.createDiv({ text: TASK_LABELS[id] });
-    const reserved = id === "alignment" || id === "verification";
-    if (id === "alignment") nameCell.createDiv({ cls: "alt2obsidian-muted", text: "이번 버전은 스크립트만 씀" });
+    const reserved = id === "verification";
+    if (id === "alignment") nameCell.createDiv({ cls: "alt2obsidian-muted", text: "정렬은 스크립트로 항상 함. 고르면 불확실한 구간만 한 번에 확인 (기본 끔)" });
     if (id === "verification") nameCell.createDiv({ cls: "alt2obsidian-muted", text: "노트 검증 기능과 함께 제공 예정" });
 
     const markCustom = () => {
@@ -442,6 +442,21 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
             this.settings.baseFolderPath = value || "Alt2Obsidian";
             await this.save();
             this.plugin.updateBasePath();
+          })
+      );
+    new Setting(containerEl)
+      .setName("Alt 데이터 폴더")
+      .setDesc(
+        "Alt 노트 목록을 읽을 Alt 앱 데이터 폴더. 비우면 기본 위치(macOS: ~/Library/Application Support/alt, Windows: %APPDATA%\\alt). " +
+          "플러그인은 이 폴더를 읽기만 합니다: Alt가 실행 중이면 로컬 API(토큰 파일), 꺼져 있으면 데이터베이스를 임시 폴더에 복사해 읽습니다."
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("(기본 위치)")
+          .setValue(this.settings.altDataDir)
+          .onChange(async (value) => {
+            this.settings.altDataDir = value.trim();
+            await this.save();
           })
       );
     new Setting(containerEl)

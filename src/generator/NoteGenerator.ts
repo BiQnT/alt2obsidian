@@ -11,6 +11,18 @@ import {
 import { sanitizeFilename, formatDate } from "../utils/helpers";
 import { buildOverviewSection, linkConceptNames } from "../core/markdown";
 
+/**
+ * Note identity: `alt_id` (public share id, 1.x and URL imports) or
+ * `alt_local_id` (Alt local UUID) with `alt_source`, so the sidebar can find
+ * the note again; the two id spaces never mix (spec 2.3).
+ */
+function identityLines(altData: AltNoteData): string[] {
+  if (altData.metadata.sourceKind === "alt-local") {
+    return [`alt_local_id: "${altData.metadata.noteId}"`, `alt_source: "alt-local"`];
+  }
+  return [`alt_id: "${altData.metadata.noteId}"`];
+}
+
 export class NoteGenerator {
   constructor(private llm: LLMProvider) {}
 
@@ -49,8 +61,8 @@ export class NoteGenerator {
     extraFrontmatter: string[] = []
   ): Promise<{ lectureMarkdown: string; conceptNotes: ConceptNote[] }> {
     if (slidesResult.slides.length === 0) {
-      // No usable slide commentary — fall back to lecture-level path.
-      return this.generate(altData, llmResult, subject);
+      // No usable slide commentary: fall back to the lecture-level path.
+      return this.generate(altData, llmResult, subject, extraFrontmatter);
     }
 
     const title = sanitizeFilename(altData.title);
@@ -67,7 +79,7 @@ export class NoteGenerator {
       altData.metadata.createdAt
         ? `alt_created: "${altData.metadata.createdAt}"`
         : null,
-      `alt_id: "${altData.metadata.noteId}"`,
+      ...identityLines(altData),
       ...extraFrontmatter,
       "---",
       "",
@@ -149,7 +161,8 @@ export class NoteGenerator {
   async generate(
     altData: AltNoteData,
     llmResult: LLMResult,
-    subject: string
+    subject: string,
+    extraFrontmatter: string[] = []
   ): Promise<{ lectureMarkdown: string; conceptNotes: ConceptNote[] }> {
     // Handle partial parse quality
     if (altData.parseQuality === "partial") {
@@ -170,7 +183,8 @@ export class NoteGenerator {
       altData.metadata.createdAt
         ? `alt_created: "${altData.metadata.createdAt}"`
         : null,
-      `alt_id: "${altData.metadata.noteId}"`,
+      ...identityLines(altData),
+      ...extraFrontmatter,
       "---",
       "",
     ]
@@ -220,6 +234,7 @@ export class NoteGenerator {
       `date: "${formatDate()}"`,
       `source: "alt2obsidian"`,
       `parse_quality: "partial"`,
+      ...(altData.metadata.sourceKind === "alt-local" ? identityLines(altData) : []),
       "---",
       "",
     ].join("\n");

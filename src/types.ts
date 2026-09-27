@@ -1,10 +1,12 @@
+import type { LectureBundle, SourceKind } from "./sources/types";
+
 /** LLM backends. The CLI providers run the user's installed `claude` / `codex`. */
 export type ProviderId = "claude-cli" | "codex-cli" | "gemini" | "ollama";
 
 /**
- * Tasks with their own provider, model and effort (spec 4.2). `alignment` is
- * script-only in 2.0.0-beta.1 and `verification` lands in Phase 3; their
- * fields are stored so the settings shape does not change later.
+ * Tasks with their own provider, model and effort (spec 4.2). `alignment`
+ * is the optional LLM check of low-confidence transcript alignment (off =
+ * "none", the default); `verification` lands in Phase 3.
  */
 export type TaskId = "commentary" | "concepts" | "alignment" | "verification";
 
@@ -64,6 +66,8 @@ export interface Alt2ObsidianSettings {
   /** Recently used model names per provider, newest first. */
   recentModels: Partial<Record<ProviderId, string[]>>;
   generation: GenerationOptions;
+  /** Alt's data folder override (read only). "" = the platform default. */
+  altDataDir: string;
 }
 
 export const DEFAULT_GENERATION: GenerationOptions = {
@@ -105,6 +109,7 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   preset: "custom",
   recentModels: {},
   generation: DEFAULT_GENERATION,
+  altDataDir: "",
 };
 
 export type ExamPeriod = "midterm" | "final";
@@ -119,9 +124,12 @@ export interface AltNoteData {
 }
 
 export interface AltNoteMetadata {
+  /** Public share id (URL source) or Alt local UUID (local sources). */
   noteId: string;
   createdAt: string | null;
   visibility: string | null;
+  /** Missing = "alt-url" (1.x). Local notes get `alt_local_id` instead of `alt_id`. */
+  sourceKind?: SourceKind;
 }
 
 export interface LLMResult {
@@ -230,6 +238,8 @@ export interface ImportRecord {
   date: string;
   parseQuality: "full" | "partial";
   altId?: string;
+  /** Alt local UUID (local sources). */
+  altLocalId?: string;
   examPeriod?: ExamPeriod;
   pdfPath?: string;
   wasUpdate?: boolean;
@@ -241,6 +251,8 @@ export interface ImportPreview {
   pdfData: ArrayBuffer | null;
   pdfUrl?: string | null;
   suggestedSubject: string;
+  /** Local sources: the full bundle (timestamped transcript for alignment). */
+  bundle?: LectureBundle;
 }
 
 /** Token usage of LLM calls, as reported by the CLI JSON output (spec 5.5). */

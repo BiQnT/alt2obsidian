@@ -28,6 +28,18 @@ import {
   Component,
 } from "obsidian";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import { parseAlignment, spansForSlide, StoredSpan } from "../core/prep/TranscriptAligner";
+
+/** Timestamped transcript of a local note (plugin cache, else Alt). */
+export type TranscriptLoader = (altLocalId: string) => Promise<Array<{ startMs: number; endMs: number; text: string }> | null>;
+
+function mmss(ms: number): string {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(t / 3600);
+  const m = String(Math.floor((t % 3600) / 60)).padStart(2, "0");
+  const sec = String(t % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${m}:${sec}` : `${m}:${sec}`;
+}
 
 export const VIEW_TYPE_SYNCED_VIEWER = "alt2obsidian-synced-viewer";
 
@@ -118,6 +130,61 @@ const SYNCED_VIEWER_CSS = `
 .alt2obs-md-pane .markdown-rendered {
   max-width: 100%;
 }
+.alt2obs-md-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-left: 1px solid var(--background-modifier-border);
+}
+.alt2obs-md-column .alt2obs-md-pane {
+  border-left: 0;
+}
+.alt2obs-sync-mode {
+  font-size: 12px;
+  color: var(--color-green);
+}
+.alt2obs-transcript-panel {
+  height: 32%;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+.alt2obs-transcript-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.alt2obs-transcript-range {
+  font-family: var(--font-monospace);
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.alt2obs-transcript-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 8px;
+}
+.alt2obs-seg {
+  display: flex;
+  gap: 10px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.alt2obs-seg-time {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
 .alt2obs-empty-state {
   padding: 32px;
   color: var(--text-muted);
@@ -151,13 +218,21 @@ export class SyncedViewerView extends ItemView {
   private pendingPageNum: number | null = null;
   private mdSyncTimer: number | null = null;
   private pendingMdPageNum: number | null = null;
+  /** `alt_alignment` of the note (spec 4.9); empty = scroll sync by headings only. */
+  private alignment: StoredSpan[] = [];
+  private altLocalId: string | null = null;
+  private transcript: Array<{ startMs: number; endMs: number; text: string }> | null = null;
+  private transcriptOpen = false;
+  private transcriptPanelEl: HTMLElement | null = null;
+  private transcriptBtnEl: HTMLButtonElement | null = null;
+  private syncModeEl: HTMLElement | null = null;
   // Suppression: when ONE side initiates a programmatic scroll on the OTHER
   // side, we ignore that other side's intersection events for a brief window
   // so the smooth-scroll doesn't bounce a return sync back. Single shared
   // timestamp keeps the logic simple.
   private suppressSyncUntil = 0;
 
-  constructor(leaf: WorkspaceLeaf) {
+  constructor(leaf: WorkspaceLeaf, private loadTranscript?: TranscriptLoader) {
     super(leaf);
   }
 
@@ -263,6 +338,12 @@ export class SyncedViewerView extends ItemView {
     });
     nativeBtn.onclick = () => this.openInNativeView();
 
+    this.syncModeEl = this.toolbarEl.createSpan({ cls: "alt2obs-sync-mode", text: "정렬 기준 동기화 · 전사 매칭" });
+    this.syncModeEl.hide();
+    this.transcriptBtnEl = this.toolbarEl.createEl("button", { text: "전사 패널" });
+    this.transcriptBtnEl.onclick = () => void this.toggleTranscript();
+    this.transcriptBtnEl.hide();
+
     this.pageInfoEl = this.toolbarEl.createDiv({ cls: "alt2obs-page-info" });
     this.updatePageInfo();
   }
@@ -288,7 +369,68 @@ export class SyncedViewerView extends ItemView {
   private buildPanes(root: HTMLElement): void {
     this.panesEl = root.createDiv({ cls: "alt2obs-synced-panes" });
     this.pdfPaneEl = this.panesEl.createDiv({ cls: "alt2obs-pdf-pane" });
-    this.mdPaneEl = this.panesEl.createDiv({ cls: "alt2obs-md-pane" });
+    const column = this.panesEl.createDiv({ cls: "alt2obs-md-column" });
+    this.mdPaneEl = column.createDiv({ cls: "alt2obs-md-pane" });
+    this.transcriptPanelEl = column.createDiv({ cls: "alt2obs-transcript-panel" });
+    this.transcriptPanelEl.hide();
+  }
+
+  /** Alignment facts from the note's frontmatter (spec 4.9). */
+  private readAlignment(file: TFile): void {
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    this.alignment = parseAlignment(fm?.alt_alignment);
+    const id = typeof fm?.alt_local_id === "string" ? fm.alt_local_id : null;
+    if (id !== this.altLocalId) this.transcript = null;
+    this.altLocalId = id;
+    const aligned = this.alignment.length > 0;
+    this.syncModeEl?.toggle(aligned);
+    this.transcriptBtnEl?.toggle(aligned && !!this.altLocalId && !!this.loadTranscript);
+    if (!aligned && this.transcriptOpen) {
+      this.transcriptOpen = false;
+      this.transcriptPanelEl?.hide();
+    }
+  }
+
+  private async toggleTranscript(): Promise<void> {
+    this.transcriptOpen = !this.transcriptOpen;
+    this.transcriptBtnEl?.toggleClass("is-active", this.transcriptOpen);
+    this.transcriptPanelEl?.toggle(this.transcriptOpen);
+    if (this.transcriptOpen) await this.renderTranscript();
+  }
+
+  /** The current slide's transcript segments with [mm:ss], from its aligned spans. */
+  private async renderTranscript(): Promise<void> {
+    const panel = this.transcriptPanelEl;
+    if (!panel || !this.transcriptOpen) return;
+    if (!this.transcript && this.altLocalId && this.loadTranscript) {
+      panel.empty();
+      panel.createDiv({ cls: "alt2obs-empty-state", text: "전사를 불러오는 중..." });
+      this.transcript = await this.loadTranscript(this.altLocalId);
+    }
+    panel.empty();
+    const slide = this.currentPage;
+    const spans = spansForSlide(this.alignment, slide);
+    const head = panel.createDiv({ cls: "alt2obs-transcript-head" });
+    head.createSpan({ text: `전사 · 슬라이드 ${slide} 구간${spans.some((s) => s.low) ? " (정렬 불확실)" : ""}` });
+    head.createSpan({
+      cls: "alt2obs-transcript-range",
+      text: spans.map((s) => `${mmss(s.startMs)} - ${mmss(s.endMs)}`).join(", "),
+    });
+    const body = panel.createDiv({ cls: "alt2obs-transcript-body" });
+    if (!this.transcript) {
+      body.createDiv({ cls: "alt2obs-empty-state", text: "전사를 찾지 못했습니다. Alt를 실행하거나 노트를 다시 가져오세요." });
+      return;
+    }
+    const segs = this.transcript.filter((seg) => spans.some((s) => seg.startMs >= s.startMs && seg.startMs < s.endMs));
+    if (segs.length === 0) {
+      body.createDiv({ cls: "alt2obs-empty-state", text: "이 슬라이드에 정렬된 전사가 없습니다." });
+      return;
+    }
+    for (const seg of segs) {
+      const row = body.createDiv({ cls: "alt2obs-seg" });
+      row.createSpan({ cls: "alt2obs-seg-time", text: `[${mmss(seg.startMs)}]` });
+      row.createSpan({ text: seg.text });
+    }
   }
 
   private renderEmptyState(): void {
@@ -302,6 +444,7 @@ export class SyncedViewerView extends ItemView {
   }
 
   private updatePageInfo(): void {
+    if (this.transcriptOpen) void this.renderTranscript();
     if (this.totalPages === 0) {
       this.pageInfoEl.setText("페이지 —");
     } else {
@@ -343,6 +486,7 @@ export class SyncedViewerView extends ItemView {
       return;
     }
     const text = await this.app.vault.read(file);
+    this.readAlignment(file);
     this.mdRenderComponent.unload();
     this.mdRenderComponent = new Component();
     this.mdRenderComponent.load();

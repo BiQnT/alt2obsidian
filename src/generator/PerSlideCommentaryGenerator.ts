@@ -25,13 +25,13 @@ import slideCommentaryUserTemplate from "../../prompts/slide-commentary.user.md"
 
 export interface PerSlideGenerationOptions {
   /**
-   * Lecture audio transcript (concatenated segments from `RscParser`). Passed
-   * to the LLM in even-sized chunks across slides. The current `RscParser`
-   * loses per-segment timestamps (segments are joined by " "), so we cannot
-   * yet do altToNotes-style time-proportional mapping; even-split is the
-   * stop-gap. Pass `null` to skip transcript injection entirely.
+   * Lecture audio transcript. Without `transcriptChunks` it is passed to the
+   * LLM in even-sized chunks across slides (the URL source has no
+   * timestamps). Pass `null` to skip transcript injection entirely.
    */
   transcript: string | null;
+  /** Aligned transcript per slide (spec 4.3, index 0 = slide 1); replaces the even split. */
+  transcriptChunks?: Array<string | null>;
   /**
    * Concept names already present in this subject's `Concepts/` folder. The
    * prompt instructs the LLM to reuse these names when the same concept
@@ -106,7 +106,7 @@ export class PerSlideCommentaryGenerator {
     }
 
     const pageTexts = await this.pdfProcessor.getPageTexts(pdfData);
-    const transcriptChunks = splitTranscriptEvenly(options.transcript, pageCount);
+    const transcriptChunks = options.transcriptChunks ?? splitTranscriptEvenly(options.transcript, pageCount);
     const slides: SlideSection[] = [];
     const errors: PerSlideGenerationResult["errors"] = [];
     const perSlideWallTimeMs: number[] = [];

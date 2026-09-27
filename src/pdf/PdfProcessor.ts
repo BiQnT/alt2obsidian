@@ -79,6 +79,16 @@ export class PdfProcessor {
     }
   }
 
+  /** Text layers with line breaks (alignment input, spec 4.3); no rendering. */
+  async getPageLayouts(pdfData: ArrayBuffer): Promise<PageLayout[]> {
+    const pdf = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
+    try {
+      return await extractPageLayouts(pdf);
+    } finally {
+      await pdf.destroy();
+    }
+  }
+
   /**
    * Render the requested PDF pages to base64 PNG images, scaled to fit
    * `maxWidth` while preserving aspect ratio (capped at scale=2 to avoid
