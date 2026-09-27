@@ -157,6 +157,14 @@ Read(file_path="/tmp/alt-deck-<noteId>.pdf", pages="21-40")
 
 Reading a PDF returns the page contents as images you can see directly. For each page N, generate the commentary with `$REPO/prompts/slide-commentary.system.md` + `slide-commentary.user.md`: `{{slideNum}}` = N, `{{totalSlides}}` = page count, `{{conceptList}}` = the existing concept names from step 4.1 (not the newly extracted ones), `{{transcriptBlock}}` = slide N's transcript chunk. Both fragments are empty when there is nothing to show and are otherwise formatted as in `buildSlidePrompt` in `PerSlideCommentaryGenerator.ts`.
 
+**Token saving (same prep as the plugin 2.0 CLI path).** Before writing commentary, save the full transcript to `/tmp/alt2obs-<noteId>/transcript.txt` and run the plugin's deterministic prep:
+
+```bash
+node "$REPO/scripts/phase2/prep.mjs" "/tmp/alt-deck-<noteId>.pdf" "<noteId>" --title "<title>" --transcript "/tmp/alt2obs-<noteId>/transcript.txt"
+```
+
+It prints `{"pages":[{"page","hash","kind","dupOf","mode","template","transcript",...}],"batches":[[...]]}` (renders with `pdftoppm` when installed; add `--no-render` to skip). For every page with `"mode":"template"` (cover, table of contents, closing slide, or an animation step whose `dupOf` page carries the explanation) use its `template` string verbatim as the slide body and do not generate or read it. For `"mode":"llm"` pages use their `transcript` field (fillers and repeats removed, capped, preferring sentences that match the slide) as the transcript chunk instead of the even split above. The `hash` values equal `slide-hashes.mjs`.
+
 Save each commentary to `/tmp/alt2obs-<noteId>/slide-<N>.md`, then link the extracted concept names (step 4) in all of them with the plugin's own code (`linkConceptNames` in `$REPO/src/core/markdown.ts`). The files are rewritten in place:
 
 ```bash

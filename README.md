@@ -2,11 +2,22 @@
 
 Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그인입니다.
 
-LLM(Gemini)을 활용하여 강의 슬라이드 1장당 한국어 해설을 만들고, 핵심 개념을 `[[Wikilink]]`와 `#태그`로 네트워크화하며, PDF와 노트를 좌우 동기 스크롤로 보여주는 전용 뷰어를 제공합니다.
+컴퓨터에 설치된 Claude Code CLI나 Codex CLI(또는 Gemini API, Ollama)로 강의 슬라이드 1장당 한국어 해설을 만들고, 핵심 개념을 `[[Wikilink]]`와 `#태그`로 네트워크화하며, PDF와 노트를 좌우 동기 스크롤로 보여주는 전용 뷰어를 제공합니다.
 
-## 주요 기능 (1.1.0)
+## 2.0.0-beta.1에서 바뀐 점
 
-- **페이지-anchored 노트 구조**: 강의 1개당 1 .md 파일에 PDF 슬라이드와 1:1로 대응하는 `## 📚 슬라이드 N` 섹션 자동 생성. 각 섹션 안의 Gemini 해설은 슬라이드 이미지 + 해당 구간 음성 전사 발췌를 입력으로 한 번씩 호출되어 만들어집니다.
+- **API 키 없이 생성**: 이미 구독 중인 Claude Code(`claude`)나 Codex(`codex`) CLI를 플러그인이 직접 실행합니다. Gemini API 키는 Gemini를 고를 때만 필요합니다.
+- **작업별 모델 선택**: 슬라이드 해설과 개념 추출마다 프로바이더, 모델, effort를 따로 고릅니다. 프리셋 `절약` / `품질` / `사용자 지정`.
+- **토큰 절약**: 슬라이드를 8장씩 묶어 한 번에 보내고(이미지가 있으면 4장), 표지·목차·마무리·애니메이션 중복 슬라이드는 LLM에 보내지 않으며, 이미지는 도표 위주 슬라이드에만 1024px JPEG로 붙입니다. 전사는 군말과 반복을 지우고 슬라이드당 600자로 줄입니다. 모든 호출의 앞부분(지시문과 강의 공통 맥락)이 같아서 두 번째 묶음부터 프롬프트 캐시에 걸립니다.
+- **다시 가져오기**: 슬라이드 텍스트와 렌더링 이미지가 모두 그대로인 슬라이드는 기존 해설을 재사용하고, 바뀐 슬라이드만 생성합니다.
+- **가져오기 전 예산 미리보기**: 예상 호출 수, 입력·출력 토큰, 보낼 이미지 수, 생략한 슬라이드 수를 사이드바에서 확인한 뒤 시작합니다. 강의당 토큰 상한을 넘으면 시작 전에 멈추고 이미지 줄이기를 제안합니다. 진행 중에는 단계, 묶음 진행률, 실시간 사용량, 취소 버튼이 보입니다.
+- **사용량 기록**: 실제 사용량(입력, 캐시 적중, 출력)을 노트 frontmatter `alt2obs_usage`와 설정 화면의 누적 사용량에 남깁니다.
+
+> **외부 프로그램 실행과 구독 사용량 안내**: Claude CLI나 Codex CLI를 고르면 이 플러그인은 컴퓨터에 설치된 `claude` / `codex` 프로그램을 자식 프로세스로 실행합니다. 모든 호출은 **사용자 계정의 구독 한도(또는 API 사용량)를 소모**합니다. CLI는 vault 밖 임시 폴더에서 실행되고(Claude: 도구 없음 또는 이미지 읽기(Read)만 허용, 설정·MCP·세션 저장 없음 / Codex: 읽기 전용 샌드박스, 세션 저장 없음), 노트 쓰기는 플러그인만 합니다. 데스크톱 전용입니다.
+
+## 주요 기능
+
+- **페이지-anchored 노트 구조**: 강의 1개당 1 .md 파일에 PDF 슬라이드와 1:1로 대응하는 `## 📚 슬라이드 N` 섹션 자동 생성. 각 섹션의 해설은 슬라이드 텍스트(도표 슬라이드는 이미지 포함)와 해당 구간 음성 전사 발췌로 만듭니다.
 - **사용자 메모 안전 보존**: 슬라이드별 `> [!note] 내 메모` 콜아웃은 관리 블록 바깥에 위치하며, 다음 import 때도 그대로 유지됩니다 (해시-augmented 마커가 슬라이드 reorder/insert/delete를 감지해 재정렬).
 - **Synced Viewer**: 명령 팔레트에서 'Open Synced Viewer (PDF + lecture .md)'를 실행하면 PDF(좌)와 강의 노트(우)가 좌우로 떠오릅니다. **양방향 동기 스크롤** (PDF↔md), 페이지 nav 버튼, 줌, 슬라이드 번호 라벨, **wikilink 클릭 이동** (Cmd-클릭 = 새 탭), **"📝 노트 편집"** 버튼으로 split-pane editor 열기 + 편집 시 우측 자동 refresh.
 - **개념 네트워크**: LLM이 한국어 강의에 한국어 개념(영어 병기), 영어 강의엔 영어 개념을 추출하고, 모든 슬라이드 섹션에 걸쳐 `[[Wikilink]]`로 일관성 있게 연결합니다. 정의 3-5문장 + 강의 맥락 2-3문장 + 구체 예시 + 시험 함정.
@@ -14,7 +25,9 @@ LLM(Gemini)을 활용하여 강의 슬라이드 1장당 한국어 해설을 만�
 - **시험대비 요약본**: 과목별 강의 관계도 + 핵심 요약을 자동 생성.
 - **사이드바 UI**: URL 입력, 과목 선택, 최근 노트, 시험요약본 생성을 한 곳에서 관리.
 - **다중 LLM 지원**:
-  - **Google AI Studio (기본)**: Gemini 2.5 Flash, **Gemma 3 27B/12B/4B** (모두 멀티모달, Gemma는 무료 등급 RPM ~30으로 더 여유). 모델명만 변경.
+  - **Claude Code CLI (기본, 설치되어 있으면)**: `claude -p`를 실행. 모델은 `sonnet`, `opus`, `haiku` 같은 별칭이나 전체 이름을 자유롭게 입력.
+  - **Codex CLI**: `codex exec`를 실행. 호출마다 Codex 자체 지시문과 전역 `~/.codex/AGENTS.md`가 함께 실려(이 컴퓨터 측정 약 18k 토큰) 고정 비용이 큽니다. 묶음 전송으로 나눠 냅니다.
+  - **Google AI Studio**: Gemini 2.5 Flash, **Gemma 3 27B/12B/4B** (모두 멀티모달, Gemma는 무료 등급 RPM ~30으로 더 여유). 모델명만 변경.
   - **Multi-key rotation**: API 키 필드에 콤마로 여러 무료 키 입력 → 429 시 자동 round-robin (3개 키 ≈ 15 RPM).
   - **Ollama (로컬)**: 멀티모달은 `llama3.2-vision:11b`, 텍스트는 `gemma3:4b` 권장. 무제한·무료·offline.
   - 자세한 RPM 우회 옵션: [`docs/gemini-rpm-options.md`](docs/gemini-rpm-options.md) 참고.
@@ -23,6 +36,22 @@ LLM(Gemini)을 활용하여 강의 슬라이드 1장당 한국어 해설을 만�
 > 1.0.x → 1.1.0 마이그레이션: 기존에 import한 노트는 그대로 유지됩니다. 새로 import하는 강의부터 페이지-anchored 구조로 생성됩니다.
 
 ## 설치 방법
+
+### 준비: LLM CLI (권장)
+
+Claude Code 또는 Codex 중 하나를 설치하고 터미널에서 한 번 로그인해 두세요.
+
+```bash
+# Claude Code
+npm install -g @anthropic-ai/claude-code   # 또는 공식 설치 스크립트
+claude    # 처음 한 번 실행해 로그인
+
+# Codex
+npm install -g @openai/codex
+codex login
+```
+
+Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니다. 플러그인은 처음 한 번 로그인 셸에서 `command -v claude`로 경로를 찾아 저장하고, 못 찾으면 흔한 설치 폴더를 살펴봅니다. 그래도 못 찾으면 **설정 → Alt2Obsidian → LLM 연결**에 `command -v claude` 결과(절대 경로)를 넣고 '다시 찾기'를 누르세요.
 
 ### 방법 1: 수동 설치 (지금 바로 사용)
 
@@ -87,15 +116,11 @@ Alt2Obsidian을 사용하려면 먼저 Alt 앱에서 강의 노트의 공유 링
 
 ## 사용 방법
 
-### 1단계: API 키 설정
+### 1단계: LLM 연결
 
-1. [Google AI Studio](https://aistudio.google.com/apikey)에서 **무료** API 키를 발급받습니다.
-   - Google 계정으로 로그인
-   - "Create API Key" 클릭
-   - 생성된 키 복사
-   > **무료 등급으로도 충분히 사용 가능합니다.**
-
-2. Obsidian **설정 → Alt2Obsidian**에서 API 키를 입력합니다.
+1. **설정 → Alt2Obsidian → LLM 연결**에서 Claude CLI / Codex CLI 카드에 경로와 버전이 보이는지 확인합니다. 1.x에서 올라온 경우에도 Claude CLI가 설치되어 있으면 슬라이드 해설과 개념 추출이 자동으로 Claude CLI로 설정됩니다(기존 Gemini 설정 값은 그대로 남습니다).
+2. **작업별 모델** 표에서 작업마다 프로바이더, 모델, effort를 고릅니다. 모델 칸을 비우면 CLI 기본 모델을 씁니다. 기본값: 슬라이드 해설은 기본 모델 + medium, 개념 추출은 `haiku` + low.
+3. Gemini API를 쓰려면 [Google AI Studio](https://aistudio.google.com/apikey)에서 무료 API 키를 발급받아 Gemini 카드에 입력하고, 작업 표에서 Gemini를 고릅니다. 이때는 1.1.0과 같은 슬라이드별 호출 방식으로 동작합니다.
 
 ### 2단계: Alt 노트 가져오기
 
@@ -108,7 +133,7 @@ Alt2Obsidian을 사용하려면 먼저 Alt 앱에서 강의 노트의 공유 링
    - 기존 과목이 있으면 칩을 클릭하여 선택 가능
    - 비워두면 자동 감지 시도
 
-4. **"가져오기"** 버튼을 클릭합니다.
+4. **"가져오기"** 버튼을 클릭합니다. CLI 프로바이더라면 PDF를 분석한 뒤 **예상 사용량**(호출 수, 토큰, 이미지, 생략 슬라이드)이 먼저 나옵니다. **시작**을 누르면 생성이 시작되고, 진행 중 **취소**로 언제든 멈출 수 있습니다(취소하면 노트는 바뀌지 않습니다).
 
 5. 잠시 후 Vault에 다음이 생성됩니다:
    ```
@@ -200,13 +225,22 @@ tags: [concept]
 
 | 설정 | 설명 | 기본값 |
 |------|------|--------|
-| LLM 제공자 | `Google Gemini / Gemma`, `Ollama (local)`, OpenAI/Claude (텍스트 전용 stub) | Google Gemini / Gemma |
+| LLM 연결 | Claude CLI / Codex CLI 경로(비우면 자동 탐색)와 버전, Gemini API 키, Ollama | 자동 탐색 |
+| 작업별 모델 | 슬라이드 해설, 개념 추출마다 프로바이더·모델·effort. 전사 정렬 확인과 노트 검증은 다음 베타에서 사용 | 해설: Claude CLI 기본 모델 medium / 개념: Claude CLI haiku low (Claude CLI가 없으면 Gemini) |
+| 프리셋 | `절약`: 모든 작업 경량 모델 + low. `품질`: 해설·검증 상위 모델 + high | 사용자 지정 |
+| 배치 크기 | CLI 호출 한 번에 보낼 슬라이드 수 (이미지가 있으면 절반) | 8 |
+| 이미지 전송 규칙 | 자동(도표 위주 슬라이드와 스캔 PDF만) / 텍스트만 | 자동 |
+| 슬라이드당 전사 상한 | 압축 후 남길 전사 글자 수 | 600 |
+| 강의당 토큰 상한 | 예상치가 넘으면 시작 전에 멈춤. 0 = 없음 | 0 |
+| CLI 호출 제한 시간 | 초과하면 중단하고 그 슬라이드만 한 번 재요청 | 300초 |
+| 바뀐 슬라이드만 다시 생성 | 텍스트 해시와 이미지 신호가 같으면 기존 해설 재사용 | 켜짐 |
+| 핵심 다이어그램 이미지 저장 | 값만 저장, 삽입은 다음 베타 | 켜짐 |
 | API 키 | Google AI Studio API 키. **콤마 구분으로 여러 키 입력하면 429 시 자동 rotation** | (직접 입력) |
 | Gemini 모델 | `gemini-2.5-flash` (기본), `gemini-2.5-flash-lite` (RPD 여유), **`gemma-3-27b-it`** (무료 RPM ~30, 멀티모달, 추천 무료 사용 모델) | gemini-2.5-flash |
 | Ollama endpoint | 로컬 Ollama 서버 URL (provider=ollama 일 때 노출) | http://localhost:11434 |
 | Ollama 모델 | `gemma3:4b` (텍스트), `llama3.2-vision:11b` (멀티모달) | gemma3:4b |
 | 저장 폴더 | Vault 내 저장 경로 | Alt2Obsidian |
-| 요청 간격 | API 호출 간 대기시간(ms). 슬라이드 30+ deck면 6000+ 권장 | 4000 |
+| 요청 간격 | Gemini API 호출 간 대기시간(ms). 슬라이드 30+ deck면 6000+ 권장 | 4000 |
 | 언어 | `ko` / `en` — concept 노트와 해설 출력 언어 | ko |
 
 **API 키가 부족할 때 (RPM/RPD 한도):** [`docs/gemini-rpm-options.md`](docs/gemini-rpm-options.md) 에 5개 우회 옵션 (Gemma 모델 변경, multi-key, Ollama, Tier 1, Phase 2 Skill) 비교.
@@ -227,6 +261,15 @@ npm run dev
 
 # 프로덕션 빌드
 npm run build
+
+# 테스트 (토큰을 쓰지 않음: test/fixtures/bin의 가짜 claude/codex 사용)
+npm test
+
+# 실제 CLI로 한 번씩 확인 (구독 사용량 소량 소모)
+ALT2OBS_SMOKE=1 node test/smoke-cli.mjs
+
+# 벤치마크 (scripts/bench/README.md)
+node scripts/bench/bench.mjs --pdf deck.pdf --transcript t.txt --provider claude-cli
 ```
 
 ## 라이선스
