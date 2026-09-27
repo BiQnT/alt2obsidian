@@ -116,6 +116,48 @@ const quiet = async (fn) => {
   }
 }
 
+// ---- version floor (MIN_CLI_VERSION): old installs skipped, the newest usable one wins ----
+{
+  const dir = mkdtempSync(join(tmpdir(), "resolve-ver-"));
+  try {
+    const mk = (sub, version, extra = "") => {
+      mkdirSync(join(dir, sub));
+      const f = join(dir, sub, "claude");
+      writeFileSync(f, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${version} (Claude Code)"; exit 0; fi\n${extra}\n`);
+      chmodSync(f, 0o755);
+      return f;
+    };
+    const old = mk("brew", "2.1.77", 'echo "error: unknown option \'--safe-mode\'" >&2; exit 1');
+    const cur = mk("nvm", "2.1.283");
+    const newer = mk("local", "2.2.0");
+    assert.equal(m.MIN_CLI_VERSION.claude, "2.1.283");
+    assert.deepEqual(m.parseSemver("2.1.283 (Claude Code)"), [2, 1, 283]);
+    assert.equal(m.versionAtLeast("2.1.77", "2.1.283"), false);
+    assert.equal(m.versionAtLeast("codex-cli 0.155.1", "0.155.1"), true);
+    assert.equal(m.versionAtLeast("", "0.1.0"), false);
+    const opts = { configuredPath: "", shell: FAKE_SHELL, minVersion: "2.1.283" };
+    // The login shell finds the old one first (like /opt/homebrew/bin before nvm): skipped.
+    process.env.FAKE_SHELL_RESULT = old;
+    const r = await m.resolveCliBinary("claude", { ...opts, extraDirs: [join(dir, "nvm")] });
+    assert.deepEqual(r, { path: cur, source: "common-path", version: "2.1.283 (Claude Code)" });
+    // The newest qualifying install wins; an old cached path is not kept.
+    assert.equal((await m.resolveCliBinary("claude", { ...opts, cachedPath: old, extraDirs: [join(dir, "nvm"), join(dir, "local")] })).path, newer);
+    // Only old installs: a clear error naming them.
+    await assert.rejects(m.resolveCliBinary("claude", { ...opts, extraDirs: [] }), (e) => /2\.1\.283 이상이 필요합니다/.test(e.message) && e.message.includes(`${old} (2.1.77 (Claude Code))`));
+    // A configured old path: error naming the usable alternatives.
+    process.env.FAKE_SHELL_RESULT = "";
+    await assert.rejects(m.resolveCliBinary("claude", { ...opts, configuredPath: old, extraDirs: [join(dir, "nvm")] }), (e) => e.message.includes(old) && e.message.includes(cur));
+    assert.equal((await m.resolveCliBinary("claude", { ...opts, configuredPath: cur, extraDirs: [] })).source, "settings");
+    // An "unknown option" exit of an old CLI becomes the update message, fatal for the run.
+    const provider = new m.ClaudeCliProvider({ bin: old, model: "", effort: "", timeoutMs: 10000, workDir: dir, ownsWorkDir: false });
+    await assert.rejects(provider.generateText("hi"), (e) => e.kind === "spawn" && /2\.1\.283 이상으로 업데이트/.test(e.message) && m.isFatalCliError(e));
+    console.log("PASS: CLI version floor: older installs skipped, newest usable picked, clear errors, unknown option mapped");
+  } finally {
+    delete process.env.FAKE_SHELL_RESULT;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ---- providers ----
 const SCHEMA = { type: "object", additionalProperties: false, required: ["ok"], properties: { ok: { type: "boolean" } } };
 const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";

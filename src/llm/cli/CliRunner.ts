@@ -369,11 +369,58 @@ export interface ResolveOptions {
   spawnFn?: SpawnFn;
   /** Environment for the Windows folders (%APPDATA% ...). Default process.env. */
   env?: Record<string, string | undefined>;
+  /**
+   * Lowest usable version ("2.1.283"). When set, every candidate's
+   * `--version` is read, older ones are skipped and the newest usable one
+   * wins; a configured path below it is an error naming the alternatives.
+   */
+  minVersion?: string;
+  /** Reads `<bin> --version` (default readCliVersion; tests override). */
+  readVersion?: (bin: string) => Promise<string>;
 }
 
 export interface ResolvedCli {
   path: string;
   source: "settings" | "cache" | "login-shell" | "where" | "common-path";
+  /** `--version` output when a minimum version was checked. */
+  version?: string;
+}
+
+/**
+ * Lowest CLI versions the providers are tested with (every flag they pass
+ * exists there): Claude Code 2.1.283 (`--safe-mode`, `--disable-slash-commands`,
+ * `--setting-sources`, `--effort`, `--permission-mode dontAsk`,
+ * `--strict-mcp-config`, stream-json input) and Codex 0.155.1
+ * (`--ignore-user-config`, `--ephemeral`, `--output-schema`). Older
+ * versions stop at "unknown option"; the first version that supports all of
+ * them is not documented, so the tested one is the floor.
+ */
+export const MIN_CLI_VERSION: Record<CliName, string> = { claude: "2.1.283", codex: "0.155.1" };
+
+/** [major, minor, patch] of the first x.y.z in a `--version` line, or null. */
+export function parseSemver(text: string): [number, number, number] | null {
+  const m = text.match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** True when `version` parses and is at least `min`. */
+export function versionAtLeast(version: string | undefined, min: string): boolean {
+  const v = parseSemver(version ?? "");
+  const m = parseSemver(min);
+  if (!v || !m) return false;
+  for (let i = 0; i < 3; i++) if (v[i] !== m[i]) return v[i] > m[i];
+  return true;
+}
+
+export function cliTooOldMessage(name: CliName, found: Array<{ path: string; version: string }>, min: string): string {
+  const list = found.map((f) => `${f.path} (${f.version || "버전 확인 실패"})`).join(", ");
+  return `${name} CLI ${min} 이상이 필요합니다. 찾은 실행 파일: ${list}. 새 버전으로 업데이트하거나(\`${name} update\` 또는 npm i -g) 설정 > LLM 연결에 새 버전의 절대 경로를 넣으세요.`;
+}
+
+/** Message for an exit whose stderr says the CLI does not know a flag (too old). */
+export function unknownOptionMessage(name: CliName, stderr: string): string | null {
+  if (!/unknown option|unexpected argument|unrecognized (option|argument)/i.test(stderr)) return null;
+  return `${name} CLI가 이 플러그인이 쓰는 옵션을 모릅니다 (${lastLine(stderr)}). ${name} CLI ${MIN_CLI_VERSION[name]} 이상으로 업데이트하거나 설정 > LLM 연결에서 '다시 찾기'를 누르세요.`;
 }
 
 export function cliNotFoundMessage(name: CliName, platform: NodeJS.Platform = process.platform): string {
@@ -462,6 +509,7 @@ export async function lookupWithWhere(name: CliName, timeoutMs: number, spawnFn?
 }
 
 export async function resolveCliBinary(name: CliName, opts: ResolveOptions): Promise<ResolvedCli> {
+  if (opts.minVersion) return resolveNewest(name, opts, opts.minVersion);
   const platform = opts.platform ?? process.platform;
   const P = pathLib(platform);
   const configured = opts.configuredPath.trim();
@@ -487,6 +535,63 @@ export async function resolveCliBinary(name: CliName, opts: ResolveOptions): Pro
     }
   }
   throw new CliRunError("not-found", cliNotFoundMessage(name, platform));
+}
+
+/** Every executable candidate in lookup order (no duplicates). */
+async function allCandidates(name: CliName, opts: ResolveOptions): Promise<Array<Omit<ResolvedCli, "version">>> {
+  const platform = opts.platform ?? process.platform;
+  const P = pathLib(platform);
+  const out: Array<Omit<ResolvedCli, "version">> = [];
+  const add = (path: string | null | undefined, source: ResolvedCli["source"]) => {
+    if (path && isExecutable(path, platform) && !out.some((c) => c.path === path)) out.push({ path, source });
+  };
+  add(opts.cachedPath, "cache");
+  if (platform === "win32") add(await lookupWithWhere(name, opts.shellTimeoutMs ?? 10_000, opts.spawnFn), "where");
+  else add(await lookupInLoginShell(name, opts.shell ?? (process.env.SHELL || "/bin/zsh"), opts.shellTimeoutMs ?? 10_000, opts.spawnFn), "login-shell");
+  for (const dir of opts.extraDirs ?? commonCliDirs(opts.home ?? homedir(), platform, opts.env)) {
+    for (const file of candidateNames(name, platform)) {
+      const candidate = platform === "win32" ? winJoin(dir, file) : P.join(dir, file);
+      if (existsSync(candidate)) add(candidate, "common-path");
+    }
+  }
+  return out;
+}
+
+/**
+ * Lookup with a version floor: a configured path must meet it; otherwise
+ * the newest candidate at or above it wins (lookup order breaks ties).
+ */
+async function resolveNewest(name: CliName, opts: ResolveOptions, min: string): Promise<ResolvedCli> {
+  const platform = opts.platform ?? process.platform;
+  const P = pathLib(platform);
+  const readVersion = opts.readVersion ?? ((bin: string) => readCliVersion(bin));
+  const versionOf = async (bin: string) => {
+    try {
+      return await readVersion(bin);
+    } catch {
+      return "";
+    }
+  };
+  const configured = opts.configuredPath.trim();
+  if (configured) {
+    if (!P.isAbsolute(configured) || !isExecutable(configured, platform)) {
+      throw new CliRunError("not-found", `설정한 ${name} 경로에서 실행 파일을 찾지 못했습니다: ${configured}`);
+    }
+    const version = await versionOf(configured);
+    if (versionAtLeast(version, min)) return { path: configured, source: "settings", version };
+    const others = (await allCandidates(name, { ...opts, cachedPath: undefined })).filter((c) => c.path !== configured);
+    const found = [{ path: configured, version }];
+    for (const c of others) found.push({ path: c.path, version: await versionOf(c.path) });
+    throw new CliRunError("not-found", cliTooOldMessage(name, found, min));
+  }
+  const candidates = await allCandidates(name, opts);
+  if (candidates.length === 0) throw new CliRunError("not-found", cliNotFoundMessage(name, platform));
+  const withVersions = await Promise.all(candidates.map(async (c) => ({ ...c, version: await versionOf(c.path) })));
+  const usable = withVersions.filter((c) => versionAtLeast(c.version, min));
+  if (usable.length === 0) throw new CliRunError("not-found", cliTooOldMessage(name, withVersions, min));
+  let best = usable[0];
+  for (const c of usable) if (versionAtLeast(c.version, best.version) && !versionAtLeast(best.version, c.version)) best = c;
+  return best;
 }
 
 /** First line of `<bin> --version`, e.g. "2.1.283 (Claude Code)". */

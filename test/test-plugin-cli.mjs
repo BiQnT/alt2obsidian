@@ -186,6 +186,9 @@ try {
   assert.equal(plugin.data.settings.apiKey, "old-key");
   assert.equal(plugin.data.settings.geminiModel, "gemma-3-27b-it");
   assert.equal(plugin.data.cliDetection.claude.version, "2.1.283 (Claude Code)");
+  plugin.data.cliDetection.claude.version = "2.1.77 (Claude Code)";
+  assert.equal(await plugin.resolveBin("claude"), FAKE_CLAUDE);
+  assert.equal(plugin.data.cliDetection.claude.version, "2.1.283 (Claude Code)", "a cached path below the version floor is checked again");
   assert.ok(plugin.isCliCommentary());
   plugin.pdfProcessor = pdfStub;
   console.log("PASS: CLI default only without a working setup and after a free login check; 1.x Gemini users get an offer");

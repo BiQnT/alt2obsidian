@@ -26,7 +26,7 @@
 
 import { LLMUsage } from "../../types";
 import { CliCall, CliCallResult, CliProviderBase } from "./CliProviderBase";
-import { CliRunError, runCli } from "./CliRunner";
+import { CliRunError, runCli, unknownOptionMessage } from "./CliRunner";
 
 export interface ClaudeArgsInput {
   model: string;
@@ -182,6 +182,8 @@ export class ClaudeCliProvider extends CliProviderBase {
       });
       return parseClaudeOutput(out.stdout);
     } catch (e) {
+      const tooOld = e instanceof CliRunError && e.kind === "exit" ? unknownOptionMessage("claude", e.stderr) : null;
+      if (tooOld) throw new CliRunError("spawn", tooOld, e instanceof CliRunError ? e.stderr : "");
       // A non-zero exit often still prints the result event with the reason.
       if (e instanceof CliRunError && e.kind === "exit" && e.stdout) {
         const res = findClaudeResult(e.stdout);

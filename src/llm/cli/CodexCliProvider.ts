@@ -37,7 +37,7 @@ import { readFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { LLMUsage } from "../../types";
 import { CliCall, CliCallResult, CliProviderBase } from "./CliProviderBase";
-import { CliRunError, runCli } from "./CliRunner";
+import { CliRunError, runCli, unknownOptionMessage } from "./CliRunner";
 
 export interface CodexArgsInput {
   model: string;
@@ -170,6 +170,8 @@ export class CodexCliProvider extends CliProviderBase {
       });
       return parseCodexEvents(out.stdout, readIfExists(lastMessagePath));
     } catch (e) {
+      const tooOld = e instanceof CliRunError && e.kind === "exit" ? unknownOptionMessage("codex", e.stderr) : null;
+      if (tooOld) throw new CliRunError("spawn", tooOld, e instanceof CliRunError ? e.stderr : "");
       if (e instanceof CliRunError && e.kind === "exit" && e.stdout) {
         try {
           parseCodexEvents(e.stdout);
