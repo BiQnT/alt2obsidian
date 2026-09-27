@@ -7,7 +7,7 @@
 		"dev": "node esbuild.config.mjs",
 		"build": "node esbuild.config.mjs production && npm run build:scripts",
 		"build:scripts": "node scripts/build-scripts.mjs",
-		"test": "node test/test-prompts.mjs && node test/test-gemini-prompts.mjs && node test/test-cli-providers.mjs && node test/test-prep.mjs && node test/test-batch.mjs && node test/test-bench.mjs && node test/test-markdown.mjs && node test/test-merge.mjs && node test/test-slide-hash.mjs && node test/test-skill-clis.mjs"
+		"test": "node test/test-prompts.mjs && node test/test-gemini-prompts.mjs && node test/test-cli-providers.mjs && node test/test-prep.mjs && node test/test-batch.mjs && node test/test-bench.mjs && node test/test-plugin-cli.mjs && node test/test-markdown.mjs && node test/test-merge.mjs && node test/test-slide-hash.mjs && node test/test-skill-clis.mjs"
 	},
 	"keywords": [
 		"obsidian",
