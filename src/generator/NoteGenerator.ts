@@ -131,7 +131,7 @@ export class NoteGenerator {
    */
   private buildSlideSection(slide: SlideSection, conceptNames: string[]): string {
     const linked = linkConceptNames(slide.commentary, conceptNames);
-    const body = slide.meta ? `${linked}\n${slide.meta}` : linked;
+    const body = slide.meta ? `${linked}\n\n${slide.meta}` : linked;
     const startMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} start -->`;
     const endMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} end -->`;
     return [

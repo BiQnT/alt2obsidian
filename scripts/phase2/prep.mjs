@@ -26,8 +26,11 @@ var SCANNED_SHARE = 0.8;
 var VISUAL_RATIO = 0.3;
 var LOW_TEXT_CHARS = 30;
 var LOW_TEXT_VISUAL_RATIO = 0.08;
-var TOC_PREFIXES = ["tableofcontents", "contents", "\uBAA9\uCC28", "\uCC28\uB840", "outline", "agenda"];
-var THANKS_PATTERN = /thank|감사합니다|수고하셨습니다|q\s*&\s*a|questions\??$|질문|the\s*end/i;
+var TOC_LINE = /^(table of contents|contents|목차|차례|outline|agenda)\s*:?$/i;
+var THANKS_LINE = /^(thank you( very much)?|thanks|감사합니다|수고하셨습니다|q\s*&\s*a|questions?|any questions|질문 있나요|the end|끝)\s*[!.?]*$/i;
+var COVER_TITLE = /\b(lecture|lec\.?|chapter|week|unit|session)\s*\d+|\b[A-Z]{2,6}\s?-?\d{3,4}[A-Z]?\b|제\s*\d+\s*강|\d+\s*강\b|\d+\s*주차|강의/i;
+var COVER_AFFILIATION = /universit|department|dept\.|school of|college|institute|laborator|\blab\b|professor|prof\.|@[\w.-]+\.[a-z]{2,}|대학|학과|학부|연구실|교수/i;
+var COVER_MAX_CHARS = 1200;
 function bigrams(s) {
   const m = /* @__PURE__ */ new Map();
   for (let i = 0; i < s.length - 1; i++) {
@@ -130,6 +133,30 @@ function averageHash(gray, size = 16) {
   }
   return hex;
 }
+function luminanceGrid(gray, size = 8) {
+  let hex = "";
+  for (let gy = 0; gy < size; gy++) {
+    for (let gx = 0; gx < size; gx++) {
+      const x0 = Math.floor(gx * gray.width / size);
+      const x1 = Math.max(x0 + 1, Math.floor((gx + 1) * gray.width / size));
+      const y0 = Math.floor(gy * gray.height / size);
+      const y1 = Math.max(y0 + 1, Math.floor((gy + 1) * gray.height / size));
+      let sum = 0;
+      let cnt = 0;
+      for (let y = y0; y < y1 && y < gray.height; y++) {
+        for (let x = x0; x < x1 && x < gray.width; x++) {
+          sum += gray.data[y * gray.width + x];
+          cnt++;
+        }
+      }
+      hex += Math.min(15, Math.floor((cnt > 0 ? sum / cnt : 0) / 16)).toString(16);
+    }
+  }
+  return hex;
+}
+function imageSignal(gray) {
+  return averageHash(gray) + luminanceGrid(gray);
+}
 function signalDistance(a, b) {
   if (!a || !b || a.length !== b.length)
     return Infinity;
@@ -144,16 +171,47 @@ function signalDistance(a, b) {
   return d;
 }
 function sameImageSignal(a, b) {
-  return signalDistance(a, b) <= 8;
+  if (!a || !b || a.length !== 128 || b.length !== 128)
+    return false;
+  if (signalDistance(a.slice(0, 64), b.slice(0, 64)) > 2)
+    return false;
+  let cells = 0;
+  for (let i = 64; i < 128; i++) {
+    const d = Math.abs(parseInt(a[i], 16) - parseInt(b[i], 16));
+    if (d > 1)
+      return false;
+    if (d === 1)
+      cells++;
+  }
+  return cells <= 2;
 }
-function classifySlide(index, pageCount, text, imageRatio) {
+function contentLines(text, lines) {
+  return (lines ?? [text ?? ""]).map((l) => l.replace(/\s+/g, " ").trim()).filter((l) => l.length > 0 && !/^\d{1,3}$/.test(l));
+}
+function looksLikeCover(text, lines) {
+  const chars = normalizePageText(text ?? "").length;
+  if (chars <= 150)
+    return true;
+  if (chars > COVER_MAX_CHARS)
+    return false;
+  const ls = contentLines(text, lines);
+  if (ls.some((l) => /^[•◼▪■●◦\-*]\s/.test(l)))
+    return false;
+  return ls.slice(0, 3).some((l) => COVER_TITLE.test(l)) && ls.some((l) => COVER_AFFILIATION.test(l));
+}
+function classifySlide(index, pageCount, text, imageRatio, lines) {
   const norm = normalizePageText(text ?? "");
   const chars = norm.length;
-  if (index === 0 && chars <= 150)
+  const ls = contentLines(text, lines);
+  if (index === 0 && looksLikeCover(text, lines))
     return "cover";
-  if (index >= pageCount - 2 && chars > 0 && chars <= 120 && THANKS_PATTERN.test((text ?? "").trim()))
-    return "thanks";
-  if (chars > 0 && chars <= 500 && TOC_PREFIXES.some((p) => norm.startsWith(p)))
+  if (index >= pageCount - 2 && chars > 0 && chars <= 120 && ls.length > 0 && THANKS_LINE.test(ls[0])) {
+    const rest = ls.slice(1).join(" ");
+    if (rest.length <= 40 && !/^[•◼▪■●◦\-*]/m.test(ls.slice(1).join("\n")))
+      return "thanks";
+  }
+  const tocWindow = Math.max(3, Math.ceil(pageCount * 0.15));
+  if (index < tocWindow && chars > 0 && chars <= 500 && ls.length > 0 && TOC_LINE.test(ls[0]))
     return "toc";
   if (imageRatio === null)
     return chars < LOW_TEXT_CHARS ? "visual" : "content";
@@ -165,6 +223,31 @@ function classifySlide(index, pageCount, text, imageRatio) {
     return "visual";
   return "content";
 }
+function tokens(text) {
+  return text.normalize("NFC").toLowerCase().match(/[a-z]+|\d+(?:\.\d+)?|[\uac00-\ud7a3]+|[^\s\w]/g) ?? [];
+}
+function isBuildStep(a, b) {
+  if (textSimilarity(a, b) < DUPLICATE_SIMILARITY)
+    return false;
+  const ta = tokens(a);
+  const pool = /* @__PURE__ */ new Map();
+  for (const t of tokens(b))
+    pool.set(t, (pool.get(t) ?? 0) + 1);
+  if (tokens(b).length < ta.length)
+    return false;
+  let missingWords = 0;
+  for (const t of ta) {
+    const n = pool.get(t) ?? 0;
+    if (n > 0) {
+      pool.set(t, n - 1);
+      continue;
+    }
+    if (/^\d/.test(t))
+      return false;
+    missingWords++;
+  }
+  return missingWords <= Math.floor(ta.length * 0.03);
+}
 async function analyzeSlides(layouts, grays, opts) {
   const n = layouts.length;
   const textless = layouts.filter((l) => normalizePageText(l.text ?? "").length === 0).length;
@@ -174,7 +257,7 @@ async function analyzeSlides(layouts, grays, opts) {
     const layout = layouts[i];
     const gray = grays[i] ?? null;
     const imageRatio = gray ? computeImageRatio(gray, layout.boxes) : null;
-    const kind = scanned ? "content" : classifySlide(i, n, layout.text, imageRatio);
+    const kind = scanned ? "content" : classifySlide(i, n, layout.text, imageRatio, layout.lines);
     slides.push({
       page: i + 1,
       hash: await computeSlideHash(layout.text, i + 1, opts.sourceId),
@@ -184,7 +267,7 @@ async function analyzeSlides(layouts, grays, opts) {
       dupOf: null,
       sendImage: scanned || kind === "visual" && opts.imageRule !== "text-only",
       title: slideTitle(layout.text),
-      imageSignal: gray ? averageHash(gray) : null
+      imageSignal: gray ? imageSignal(gray) : null
     });
   }
   const generated = (s) => s.kind === "content" || s.kind === "visual";
@@ -193,7 +276,9 @@ async function analyzeSlides(layouts, grays, opts) {
     const b = slides[i + 1];
     if (!generated(a) || !generated(b) || a.textChars < 20 || b.textChars < 20)
       continue;
-    if (textSimilarity(layouts[i].text ?? "", layouts[i + 1].text ?? "") >= DUPLICATE_SIMILARITY) {
+    if ((a.kind === "visual" || b.kind === "visual") && !sameImageSignal(a.imageSignal, b.imageSignal))
+      continue;
+    if (isBuildStep(layouts[i].text ?? "", layouts[i + 1].text ?? "")) {
       a.dupOf = b.dupOf ?? b.page;
     }
   }
@@ -239,13 +324,25 @@ async function extractPageLayouts(pdf) {
       const content = await page.getTextContent();
       const items = content.items;
       const view = page.view ?? [0, 0, 1, 1];
+      const lines = [];
+      let line = "";
+      for (const item of items) {
+        line += item.str ?? "";
+        if (item.hasEOL) {
+          lines.push(line);
+          line = "";
+        }
+      }
+      if (line)
+        lines.push(line);
       out.push({
         text: items.map((item) => item.str ?? "").join(""),
-        boxes: items.map((item) => itemBox(item, view)).filter((b) => b !== null)
+        boxes: items.map((item) => itemBox(item, view)).filter((b) => b !== null),
+        lines
       });
     } catch (e) {
       console.warn(`[Alt2Obsidian] layout extraction failed for page ${pageNum}:`, e);
-      out.push({ text: null, boxes: [] });
+      out.push({ text: null, boxes: [], lines: [] });
     }
   }
   return out;
@@ -409,7 +506,13 @@ function splitMultiManagedNote(content) {
 }
 
 // src/core/slideMeta.ts
-var META_RE = /\n?<!-- alt2obs:meta img:([0-9a-f]{64}|none) gist:("(?:[^"\\]|\\.)*") -->\s*$/;
+var META_RE = /\n*<!-- alt2obs:meta img:([0-9a-f]{128}|[0-9a-f]{64}|none) gist:("(?:[^"\\]|\\.)*") -->\s*$/;
+function commentSafeJson(value) {
+  return JSON.stringify(value).replace(/-/g, "\\u002d").replace(/>/g, "\\u003e");
+}
+function formatSlideMeta(imageSignal2, gist) {
+  return `<!-- alt2obs:meta img:${imageSignal2 ?? "none"} gist:${commentSafeJson(gist)} -->`;
+}
 function parseSlideMeta(managed) {
   const m = managed.match(META_RE);
   if (!m)
@@ -425,8 +528,9 @@ function stripSlideMeta(managed) {
 }
 
 // src/core/prep/TranscriptCompressor.ts
-var KO_FILLERS = ["\uC74C", "\uC73C\uC74C", "\uC74C\uC74C", "\uC5B4", "\uC5B4\uC5B4", "\uC5D0", "\uC5D0\uC5D0", "\uC544", "\uADF8\uB7EC\uB2C8\uAE4C", "\uC774\uC81C", "\uB9C9", "\uBB50", "\uC800\uAE30", "\uADF8\uB2C8\uAE4C"];
-var EN_FILLERS = ["um", "umm", "uh", "uhh", "uhm", "erm", "er", "ah", "hmm", "mm", "you know", "i mean"];
+var KO_FILLERS = ["\uC74C", "\uC73C\uC74C", "\uC74C\uC74C", "\uC5B4", "\uC5B4\uC5B4", "\uC5D0", "\uC5D0\uC5D0", "\uADF8\uB7EC\uB2C8\uAE4C", "\uC800\uAE30", "\uADF8\uB2C8\uAE4C"];
+var EN_FILLERS = ["um", "umm", "uh", "uhh", "uhm", "erm", "er", "hmm", "you know", "i mean"];
+var PAUSE_FILLERS_RE = /(^|[\s,.!?])(?:뭐|아|ah)(?:,|…|\.{2,})(?=$|\s)/giu;
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -439,7 +543,7 @@ function removeFillers(text) {
   let out = text;
   while (prev !== out) {
     prev = out;
-    out = out.replace(FILLER_RE, "$1");
+    out = out.replace(FILLER_RE, "$1").replace(PAUSE_FILLERS_RE, "$1");
   }
   return out.replace(/[ \t]{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^[\s,]+/, "").trim();
 }
@@ -495,15 +599,15 @@ function dedupeSentences(sentences) {
   return out;
 }
 function contentTokens(text) {
-  const tokens = /* @__PURE__ */ new Set();
+  const tokens2 = /* @__PURE__ */ new Set();
   const lower = text.normalize("NFC").toLowerCase();
   for (const m of lower.matchAll(/[a-z0-9]{3,}|[가-힣]{2,}/g)) {
     const w = m[0];
-    tokens.add(w);
+    tokens2.add(w);
     if (/^[가-힣]/.test(w) && w.length > 2)
-      tokens.add(w.slice(0, 2));
+      tokens2.add(w.slice(0, 2));
   }
-  return tokens;
+  return tokens2;
 }
 function capSentences(sentences, slideText, capChars) {
   if (capChars <= 0)
@@ -554,20 +658,17 @@ function splitTranscriptEvenly(transcript, slideCount) {
 
 // src/pipeline/batchPlan.ts
 function parseExistingSlides(noteContent) {
-  const out = [];
-  for (const s of splitMultiManagedNote(noteContent).sections) {
+  return splitMultiManagedNote(noteContent).sections.map((s) => {
     const meta = parseSlideMeta(s.managed);
-    if (!meta || !meta.gist)
-      continue;
-    out.push({
+    return {
       slideNum: s.slideNum,
       hash: s.hash,
       commentary: stripSlideMeta(s.managed).trim(),
-      imageSignal: meta.imageSignal,
-      gist: meta.gist
-    });
-  }
-  return out;
+      imageSignal: meta?.imageSignal ?? null,
+      gist: meta?.gist ?? "",
+      meta: meta ? formatSlideMeta(meta.imageSignal, meta.gist) : ""
+    };
+  });
 }
 function planDeck(input) {
   const n = input.slides.length;
@@ -587,23 +688,33 @@ function planDeck(input) {
   }
   let before = 0;
   let after = 0;
+  const used = /* @__PURE__ */ new Set();
   const slides = input.slides.map((s, i) => {
     const text = input.layouts[i]?.text ?? "";
     const template = templateCommentary(s, input.deckTitle);
     if (template !== null)
       return { ...s, text, transcript: "", mode: "template", template };
     const candidates = pool.get(s.hash);
-    const prev = candidates && candidates.length > 0 ? candidates[0] : void 0;
+    const prev = candidates && candidates.length > 0 ? candidates.shift() : void 0;
     if (prev)
-      candidates.shift();
-    if (prev && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal)) {
+      used.add(prev);
+    if (prev && prev.gist && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal)) {
       return { ...s, text, transcript: "", mode: "reuse", reused: { commentary: prev.commentary, gist: prev.gist } };
     }
     const compressed = compressTranscript(runChunks[i] || null, text, input.transcriptCapChars);
     before += compressed.originalChars;
     after += compressed.text.length;
-    return { ...s, text, transcript: compressed.text, mode: "llm" };
+    return { ...s, text, transcript: compressed.text, mode: "llm", previous: prev };
   });
+  for (const s of slides) {
+    if (s.mode !== "llm" || s.previous)
+      continue;
+    const byNum = (input.existing ?? []).find((e) => !used.has(e) && e.slideNum === s.page);
+    if (byNum) {
+      used.add(byNum);
+      s.previous = byNum;
+    }
+  }
   return {
     slides,
     batches: makeBatches(slides, input.batchSize),

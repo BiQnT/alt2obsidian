@@ -8,12 +8,14 @@
 //               small grayscale render and the text item boxes (null when no
 //               render is available)
 //   kind        cover / toc / thanks / content / visual
-//   dupOf       for a near-duplicate run of consecutive pages (text
-//               similarity >= 0.9, animation builds), every page but the last
-//               points at the last one, which alone is generated
+//   dupOf       for a run of animation build steps (each page's text is
+//               contained in the next and similarity >= 0.9, no number
+//               changed), every page but the last points at the last one,
+//               which alone is generated
 //   sendImage   whether the generator attaches the page image (spec 5.2)
-//   imageSignal 16x16 average hash of the render (64 hex), the cheap image
-//               check that makes "skip unchanged slide" safe (spec 5.4)
+//   imageSignal 16x16 average hash plus an 8x8 luminance grid of the render
+//               (128 hex), the cheap image check that makes "skip unchanged
+//               slide" safe (spec 5.4)
 
 import { computeSlideHash, normalizePageText } from "../slideHash";
 
@@ -38,6 +40,8 @@ export interface PageLayout {
   /** pdfjs text layer joined like `extractPageTexts`; null = unreadable. */
   text: string | null;
   boxes: TextBox[];
+  /** Text lines (pdfjs end-of-line marks). Absent: `text` is one line. */
+  lines?: string[];
 }
 
 export interface SlideInfo {
@@ -67,8 +71,15 @@ const VISUAL_RATIO = 0.3;
 const LOW_TEXT_CHARS = 30;
 const LOW_TEXT_VISUAL_RATIO = 0.08;
 
-const TOC_PREFIXES = ["tableofcontents", "contents", "목차", "차례", "outline", "agenda"];
-const THANKS_PATTERN = /thank|감사합니다|수고하셨습니다|q\s*&\s*a|questions\??$|질문|the\s*end/i;
+/** A whole first line that names a table of contents. */
+const TOC_LINE = /^(table of contents|contents|목차|차례|outline|agenda)\s*:?$/i;
+/** A whole line that only says thanks / Q&A / the end. "질문: 왜 ...?" does not match. */
+const THANKS_LINE = /^(thank you( very much)?|thanks|감사합니다|수고하셨습니다|q\s*&\s*a|questions?|any questions|질문 있나요|the end|끝)\s*[!.?]*$/i;
+/** Cover: lecture or course title in the first lines ... */
+const COVER_TITLE = /\b(lecture|lec\.?|chapter|week|unit|session)\s*\d+|\b[A-Z]{2,6}\s?-?\d{3,4}[A-Z]?\b|제\s*\d+\s*강|\d+\s*강\b|\d+\s*주차|강의/i;
+/** ... and an author or affiliation line. */
+const COVER_AFFILIATION = /universit|department|dept\.|school of|college|institute|laborator|\blab\b|professor|prof\.|@[\w.-]+\.[a-z]{2,}|대학|학과|학부|연구실|교수/i;
+const COVER_MAX_CHARS = 1200;
 
 // ---- text helpers ----
 
@@ -179,7 +190,35 @@ export function averageHash(gray: GrayImage, size = 16): string {
   return hex;
 }
 
-/** Bits that differ between two image signals; Infinity when not comparable. */
+/** 8x8 grid of mean luminance quantized to 16 levels (64 hex): catches edits the average hash misses. */
+export function luminanceGrid(gray: GrayImage, size = 8): string {
+  let hex = "";
+  for (let gy = 0; gy < size; gy++) {
+    for (let gx = 0; gx < size; gx++) {
+      const x0 = Math.floor((gx * gray.width) / size);
+      const x1 = Math.max(x0 + 1, Math.floor(((gx + 1) * gray.width) / size));
+      const y0 = Math.floor((gy * gray.height) / size);
+      const y1 = Math.max(y0 + 1, Math.floor(((gy + 1) * gray.height) / size));
+      let sum = 0;
+      let cnt = 0;
+      for (let y = y0; y < y1 && y < gray.height; y++) {
+        for (let x = x0; x < x1 && x < gray.width; x++) {
+          sum += gray.data[y * gray.width + x];
+          cnt++;
+        }
+      }
+      hex += Math.min(15, Math.floor((cnt > 0 ? sum / cnt : 0) / 16)).toString(16);
+    }
+  }
+  return hex;
+}
+
+/** Image signal: average hash (64 hex) followed by the luminance grid (64 hex). */
+export function imageSignal(gray: GrayImage): string {
+  return averageHash(gray) + luminanceGrid(gray);
+}
+
+/** Bits that differ between two hex strings of equal length; Infinity when not comparable. */
 export function signalDistance(a: string | null, b: string | null): number {
   if (!a || !b || a.length !== b.length) return Infinity;
   let d = 0;
@@ -193,29 +232,99 @@ export function signalDistance(a: string | null, b: string | null): number {
   return d;
 }
 
-/** Renders of the same page differ by a few anti-aliasing bits at most (8 of 256). */
+/**
+ * Same render: at most 2 of the 256 average-hash bits differ, and at most
+ * 2 grid cells differ, by one luminance level only (anti-aliasing noise).
+ */
 export function sameImageSignal(a: string | null, b: string | null): boolean {
-  return signalDistance(a, b) <= 8;
+  if (!a || !b || a.length !== 128 || b.length !== 128) return false;
+  if (signalDistance(a.slice(0, 64), b.slice(0, 64)) > 2) return false;
+  let cells = 0;
+  for (let i = 64; i < 128; i++) {
+    const d = Math.abs(parseInt(a[i], 16) - parseInt(b[i], 16));
+    if (d > 1) return false;
+    if (d === 1) cells++;
+  }
+  return cells <= 2;
 }
 
 // ---- classification ----
+
+/** Lines without page numbers and blanks. */
+function contentLines(text: string | null, lines?: string[]): string[] {
+  return (lines ?? [text ?? ""]).map((l) => l.replace(/\s+/g, " ").trim()).filter((l) => l.length > 0 && !/^\d{1,3}$/.test(l));
+}
+
+/**
+ * Page 1 is a cover when its text is short, or (conservatively) when it has
+ * a lecture/course title in its first three lines, an author or affiliation
+ * line, no bullet list, and stays under 1200 characters: covers often carry
+ * a long disclaimer.
+ */
+export function looksLikeCover(text: string | null, lines?: string[]): boolean {
+  const chars = normalizePageText(text ?? "").length;
+  if (chars <= 150) return true;
+  if (chars > COVER_MAX_CHARS) return false;
+  const ls = contentLines(text, lines);
+  if (ls.some((l) => /^[•◼▪■●◦\-*]\s/.test(l))) return false;
+  return ls.slice(0, 3).some((l) => COVER_TITLE.test(l)) && ls.some((l) => COVER_AFFILIATION.test(l));
+}
 
 export function classifySlide(
   index: number,
   pageCount: number,
   text: string | null,
-  imageRatio: number | null
+  imageRatio: number | null,
+  lines?: string[]
 ): SlideKind {
   const norm = normalizePageText(text ?? "");
   const chars = norm.length;
-  if (index === 0 && chars <= 150) return "cover";
-  if (index >= pageCount - 2 && chars > 0 && chars <= 120 && THANKS_PATTERN.test((text ?? "").trim())) return "thanks";
-  if (chars > 0 && chars <= 500 && TOC_PREFIXES.some((p) => norm.startsWith(p))) return "toc";
+  const ls = contentLines(text, lines);
+  if (index === 0 && looksLikeCover(text, lines)) return "cover";
+  // Thanks / Q&A: one of the last two pages whose first line says only that,
+  // with at most a short name or e-mail line besides.
+  if (index >= pageCount - 2 && chars > 0 && chars <= 120 && ls.length > 0 && THANKS_LINE.test(ls[0])) {
+    const rest = ls.slice(1).join(" ");
+    if (rest.length <= 40 && !/^[•◼▪■●◦\-*]/m.test(ls.slice(1).join("\n"))) return "thanks";
+  }
+  // Table of contents: within the first 15% of the deck (at least 3 pages), first line is the keyword.
+  const tocWindow = Math.max(3, Math.ceil(pageCount * 0.15));
+  if (index < tocWindow && chars > 0 && chars <= 500 && ls.length > 0 && TOC_LINE.test(ls[0])) return "toc";
   if (imageRatio === null) return chars < LOW_TEXT_CHARS ? "visual" : "content";
   if (chars < LOW_TEXT_CHARS && imageRatio >= LOW_TEXT_VISUAL_RATIO) return "visual";
   if (imageRatio >= VISUAL_RATIO) return "visual";
   if (chars === 0) return "visual";
   return "content";
+}
+
+/** Word, number and symbol tokens; letters and digits split apart ("Case1" = case, 1). */
+function tokens(text: string): string[] {
+  return text.normalize("NFC").toLowerCase().match(/[a-z]+|\d+(?:\.\d+)?|[\uac00-\ud7a3]+|[^\s\w]/g) ?? [];
+}
+
+/**
+ * Page `b` is an animation build step of page `a`: similar text, every
+ * number of `a` still in `b`, and `a`'s other tokens contained in `b` (up to
+ * 3% missing for text-extraction noise). "Case 1" vs "Case 2" or a changed
+ * number is not a build step.
+ */
+export function isBuildStep(a: string, b: string): boolean {
+  if (textSimilarity(a, b) < DUPLICATE_SIMILARITY) return false;
+  const ta = tokens(a);
+  const pool = new Map<string, number>();
+  for (const t of tokens(b)) pool.set(t, (pool.get(t) ?? 0) + 1);
+  if (tokens(b).length < ta.length) return false;
+  let missingWords = 0;
+  for (const t of ta) {
+    const n = pool.get(t) ?? 0;
+    if (n > 0) {
+      pool.set(t, n - 1);
+      continue;
+    }
+    if (/^\d/.test(t)) return false;
+    missingWords++;
+  }
+  return missingWords <= Math.floor(ta.length * 0.03);
 }
 
 /**
@@ -236,7 +345,7 @@ export async function analyzeSlides(
     const layout = layouts[i];
     const gray = grays[i] ?? null;
     const imageRatio = gray ? computeImageRatio(gray, layout.boxes) : null;
-    const kind: SlideKind = scanned ? "content" : classifySlide(i, n, layout.text, imageRatio);
+    const kind: SlideKind = scanned ? "content" : classifySlide(i, n, layout.text, imageRatio, layout.lines);
     slides.push({
       page: i + 1,
       hash: await computeSlideHash(layout.text, i + 1, opts.sourceId),
@@ -246,16 +355,18 @@ export async function analyzeSlides(
       dupOf: null,
       sendImage: scanned || (kind === "visual" && opts.imageRule !== "text-only"),
       title: slideTitle(layout.text),
-      imageSignal: gray ? averageHash(gray) : null,
+      imageSignal: gray ? imageSignal(gray) : null,
     });
   }
-  // Near-duplicate runs of generated kinds: keep the last page of each run.
+  // Animation build runs of generated kinds: keep the last page of each run.
+  // A visual page also needs the same image (its picture may be what changed).
   const generated = (s: SlideInfo) => s.kind === "content" || s.kind === "visual";
   for (let i = n - 2; i >= 0; i--) {
     const a = slides[i];
     const b = slides[i + 1];
     if (!generated(a) || !generated(b) || a.textChars < 20 || b.textChars < 20) continue;
-    if (textSimilarity(layouts[i].text ?? "", layouts[i + 1].text ?? "") >= DUPLICATE_SIMILARITY) {
+    if ((a.kind === "visual" || b.kind === "visual") && !sameImageSignal(a.imageSignal, b.imageSignal)) continue;
+    if (isBuildStep(layouts[i].text ?? "", layouts[i + 1].text ?? "")) {
       a.dupOf = b.dupOf ?? b.page;
     }
   }

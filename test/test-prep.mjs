@@ -32,16 +32,45 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
 
   assert.equal(m.classifySlide(0, 30, "Computer Architecture Lecture 7", null), "cover");
   assert.equal(m.classifySlide(0, 30, "x".repeat(400), null), "content");
-  assert.equal(m.classifySlide(3, 30, "Contents 1. Intro 2. Caches", 0.01), "toc");
-  assert.equal(m.classifySlide(5, 30, "목차  캐시와 메모리", 0.01), "toc");
+  // TOC: keyword as the whole first line, within the first 15% (min 3) pages (review M5).
+  assert.equal(m.classifySlide(3, 30, "Contents1. Intro2. Caches", 0.01, ["3", "Contents", "1. Intro", "2. Caches"]), "toc");
+  assert.equal(m.classifySlide(2, 30, "목차캐시와 메모리", 0.01, ["목차", "캐시와 메모리"]), "toc");
+  assert.equal(m.classifySlide(20, 30, "Outline1. Intro", 0.01, ["Outline", "1. Intro"]), "content", "late outline slide is content");
+  assert.equal(m.classifySlide(2, 30, "Contents of a cache line: tag, index", 0.01, ["Contents of a cache line: tag, index"]), "content");
   assert.equal(m.classifySlide(29, 30, "Thank you!", 0.02), "thanks");
   assert.equal(m.classifySlide(28, 30, "Q&A", 0.02), "thanks");
+  assert.equal(m.classifySlide(29, 30, "질문: 왜 캐시가 빠른가?", 0.02, ["질문: 왜 캐시가 빠른가?"]), "content", "a question slide is not a closing slide");
+  assert.equal(m.classifySlide(29, 30, "46Question?Announcements- Textbook reading: P&H Ch. 5.1", 0.02, ["46", "Question?", "Announcements", "- Textbook reading: P&H Ch. 5.1"]), "content");
+  // Cover with a long disclaimer (lec13 page 1) (review A.5).
+  const lec13Cover = [
+    "CSED311 Computer Architecture \u2013 Lecture 13", // en dash as in the PDF
+    "Memory Hierarchy & Cache",
+    "Gwangsun Kim",
+    "Department of Computer Science and Engineering",
+    "POSTECH",
+    "Disclaimer: Slides developed in part by Profs. Austin, Brehob, Falsafi, Hill, Hoe, Lipasti, Martin, Roth,",
+    "Shen, Smith, Sohi, Tyson, Vijaykumar, Mutlu, and Wenisch @ Carnegie Mellon University, University",
+    "of Michigan, Purdue University, University of Pennsylvania, University of Wisconsin.",
+  ];
+  assert.equal(m.classifySlide(0, 46, lec13Cover.join(""), 0.1, lec13Cover), "cover");
+  const bulletFirst = ["Lecture 13 review", "• Caches keep recent data close to the CPU and reduce the average access time", "• Department of redundancy department"];
+  assert.equal(m.classifySlide(0, 46, bulletFirst.join("") + "x".repeat(200), 0.1, bulletFirst), "content", "a first page with bullets is content");
+  const noAffiliation = ["Lecture 13: Memory Hierarchy", "Why do we need caches? " + "Because main memory is slow. ".repeat(8)];
+  assert.equal(m.classifySlide(0, 46, noAffiliation.join(""), 0.1, noAffiliation), "content", "title without author or affiliation is not a cover");
   assert.equal(m.classifySlide(10, 30, "Thank you for the feedback on homework 3, " + "details ".repeat(20), 0.0), "content");
   assert.equal(m.classifySlide(10, 30, "Figure 3", 0.2), "visual");
   assert.equal(m.classifySlide(10, 30, "x".repeat(200), 0.45), "visual");
   assert.equal(m.classifySlide(10, 30, "x".repeat(200), 0.05), "content");
   assert.equal(m.classifySlide(10, 30, "", null), "visual");
-  console.log("PASS: text similarity and slide kind rules (cover, toc, thanks, content, visual)");
+  // Build steps vs different slides (review M4).
+  const base = "Cache hierarchy: L1 is small and fast, L2 is larger, main memory is slow";
+  assert.ok(m.isBuildStep(base, base));
+  assert.ok(m.isBuildStep(base, base + " and far"), "added text is a build step");
+  assert.ok(!m.isBuildStep("Case 1: the block is in the cache and the tag matches", "Case 2: the block is in the cache and the tag matches"), "Case 1 vs Case 2");
+  assert.ok(!m.isBuildStep("Hit latency is 10 ns and miss penalty is 100 ns for this cache", "Hit latency is 20 ns and miss penalty is 100 ns for this cache"), "changed number");
+  assert.ok(!m.isBuildStep(base + " and far", base), "removing text is not a build step");
+  assert.ok(!m.isBuildStep("Direct mapped cache: each block maps to exactly one line", "Fully associative cache: each block maps to any line"));
+  console.log("PASS: text similarity and slide kind rules (cover, toc, thanks, content, visual), build-step detection");
 }
 
 // ---- image ratio and image signal ----
@@ -54,14 +83,18 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
   assert.ok(r > 0.3, `diagram area counts (${r})`);
   assert.equal(m.computeImageRatio(blank(), []), 0);
 
-  const sig = m.averageHash(diagram);
-  assert.match(sig, /^[0-9a-f]{64}$/);
-  assert.equal(m.averageHash(diagram), sig, "deterministic");
+  const sig = m.imageSignal(diagram);
+  assert.match(sig, /^[0-9a-f]{128}$/);
+  assert.equal(m.imageSignal(diagram), sig, "deterministic");
   const noisy = { ...diagram, data: diagram.data.map((v, i) => (i % 97 === 0 ? Math.min(255, v + 3) : v)) };
-  assert.ok(m.sameImageSignal(sig, m.averageHash(noisy)), "anti-aliasing noise keeps the signal");
+  assert.ok(m.sameImageSignal(sig, m.imageSignal(noisy)), "anti-aliasing noise keeps the signal");
   const edited = fillRect(fillRect(blank(), 10, 10, 150, 30), 20, 45, 70, 115, 90);
-  assert.ok(!m.sameImageSignal(sig, m.averageHash(edited)), "changed figure changes the signal");
+  assert.ok(!m.sameImageSignal(sig, m.imageSignal(edited)), "changed figure changes the signal");
+  // A small mark inside the figure: the average hash can miss it, the luminance grid does not (review M6).
+  const marked = fillRect({ ...diagram, data: Uint8Array.from(diagram.data) }, 60, 60, 75, 75, 255);
+  assert.ok(!m.sameImageSignal(sig, m.imageSignal(marked)), "small edit inside a figure changes the signal");
   assert.ok(!m.sameImageSignal(sig, null));
+  assert.ok(!m.sameImageSignal(sig.slice(0, 64), sig.slice(0, 64)), "old 64-hex signals never match");
   assert.equal(m.signalDistance("f0", "0f"), 8);
   console.log("PASS: image ratio from renders and text boxes; 16x16 average-hash image signal");
 }
@@ -71,7 +104,7 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
   const build = "Pipelining overlaps instruction execution to raise throughput in the CPU";
   const layouts = [
     { text: "Lecture 7 Pipelining", boxes: [] },
-    { text: "Contents 1 Pipelining 2 Hazards", boxes: [] },
+    { text: "Contents1 Pipelining2 Hazards", boxes: [], lines: ["Contents", "1 Pipelining", "2 Hazards"] },
     { text: build, boxes: [] },
     { text: build + " IF", boxes: [] },
     { text: build + " IF ID", boxes: [] },
@@ -100,7 +133,15 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
   );
   assert.equal(scan.scanned, true);
   assert.ok(scan.slides.every((s) => s.kind === "content" && s.sendImage), "a scan sends every page as an image");
-  console.log("PASS: analyzeSlides kinds, near-duplicate runs, image rule, scanned PDF");
+  // Visual pages with the same text but different pictures are not merged.
+  const fig = "Figure: pipeline diagram of the five stages";
+  const vis = await m.analyzeSlides(
+    [{ text: "Title", boxes: [] }, { text: fig, boxes: [] }, { text: fig, boxes: [] }],
+    [blank(), fillRect(blank(), 10, 30, 80, 110, 60), fillRect(blank(), 10, 30, 150, 110, 60)],
+    { sourceId: "v" }
+  );
+  assert.deepEqual(vis.slides.map((x) => [x.kind, x.dupOf]), [["cover", null], ["visual", null], ["visual", null]]);
+  console.log("PASS: analyzeSlides kinds, near-duplicate runs, image rule, scanned PDF, visual steps need the same picture");
 }
 
 // ---- TranscriptCompressor ----
@@ -108,6 +149,8 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
   assert.equal(m.removeFillers("음 그러니까 캐시는, 어, 빠른 메모리입니다."), "캐시는, 빠른 메모리입니다.");
   assert.equal(m.removeFillers("um so the cache uh is fast"), "so the cache is fast");
   assert.equal(m.removeFillers("음악과 어머니"), "음악과 어머니", "only whole-word fillers");
+  assert.equal(m.removeFillers("이제 캐시를 막 채웁니다. mm 단위"), "이제 캐시를 막 채웁니다. mm 단위", "이제, 막, mm are kept (review L3)");
+  assert.equal(m.removeFillers("뭐, 캐시가 뭐가 문제냐면 아... 느립니다"), "캐시가 뭐가 문제냐면 느립니다", "뭐/아 only before a comma or ellipsis");
   assert.equal(m.collapseRepeats("그래서 그래서 그래서 캐시가 캐시가 빠르다"), "그래서 캐시가 빠르다");
   assert.equal(m.collapseRepeats("the cache the cache is fast"), "the cache is fast");
   assert.deepEqual(
@@ -216,7 +259,8 @@ async function deck(n, visualPages = []) {
   assert.equal(m.splitMultiManagedNote(newNote).sections.length, 4);
   assert.ok(m.hasMultiManagedMarkers(newNote));
   assert.ok(newNote.includes("alt2obs_usage: {calls: 1}\n---"), "usage frontmatter line");
-  assert.deepEqual(m.parseExistingSlides(oldNote), [], "1.1.0 notes carry no reusable metadata");
+  assert.deepEqual(m.parseExistingSlides(oldNote).map((e) => [e.slideNum, e.gist, e.meta]), [1, 2, 3, 4].map((i) => [i, "", ""]), "1.1.0 notes: sections without metadata");
+  assert.ok(newNote.includes("해설 2\n\n<!-- alt2obs:meta"), "meta separated by a blank line (review L10)");
   const existing = m.parseExistingSlides(newNote);
   assert.deepEqual(existing.map((e) => [e.slideNum, e.gist, e.commentary]), [1, 2, 3, 4].map((i) => [i, `요지 ${i}`, `해설 ${i}`]));
 
@@ -225,7 +269,9 @@ async function deck(n, visualPages = []) {
   assert.notEqual(withMemo, oldNote);
   const merged = m.mergeNote(withMemo, newNote).merged;
   assert.ok(merged.includes("내가 쓴 메모"));
-  assert.equal(m.parseExistingSlides(merged).length, 4);
+  assert.equal(m.parseExistingSlides(merged).filter((e) => e.gist).length, 4);
+  // A 1.1.0 note gives no reuse (no gist, no image signal).
+  assert.ok(m.planDeck({ ...d, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "T", existing: m.parseExistingSlides(oldNote) }).slides.every((s) => s.mode !== "reuse"));
   assert.equal(m.mergeNote(merged, newNote).merged, merged, "re-import of an unchanged 2.0 note is idempotent");
 
   // Reuse needs text hash AND image signal.
@@ -247,14 +293,13 @@ async function deck(n, visualPages = []) {
   assert.equal(m.estimateTextTokens("가나다라마"), 5);
   assert.deepEqual(m.estimateCalls([{ promptText: "a".repeat(400), images: 2, outputTokens: 50, schema: true }], "claude-cli"), {
     calls: 1,
-    // Claude: schema turn + image turn, each re-sending prompt and CLI overhead.
-    inputTokens: 3 * (2150 + 100) + 2 * 1100,
+    // Claude: one turn (images inline, JSON asked in the prompt).
+    inputTokens: 450 + 100 + 2 * 1100,
     outputTokens: 50,
     imagesSent: 2,
   });
-  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "codex-cli").inputTokens, 18000 + 100);
-  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "claude-cli").inputTokens, 2 * (550 + 100));
-  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: false }], "claude-cli").inputTokens, 550 + 100);
+  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "codex-cli").inputTokens, 11900 + 100);
+  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "claude-cli").inputTokens, 450 + 100);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 1000), true);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 0), false);
 
@@ -284,7 +329,7 @@ async function deck(n, visualPages = []) {
   assert.equal(m.migrateSettings({ provider: "claude" }).settings.tasks.commentary.provider, "gemini", "1.x Claude stub maps to Gemini");
 
   m.applyClaudeDefaults(settings);
-  assert.deepEqual(settings.tasks.commentary, { provider: "claude-cli", model: "", effort: "medium" });
+  assert.deepEqual(settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.deepEqual(settings.tasks.concepts, { provider: "claude-cli", model: "haiku", effort: "low" });
   assert.equal(settings.tasks.alignment.provider, "none");
 
@@ -304,5 +349,18 @@ async function deck(n, visualPages = []) {
   m.rememberModel(settings, "claude-cli", "haiku");
   m.rememberModel(settings, "claude-cli", "sonnet");
   assert.deepEqual(settings.recentModels["claude-cli"], ["sonnet", "haiku"]);
-  console.log("PASS: 1.x settings kept, CLI defaults, presets, recent models");
+  // Review H2: a working 1.x setup is only offered the switch.
+  const keyed = m.migrateSettings({ apiKey: "k", provider: "gemini" }).settings;
+  assert.equal(m.cliDefaultAction(keyed, true), "offer");
+  assert.equal(m.cliDefaultAction(m.migrateSettings({ provider: "ollama" }).settings, true), "offer");
+  assert.equal(m.cliDefaultAction(m.migrateSettings({ provider: "gemini" }).settings, true), "switch", "no key: nothing working to keep");
+  assert.equal(m.cliDefaultAction(m.migrateSettings(undefined).settings, false), "none", "CLI missing or logged out");
+  // Review L9: unsafe saved values are dropped.
+  const bad = m.migrateSettings({
+    tasks: { commentary: { provider: "claude-cli", model: "--dangerously-skip-permissions", effort: "ultra; rm" }, concepts: { provider: "evil", model: "haiku", effort: "low" } },
+  }).settings;
+  assert.deepEqual(bad.tasks.commentary, { provider: "claude-cli", model: "", effort: "" });
+  assert.equal(bad.tasks.concepts.provider, "gemini");
+  assert.ok(m.isSafeModelName("claude-sonnet-4-5[1m]") && m.isSafeModelName("gpt-5.6-luna") && !m.isSafeModelName("-m") && !m.isSafeModelName("a b"));
+  console.log("PASS: 1.x settings kept, CLI defaults (sonnet/haiku), switch only without a working setup, presets, recent models, unsafe values dropped");
 }

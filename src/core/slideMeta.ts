@@ -1,15 +1,15 @@
 // Per-slide metadata kept inside the managed block (spec 5.4):
 //
-//   <!-- alt2obs:meta img:<64 hex> gist:"<JSON string>" -->
+//   <!-- alt2obs:meta img:<128 hex> gist:"<JSON string>" -->
 //
 // The slide marker grammar (`<!-- alt2obs:slide:N hash:H start|end -->`,
 // parsed by src/core/merge.ts) is unchanged: this is a separate comment on
-// the last line of the managed body, so 1.x parsers treat it as commentary
+// the last line of the managed body (after a blank line), so 1.x parsers treat it as commentary
 // and it is replaced with the block on every re-import. It lets a re-import
 // skip a slide whose text hash AND render signal are unchanged, and reuse
 // its gist for the overview and concept steps without an LLM call.
 
-const META_RE = /\n?<!-- alt2obs:meta img:([0-9a-f]{64}|none) gist:("(?:[^"\\]|\\.)*") -->\s*$/;
+const META_RE = /\n*<!-- alt2obs:meta img:([0-9a-f]{128}|[0-9a-f]{64}|none) gist:("(?:[^"\\]|\\.)*") -->\s*$/;
 
 /** JSON string with no "--" or ">" so it can sit inside an HTML comment. */
 function commentSafeJson(value: string): string {

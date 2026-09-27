@@ -7,8 +7,10 @@
 //    most words with the slide text, and emit them in their original order.
 
 /** Standalone filler tokens. Matched as whole words, optional trailing comma or ellipsis. */
-const KO_FILLERS = ["음", "으음", "음음", "어", "어어", "에", "에에", "아", "그러니까", "이제", "막", "뭐", "저기", "그니까"];
-const EN_FILLERS = ["um", "umm", "uh", "uhh", "uhm", "erm", "er", "ah", "hmm", "mm", "you know", "i mean"];
+const KO_FILLERS = ["음", "으음", "음음", "어", "어어", "에", "에에", "그러니까", "저기", "그니까"];
+const EN_FILLERS = ["um", "umm", "uh", "uhh", "uhm", "erm", "er", "hmm", "you know", "i mean"];
+/** Words that are fillers only when a comma or ellipsis follows ("뭐, 그렇죠" but not "뭐가 문제"). */
+const PAUSE_FILLERS_RE = /(^|[\s,.!?])(?:뭐|아|ah)(?:,|…|\.{2,})(?=$|\s)/giu;
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -28,7 +30,7 @@ export function removeFillers(text: string): string {
   // Adjacent fillers share a separator, so repeat until stable.
   while (prev !== out) {
     prev = out;
-    out = out.replace(FILLER_RE, "$1");
+    out = out.replace(FILLER_RE, "$1").replace(PAUSE_FILLERS_RE, "$1");
   }
   return out.replace(/[ \t]{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^[\s,]+/, "").trim();
 }

@@ -6,6 +6,7 @@ import type { GrayImage, PageLayout, TextBox } from "./SlideAnalyzer";
 
 interface PdfTextItem {
   str?: string;
+  hasEOL?: boolean;
   transform?: number[];
   width?: number;
   height?: number;
@@ -42,13 +43,24 @@ export async function extractPageLayouts(pdf: PdfLayoutSource): Promise<PageLayo
       const content = await page.getTextContent();
       const items = content.items as PdfTextItem[];
       const view = page.view ?? [0, 0, 1, 1];
+      const lines: string[] = [];
+      let line = "";
+      for (const item of items) {
+        line += item.str ?? "";
+        if (item.hasEOL) {
+          lines.push(line);
+          line = "";
+        }
+      }
+      if (line) lines.push(line);
       out.push({
         text: items.map((item) => item.str ?? "").join(""),
         boxes: items.map((item) => itemBox(item, view)).filter((b): b is TextBox => b !== null),
+        lines,
       });
     } catch (e) {
       console.warn(`[Alt2Obsidian] layout extraction failed for page ${pageNum}:`, e);
-      out.push({ text: null, boxes: [] });
+      out.push({ text: null, boxes: [], lines: [] });
     }
   }
   return out;
