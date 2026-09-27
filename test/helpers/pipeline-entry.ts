@@ -15,3 +15,4 @@ export { ClaudeCliProvider } from "../../src/llm/cli/ClaudeCliProvider";
 export { CodexCliProvider } from "../../src/llm/cli/CodexCliProvider";
 export { createJobDir, removeJobDir, isAbortError } from "../../src/llm/cli/CliRunner";
 export { UsageTracker } from "../../src/llm/usage";
+export { alignLecture } from "../../src/pipeline/alignment";

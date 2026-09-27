@@ -33,7 +33,8 @@ var DEFAULT_SETTINGS = {
   },
   preset: "custom",
   recentModels: {},
-  generation: DEFAULT_GENERATION
+  generation: DEFAULT_GENERATION,
+  altDataDir: ""
 };
 var EMPTY_USAGE = {
   calls: 0,

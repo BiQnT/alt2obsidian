@@ -129,6 +129,35 @@ try {
   mkdirSync(join(dir, "pgm"), { recursive: true });
   await checkPrep(FIXTURE_PATH, "the fixture deck");
 
+  // prep --bundle: the timestamped transcript of an alt-local.mjs export is
+  // aligned to the slides exactly like the plugin does (spec 4.3).
+  {
+    const lines = [
+      "today we start with an introduction to caches",
+      "alpha is the first topic, caches are small and fast",
+      "cache coherence keeps copies consistent",
+      "the MESI protocol has four states for coherence",
+      "beta slide shows MESI again, coherence matters",
+      "in summary gamma, any questions about the summary",
+    ];
+    const transcript = lines.flatMap((text, i) => [0, 1, 2].map((k) => ({ startMs: (i * 3 + k) * 5000, endMs: (i * 3 + k) * 5000 + 4800, text, speaker: "" })));
+    const bundleFile = join(dir, "bundle.json");
+    writeFileSync(bundleFile, JSON.stringify({ sourceId: "local-1", sourceKind: "alt-local", title: "Deck", transcript }));
+    const out = JSON.parse(cli("prep", [FIXTURE_PATH, "local-1", "--title", "Deck", "--bundle", bundleFile, "--cap", "300", "--no-render"]));
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(FIXTURE_PATH)), verbosity: 0 }).promise;
+    const layouts = await prepMod.extractPageLayouts(doc);
+    await doc.destroy();
+    const al = prepMod.alignLecture(layouts.map(prepMod.layoutAlignmentText), transcript);
+    const analysis = await prepMod.analyzeSlides(layouts, layouts.map(() => null), { sourceId: "local-1", imageRule: "auto" });
+    const plan = prepMod.planDeck({ ...analysis, layouts, transcript: lines.join("\n"), transcriptChunks: al.chunks, transcriptCapChars: 300, batchSize: 8, deckTitle: "Deck" });
+    assert.equal(out.alignment.value, al.value);
+    assert.deepEqual(out.pages.map((p) => p.transcript), plan.slides.map((s) => s.transcript));
+    assert.ok(out.alignment.spans.length >= 2, "the lecture moves across slides");
+    const noBundle = JSON.parse(cli("prep", [FIXTURE_PATH, "local-1", "--no-render"]));
+    assert.equal(noBundle.alignment, null, "no bundle: no alignment");
+    console.log(`PASS: prep.mjs --bundle aligns the transcript like the plugin (alt_alignment "${out.alignment.value}")`);
+  }
+
   const deck = optionalRealDeck();
   if (!deck) {
     console.log("INFO: no real deck available, fixture only");

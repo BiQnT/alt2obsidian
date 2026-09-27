@@ -5,6 +5,10 @@
 // Usage: node scripts/phase2/prep.mjs <pdfPath> <sourceId> [options]
 //   --title <text>          deck title for the cover template line
 //   --transcript <file>     transcript text (split evenly per slide, then compressed)
+//   --bundle <bundle.json>  alt-local.mjs export: its timestamped transcript is
+//                           aligned to the slides (spec 4.3) instead of the even
+//                           split; output gets "alignment" (frontmatter value
+//                           of alt_alignment, spans, low-confidence count)
 //   --cap <chars>           per-slide transcript cap (default 600)
 //   --batch <K>             slides per batch (default 8, K/2 with images)
 //   --image-rule auto|text-only
@@ -14,14 +18,16 @@
 //   --no-render             or skips rendering (image ratio and image signal null)
 //   --existing <note.md>    previous note: slides with the same text hash and
 //                           image signal are marked "reuse"
-// Prints {"scanned","transcriptChars","pages":[...],"batches":[[...]]}.
+// Prints {"scanned","transcriptChars","pages":[...],"batches":[[...]],"alignment"}.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { analyzeSlides, GrayImage } from "../../src/core/prep/SlideAnalyzer";
-import { ANALYSIS_LONG_EDGE, extractPageLayouts, parsePgm } from "../../src/core/prep/pageLayout";
+import { ANALYSIS_LONG_EDGE, extractPageLayouts, layoutAlignmentText, parsePgm } from "../../src/core/prep/pageLayout";
+import { alignLecture } from "../../src/pipeline/alignment";
+import { TranscriptSegment } from "../../src/sources/types";
 import { parseExistingSlides, planDeck } from "../../src/pipeline/batchPlan";
 import { fail, openPdf } from "./cli-common";
 
@@ -62,7 +68,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const [pdfPath, sourceId] = args;
   if (!pdfPath || !sourceId || pdfPath.startsWith("--") || sourceId.startsWith("--")) {
-    process.stderr.write("Usage: node scripts/phase2/prep.mjs <pdfPath> <sourceId> [--title T] [--transcript F] [--cap N] [--batch K] [--image-rule auto|text-only] [--renders DIR | --no-render] [--existing NOTE]\n");
+    process.stderr.write("Usage: node scripts/phase2/prep.mjs <pdfPath> <sourceId> [--title T] [--transcript F | --bundle B] [--cap N] [--batch K] [--image-rule auto|text-only] [--renders DIR | --no-render] [--existing NOTE]\n");
     process.exit(2);
   }
   const imageRule = option(args, "--image-rule") === "text-only" ? "text-only" : "auto";
@@ -79,10 +85,15 @@ async function main(): Promise<void> {
         ? readPgmDir(rendersDir, layouts.length)
         : renderWithPdftoppm(pdfPath, layouts.length);
     const analysis = await analyzeSlides(layouts, grays, { sourceId, imageRule });
+    const bundleFile = option(args, "--bundle");
+    const segments: TranscriptSegment[] | undefined = bundleFile ? JSON.parse(readFileSync(bundleFile, "utf8")).transcript : undefined;
+    const alignment = alignLecture(layouts.map(layoutAlignmentText), segments);
+    const transcriptText = transcriptFile ? readFileSync(transcriptFile, "utf8") : segments ? segments.map((s) => s.text).join("\n") : null;
     const plan = planDeck({
       ...analysis,
       layouts,
-      transcript: transcriptFile ? readFileSync(transcriptFile, "utf8") : null,
+      transcript: transcriptText,
+      transcriptChunks: alignment?.chunks,
       transcriptCapChars: parseInt(option(args, "--cap") ?? "600", 10),
       batchSize: parseInt(option(args, "--batch") ?? "8", 10),
       deckTitle: option(args, "--title") ?? "",
@@ -108,6 +119,13 @@ async function main(): Promise<void> {
         transcriptChars: plan.transcriptChars,
         pages,
         batches: plan.batches.map((b) => b.pages),
+        alignment: alignment
+          ? {
+              value: alignment.value,
+              spans: alignment.result.spans.map((s) => ({ slide: s.slide, startMs: s.startMs, endMs: s.endMs, confidence: s.confidence })),
+              lowSpans: alignment.lowSpans.length,
+            }
+          : null,
       }) + "\n"
     );
   } finally {

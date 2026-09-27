@@ -384,6 +384,354 @@ function parsePgm(bytes) {
   return { width, height, data: scaled };
 }
 var ANALYSIS_LONG_EDGE = 160;
+function layoutAlignmentText(layout) {
+  return layout.lines && layout.lines.length > 0 ? layout.lines.join("\n") : layout.text ?? "";
+}
+
+// src/core/prep/TranscriptAligner.ts
+var LOW_CONFIDENCE = 0.45;
+var DEFAULT_ALIGNER_PARAMS = {
+  windowMs: 15e3,
+  damping: 0.4,
+  nextCost: 1.2,
+  skipCost: 1.5,
+  backCost: 6,
+  backPerSlide: 0.05,
+  offEmission: 0.5,
+  offCost: 1,
+  titleWeight: 1,
+  bm25K1: 1.2,
+  bm25B: 0.75
+};
+var EN_STOPWORDS = new Set(
+  "a an the and or but if then than so as at by for from in into of on onto to with without within about above below over under is are was were be been being am do does did done doing have has had having can could will would shall should may might must this that these those there here it its it's they them their we us our you your he she his her i me my mine what which who whom whose when where why how all any both each few more most other some such no nor not only own same very just also too again further once now okay ok yeah yes right well like really actually basically kind sort thing things let lets go going get got say said see look talk think know want need make made use used using one two way ll ve re don doesn didn isn aren wasn slide slides lecture today class question questions answer example examples".split(/\s+/)
+);
+var KO_STOPWORDS = new Set(
+  "\uADF8\uB9AC\uACE0 \uADF8\uB798\uC11C \uADF8\uB7EC\uBA74 \uADF8\uB7EC\uB2C8\uAE4C \uADF8\uB7F0\uB370 \uD558\uC9C0\uB9CC \uADF8\uB7EC\uB098 \uB610\uB294 \uD639\uC740 \uC774\uC81C \uC9C0\uAE08 \uC5EC\uAE30 \uAC70\uAE30 \uC800\uAE30 \uC774\uAC83 \uADF8\uAC83 \uC800\uAC83 \uC774\uAC70 \uADF8\uAC70 \uC800\uAC70 \uC774\uB7F0 \uADF8\uB7F0 \uC800\uB7F0 \uC774\uB807\uAC8C \uADF8\uB807\uAC8C \uC800\uB807\uAC8C \uC6B0\uB9AC \uC5EC\uB7EC\uBD84 \uC81C\uAC00 \uC800\uB294 \uB098\uB294 \uB0B4\uAC00 \uB108\uBB34 \uC815\uB9D0 \uC9C4\uC9DC \uC57D\uAC04 \uC870\uAE08 \uB9CE\uC774 \uADF8\uB0E5 \uC77C\uB2E8 \uB2E4\uC2DC \uACC4\uC18D \uBA3C\uC800 \uB2E4\uC74C \uC788\uC2B5\uB2C8\uB2E4 \uC788\uC5B4\uC694 \uC788\uB294 \uC788\uACE0 \uC5C6\uC2B5\uB2C8\uB2E4 \uC5C6\uB294 \uD569\uB2C8\uB2E4 \uD574\uC694 \uD558\uB294 \uD558\uACE0 \uD574\uC11C \uD588\uC2B5\uB2C8\uB2E4 \uB429\uB2C8\uB2E4 \uB418\uB294 \uB41C\uB2E4 \uC774\uB2E4 \uC785\uB2C8\uB2E4 \uC5D0\uC694 \uC608\uC694 \uAC83\uC774 \uAC83\uC740 \uAC83\uC744 \uAC70\uC8E0 \uAC70\uC608\uC694 \uAC70\uC5D0\uC694 \uBB50\uB0D0 \uBB34\uC5C7 \uC5B4\uB5A4 \uC5B4\uB5BB\uAC8C \uC65C\uB0D0 \uB54C\uBB38 \uACBD\uC6B0 \uBD80\uBD84 \uC815\uB3C4 \uC2AC\uB77C\uC774\uB4DC \uAC15\uC758 \uC624\uB298 \uC9C8\uBB38".split(/\s+/)
+);
+var KO_SUFFIXES = [
+  "\uC5D0\uC11C\uB294",
+  "\uC73C\uB85C\uB294",
+  "\uC774\uB77C\uB294",
+  "\uC774\uB77C\uACE0",
+  "\uC785\uB2C8\uB2E4",
+  "\uD588\uC2B5\uB2C8\uB2E4",
+  "\uD569\uB2C8\uB2E4",
+  "\uC5D0\uAC8C\uC11C",
+  "\uAE4C\uC9C0\uB294",
+  "\uBD80\uD130\uB294",
+  "\uC5D0\uC11C",
+  "\uC73C\uB85C",
+  "\uC5D0\uAC8C",
+  "\uAE4C\uC9C0",
+  "\uBD80\uD130",
+  "\uB77C\uB294",
+  "\uB77C\uACE0",
+  "\uC774\uACE0",
+  "\uC774\uBA70",
+  "\uD558\uB294",
+  "\uD558\uACE0",
+  "\uD574\uC11C",
+  "\uD588\uB2E4",
+  "\uD55C\uB2E4",
+  "\uB41C\uB2E4",
+  "\uB418\uB294",
+  "\uCC98\uB7FC",
+  "\uBCF4\uB2E4",
+  "\uB9C8\uB2E4",
+  "\uC774\uB098",
+  "\uC5D0\uB294",
+  "\uC640\uB294",
+  "\uACFC\uB294",
+  "\uB4E4\uC774",
+  "\uB4E4\uC744",
+  "\uB4E4\uC740",
+  "\uB4E4\uC758",
+  "\uC740",
+  "\uB294",
+  "\uC774",
+  "\uAC00",
+  "\uC744",
+  "\uB97C",
+  "\uC5D0",
+  "\uC758",
+  "\uB85C",
+  "\uC640",
+  "\uACFC",
+  "\uB3C4",
+  "\uB9CC",
+  "\uB4E4",
+  "\uACE0",
+  "\uB2E4",
+  "\uC694"
+].sort((a, b) => b.length - a.length);
+function stemEnglish(w) {
+  let t = w;
+  if (t.length > 4 && t.endsWith("ies"))
+    t = t.slice(0, -3) + "y";
+  else if (t.length > 4 && t.endsWith("sses"))
+    t = t.slice(0, -2);
+  else if (t.length > 3 && t.endsWith("s") && !t.endsWith("ss"))
+    t = t.slice(0, -1);
+  if (t.length > 5 && t.endsWith("ing"))
+    t = t.slice(0, -3);
+  else if (t.length > 4 && t.endsWith("ed"))
+    t = t.slice(0, -2);
+  return t;
+}
+function stemKorean(w) {
+  for (const s of KO_SUFFIXES) {
+    if (w.length - s.length >= 2 && w.endsWith(s))
+      return w.slice(0, -s.length);
+  }
+  return w;
+}
+function alignTokens(text) {
+  const out = [];
+  const lower = text.normalize("NFKC").toLowerCase();
+  for (const m of lower.matchAll(/[a-z][a-z0-9]*|\d+(?:\.\d+)?|[가-힣]+/g)) {
+    const w = m[0];
+    if (/^[가-힣]/.test(w)) {
+      if (w.length < 2 || KO_STOPWORDS.has(w))
+        continue;
+      const stem = stemKorean(w);
+      if (stem.length < 2 || KO_STOPWORDS.has(stem))
+        continue;
+      out.push(stem);
+    } else if (/^\d/.test(w)) {
+      if (w.length >= 2)
+        out.push(w);
+    } else {
+      if (w.length < 2 || EN_STOPWORDS.has(w))
+        continue;
+      const stem = stemEnglish(w);
+      if (stem.length < 2 || EN_STOPWORDS.has(stem))
+        continue;
+      out.push(stem);
+    }
+  }
+  return out;
+}
+function indexSlides(slideTexts, titleWeight) {
+  const tf = slideTexts.map((t) => {
+    const m = /* @__PURE__ */ new Map();
+    const title = t.split("\n").find((line) => line.trim().length > 0) ?? "";
+    const titleTokens = alignTokens(title);
+    for (const tok of alignTokens(t))
+      m.set(tok, (m.get(tok) ?? 0) + 1);
+    for (let r = 0; r < titleWeight; r++)
+      for (const tok of titleTokens)
+        m.set(tok, (m.get(tok) ?? 0) + 1);
+    return m;
+  });
+  const len = tf.map((m) => Array.from(m.values()).reduce((a, b) => a + b, 0));
+  const avgLen = Math.max(1, len.reduce((a, b) => a + b, 0) / Math.max(1, len.length));
+  const df = /* @__PURE__ */ new Map();
+  for (const m of tf)
+    for (const t of m.keys())
+      df.set(t, (df.get(t) ?? 0) + 1);
+  const n = slideTexts.length;
+  const idf = /* @__PURE__ */ new Map();
+  for (const [t, d] of df)
+    idf.set(t, Math.log(1 + (n - d + 0.5) / (d + 0.5)));
+  return { tf, len, avgLen, idf };
+}
+function bm25(query, index, p) {
+  const scores = new Array(index.tf.length).fill(0);
+  for (const [term] of query) {
+    const idf = index.idf.get(term);
+    if (idf === void 0)
+      continue;
+    for (let j = 0; j < index.tf.length; j++) {
+      const f = index.tf[j].get(term);
+      if (!f)
+        continue;
+      const norm = p.bm25K1 * (1 - p.bm25B + p.bm25B * index.len[j] / index.avgLen);
+      scores[j] += idf * f * (p.bm25K1 + 1) / (f + norm);
+    }
+  }
+  return scores;
+}
+function emissionScores(slideTexts, segments, p = DEFAULT_ALIGNER_PARAMS) {
+  const index = indexSlides(slideTexts, p.titleWeight);
+  const segTokens = segments.map((s) => alignTokens(s.text));
+  const raw = [];
+  const bests = [];
+  let lo = 0;
+  let hi = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const from = segments[i].startMs - p.windowMs;
+    const to = segments[i].endMs + p.windowMs;
+    while (lo < segments.length && segments[lo].endMs < from)
+      lo++;
+    if (hi < i)
+      hi = i;
+    while (hi + 1 < segments.length && segments[hi + 1].startMs <= to)
+      hi++;
+    const query = /* @__PURE__ */ new Map();
+    for (let k = Math.min(lo, i); k <= hi; k++)
+      for (const t of segTokens[k])
+        query.set(t, (query.get(t) ?? 0) + 1);
+    const scores = bm25(query, index, p);
+    raw.push(scores);
+    bests.push(Math.max(0, ...scores));
+  }
+  const sorted = bests.filter((b) => b > 0).sort((a, b) => a - b);
+  const typical = sorted.length > 0 ? sorted[Math.floor(sorted.length / 2)] : 1;
+  const damp = p.damping * typical;
+  return raw.map((scores, i) => scores.map((s) => s / (bests[i] + damp)));
+}
+function transitionCost(from, to, p) {
+  if (to === from)
+    return 0;
+  if (to === from + 1)
+    return p.nextCost;
+  if (to > from)
+    return p.nextCost + p.skipCost * (to - from - 1);
+  return p.backCost + p.backPerSlide * (from - to);
+}
+function alignTranscript(slideTexts, segments, params = {}) {
+  const p = { ...DEFAULT_ALIGNER_PARAMS, ...params };
+  const m = slideTexts.length;
+  const n = segments.length;
+  if (m === 0 || n === 0)
+    return { spans: [], segmentSlides: [] };
+  const e = emissionScores(slideTexts, segments, p);
+  let on = new Float64Array(m);
+  let off = new Float64Array(m);
+  for (let j = 0; j < m; j++) {
+    const enter = j === 0 ? 0 : (p.nextCost + p.skipCost * (j - 1)) * 0.5;
+    on[j] = e[0][j] - enter;
+    off[j] = p.offEmission - p.offCost - enter;
+  }
+  const back = [new Int32Array(2 * m).fill(-1)];
+  const best = new Float64Array(m);
+  const bestState = new Int32Array(m);
+  for (let i = 1; i < n; i++) {
+    for (let j = 0; j < m; j++) {
+      if (off[j] > on[j]) {
+        best[j] = off[j];
+        bestState[j] = m + j;
+      } else {
+        best[j] = on[j];
+        bestState[j] = j;
+      }
+    }
+    const nextOn = new Float64Array(m);
+    const nextOff = new Float64Array(m);
+    const ptr = new Int32Array(2 * m);
+    for (let k = 0; k < m; k++) {
+      let v = -Infinity;
+      let arg = k;
+      for (let j = 0; j < m; j++) {
+        const c = best[j] - transitionCost(j, k, p);
+        if (c > v) {
+          v = c;
+          arg = bestState[j];
+        }
+      }
+      nextOn[k] = v + e[i][k];
+      ptr[k] = arg;
+      const stay = off[k];
+      const drift = on[k] - p.offCost;
+      nextOff[k] = Math.max(stay, drift) + p.offEmission;
+      ptr[m + k] = stay >= drift ? m + k : k;
+    }
+    back.push(ptr);
+    on = nextOn;
+    off = nextOff;
+  }
+  let lastState = 0;
+  let lastScore = -Infinity;
+  for (let j = 0; j < m; j++) {
+    if (on[j] > lastScore) {
+      lastScore = on[j];
+      lastState = j;
+    }
+    if (off[j] > lastScore) {
+      lastScore = off[j];
+      lastState = m + j;
+    }
+  }
+  const states = new Array(n);
+  states[n - 1] = lastState;
+  for (let i = n - 1; i > 0; i--)
+    states[i - 1] = back[i][states[i]];
+  const path = states.map((st) => st % m);
+  const spans = [];
+  let start = 0;
+  for (let i = 1; i <= n; i++) {
+    if (i < n && path[i] === path[start])
+      continue;
+    const j = path[start];
+    let own = 0;
+    let other = 0;
+    for (let k = start; k < i; k++) {
+      own += e[k][j];
+      let alt = 0;
+      for (let q = 0; q < m; q++)
+        if (q !== j && e[k][q] > alt)
+          alt = e[k][q];
+      other += alt;
+    }
+    const share = own + other > 0 ? own / (own + other) : 0;
+    const evidence = Math.min(1, own / 3);
+    spans.push({
+      slide: j + 1,
+      startMs: segments[start].startMs,
+      endMs: segments[i - 1].endMs,
+      fromSegment: start,
+      toSegment: i,
+      confidence: Math.round(share * (0.5 + 0.5 * evidence) * 100) / 100
+    });
+    start = i;
+  }
+  return { spans, segmentSlides: path.map((j) => j + 1) };
+}
+function chunksFromAlignment(result, segments, slideCount) {
+  const parts = Array.from({ length: slideCount }, () => []);
+  result.segmentSlides.forEach((slide, i) => {
+    if (slide >= 1 && slide <= slideCount)
+      parts[slide - 1].push(segments[i].text.trim());
+  });
+  return parts.map((p) => {
+    const text = p.filter((t) => t.length > 0).join(" ");
+    return text.length > 0 ? text : null;
+  });
+}
+function formatAlignment(spans) {
+  return spans.map((s, i) => {
+    const start = Math.floor(s.startMs / 1e3);
+    const end = i + 1 < spans.length ? Math.floor(spans[i + 1].startMs / 1e3) : Math.ceil(s.endMs / 1e3);
+    return `${s.slide}:${start}-${Math.max(start, end)}${s.confidence < LOW_CONFIDENCE ? "?" : ""}`;
+  }).join(" ");
+}
+
+// src/pipeline/alignment.ts
+function timedSegments(segments) {
+  if (!segments || segments.length === 0)
+    return null;
+  const timed = segments.filter((s) => s.startMs !== null && s.endMs !== null);
+  if (timed.length === 0 || timed.length < segments.length * 0.9)
+    return null;
+  return timed.map((s) => ({ startMs: s.startMs, endMs: Math.max(s.endMs, s.startMs), text: s.text }));
+}
+function finish(result, segments, slideCount, llmChanged) {
+  return {
+    result,
+    segments,
+    chunks: chunksFromAlignment(result, segments, slideCount),
+    value: formatAlignment(result.spans),
+    lowSpans: result.spans.filter((s) => s.confidence < LOW_CONFIDENCE),
+    llmChanged
+  };
+}
+function alignLecture(slideTexts, segments) {
+  const timed = timedSegments(segments);
+  if (!timed || slideTexts.length === 0)
+    return null;
+  return finish(alignTranscript(slideTexts, timed), timed, slideTexts.length, 0);
+}
 
 // src/types.ts
 var DEFAULT_GENERATION = {
@@ -415,7 +763,8 @@ var DEFAULT_SETTINGS = {
   },
   preset: "custom",
   recentModels: {},
-  generation: DEFAULT_GENERATION
+  generation: DEFAULT_GENERATION,
+  altDataDir: ""
 };
 var EMPTY_USAGE = {
   calls: 0,
@@ -670,16 +1019,20 @@ function parseExistingSlides(noteContent) {
     };
   });
 }
-function planDeck(input) {
-  const n = input.slides.length;
-  const chunks = splitTranscriptEvenly(input.transcript, n);
-  const runChunks = chunks.map((c) => c ?? "");
-  for (const s of [...input.slides].reverse()) {
+function slideChunks(slides, chunks) {
+  const runChunks = slides.map((_, i) => chunks[i] ?? "");
+  for (const s of [...slides].reverse()) {
     if (s.dupOf !== null && runChunks[s.page - 1]) {
       runChunks[s.dupOf - 1] = `${runChunks[s.page - 1]} ${runChunks[s.dupOf - 1]}`.trim();
       runChunks[s.page - 1] = "";
     }
   }
+  return runChunks;
+}
+function planDeck(input) {
+  const n = input.slides.length;
+  const chunks = input.transcriptChunks ?? splitTranscriptEvenly(input.transcript, n);
+  const runChunks = slideChunks(input.slides, chunks);
   const pool = /* @__PURE__ */ new Map();
   for (const e of input.existing ?? []) {
     if (!pool.has(e.hash))
@@ -798,7 +1151,7 @@ async function main() {
   const args = process.argv.slice(2);
   const [pdfPath, sourceId] = args;
   if (!pdfPath || !sourceId || pdfPath.startsWith("--") || sourceId.startsWith("--")) {
-    process.stderr.write("Usage: node scripts/phase2/prep.mjs <pdfPath> <sourceId> [--title T] [--transcript F] [--cap N] [--batch K] [--image-rule auto|text-only] [--renders DIR | --no-render] [--existing NOTE]\n");
+    process.stderr.write("Usage: node scripts/phase2/prep.mjs <pdfPath> <sourceId> [--title T] [--transcript F | --bundle B] [--cap N] [--batch K] [--image-rule auto|text-only] [--renders DIR | --no-render] [--existing NOTE]\n");
     process.exit(2);
   }
   const imageRule = option(args, "--image-rule") === "text-only" ? "text-only" : "auto";
@@ -810,10 +1163,15 @@ async function main() {
     const layouts = await extractPageLayouts(pdf);
     const grays = args.includes("--no-render") ? new Array(layouts.length).fill(null) : rendersDir ? readPgmDir(rendersDir, layouts.length) : renderWithPdftoppm(pdfPath, layouts.length);
     const analysis = await analyzeSlides(layouts, grays, { sourceId, imageRule });
+    const bundleFile = option(args, "--bundle");
+    const segments = bundleFile ? JSON.parse(readFileSync(bundleFile, "utf8")).transcript : void 0;
+    const alignment = alignLecture(layouts.map(layoutAlignmentText), segments);
+    const transcriptText = transcriptFile ? readFileSync(transcriptFile, "utf8") : segments ? segments.map((s) => s.text).join("\n") : null;
     const plan = planDeck({
       ...analysis,
       layouts,
-      transcript: transcriptFile ? readFileSync(transcriptFile, "utf8") : null,
+      transcript: transcriptText,
+      transcriptChunks: alignment?.chunks,
       transcriptCapChars: parseInt(option(args, "--cap") ?? "600", 10),
       batchSize: parseInt(option(args, "--batch") ?? "8", 10),
       deckTitle: option(args, "--title") ?? "",
@@ -838,7 +1196,12 @@ async function main() {
         scanned: plan.scanned,
         transcriptChars: plan.transcriptChars,
         pages,
-        batches: plan.batches.map((b) => b.pages)
+        batches: plan.batches.map((b) => b.pages),
+        alignment: alignment ? {
+          value: alignment.value,
+          spans: alignment.result.spans.map((s) => ({ slide: s.slide, startMs: s.startMs, endMs: s.endMs, confidence: s.confidence })),
+          lowSpans: alignment.lowSpans.length
+        } : null
       }) + "\n"
     );
   } finally {

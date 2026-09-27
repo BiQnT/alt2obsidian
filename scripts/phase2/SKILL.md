@@ -5,13 +5,13 @@ description: Import an Alt (altalt.io) lecture into the user's Obsidian vault as
 
 # alt2obs Skill (Phase 2 Stage A — Claude Code Max import path)
 
-This Skill produces a page-anchored Obsidian lecture note from an Alt URL. The output is byte-compatible with Alt2Obsidian 1.1.0's storage format (`## 📚 슬라이드 N` sections, `<!-- alt2obs:slide:N hash:H start --> ... <!-- end -->` managed markers, `> [!note] 내 메모` callouts), so the plugin's Synced Viewer renders it correctly and re-imports preserve user free-space via the multi-managed merge.
+This Skill produces a page-anchored Obsidian lecture note from an Alt note on this Mac (preferred: Alt's local data, with transcript timestamps) or from a public Alt URL (fallback). The output is byte-compatible with Alt2Obsidian 1.1.0's storage format (`## 📚 슬라이드 N` sections, `<!-- alt2obs:slide:N hash:H start --> ... <!-- end -->` managed markers, `> [!note] 내 메모` callouts), so the plugin's Synced Viewer renders it correctly and re-imports preserve user free-space via the multi-managed merge.
 
 The Skill exists because the plugin's per-slide Gemini multimodal call hits free-tier RPD limits on long decks. This path uses Claude Code's own session vision instead.
 
 ## When to use
 
-- User provides an Alt URL and asks to "import" / "alt2obs" / "Phase 2 import" / "Claude Code 버전으로 import".
+- User names an Alt note (title, folder, date) or provides an Alt URL and asks to "import" / "alt2obs" / "Phase 2 import" / "Claude Code 버전으로 import".
 - Gemini quota is exhausted or the user wants Claude commentary quality.
 - User wants a one-off import without waiting for plugin's per-slide rate-limited loop.
 
@@ -21,9 +21,10 @@ Parse from the user's message (or ask if missing):
 
 | Input | Example | Required |
 |---|---|---|
-| `url` | `https://altalt.io/note/b7472c41-…` | yes |
+| `note` | an Alt note on this Mac: title, folder or date, resolved with `alt-local.mjs list` (step 1A) | one of `note` / `url` |
+| `url` | `https://altalt.io/note/b7472c41-…` (fallback, no timestamps) | one of `note` / `url` |
 | `vault` | absolute path, e.g. `/Users/biqnt/Documents/lecture-vault` | yes — read from `~/Library/Application Support/obsidian/obsidian.json` if a single vault, else ask |
-| `subject` | folder under `Alt2Obsidian/`, e.g. `CSED232` | yes — ask if not in user's message |
+| `subject` | folder under `Alt2Obsidian/`, e.g. `CSED232` | local notes: the `subject` guessed from the Alt folder (confirm with the user); URL: ask if not in user's message |
 | `title` | filename stem, e.g. `8강` | optional — falls back to scraped Alt note title |
 | `period` | `midterm` / `final` (or Korean equivalents — see mapping below) | optional — required if the user wants this lecture to appear in the plugin's "시험대비 요약" extraction |
 
@@ -50,7 +51,24 @@ test -f "$REPO/prompts/slide-commentary.user.md" && test -d "$REPO/node_modules/
 
 If the check fails (skill copied instead of linked, or repo moved), ask the user for the repo path. If only `node_modules` is missing, run `npm install` in `$REPO` first. Every `$REPO/...` path below uses this value.
 
-### 1. Scrape Alt metadata
+### 1A. Alt local note (preferred)
+
+The plugin's own source code reads Alt's local data read only: the local HTTP API when Alt is running (token read from Alt's token file, never printed), else a private copy of Alt's database. Never open, write or modify anything under `~/Library/Application Support/alt/` yourself.
+
+```bash
+node "$REPO/scripts/phase2/alt-local.mjs" status
+node "$REPO/scripts/phase2/alt-local.mjs" list --query "<words from the user's message>"
+```
+
+`list` prints `{"mode","notes":[{id,title,type,lectureDate,folderPath,subject}]}`. Pick the note with the user (title, folder, date); ask when several match. Then export it:
+
+```bash
+node "$REPO/scripts/phase2/alt-local.mjs" export "<id>" "/tmp/alt2obs-<id>"
+```
+
+It prints `{"bundle","pdfPath","segments","timestamps","warnings"}` and writes `/tmp/alt2obs-<id>/bundle.json` (title, lectureDate, folderPath, subject, summaryMarkdown, memoMarkdown, transcript segments with ms timestamps) and `transcript.txt`. Use `<id>` wherever this document says `<noteId>`, `pdfPath` instead of the downloaded deck (read it in place; copy it to the vault in step 8), `summaryMarkdown` (plus `memoMarkdown` under `## Alt 메모`, like the plugin) as the scraped `summary`, and `transcript.txt` as `transcript`. If `pdfPath` is null, stop and tell the user (relay `warnings`). Skip steps 1 and 2.
+
+### 1. Scrape Alt metadata (URL fallback)
 
 ```bash
 node "$REPO/scripts/phase2/alt-scrape.mjs" "<url>"
@@ -145,7 +163,7 @@ Stdout is `{"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}`. Use `
 
 ### 6. Read each slide and compose commentary
 
-If `transcript` is non-empty, split the full transcript evenly by character count across the slide count (chunk size = ceil(length / slideCount), each chunk trimmed, empty chunk = none), exactly like `splitTranscriptEvenly` in `$REPO/src/generator/PerSlideCommentaryGenerator.ts`. Chunk N is slide N's transcript context.
+Local notes: skip this even split; `prep.mjs --bundle` below aligns the timestamped transcript to the slides. URL notes: if `transcript` is non-empty, split the full transcript evenly by character count across the slide count (chunk size = ceil(length / slideCount), each chunk trimmed, empty chunk = none), exactly like `splitTranscriptEvenly` in `$REPO/src/generator/PerSlideCommentaryGenerator.ts`. Chunk N is slide N's transcript context.
 
 Use `Read` with the `pages` parameter to walk through the deck, **20 pages at a time** (the tool's max). Example:
 
@@ -163,7 +181,9 @@ Reading a PDF returns the page contents as images you can see directly. For each
 node "$REPO/scripts/phase2/prep.mjs" "/tmp/alt-deck-<noteId>.pdf" "<noteId>" --title "<title>" --transcript "/tmp/alt2obs-<noteId>/transcript.txt"
 ```
 
-It prints `{"pages":[{"page","hash","kind","dupOf","mode","template","transcript",...}],"batches":[[...]]}` (renders with `pdftoppm` when installed; add `--no-render` to skip). For every page with `"mode":"template"` (cover, table of contents, closing slide, or an animation step whose `dupOf` page carries the explanation) use its `template` string verbatim as the slide body and do not generate or read it. For `"mode":"llm"` pages use their `transcript` field (fillers and repeats removed, capped, preferring sentences that match the slide) as the transcript chunk instead of the even split above. The `hash` values equal `slide-hashes.mjs`.
+For a local note use `--bundle "/tmp/alt2obs-<id>/bundle.json"` instead of `--transcript`: the transcript segments are aligned to the slides by their timestamps (spec 4.3, the plugin's `TranscriptAligner`), not split evenly.
+
+It prints `{"pages":[{"page","hash","kind","dupOf","mode","template","transcript",...}],"batches":[[...]],"alignment"}` (renders with `pdftoppm` when installed; add `--no-render` to skip). With `--bundle`, `alignment.value` is the frontmatter value of `alt_alignment` (step 7). For every page with `"mode":"template"` (cover, table of contents, closing slide, or an animation step whose `dupOf` page carries the explanation) use its `template` string verbatim as the slide body and do not generate or read it. For `"mode":"llm"` pages use their `transcript` field (fillers and repeats removed, capped, preferring sentences that match the slide) as the transcript chunk instead of the even split above. The `hash` values equal `slide-hashes.mjs`.
 
 Save each commentary to `/tmp/alt2obs-<noteId>/slide-<N>.md`, then link the extracted concept names (step 4) in all of them with the plugin's own code (`linkConceptNames` in `$REPO/src/core/markdown.ts`). The files are rewritten in place:
 
@@ -194,6 +214,19 @@ slide_count: <N>
 alt_id: "<noteId>"
 alt_created: "<createdAt>"
 ---
+```
+
+Local notes use this identity instead of `alt_id` / `alt_created` (the local id is not a public share id), plus the alignment from `prep.mjs --bundle`:
+
+```yaml
+alt_local_id: "<id>"
+alt_source: "alt-local"
+alt_alignment: "<alignment.value>"
+```
+
+The rest of the note is the same for both sources:
+
+```markdown
 
 # <title>
 
@@ -226,7 +259,7 @@ Marker format must match exactly:
 
 ### 8. Write to the vault
 
-Save the assembled markdown to `/tmp/alt2obs-<noteId>/note.md` first. The target is `<vault>/Alt2Obsidian/<subject>/<title>.md`.
+Save the assembled markdown to `/tmp/alt2obs-<noteId>/note.md` first. The target is `<vault>/Alt2Obsidian/<subject>/<title>.md`, except for local notes: if a note in `<vault>/Alt2Obsidian/` already has `alt_local_id: "<id>"` in its frontmatter (`grep -rl`), that note is the target wherever it is; if the default target exists but belongs to another lecture (a different `alt_local_id`, or an `alt_id` without `alt_local_id`), use `<title> (<lectureDate>).md` instead and never merge into it. When an older note with only `alt_id` has the same title and date, ask the user whether to link it (add `alt_local_id` to its frontmatter, keep `alt_id`) before using it as the target.
 
 **If the target does not exist:**
 
