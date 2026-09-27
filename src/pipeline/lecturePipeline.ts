@@ -13,6 +13,7 @@ import {
   buildBatchSystemPrompt,
   buildBatchUserPrompt,
   buildLectureContextBlock,
+  BATCH_SCHEMA,
   LectureContext,
 } from "../generator/BatchCommentaryGenerator";
 import { ConceptExtractor } from "../generator/ConceptExtractor";
@@ -161,7 +162,8 @@ export function estimateLecture(
   const batchCalls: CallShape[] = plan.batches.map((b) => {
     const slides = b.pages.map((p) => byPage.get(p)!);
     return {
-      promptText: system + buildBatchUserPrompt(contextBlock, slides),
+      // The schema travels with every call (Claude: appended text; Codex: --output-schema).
+      promptText: system + buildBatchUserPrompt(contextBlock, slides) + JSON.stringify(BATCH_SCHEMA),
       images: slides.filter((s) => s.sendImage).length,
       schema: true,
       outputTokens: slides.reduce(

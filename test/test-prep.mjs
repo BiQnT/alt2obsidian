@@ -289,17 +289,17 @@ async function deck(n, visualPages = []) {
 
 // ---- budget estimate ----
 {
-  assert.equal(m.estimateTextTokens("abcd"), 1);
+  assert.equal(m.estimateTextTokens("abcd"), 2);
   assert.equal(m.estimateTextTokens("가나다라마"), 5);
   assert.deepEqual(m.estimateCalls([{ promptText: "a".repeat(400), images: 2, outputTokens: 50, schema: true }], "claude-cli"), {
     calls: 1,
     // Claude: one turn (images inline, JSON asked in the prompt).
-    inputTokens: 450 + 100 + 2 * 1100,
+    inputTokens: 300 + 200 + 2 * 1060,
     outputTokens: 50,
     imagesSent: 2,
   });
-  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "codex-cli").inputTokens, 11900 + 100);
-  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "claude-cli").inputTokens, 450 + 100);
+  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "codex-cli").inputTokens, 11900 + 200);
+  assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "claude-cli").inputTokens, 300 + 200);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 1000), true);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 0), false);
 

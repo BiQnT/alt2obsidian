@@ -5,9 +5,12 @@
 import type { ProviderId } from "../../types";
 
 /**
- * Tokens for a text: about 4 ASCII characters per token, and about one
- * token per Hangul or other non-ASCII character (Claude and OpenAI
- * tokenizers both land near 0.8 to 1.1 on Korean lecture text).
+ * Tokens for a text: about 2 ASCII characters per token and about 0.9
+ * tokens per Hangul or other non-ASCII character. Fitted on two real Claude
+ * calls (2026-09-28): a 4-slide batch of pdfjs slide text (4,246 ASCII +
+ * 705 other characters, 3,239 input tokens) and the tiny smoke call. Slide
+ * text from pdfjs is full of runs of spaces and symbols, so English does
+ * not reach the usual 4 characters per token.
  */
 export function estimateTextTokens(text: string): number {
   let ascii = 0;
@@ -16,7 +19,7 @@ export function estimateTextTokens(text: string): number {
     if (text.charCodeAt(i) < 128) ascii++;
     else other++;
   }
-  return Math.ceil(ascii / 4 + other * 0.9);
+  return Math.ceil(ascii / 2 + other * 0.9);
 }
 
 /**
@@ -24,21 +27,24 @@ export function estimateTextTokens(text: string): number {
  * haiku, codex 0.155.1):
  * - fixedPerTurn: tokens the CLI adds to every model turn (its own
  *   instructions). Claude with stream-json input, tools off, own system
- *   prompt: about 0.45k (553 input tokens for a 60-token prompt plus an 8x8
- *   image). Codex with the trim config: about 11.9k, most of it Codex's base
+ *   prompt: about 0.3k (fitted together with the text rate above). Codex with the trim config: about 11.9k, most of it Codex's base
  *   instructions plus the user's global ~/.codex/AGENTS.md, which has no
  *   documented off switch (it was 18.3k before the trim config).
  * - schemaTurns / imageTurns: extra model turns per call. Both are 0 now:
  *   Claude gets images inline and the JSON format in the prompt (one turn),
  *   Codex answers --output-schema in one turn.
- * - perImage: input tokens of one 1024px JPEG.
+ * - perImage: input tokens of one 1024x768 JPEG, measured on 4 real slides
+ *   (02-What-is-OS pages 2, 3, 8, 13): Claude 1,053 per image (7,450 with
+ *   images minus 3,239 without, over 4). Codex about 1,750 per image
+ *   (21,466 for the same batch; its text-only baseline was estimated, not
+ *   measured, so this one is less certain).
  */
 export const PROVIDER_COSTS: Record<
   ProviderId,
   { fixedPerTurn: number; schemaTurns: number; imageTurns: number; perImage: number }
 > = {
-  "claude-cli": { fixedPerTurn: 450, schemaTurns: 0, imageTurns: 0, perImage: 1100 },
-  "codex-cli": { fixedPerTurn: 11900, schemaTurns: 0, imageTurns: 0, perImage: 800 },
+  "claude-cli": { fixedPerTurn: 300, schemaTurns: 0, imageTurns: 0, perImage: 1060 },
+  "codex-cli": { fixedPerTurn: 11900, schemaTurns: 0, imageTurns: 0, perImage: 1750 },
   // Gemini: 258 tokens per 768px tile; a 1024px slide is 2 tiles.
   gemini: { fixedPerTurn: 0, schemaTurns: 0, imageTurns: 0, perImage: 516 },
   ollama: { fixedPerTurn: 0, schemaTurns: 0, imageTurns: 0, perImage: 600 },
