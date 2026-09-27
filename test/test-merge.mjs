@@ -257,4 +257,16 @@ async function reimport(oldTexts, newTexts) {
   console.log("PASS: 1.0.x single-block note migrating to page-anchored keeps the old note as a backup");
 }
 
+// Re-importing an unchanged deck is idempotent (no blank-line growth).
+{
+  const next = await note(["alpha", "beta", "gamma"]);
+  const once = (await pluginMerge(addMemos(next), next)).md;
+  const twice = (await pluginMerge(once, next)).md;
+  const thrice = (await pluginMerge(twice, next)).md;
+  assert.equal(twice, once, "second re-import changes nothing");
+  assert.equal(thrice, once, "third re-import changes nothing");
+  assert.deepEqual(sections(once).out.map((s) => s.memo), ["memo alpha", "memo beta", "memo gamma"]);
+  console.log("PASS: re-importing an unchanged deck is idempotent");
+}
+
 console.log(`PASS: merge-note.mjs matched the plugin merge in all ${cliRuns} merge scenarios`);

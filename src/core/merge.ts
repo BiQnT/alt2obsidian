@@ -361,7 +361,9 @@ export function mergeMultiManagedNote(
         startMarker,
         ns.managed.trim(),
         endMarker,
-        after.startsWith("\n") ? after.slice(1) : after,
+        // Same shape for kept and default memos (one blank line before, one
+        // after) so re-importing an unchanged deck leaves the file unchanged.
+        "\n" + after.replace(/^\n+|\n+$/g, "") + "\n\n",
       ].join("\n");
     })
     .join("\n");
