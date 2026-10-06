@@ -61,7 +61,15 @@ node "$REPO/scripts/phase2/alt-local.mjs" export "<id>"
 
 It prints `{"dir","bundle","pdfPath","segments","timestamps","warnings"}` and writes, into a private folder `dir` it creates under the OS temp folder (mode 0700, files 0600), `bundle.json` (title, lectureDate, folderPath, subject, summaryMarkdown, memoMarkdown, transcript segments with ms timestamps) and `transcript.txt`. Use `<id>` wherever this document says `<noteId>`, `<dir>/bundle.json` and `<dir>/transcript.txt` for the exported files, `pdfPath` instead of the downloaded deck (read it in place; copy it to the vault in step 8), `summaryMarkdown` (plus `memoMarkdown` under `## Alt 메모`, like the plugin) as the scraped `summary`, and `transcript.txt` as `transcript`. Skip steps 1 and 2.
 
-If `pdfPath` is null the lecture has no slides here. Relay `warnings`, then decide by `type`, like the plugin's sidebar (never fall back silently to a note without slides):
+**A PDF the user attached wins.** Once the target note of step 8 is known (it may not exist yet), run
+
+```bash
+node "$REPO/scripts/phase2/carry-frontmatter.mjs" "<target note>" --local
+```
+
+(`--url` for a URL import; add `--alignment "<alignment.value>"` once `prep.mjs` gave one). It prints `{"lines","attachedPdf"}`. When `attachedPdf` is not null, the user attached that PDF in the plugin or in step A below: use it as the deck instead of `pdfPath`, and never copy Alt's PDF over it in step 8. Keep `lines` for the frontmatter in step 7. Without a target note yet, a `<target stem>.pdf` already next to where the note will go is reported as attached too (the plugin treats it so).
+
+If `pdfPath` is null (and there is no attached PDF) the lecture has no slides here. Relay `warnings`, then decide by `type`, like the plugin's sidebar (never fall back silently to a note without slides):
 - `slide`: a slide lecture whose slides are not attached in Alt yet ("슬라이드(미첨부)"). Tell the user to attach the slides in Alt and ask you to export again (a synced slides file must be opened in Alt once to download it). Only if they want to go on without that, offer the two choices below.
 - `note`, `legacy`: a lecture without slides ("노트(전사만)"). Ask: a summary note from the transcript (default), or attach a PDF they have.
 Then follow "Lectures without slides" below.
@@ -220,6 +228,8 @@ alt_created: "<createdAt>"
 ---
 ```
 
+On a re-import, add every line of `lines` from `carry-frontmatter.mjs` (step 1A) to this frontmatter: the other identity of a linked note and `alt_pdf_source: "attached"` when the user attached the PDF. The merge replaces the whole frontmatter, so a line not written here is gone.
+
 Local notes use this identity instead of `alt_id` / `alt_created` (the local id is not a public share id), plus the alignment from `prep.mjs --bundle`:
 
 ```yaml
@@ -303,7 +313,7 @@ Then `Write` `note.md` to the target unchanged.
 
    then copy `merged.md` over the target (`cp`). If `merge-note.mjs` exits non-zero, relay its message and leave the target untouched.
 
-Copy the PDF next to the note (the Synced Viewer opens `<note>.pdf`):
+Copy the PDF next to the note (the Synced Viewer opens `<note>.pdf`), unless the deck is the attached PDF (`attachedPdf` in step 1A): that file already is `<note>.pdf`, never copy over it.
 
 ```bash
 cp "/tmp/alt-deck-<noteId>.pdf" "<vault>/<base>/<subject>/Lectures/<title>.pdf"
@@ -334,7 +344,7 @@ Alt notes of type `note` hold a recording and its transcript only; a `slide` not
 
 ### A. Attach a PDF
 
-The user names a PDF (a vault path or any file on disk). Check it is a PDF (`head -c 5 "<file>"` prints `%PDF-`), then copy it next to the target note: `<vault>/<base>/<subject>/Lectures/<title>.pdf` (the step 8 rules for the target path; for a summary note already in the vault, its own path with `.pdf`). From then on the lecture is a slide lecture: run steps 3 to 8 with that PDF as the deck (`pdfPath`), and add one frontmatter line `alt_pdf_source: "attached"` (the plugin uses the attached PDF on every later import because of it). If the target is a summary note, `merge-note.mjs` keeps the whole old note, memos included, under `## 이전 노트 백업` and says so in `notes`; show that to the user.
+The user names a PDF (a vault path or any file on disk). Check it is a PDF (`head -c 5 "<file>"` prints `%PDF-`), then copy it next to the target note: `<vault>/<base>/<subject>/Lectures/<title>.pdf` (the step 8 rules for the target path; for a summary note already in the vault, its own path with `.pdf`). From then on the lecture is a slide lecture: run steps 3 to 8 with that PDF as the deck (`pdfPath`), and add one frontmatter line `alt_pdf_source: "attached"` (the plugin and later Skill imports use the attached PDF because of it; `carry-frontmatter.mjs` reports it as `attachedPdf`). Do not copy Alt's PDF over it in step 8. If the target is a summary note, `merge-note.mjs` keeps the whole old note, memos included, under `## 이전 노트 백업` and says so in `notes`; show that to the user.
 
 ### B. Summary note from the transcript
 
@@ -401,7 +411,15 @@ Notes written by 1.x (plugin PNG hash, or the old Skill `sha1(noteId:page)` hash
 - `alt-scrape.mjs` exits 1 with stderr message → relay to user, stop.
 - Any `scripts/phase2/*.mjs` helper exits non-zero → relay its stderr to the user and stop. Do not recreate their output by hand. If a `scripts/phase2/*.mjs` file is missing, run `npm run build:scripts` in `$REPO` first.
 - `parseQuality: "partial"` → tell user the Alt note isn't a full lecture and stop. `pdfUrl: null` or a null `pdfPath` → "Lectures without slides".
-- `Read` of a PDF page fails → log the slide as `## ⚠️ 처리 실패 슬라이드 N` footer at the end of the markdown (matches the plugin's failure-footer convention), continue with the rest.
+- `Read` of a PDF page fails → list it at the end of the markdown in the plugin's failure list, one blank line after the last slide section, so a re-import replaces the list instead of keeping the old one:
+  ```markdown
+  <!-- alt2obs:failures start -->
+  ## ⚠️ 처리 실패 슬라이드
+
+  - 슬라이드 N: <reason>
+  <!-- alt2obs:failures end -->
+  ```
+  Continue with the rest.
 - Vault path doesn't exist → ask the user; do NOT create it without consent.
 - A file already exists at the target `.md` path → merge it as in step 8 (preview, confirm, `merge-note.mjs`); never overwrite it with `Write`.
 
