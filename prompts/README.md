@@ -12,7 +12,7 @@ Single source for every LLM prompt used by the Alt2Obsidian plugin and the alt2o
 
 | File | Used by | Variables |
 |---|---|---|
-| `slide-commentary.system.md` | per-slide commentary (system), alt2obs Skill (the plugin uses the batch prompts) | none |
+| `slide-commentary.system.md` | per-slide commentary (system), alt2obs Skill via `scripts/phase2/slide-prompt.mjs`; its 문체 block is identical to the batch prompt (checked by test-skill-prompts) | none |
 | `slide-commentary.user.md` | per-slide commentary (user), alt2obs Skill | `slideNum`, `totalSlides`, `conceptList`, `transcriptBlock` |
 | `slide-commentary-batch.system.md` | batched commentary, CLI path (fixed instructions, cached prefix) | none |
 | `slide-commentary-batch.context.md` | batched commentary: lecture-wide context, identical for every batch | `title`, `slideCount`, `subjectTags`, `knownConcepts`, `slideTitles` |

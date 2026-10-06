@@ -1,19 +1,19 @@
 ---
 name: alt2obs
-description: Import an Alt (altalt.io) lecture into the user's Obsidian vault as page-anchored markdown compatible with the Alt2Obsidian 1.1.0 plugin. Uses Claude Code's native PDF vision (Read with pages parameter) to generate per-slide Korean commentary, sidestepping the Gemini API quota the plugin's full path needs. Output works in the plugin's Synced Viewer.
+description: Import an Alt (altalt.io) lecture into the user's Obsidian vault as page-anchored markdown compatible with the Alt2Obsidian 1.1.0 plugin. Uses Claude Code's native PDF vision (Read with pages parameter) to generate per-slide Korean commentary in the current Claude Code session, with the plugin's prompt files and writing rules. Output works in the plugin's Synced Viewer.
 ---
 
 # alt2obs Skill (Phase 2 Stage A — Claude Code Max import path)
 
 This Skill produces a page-anchored Obsidian lecture note from an Alt note on this Mac (preferred: Alt's local data, with transcript timestamps) or from a public Alt URL (fallback). The output is byte-compatible with Alt2Obsidian 1.1.0's storage format (`## 📚 슬라이드 N` sections, `<!-- alt2obs:slide:N hash:H start --> ... <!-- end -->` managed markers, `> [!note] 내 메모` callouts), so the plugin's Synced Viewer renders it correctly and re-imports preserve user free-space via the multi-managed merge.
 
-The Skill exists because the plugin's per-slide Gemini multimodal call hits free-tier RPD limits on long decks. This path uses Claude Code's own session vision instead.
+The Skill runs the import inside a Claude Code session: the commentary comes from the session's own vision (it reads each slide image), not from a CLI call the plugin starts. The plugin (2.0) calls the Claude Code or Codex CLI itself; both paths use the same prompt files, writing rules and deterministic helpers.
 
 ## When to use
 
 - User names an Alt note (title, folder, date) or provides an Alt URL and asks to "import" / "alt2obs" / "Phase 2 import" / "Claude Code 버전으로 import".
-- Gemini quota is exhausted or the user wants Claude commentary quality.
-- User wants a one-off import without waiting for plugin's per-slide rate-limited loop.
+- The user wants to import from a Claude Code session instead of the Obsidian plugin (for example Obsidian is closed).
+- The user wants the session's own model to read every slide image.
 
 ## Required inputs
 
@@ -79,7 +79,7 @@ curl -sSL -o "/tmp/alt-deck-<noteId>.pdf" "<pdfUrl>"
 
 Quote the URL (it has `&` query params). Verify the file is non-empty (`ls -l`).
 
-The steps follow the plugin's import pipeline (`importNote` in `$REPO/src/main.ts`) in the same order, with the same prompt files and the same deterministic helpers, so a Skill import and a plugin import of the same lecture have the same structure. The prompt files in `$REPO/prompts/` are the single source for every generation rule; `$REPO/prompts/README.md` explains the `{{variable}}` rules. Keep scratch files under `/tmp/alt2obs-<noteId>/`.
+The steps follow the plugin's import pipeline (`prepareCliImport` and `runCliImport` in `$REPO/src/main.ts`; for a lecture without slides, `runLegacyImport`) in the same order, with the same prompt files and the same deterministic helpers, so a Skill import and a plugin import of the same lecture have the same structure. The prompt files in `$REPO/prompts/` are the single source for every generation rule; `$REPO/prompts/README.md` explains the `{{variable}}` rules. Keep scratch files under `/tmp/alt2obs-<noteId>/`.
 
 ### 3. Build the lecture summary (overview source)
 
@@ -156,7 +156,7 @@ Stdout is `{"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}`. Use `
 
 ### 6. Read each slide and compose commentary
 
-Local notes: skip this even split; `prep.mjs --bundle` below aligns the timestamped transcript to the slides. URL notes: if `transcript` is non-empty, split the full transcript evenly by character count across the slide count (chunk size = ceil(length / slideCount), each chunk trimmed, empty chunk = none), exactly like `splitTranscriptEvenly` in `$REPO/src/generator/PerSlideCommentaryGenerator.ts`. Chunk N is slide N's transcript context.
+Each slide's transcript context comes from `prep.mjs` below (local notes: aligned by timestamps; URL notes: split and compressed). Without prep, a URL note's transcript is split evenly by character count across the slide count (chunk size = ceil(length / slideCount), each chunk trimmed, empty chunk = none), exactly like `splitTranscriptEvenly` in `$REPO/src/core/prep/TranscriptCompressor.ts`; `slide-prompt.mjs --transcript` does this for you. Chunk N is slide N's transcript context.
 
 Use `Read` with the `pages` parameter to walk through the deck, **20 pages at a time** (the tool's max). Example:
 
@@ -166,12 +166,18 @@ Read(file_path="/tmp/alt-deck-<noteId>.pdf", pages="21-40")
 …
 ```
 
-Reading a PDF returns the page contents as images you can see directly. For each page N, generate the commentary with `$REPO/prompts/slide-commentary.system.md` + `slide-commentary.user.md`: `{{slideNum}}` = N, `{{totalSlides}}` = page count, `{{conceptList}}` = the existing concept names from step 4.1 (not the newly extracted ones), `{{transcriptBlock}}` = slide N's transcript chunk. Both fragments are empty when there is nothing to show and are otherwise formatted as in `buildSlidePrompt` in `PerSlideCommentaryGenerator.ts`.
+Reading a PDF returns the page contents as images you can see directly. Run the token-saving prep below first, then render the prompts with the plugin's code instead of formatting them by hand (save the existing concept names from step 4.1, not the newly extracted ones, as a JSON array, and the prep output below as `prep.json`):
+
+```bash
+node "$REPO/scripts/phase2/slide-prompt.mjs" <pageCount> --concepts "/tmp/alt2obs-<noteId>/known-concepts.json" --prep "/tmp/alt2obs-<noteId>/prep.json"
+```
+
+It prints `{"system":"...","slides":[{"slide":N,"user":"..."}]}`. For page N follow `system` (the role, content rules and the writing rules the plugin also uses: one speech level, terms with English only at first mention, links as `[[한국어 (English)]]`, no narration about the slide, no unverified exam claims) and `slides[N-1].user`. For reference, the two optional fragments of `user` are, each after a blank line: `[기존 개념 목록 (같은 의미면 이 이름을 그대로 쓰시오. 새 개념은 새 이름으로 도입 가능)]` plus the names (first 100, comma separated), and `[해당 구간 음성 전사 (참고용. 그대로 붙여넣지 말고 교수님이 강조한 점만 골라 쓰시오)]` plus the trimmed chunk; each is absent when empty (`$REPO/src/prompts/slidePrompt.ts`, fixture `test/fixtures/skill-slide-prompts.json`). Without prep use `--transcript transcript.txt` (even split) instead of `--prep`.
 
 **Token saving (same prep as the plugin 2.0 CLI path).** Before writing commentary, save the full transcript to `/tmp/alt2obs-<noteId>/transcript.txt` and run the plugin's deterministic prep:
 
 ```bash
-node "$REPO/scripts/phase2/prep.mjs" "/tmp/alt-deck-<noteId>.pdf" "<noteId>" --title "<title>" --transcript "/tmp/alt2obs-<noteId>/transcript.txt"
+node "$REPO/scripts/phase2/prep.mjs" "/tmp/alt-deck-<noteId>.pdf" "<noteId>" --title "<title>" --transcript "/tmp/alt2obs-<noteId>/transcript.txt" > "/tmp/alt2obs-<noteId>/prep.json"
 ```
 
 For a local note use `--bundle "<dir>/bundle.json"` instead of `--transcript`: the transcript segments are aligned to the slides by their timestamps (spec 4.3, the plugin's `TranscriptAligner`), not split evenly.
@@ -372,4 +378,4 @@ subject: 8강
 title: 8강-claude
 ```
 
-This avoids overwriting the existing `8강.md` (Gemini-generated). Compare side-by-side after import to evaluate Skill commentary quality vs Gemini's.
+This avoids overwriting the existing `8강.md` (made by an earlier plugin import). Compare the two side by side after the import.
