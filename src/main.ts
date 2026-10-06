@@ -1506,7 +1506,14 @@ export default class Alt2ObsidianPlugin extends Plugin {
     delete this.data.pendingMovedTasks;
     delete this.data.removedProviderNotice;
     if (removedFrom.length > 0) {
-      new Notice(removedProviderMessage(removedFrom, cli), 15000);
+      // Data written by beta.4 has no pendingMovedTasks: its Gemini/Ollama
+      // tasks were already put on the Claude CLI then and nothing moves now.
+      const target = cli === null ? null : moved.length > 0 ? cli : "claude-cli";
+      const hint =
+        target === "claude-cli" && cli === "codex-cli"
+          ? " 로그인된 Claude CLI가 없습니다. Claude에 로그인하거나 설정의 '작업별 모델'에서 Codex CLI로 바꾸세요."
+          : "";
+      new Notice(removedProviderMessage(removedFrom, target) + hint, 15000);
     } else if (cli === "codex-cli" && moved.length > 0) {
       new Notice("Alt2Obsidian: 로그인된 Claude CLI가 없어 작업을 Codex CLI로 설정했습니다. 설정의 '작업별 모델'에서 확인하세요.");
     } else if (!cli) {

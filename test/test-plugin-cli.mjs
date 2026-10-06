@@ -192,6 +192,28 @@ try {
     assert.equal(ollama.stored().pendingFilledNotice, undefined);
     await ollama.plugin.applyCliDefaultOnce();
     assert.equal(notices.length, n0 + 2, "each told once");
+    // Data written by beta.4: the flag is `true`, no pendingMovedTasks. Claude logged out, Codex found:
+    // nothing moves, so the Notice must not claim a move to Codex.
+    const beta4 = await makePlugin({
+      settings: {
+        settingsVersion: 3,
+        tasks: {
+          commentary: { provider: "claude-cli", model: "sonnet", effort: "medium" },
+          concepts: { provider: "claude-cli", model: "haiku", effort: "low" },
+          alignment: { provider: "none", model: "", effort: "" },
+          verification: { provider: "claude-cli", model: "sonnet", effort: "medium" },
+        },
+      },
+      pendingCliDefault: true,
+      removedProviderNotice: true,
+    });
+    beta4.plugin.data.settings.claudePath = FAKE_CLAUDE;
+    beta4.plugin.data.settings.codexPath = FAKE_CODEX;
+    const n1 = notices.length;
+    await beta4.plugin.applyCliDefaultOnce();
+    assert.equal(beta4.plugin.data.settings.tasks.commentary.provider, "claude-cli", "nothing moved");
+    const said = notices.slice(n1).join("\n");
+    assert.ok(!said.includes("Codex CLI로 옮겼습니다") && said.includes("Claude CLI로 옮겼습니다") && said.includes("Codex CLI로 바꾸세요"), said);
     delete process.env.FAKE_CLAUDE_LOGGED_OUT;
     assert.equal(s.calls().length, 0, "the login check never calls a model");
   }
