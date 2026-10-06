@@ -48,7 +48,8 @@ try {
   files.forEach((f, i) => assert.equal(readFileSync(f, "utf8"), linkConceptNames(bodies[i], names)));
   assert.equal(
     readFileSync(files[0], "utf8"),
-    "[[캐시 일관성 (Cache Coherence)]]은 [[캐시]]와 [[캐시]] 사이 문제. 비용 [[$&]]."
+    "[[캐시 일관성 (Cache Coherence)]]은 [[캐시]]와 캐시 사이 문제. 비용 [[$&]].",
+    "the first mention of each concept per slide file"
   );
   console.log("PASS: link-concepts.mjs matches linkConceptNames");
 

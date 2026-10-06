@@ -104,9 +104,9 @@ b. **Lecture-material pass** (always attempted): write the seed text `<title>\n\
 
 Concepts are extracted from the enhanced summary `S` (not from the slide commentary), exactly like the plugin's `ConceptExtractor`. The concept notes are what the lecture's `[[wikilinks]]` resolve to; without this step the wikilinks dangle.
 
-1. List existing concept names by globbing `<vault>/<base>/<subject>/Concepts/*.md` (use `Bash` `ls`). These are reuse candidates.
-2. Generate with `$REPO/prompts/concept-extraction.system.ko.md` + `concept-extraction.md`: `{{subject}}` = subject, `{{langInstruction}}` = the Korean (`ko`) branch of `langInstruction` in `$REPO/src/generator/ConceptExtractor.ts`, `{{existingConceptHint}}` = empty if there are no existing names, else `\nExisting concept notes in this course (REUSE these exact names when the same concept appears):\n` + one `- <name>` line per name + `\n`, `{{summary}}` = `S`. The prompt defines the JSON shape (`concepts[]` with `name`, `definition`, `lectureContext`, `example`, `caution`, `relatedConcepts`, plus `tags[]`).
-3. Save the concept names as a JSON array to `/tmp/alt2obs-<noteId>/concepts.json`.
+1. List existing concept names by globbing `<vault>/<base>/<subject>/Concepts/*.md` (use `Bash` `ls`). These are reuse candidates. New concepts are named `English (한국어)` (for example `Lottery Scheduling (로터리 스케줄링)`); notes made before 2.0.0-beta.5 are named `한국어 (English)`. Both orders name the same concept: a new name matches an existing one when the English parts are equal, or the Korean parts are equal and the English parts are not plainly different (one of them starts with the other, as in Context Switch and Context Switching), ignoring case, spaces, `_` and `-` (`src/core/conceptNames.ts`; `Latency (지연)` and `Delay (지연)` stay two concepts).
+2. Generate with `$REPO/prompts/concept-extraction.system.ko.md` + `concept-extraction.md`: `{{subject}}` = subject, `{{langInstruction}}` = the Korean (`ko`) branch of `langInstruction` in `$REPO/src/generator/ConceptExtractor.ts`, `{{existingConceptHint}}` = empty if there are no existing names, else `\nExisting concept notes in this course (REUSE these exact names when the same concept appears, also when a name is in the older "한국어 (English)" order):\n` + one `- <name>` line per name + `\n`, `{{summary}}` = `S`. The prompt defines the JSON shape (`concepts[]` with `name`, `definition`, `lectureContext`, `example`, `caution`, `relatedConcepts`, plus `tags[]`).
+3. Replace every extracted name that matches an existing note (rule in 4.1) with that note's exact name, in its own order, and merge duplicates. Never rename an existing file. Save the concept names as a JSON array to `/tmp/alt2obs-<noteId>/concepts.json`.
 
 **Concept note files:**
 
@@ -134,7 +134,7 @@ Concepts are extracted from the enhanced summary `S` (not from the slide comment
 
    Skip the `**예시:**` line entirely if `example` is empty; same for `**주의:**` and `**관련 개념:**`. Do NOT emit empty-value lines; match how the plugin elides them.
 
-2. **Skip-if-exists with append behaviour**: if `<vault>/<base>/<subject>/Concepts/<sanitized-name>.md` already exists from a prior import:
+2. **Skip-if-exists with append behaviour**: if `<vault>/<base>/<subject>/Concepts/<sanitized-name>.md` already exists from a prior import (after step 4.3 the name is the existing note's name, so a note named in the other order is found too):
    - Read it.
    - If `**관련 강의:**` already contains `[[{lectureTitle}]]`, leave the file untouched.
    - Otherwise append `, [[{lectureTitle}]]` to the existing `**관련 강의:**` line. This matches `VaultManager.appendLectureReference` (`src/vault/VaultManager.ts`), same lecture cross-linking semantics.
@@ -172,7 +172,7 @@ Reading a PDF returns the page contents as images you can see directly. Run the 
 node "$REPO/scripts/phase2/slide-prompt.mjs" <pageCount> --concepts "/tmp/alt2obs-<noteId>/known-concepts.json" --prep "/tmp/alt2obs-<noteId>/prep.json"
 ```
 
-It prints `{"system":"...","slides":[{"slide":N,"user":"..."}]}`. For page N follow `system` (the role, content rules and the writing rules the plugin also uses: one speech level, terms with English only at first mention, links as `[[한국어 (English)]]`, no narration about the slide, no unverified exam claims) and `slides[N-1].user`. For reference, the two optional fragments of `user` are, each after a blank line: `[기존 개념 목록 (같은 의미면 이 이름을 그대로 쓰시오. 새 개념은 새 이름으로 도입 가능)]` plus the names (first 100, comma separated), and `[해당 구간 음성 전사 (참고용. 그대로 붙여넣지 말고 교수님이 강조한 점만 골라 쓰시오)]` plus the trimmed chunk; each is absent when empty (`$REPO/src/prompts/slidePrompt.ts`, fixture `test/fixtures/skill-slide-prompts.json`). Without prep use `--transcript transcript.txt` (even split) instead of `--prep`.
+It prints `{"system":"...","slides":[{"slide":N,"user":"..."}]}`. For page N follow `system` (the role, content rules and the writing rules the plugin also uses: one speech level, academic terms and concept names in their original English with general words in Korean, links as `[[English (한국어)|English]]` with an existing note's exact name when there is one, no narration about the slide, no unverified exam claims) and `slides[N-1].user`. For reference, the two optional fragments of `user` are, each after a blank line: `[기존 개념 목록 (같은 의미면 이 이름을 그대로 쓰시오. 새 개념은 새 이름으로 도입 가능)]` plus the names (first 100, comma separated), and `[해당 구간 음성 전사 (참고용. 그대로 붙여넣지 말고 교수님이 강조한 점만 골라 쓰시오)]` plus the trimmed chunk; each is absent when empty (`$REPO/src/prompts/slidePrompt.ts`, fixture `test/fixtures/skill-slide-prompts.json`). Without prep use `--transcript transcript.txt` (even split) instead of `--prep`.
 
 **Token saving (same prep as the plugin 2.0 CLI path).** Before writing commentary, save the full transcript to `/tmp/alt2obs-<noteId>/transcript.txt` and run the plugin's deterministic prep:
 
@@ -190,7 +190,7 @@ Save each commentary to `/tmp/alt2obs-<noteId>/slide-<N>.md`, then link the extr
 node "$REPO/scripts/phase2/link-concepts.mjs" "/tmp/alt2obs-<noteId>/concepts.json" /tmp/alt2obs-<noteId>/slide-*.md
 ```
 
-Use the linked files verbatim as the slide bodies in step 7. Do not add or remove wikilinks by hand.
+It links the first mention of each concept per file, by its whole name or by its English or Korean part (`[[Lottery Scheduling (로터리 스케줄링)|Lottery Scheduling]]`), and leaves a concept the file already links alone. Use the linked files verbatim as the slide bodies in step 7. Do not add or remove wikilinks by hand.
 
 ### 7. Assemble the markdown
 

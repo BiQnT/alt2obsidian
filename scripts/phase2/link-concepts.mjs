@@ -63,25 +63,118 @@ var DEFAULT_PLUGIN_DATA = {
   usageTotals: { ...EMPTY_USAGE, lectures: 0, byProvider: {}, since: "" }
 };
 
+// src/core/conceptNames.ts
+var HANGUL = /[가-힣ㄱ-ㆎ]/;
+function parseConceptName(name) {
+  const full = name.trim();
+  const m = full.match(/^(.+?)\s*\(([^()]+)\)$/);
+  if (m) {
+    const [a, b] = [m[1].trim(), m[2].trim()];
+    const aKo = HANGUL.test(a);
+    const bKo = HANGUL.test(b);
+    if (aKo !== bKo)
+      return { full, english: aKo ? b : a, korean: aKo ? a : b };
+  }
+  return HANGUL.test(full) ? { full, english: null, korean: full } : { full, english: full, korean: null };
+}
+function conceptKey(text) {
+  return text.normalize("NFC").toLowerCase().replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/[\s_-]+/g, "");
+}
+function sameConcept(a, b) {
+  if (conceptKey(a) === conceptKey(b))
+    return true;
+  const pa = parseConceptName(a);
+  const pb = parseConceptName(b);
+  const ea = pa.english ? conceptKey(pa.english) : "";
+  const eb = pb.english ? conceptKey(pb.english) : "";
+  if (ea && eb && ea === eb)
+    return true;
+  if (!pa.korean || !pb.korean || conceptKey(pa.korean) !== conceptKey(pb.korean))
+    return false;
+  return !ea || !eb || ea.startsWith(eb) || eb.startsWith(ea);
+}
+
 // src/core/markdown.ts
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+var ASCII_WORD = /[A-Za-z0-9]/;
+var HANGUL_SYLLABLE = /[\uAC00-\uD7A3]/;
+var PROTECTED = new RegExp(
+  "(" + [
+    "```[\\s\\S]*?(?:```|$)",
+    "~~~[\\s\\S]*?(?:~~~|$)",
+    "``[^\\n]*?``",
+    "`[^`\\n]+`",
+    "\\[\\[[^\\]\\n]*\\]\\]",
+    "!?\\[[^\\]\\n]*\\]\\([^)\\n]*\\)",
+    "https?:\\/\\/[^\\s)\\]]+",
+    "\\$\\$[\\s\\S]*?\\$\\$",
+    "\\$[^$\\n]+\\$",
+    "<[^<>\\n]+>",
+    "\\[\\^[^\\]\\n]*\\]"
+  ].join("|") + ")"
+);
 function linkConceptNames(text, conceptNames) {
-  const names = Array.from(
-    new Set(conceptNames.map((n) => n.trim()).filter((n) => n.length > 0))
-  ).sort((a, b) => b.length - a.length);
+  const names = Array.from(new Set(conceptNames.map((n) => n.trim()).filter((n) => n.length > 0)));
   if (names.length === 0)
     return text;
-  const canonical = /* @__PURE__ */ new Map();
+  const terms = /* @__PURE__ */ new Map();
   for (const name of names) {
-    const key = name.toLowerCase();
-    if (!canonical.has(key))
-      canonical.set(key, name);
+    const p = parseConceptName(name);
+    const add = (term, whole) => {
+      const key = term.toLowerCase();
+      if (!term || terms.has(key) && !(whole && !terms.get(key).whole))
+        return;
+      terms.set(key, { term, concept: name, whole });
+    };
+    add(name, true);
+    if (p.english && p.korean) {
+      add(p.english, false);
+      add(p.korean, false);
+    }
   }
-  const pattern = new RegExp(names.map(escapeRegex).join("|"), "gi");
-  const link = (segment) => segment.replace(pattern, (m) => `[[${canonical.get(m.toLowerCase()) ?? m}]]`);
-  return text.split(/(\[\[[^\]\n]*\]\])/).map((part, i) => i % 2 === 1 ? part : link(part)).join("");
+  const sorted = Array.from(terms.values()).sort((a, b) => b.term.length - a.term.length);
+  const pattern = new RegExp(
+    sorted.map(({ term }) => {
+      const head = ASCII_WORD.test(term[0]) ? "(?<![A-Za-z0-9])" : HANGUL_SYLLABLE.test(term[0]) ? "(?<![\\uAC00-\\uD7A3])" : "";
+      const tail = ASCII_WORD.test(term[term.length - 1]) ? "(?![A-Za-z0-9])" : "";
+      return head + escapeRegex(term) + tail;
+    }).join("|"),
+    "gi"
+  );
+  const parts = text.split(PROTECTED);
+  const linked = /* @__PURE__ */ new Set();
+  for (let i = 1; i < parts.length; i += 2) {
+    const m = parts[i].match(/^\[\[([^\]|#\n]+?)(?:#[^\]|]*)?(?:\\?\|[^\]]*)?\]\]$/);
+    if (!m)
+      continue;
+    const target = m[1].trim();
+    for (const name of names)
+      if (sameConcept(target, name))
+        linked.add(name);
+  }
+  const inTableRow = (at) => /^[ \t>]*\|/.test(text.slice(text.lastIndexOf("\n", at - 1) + 1));
+  let base = 0;
+  return parts.map((part, i) => {
+    const start = base;
+    base += part.length;
+    if (i % 2 === 1)
+      return part;
+    return part.replace(pattern, (match, offset) => {
+      const t = terms.get(match.toLowerCase());
+      if (!t || linked.has(t.concept))
+        return match;
+      if (!t.whole && ASCII_WORD.test(match[match.length - 1]) && /^[ \t]+[A-Z][A-Za-z]/.test(part.slice(offset + match.length)))
+        return match;
+      if (!t.whole && ASCII_WORD.test(match[0]) && /[A-Z][A-Za-z]*[ \t]+$/.test(part.slice(0, offset)))
+        return match;
+      linked.add(t.concept);
+      if (conceptKey(match) === conceptKey(t.concept))
+        return `[[${t.concept}]]`;
+      return `[[${t.concept}${inTableRow(start + offset) ? "\\|" : "|"}${match}]]`;
+    });
+  }).join("");
 }
 
 // scripts/src/cli-common.ts

@@ -45,7 +45,7 @@ export type ConceptResult = { concepts: ConceptData[]; tags: string[] };
 
 function existingHint(existingConceptNames: string[]): string {
   return existingConceptNames.length > 0
-    ? `\nExisting concept notes in this course (REUSE these exact names when the same concept appears):\n${existingConceptNames
+    ? `\nExisting concept notes in this course (REUSE these exact names when the same concept appears, also when a name is in the older "한국어 (English)" order):\n${existingConceptNames
         .map((name) => `- ${name}`)
         .join("\n")}\n`
     : "";
@@ -59,7 +59,7 @@ export class ConceptExtractor {
 
   private langInstruction(): string {
     return this.language === "ko"
-      ? "Write ALL concept fields (definition, example, caution, lectureContext) in Korean (한국어). Do NOT mix English explanations into Korean fields, but technical terms can be parenthesized in English (e.g., **명세(Specification)**)."
+      ? "Write ALL concept fields (definition, example, caution, lectureContext) as Korean (한국어) sentences. Inside them write academic terms and concept names in their original English (e.g., Lottery Scheduling, Context Switch, vruntime), never translated or transliterated; general words stay Korean. Do NOT write whole English sentences."
       : "Write all concept fields in clear English.";
   }
 

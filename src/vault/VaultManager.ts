@@ -5,6 +5,7 @@ import {
 } from "../types";
 import { sanitizeFilename } from "../utils/helpers";
 import { ConceptRegistry } from "./ConceptRegistry";
+import { findSameConcept } from "../core/conceptNames";
 import { CONCEPTS_DIR, conceptsFolder as conceptsFolderOf, EXAM_DIR, subjectFolder } from "./layout";
 import {
   assertNoPageAnchoredDowngrade,
@@ -157,10 +158,15 @@ export class VaultManager {
 
     const acquiredNames: string[] = [];
     const savedPaths: string[] = [];
+    // Notes already in the folder, by name: a concept matches one in either
+    // name order ("English (한국어)" or "한국어 (English)") and that note is
+    // updated under its own name, never renamed or duplicated.
+    const folder = this.app.vault.getAbstractFileByPath(conceptsFolder);
+    const existingNames = folder instanceof TFolder ? folder.children.filter((c) => c.name.endsWith(".md")).map((c) => c.name.replace(/\.md$/, "")) : [];
 
     try {
       for (const concept of concepts) {
-        const filename = sanitizeFilename(concept.name);
+        const filename = findSameConcept(sanitizeFilename(concept.name), existingNames) ?? sanitizeFilename(concept.name);
         const path = normalizePath(`${conceptsFolder}/${filename}.md`);
         const existing = this.app.vault.getAbstractFileByPath(path);
 
@@ -177,6 +183,7 @@ export class VaultManager {
           acquiredNames.push(concept.name);
           const content = this.buildConceptNoteContent(concept);
           await this.app.vault.create(path, content);
+          existingNames.push(filename);
           savedPaths.push(path);
         }
       }
@@ -392,7 +399,8 @@ export class VaultManager {
     const regex = /\[\[([^\]|#\n]+?)(?:\|[^\]]+)?\]\]/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(content)) !== null) {
-      links.add(match[1].trim());
+      // Inside a table the alias pipe is written `\|`: drop the backslash from the name.
+      links.add(match[1].trim().replace(/\\$/, "").trim());
     }
     return links;
   }

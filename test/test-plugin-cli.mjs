@@ -40,9 +40,17 @@ function makeApp() {
   const files = new Map();
   const config = new Map();
   const tfile = (path) => Object.assign(new TFile(), { path, basename: path.split("/").pop().replace(/\.md$/, "") });
+  // A folder holds the files under it (VaultManager lists concept notes this way).
+  const tfolder = (path) =>
+    Object.assign(new TFolder(), {
+      path,
+      get children() {
+        return [...new Set([...files.keys()].filter((k) => k.startsWith(path + "/")).map((k) => k.slice(path.length + 1).split("/")[0]))].map((name) => ({ name, path: `${path}/${name}` }));
+      },
+    });
   const app = {
     vault: {
-      getAbstractFileByPath: (p) => (files.has(p) ? tfile(p) : null),
+      getAbstractFileByPath: (p) => (files.has(p) ? tfile(p) : [...files.keys()].some((k) => k.startsWith(p + "/")) ? tfolder(p) : null),
       createFolder: async () => {},
       create: async (p, c) => void files.set(p, c),
       read: async (f) => files.get(f.path),
@@ -634,6 +642,38 @@ try {
     plugin.data.settings.tasks = JSON.parse(saved);
     plugin.data.settings.generation.onlyChangedSlides = true;
     console.log("PASS: a run's model choice: estimate follows (effort, Codex batches), settings untouched, the CLI gets the id, the note and the panel show the model that ran, 기본값으로 저장 saves it");
+  }
+
+  // Concept notes named the other way round are reused, never duplicated or renamed.
+  {
+    const folder = "Alt2Obsidian/CSED311/Concepts";
+    const oldNote = `${folder}/로터리 스케줄링 (Lottery Scheduling).md`;
+    files.set(oldNote, "---\ntags: [concept]\n---\n\n# 로터리 스케줄링 (Lottery Scheduling)\n\n**정의:** 무작위로 고른다.\n\n**관련 강의:** [[6강]]\n");
+    const names = await plugin.vaultManager.getExistingConceptNames("CSED311");
+    assert.ok(names.has("로터리 스케줄링 (Lottery Scheduling)"), [...names].join(", "));
+    const norm = plugin.normalizeConcepts(
+      [
+        { name: "Lottery Scheduling (로터리 스케줄링)", definition: "새 정의", relatedConcepts: ["stride scheduling (스트라이드 스케줄링)", "Unknown (모름)"] },
+        { name: "Stride Scheduling (스트라이드 스케줄링)", definition: "d", relatedConcepts: ["lottery scheduling"] },
+        { name: "로터리 스케줄링", definition: "", relatedConcepts: [] },
+      ],
+      names
+    );
+    assert.deepEqual(norm.map((c) => c.name), ["로터리 스케줄링 (Lottery Scheduling)", "Stride Scheduling (스트라이드 스케줄링)"], "the existing name wins; duplicates merge");
+    assert.deepEqual(norm[0].relatedConcepts, ["Stride Scheduling (스트라이드 스케줄링)"], "related names canonical, unknown ones dropped");
+    assert.deepEqual(norm[1].relatedConcepts, ["로터리 스케줄링 (Lottery Scheduling)"]);
+    const before = [...files.keys()].filter((k) => k.startsWith(folder)).length;
+    // Even a name that was not canonicalized finds the note written the other way round.
+    await plugin.vaultManager.saveConceptNotes(
+      [{ name: "Lottery Scheduling (로터리 스케줄링)", definition: "d", relatedLectures: ["9강"], relatedConcepts: [] }, { name: "Stride Scheduling (스트라이드 스케줄링)", definition: "d", relatedLectures: ["9강"], relatedConcepts: [] }],
+      "9강",
+      "CSED311"
+    );
+    assert.ok(!files.has(`${folder}/Lottery Scheduling (로터리 스케줄링).md`), "no duplicate note in the new order");
+    assert.match(files.get(oldNote), /\*\*관련 강의:\*\* \[\[6강\]\], \[\[9강\]\]/, "the existing note gets the lecture, keeps its name");
+    assert.ok(files.has(`${folder}/Stride Scheduling (스트라이드 스케줄링).md`), "a new concept uses the new order");
+    assert.equal([...files.keys()].filter((k) => k.startsWith(folder)).length, before + 1);
+    console.log("PASS: concept notes match in either name order (English or Korean part): existing notes reused and kept, new ones named English (한국어)");
   }
 
   // Unload aborts running jobs (review M2).

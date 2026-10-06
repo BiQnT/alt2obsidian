@@ -95,6 +95,7 @@ import { fetchNotionPage, NotionFetchProvider, NotionFetchResult } from "./verif
 import { parseAlignment } from "./core/prep/TranscriptAligner";
 import { applyLayoutMigration, MigrationPlan, MigrationResult, planLayoutMigration, VaultFileEntry } from "./vault/layoutMigration";
 import { MigrationModal } from "./ui/MigrationModal";
+import { normalizeConcepts } from "./core/conceptNames";
 import { decidePdfOpen, lectureNoteForPdf } from "./ui/pdfOpen";
 import { renderPrompt } from "./prompts/render";
 import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
@@ -1926,63 +1927,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
     return `${head}\n\n[...중간 내용 생략...]\n\n${tail}`;
   }
 
-  private normalizeConcepts(
-    concepts: ConceptData[],
-    existingConceptNames: Set<string>
-  ): ConceptData[] {
-    const canonicalByKey = new Map<string, string>();
-    for (const name of existingConceptNames) {
-      canonicalByKey.set(this.normalizeConceptKey(name), name);
-    }
-
-    const merged = new Map<string, ConceptData>();
-    for (const concept of concepts) {
-      const rawName = concept.name.trim();
-      if (!rawName) continue;
-
-      const canonicalName =
-        canonicalByKey.get(this.normalizeConceptKey(rawName)) || rawName;
-      const current = merged.get(canonicalName);
-      const next = { ...concept, name: canonicalName };
-
-      if (current) {
-        current.relatedConcepts.push(...next.relatedConcepts);
-        current.definition = current.definition || next.definition;
-        current.example = current.example || next.example;
-        current.caution = current.caution || next.caution;
-        current.lectureContext = current.lectureContext || next.lectureContext;
-      } else {
-        merged.set(canonicalName, next);
-      }
-    }
-
-    const normalized = Array.from(merged.values());
-    const allowed = new Set<string>();
-    for (const concept of normalized) {
-      allowed.add(concept.name.toLowerCase());
-      allowed.add(sanitizeFilename(concept.name).toLowerCase());
-      allowed.add(this.normalizeConceptKey(concept.name));
-    }
-    for (const name of existingConceptNames) {
-      allowed.add(name.toLowerCase());
-      allowed.add(sanitizeFilename(name).toLowerCase());
-      allowed.add(this.normalizeConceptKey(name));
-    }
-
-    return normalized.map((concept) => ({
-      ...concept,
-      relatedConcepts: Array.from(new Set(concept.relatedConcepts))
-        .map((name) => canonicalByKey.get(this.normalizeConceptKey(name)) || name)
-        .filter((name) => {
-          const key = this.normalizeConceptKey(name);
-          return (
-            key !== this.normalizeConceptKey(concept.name) &&
-            (allowed.has(name.toLowerCase()) ||
-              allowed.has(sanitizeFilename(name).toLowerCase()) ||
-              allowed.has(key))
-          );
-        }),
-    }));
+  /** Concepts as written to the vault (see `normalizeConcepts` in src/core/conceptNames.ts). */
+  private normalizeConcepts(concepts: ConceptData[], existingConceptNames: Set<string>): ConceptData[] {
+    return normalizeConcepts(concepts, existingConceptNames);
   }
 
   private async downloadPdfForImport(
@@ -1997,12 +1944,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
       console.warn("[Alt2Obsidian] PDF download failed:", e);
       return null;
     }
-  }
-
-  private normalizeConceptKey(name: string): string {
-    return sanitizeFilename(name)
-      .toLowerCase()
-      .replace(/[\s_-]+/g, "");
   }
 
   private upsertRecentImport(record: ImportRecord): boolean {
