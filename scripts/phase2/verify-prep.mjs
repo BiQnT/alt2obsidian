@@ -1951,10 +1951,13 @@ function formatDate(date) {
 // scripts/src/cli-common.ts
 import { readFile } from "node:fs/promises";
 import { webcrypto } from "node:crypto";
-async function openPdf(pdfPath) {
+function ensureWebCrypto() {
   if (!globalThis.crypto) {
     globalThis.crypto = webcrypto;
   }
+}
+async function openPdf(pdfPath) {
+  ensureWebCrypto();
   console.log = (...args) => console.error(...args);
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const data = new Uint8Array(await readFile(pdfPath));

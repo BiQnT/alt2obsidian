@@ -173,7 +173,7 @@ var transcript_section_batch_section_default = "### {{heading}}\n[\uC804\uC0AC (
 // src/generator/SectionSummaryGenerator.ts
 var SUMMARY_LIMIT = 900;
 var GIST_LIMIT = 60;
-var MIN_SUMMARY_CHARS = 30;
+var MIN_SUMMARY_CHARS = 10;
 var MAX_SLACK = 1.6;
 var SECTION_SCHEMA = {
   type: "object",
@@ -2079,6 +2079,12 @@ function untimedSegments(transcript) {
 }
 
 // scripts/src/cli-common.ts
+import { webcrypto } from "node:crypto";
+function ensureWebCrypto() {
+  if (!globalThis.crypto) {
+    globalThis.crypto = webcrypto;
+  }
+}
 function fail(e, name) {
   process.stderr.write(`${name}: ${e instanceof Error ? e.message : String(e)}
 `);
@@ -2259,6 +2265,7 @@ function render(args) {
   process.stdout.write(lectureMarkdown);
 }
 async function main() {
+  ensureWebCrypto();
   const [cmd, ...rest] = process.argv.slice(2);
   if (cmd === "prep")
     return prep(rest);

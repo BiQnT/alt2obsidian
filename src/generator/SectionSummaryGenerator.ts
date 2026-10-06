@@ -20,8 +20,8 @@ import sectionTemplate from "../../prompts/transcript-section-batch.section.md";
 
 export const SUMMARY_LIMIT = 900;
 export const GIST_LIMIT = 60;
-/** A summary of a short or empty section may be short; below this it is no summary. */
-const MIN_SUMMARY_CHARS = 30;
+/** A section of announcements or small talk gets one short line ("- 수업 안내뿐임 [00:12]"); below this it is no summary. */
+const MIN_SUMMARY_CHARS = 10;
 /** Models count characters loosely. */
 const MAX_SLACK = 1.6;
 

@@ -37,7 +37,7 @@ import { normalizeConcepts } from "../../src/core/conceptNames";
 import { sectionRange } from "../../src/core/sections";
 import type { LectureContext } from "../../src/generator/BatchCommentaryGenerator";
 import type { TranscriptSegment } from "../../src/sources/types";
-import { fail } from "./cli-common";
+import { ensureWebCrypto, fail } from "./cli-common";
 
 function option(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -206,6 +206,7 @@ function render(args: string[]): void {
 }
 
 async function main(): Promise<void> {
+  ensureWebCrypto();
   const [cmd, ...rest] = process.argv.slice(2);
   if (cmd === "prep") return prep(rest);
   if (cmd === "followup") return followup(rest);
