@@ -457,12 +457,14 @@ export class Alt2ObsidianSidebarView extends ItemView {
       button("노트 열기", () => void this.app.workspace.openLinkText(path, "", false));
     }
     const imported = it.status.kind === "imported";
+    // An imported slide note is never replaced by a note without slides.
+    const slideNote = imported && !!this.vaultNotes.find((v) => v.path === (it.status as { path: string }).path)?.slideNote;
     if (!kind) {
       button(imported ? "다시 가져오기" : "가져오기", () => void this.handleLocalImport(it), { cta: true, work: true });
     } else if (fileMissing || kind === "slides-missing") {
       button("새로고침", () => void this.refreshLocal(), { cta: true, title: "Alt에서 슬라이드를 첨부했으면 노트를 다시 읽습니다" });
       button("PDF 첨부", () => void this.attachForLocal(it), { work: true });
-      button(hasTranscript ? "요약 노트 만들기" : "강의 노트 만들기", () => void this.handleLocalImport(it, { withoutPdf: "summary" }), { work: true });
+      if (!slideNote) button(hasTranscript ? "요약 노트 만들기" : "강의 노트 만들기", () => void this.handleLocalImport(it, { withoutPdf: "summary" }), { work: true });
     } else if (kind === "slides" || kind === "attached") {
       button(imported ? "다시 가져오기" : "가져오기", () => void this.handleLocalImport(it), { cta: true, work: true });
     } else if (kind === "transcript") {

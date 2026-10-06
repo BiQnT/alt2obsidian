@@ -353,15 +353,15 @@ The user names a PDF (a vault path or any file on disk). Check it is a PDF (`hea
    node "$REPO/scripts/phase2/transcript-note.mjs" followup "$D/t" --answers "$D/t/answers.json" --subject "<subject>" [--alt-summary "<summary file>"]
    ```
 
-   It prints `{"ok":[...],"failed":[{"section","reason"}]}`. Answer the failed sections once more (append the answer to `answers.json`) and run `followup` again. Then answer `$D/t/overview.md` (the overview prompt: write only the overview markdown to `$D/t/overview-answer.md`) and `$D/t/concepts.md` (write the JSON object to `$D/t/concepts.json`).
+   It prints `{"ok":[...],"failed":[{"section","reason"}]}`. With the plugin's language setting "en", add `--language en`. Answer the failed sections once more (append the answer to `answers.json`) and run `followup` again. Then answer `$D/t/overview.md` (the overview prompt: write only the overview markdown to `$D/t/overview-answer.md`) and `$D/t/concepts.md` (write the JSON object to `$D/t/concepts.json`).
 5. Concept note files: exactly as in step 4 (template, reuse of existing names, appending the lecture), with the concepts of `concepts.json`.
 6. Assemble the note with the plugin's code:
 
    ```bash
-   node "$REPO/scripts/phase2/transcript-note.mjs" render "$D/t" --answers "$D/t/answers.json" --overview "$D/t/overview-answer.md" --concepts "$D/t/concepts.json" --subject "<subject>" --id "<noteId>" [--local] [--created "<lectureDate>"] > "$D/note.md"
+   node "$REPO/scripts/phase2/transcript-note.mjs" render "$D/t" --answers "$D/t/answers.json" --overview "$D/t/overview-answer.md" --concepts "$D/t/concepts.json" --subject "<subject>" --id "<noteId>" [--local] [--created "<lectureDate>"] [--existing "<target note>"] > "$D/note.md"
    ```
 
-   `--local` for an Alt local note (identity `alt_local_id`), without it a URL note (`alt_id`). The note has `alt_kind: "transcript"`, the overview block and one `## ⏱ 구간 N [mm:ss~mm:ss]` section per stretch of the transcript with a `> [!note] 내 메모` callout. Do not edit it.
+   `--local` for an Alt local note (identity `alt_local_id`), without it a URL note (`alt_id`). On a re-import pass the target note as `--existing` so the note keeps its other identity (a linked note's `alt_id`, or `alt_local_id`), like the plugin. If it exits non-zero (no section answered), write nothing. The note has `alt_kind: "transcript"`, the overview block and one `## ⏱ 구간 N [mm:ss~mm:ss]` section per stretch of the transcript with a `> [!note] 내 메모` callout. Do not edit it.
 7. Write it like step 8: a new target is written as is; an existing one is merged with `merge-note.mjs` (`--summary` first: `mode` is `sections`, drift and insertion counts are sections; memos follow their section and memos of sections that are gone move to `## 🗑️ 사라진 구간 (orphan)`). An older lecture-level note of the same lecture is kept whole under `## 이전 노트 백업`. There is no PDF to copy and no Synced Viewer for this note; tell the user that attaching a PDF (A) turns it into a slide note later.
 8. Delete `$D` and the export folder.
 

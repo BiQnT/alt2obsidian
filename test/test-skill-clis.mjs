@@ -265,7 +265,7 @@ try {
     assert.ok(conceptPrompt.includes("구간 1 [00:00]: 구간 1 요지다") && conceptPrompt.includes('Cite sections as "구간 3"') && conceptPrompt.includes("JSON schema:"));
     // render: the plugin's NoteGenerator for the same answers.
     writeFileSync(join(dir, "t-overview.md"), "## 흐름\n- lexer에서 parser로 (구간 1~2)");
-    const conceptsAnswer = { concepts: [{ name: "Cache (캐시)", definition: "Cache는 자주 쓰는 데이터를 프로세서 가까이에 두는 작고 빠른 메모리다. 접근 지역성을 이용해 평균 접근 시간을 줄인다.", lectureContext: "", example: "", caution: "", relatedConcepts: [] }], tags: ["parsing"] };
+    const conceptsAnswer = { concepts: [{ name: "Cache (캐시)", definition: "Cache는 자주 쓰는 데이터를 프로세서 가까이에 두는 작고 빠른 메모리다. 접근 지역성을 이용해 평균 접근 시간을 줄인다. 계층마다 크기와 속도가 다르다.", lectureContext: "", example: "", caution: "", relatedConcepts: [] }], tags: ["parsing"] };
     writeFileSync(join(dir, "t-concepts.json"), JSON.stringify(conceptsAnswer));
     const md = cli("transcript-note", ["render", out, "--answers", join(dir, "t-answers.json"), "--overview", join(dir, "t-overview.md"), "--concepts", join(dir, "t-concepts.json"), "--subject", "CSED423", "--id", "local-t", "--local", "--created", "2026-09-30"]);
     const done = new Map(answers[0].sections.map((x) => [x.section, { summary: x.summary, gist: x.gist }]));
@@ -281,6 +281,15 @@ try {
     assert.equal(md, expected, "the same note as the plugin");
     assert.match(md, /\nsource: "alt2obsidian-cc-skill"\nalt_kind: "transcript"\n/);
     assert.match(md, /\nalt_local_id: "local-t"\nalt_source: "alt-local"\n/);
+    // --existing keeps the other identity (a linked note's public alt_id), like the plugin.
+    writeFileSync(join(dir, "t-linked.md"), '---\ntitle: "L9"\nalt_id: "pub-9"\nalt_local_id: "local-t"\n---\n# L9\n');
+    const linked = cli("transcript-note", ["render", out, "--answers", join(dir, "t-answers.json"), "--overview", join(dir, "t-overview.md"), "--concepts", join(dir, "t-concepts.json"), "--subject", "CSED423", "--id", "local-t", "--local", "--existing", join(dir, "t-linked.md")]);
+    assert.match(linked, /\nalt_local_id: "local-t"\nalt_source: "alt-local"\nalt_id: "pub-9"\n---/);
+    // Nothing answered: nothing to write.
+    writeFileSync(join(dir, "t-empty.json"), "[]");
+    assert.throws(() => execFileSync("node", [join(repo, "scripts/phase2/transcript-note.mjs"), "render", out, "--answers", join(dir, "t-empty.json"), "--overview", join(dir, "t-overview.md"), "--concepts", join(dir, "t-concepts.json"), "--subject", "S", "--id", "x"], { stdio: "pipe" }));
+    cli("transcript-note", ["followup", out, "--answers", join(dir, "t-answers.json"), "--language", "en"]);
+    assert.ok(readFileSync(join(out, "concepts.md"), "utf8").includes("Write all concept fields in clear English."), "--language en");
     // Re-import with --existing: every section reused, nothing to send.
     writeFileSync(join(dir, "t-note.md"), md);
     const again = JSON.parse(cli("transcript-note", ["prep", tb, "--title", "L9", "--out", join(dir, "tn2"), "--existing", join(dir, "t-note.md")]));

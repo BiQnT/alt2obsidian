@@ -342,22 +342,35 @@ function splitSectionNote(content) {
       continue;
     used.add(i);
     used.add(k);
-    const lead = body.slice(ranges.length > 0 ? ranges[ranges.length - 1].endIdx : 0, s.idx);
-    const headings = Array.from(lead.matchAll(SECTION_H2));
-    const heading = headings.length > 0 ? headings[headings.length - 1][0].replace(/^\n/, "").trimEnd() : null;
-    sections.push({ num: s.num, hash: s.hash, heading, managed: body.slice(s.end, markers[k].idx), after: "" });
+    sections.push({ num: s.num, hash: s.hash, heading: null, lead: "", managed: body.slice(s.end, markers[k].idx), after: "" });
     ranges.push({ startIdx: s.idx, endIdx: markers[k].end });
   }
   if (sections.length === 0)
     return { frontmatter, preamble: body, sections };
-  let preamble = body.slice(0, ranges[0].startIdx);
-  const firstH2 = preamble.search(/(^|\n)## ⏱ 구간 \d+/);
-  if (firstH2 >= 0)
-    preamble = preamble.slice(0, firstH2 + (preamble[firstH2] === "\n" ? 1 : 0));
+  const firstHeading = (from, to) => {
+    const at = body.slice(from, to).search(/(^|\n)## ⏱ 구간 \d+/);
+    if (at < 0)
+      return -1;
+    return from + at + (body[from + at] === "\n" ? 1 : 0);
+  };
+  const firstH2 = firstHeading(0, ranges[0].startIdx);
+  const preamble = body.slice(0, firstH2 >= 0 ? firstH2 : ranges[0].startIdx);
+  let leadFrom = firstH2 >= 0 ? firstH2 : ranges[0].startIdx;
   for (let i = 0; i < sections.length; i++) {
-    const slice = body.slice(ranges[i].endIdx, i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length);
-    const nextH2 = slice.search(/(^|\n)## ⏱ 구간 \d+/);
-    sections[i].after = nextH2 >= 0 ? slice.slice(0, nextH2 + (slice[nextH2] === "\n" ? 1 : 0)) : slice;
+    const region = body.slice(leadFrom, ranges[i].startIdx);
+    const headings = Array.from(region.matchAll(SECTION_H2));
+    const last = headings.length > 0 ? headings[headings.length - 1] : null;
+    let lead = region;
+    if (last && last.index !== void 0) {
+      const lineStart = last.index + (last[0].startsWith("\n") ? 1 : 0);
+      sections[i].heading = last[0].replace(/^\n/, "").trimEnd();
+      lead = region.slice(0, lineStart) + region.slice(lineStart + sections[i].heading.length);
+    }
+    sections[i].lead = lead.split("\n").filter((l) => !/^## ⏱ 구간 \d+/.test(l) && !/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    const end = i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length;
+    const nextH2 = firstHeading(ranges[i].endIdx, end);
+    sections[i].after = body.slice(ranges[i].endIdx, nextH2 >= 0 ? nextH2 : end);
+    leadFrom = nextH2 >= 0 ? nextH2 : end;
   }
   return { frontmatter, preamble, sections };
 }
@@ -379,9 +392,11 @@ function mergeTranscriptNote(existingContent, nextContent) {
   const confirmDeckReplacement = deletions.length > 0.5 * existing.sections.length;
   const sectionMarkdown = next.sections.map((ns, i) => {
     const idx = matched.get(i);
+    const lead = idx === void 0 ? "" : existing.sections[idx].lead;
     return [
       ns.heading ?? `## \u23F1 \uAD6C\uAC04 ${ns.num}`,
       "",
+      ...lead ? [lead, ""] : [],
       sectionMarker(ns.num, ns.hash, "start"),
       ns.managed.trim(),
       sectionMarker(ns.num, ns.hash, "end"),
@@ -391,7 +406,7 @@ function mergeTranscriptNote(existingContent, nextContent) {
   let orphanFooter = "";
   if (deletions.length > 0) {
     const blocks = existing.sections.filter((_, i) => !used.has(i)).map((s) => `<!-- alt2obs:orphan section:${s.num} hash:${s.hash} -->
-${s.after.trim()}`).join("\n\n");
+${[s.lead, s.after.trim()].filter(Boolean).join("\n\n")}`).join("\n\n");
     orphanFooter = `
 
 ## \u{1F5D1}\uFE0F \uC0AC\uB77C\uC9C4 \uAD6C\uAC04 (orphan)

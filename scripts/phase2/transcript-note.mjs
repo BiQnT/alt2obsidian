@@ -1147,6 +1147,24 @@ function identityLines(altData) {
     return [`alt_local_id: ${id}`, `alt_source: "alt-local"`];
   return [`alt_id: ${id}`];
 }
+function preservedFrontmatterLines(fm, sourceKind, alignmentValue) {
+  const lines = [];
+  const str = (v) => typeof v === "string" && v ? v : null;
+  if (sourceKind === "alt-local") {
+    if (str(fm?.alt_id))
+      lines.push(`alt_id: ${JSON.stringify(fm.alt_id)}`);
+    if (alignmentValue)
+      lines.push(`alt_alignment: ${JSON.stringify(alignmentValue)}`);
+  } else {
+    if (str(fm?.alt_local_id))
+      lines.push(`alt_local_id: ${JSON.stringify(fm.alt_local_id)}`);
+    if (str(fm?.alt_source))
+      lines.push(`alt_source: ${JSON.stringify(fm.alt_source)}`);
+    if (str(fm?.alt_alignment))
+      lines.push(`alt_alignment: ${JSON.stringify(fm.alt_alignment)}`);
+  }
+  return lines;
+}
 var NoteGenerator = class {
   constructor(llm) {
     this.llm = llm;
@@ -1170,7 +1188,7 @@ var NoteGenerator = class {
    *   > [!note] 내 메모
    *   >
    *
-   * Round 5 invariant — the per-slide `> [!note]` callout sits OUTSIDE the
+   * Round 5 invariant: the per-slide `> [!note]` callout sits OUTSIDE the
    * managed-block markers, so re-import preserves it via the multi-managed
    * merge algorithm validated in spike 1.0b.
    *
@@ -1227,7 +1245,7 @@ var NoteGenerator = class {
   /**
    * Build a single slide section. The managed-block markers (start/end)
    * sandwich only the LLM commentary. The `> [!note] 내 메모` callout below
-   * the end marker is the user's free-space anchor — preserved on regen by
+   * the end marker is the user's free-space anchor, preserved on regen by
    * the multi-managed merge algorithm (Task 1.3).
    */
   buildSlideSection(slide, conceptNames, knownNames) {
@@ -1716,12 +1734,40 @@ function spansFrom(segs, starts, timed) {
     };
   });
 }
+var UNTIMED_PIECE_CHARS = 600;
+function untimedPieces(text) {
+  const out = [];
+  let cur = "";
+  const push = (piece) => {
+    if (cur && cur.length + 1 + piece.length > UNTIMED_PIECE_CHARS) {
+      out.push(cur);
+      cur = "";
+    }
+    cur = cur ? `${cur} ${piece}` : piece;
+  };
+  for (const sentence of splitSentences(text)) {
+    let rest = sentence;
+    while (rest.length > UNTIMED_PIECE_CHARS) {
+      const cut = rest.lastIndexOf(" ", UNTIMED_PIECE_CHARS);
+      const at = cut > UNTIMED_PIECE_CHARS / 2 ? cut : UNTIMED_PIECE_CHARS;
+      push(rest.slice(0, at).trim());
+      rest = rest.slice(at).trim();
+    }
+    if (rest)
+      push(rest);
+  }
+  if (cur)
+    out.push(cur);
+  return out;
+}
 function cleanSegments(segments) {
   const withText = segments.filter((s) => s.text && s.text.trim());
   const timedCount = withText.filter((s) => s.startMs !== null && s.startMs !== void 0).length;
   const timed = withText.length > 0 && timedCount >= withText.length * 0.9;
-  if (!timed)
-    return { segs: withText.map((s) => ({ startMs: null, endMs: null, text: s.text.trim() })), timed: false };
+  if (!timed) {
+    const segs2 = withText.flatMap((s) => untimedPieces(s.text.trim()).map((text) => ({ startMs: null, endMs: null, text })));
+    return { segs: segs2, timed: false };
+  }
   let last = 0;
   const segs = withText.map((s) => {
     const start = s.startMs ?? last;
@@ -1862,22 +1908,35 @@ function splitSectionNote(content) {
       continue;
     used.add(i);
     used.add(k);
-    const lead = body.slice(ranges.length > 0 ? ranges[ranges.length - 1].endIdx : 0, s.idx);
-    const headings = Array.from(lead.matchAll(SECTION_H2));
-    const heading = headings.length > 0 ? headings[headings.length - 1][0].replace(/^\n/, "").trimEnd() : null;
-    sections.push({ num: s.num, hash: s.hash, heading, managed: body.slice(s.end, markers[k].idx), after: "" });
+    sections.push({ num: s.num, hash: s.hash, heading: null, lead: "", managed: body.slice(s.end, markers[k].idx), after: "" });
     ranges.push({ startIdx: s.idx, endIdx: markers[k].end });
   }
   if (sections.length === 0)
     return { frontmatter, preamble: body, sections };
-  let preamble = body.slice(0, ranges[0].startIdx);
-  const firstH2 = preamble.search(/(^|\n)## ⏱ 구간 \d+/);
-  if (firstH2 >= 0)
-    preamble = preamble.slice(0, firstH2 + (preamble[firstH2] === "\n" ? 1 : 0));
+  const firstHeading = (from, to) => {
+    const at = body.slice(from, to).search(/(^|\n)## ⏱ 구간 \d+/);
+    if (at < 0)
+      return -1;
+    return from + at + (body[from + at] === "\n" ? 1 : 0);
+  };
+  const firstH2 = firstHeading(0, ranges[0].startIdx);
+  const preamble = body.slice(0, firstH2 >= 0 ? firstH2 : ranges[0].startIdx);
+  let leadFrom = firstH2 >= 0 ? firstH2 : ranges[0].startIdx;
   for (let i = 0; i < sections.length; i++) {
-    const slice = body.slice(ranges[i].endIdx, i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length);
-    const nextH2 = slice.search(/(^|\n)## ⏱ 구간 \d+/);
-    sections[i].after = nextH2 >= 0 ? slice.slice(0, nextH2 + (slice[nextH2] === "\n" ? 1 : 0)) : slice;
+    const region = body.slice(leadFrom, ranges[i].startIdx);
+    const headings = Array.from(region.matchAll(SECTION_H2));
+    const last = headings.length > 0 ? headings[headings.length - 1] : null;
+    let lead = region;
+    if (last && last.index !== void 0) {
+      const lineStart = last.index + (last[0].startsWith("\n") ? 1 : 0);
+      sections[i].heading = last[0].replace(/^\n/, "").trimEnd();
+      lead = region.slice(0, lineStart) + region.slice(lineStart + sections[i].heading.length);
+    }
+    sections[i].lead = lead.split("\n").filter((l) => !/^## ⏱ 구간 \d+/.test(l) && !/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    const end = i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length;
+    const nextH2 = firstHeading(ranges[i].endIdx, end);
+    sections[i].after = body.slice(ranges[i].endIdx, nextH2 >= 0 ? nextH2 : end);
+    leadFrom = nextH2 >= 0 ? nextH2 : end;
   }
   return { frontmatter, preamble, sections };
 }
@@ -2167,6 +2226,36 @@ JSON schema: ${JSON.stringify(SECTION_SCHEMA)}
     }) + "\n"
   );
 }
+function existingFrontmatter(file) {
+  if (!file)
+    return null;
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (e) {
+    if (e.code === "ENOENT")
+      return null;
+    throw e;
+  }
+  const block = text.replace(/^\uFEFF/, "").match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!block)
+    return null;
+  const fm = {};
+  for (const line of block[1].split(/\r?\n/)) {
+    const m = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
+    if (!m)
+      continue;
+    let v = m[2].trim();
+    if (typeof v === "string" && v.startsWith('"')) {
+      try {
+        v = JSON.parse(v);
+      } catch {
+      }
+    }
+    fm[m[1]] = v;
+  }
+  return fm;
+}
 function load(dir) {
   return JSON.parse(readFileSync(join(dir, "plan.json"), "utf8"));
 }
@@ -2210,7 +2299,7 @@ function followup(args) {
 ${buildSectionOverviewPrompt(saved.context.title, altSummary, result.gists, saved.plan)}
 `
   );
-  const extractor = new ConceptExtractor({}, "ko");
+  const extractor = new ConceptExtractor({}, option(args, "--language") === "en" ? "en" : "ko");
   const conceptPrompt = extractor.sectionPrompt({
     subject: option(args, "--subject") ?? "",
     gistLines: sectionGistLines(result.gists, saved.plan),
@@ -2242,6 +2331,9 @@ function render(args) {
     usage();
   const saved = load(dir);
   const { done, failures } = checked(saved, answers);
+  if (saved.plan.sections.some((x) => x.mode === "llm") && done.size === 0) {
+    throw new Error("no section was answered: nothing to write (the plugin keeps the existing note in this case)");
+  }
   const result = assembleSections(saved.plan, done, failures);
   const concepts = validateConcepts(JSON.parse(readFileSync(conceptsFile, "utf8")));
   const known = saved.context.knownConcepts;
@@ -2259,7 +2351,7 @@ function render(args) {
     { sections: result.sections, errors: result.errors },
     { processedSummary: readFileSync(overviewFile, "utf8"), concepts: names, tags: concepts.tags, subjectSuggestion: subject, knownConceptNames: known },
     subject,
-    [],
+    preservedFrontmatterLines(existingFrontmatter(option(args, "--existing")), local ? "alt-local" : "alt-url", null),
     "alt2obsidian-cc-skill"
   );
   process.stdout.write(lectureMarkdown);

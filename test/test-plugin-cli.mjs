@@ -121,7 +121,8 @@ function grayFor(i) {
   return img;
 }
 const pdfStub = {
-  analyzeForPrep: async () => ({ layouts: TEXTS.map((text) => ({ text, boxes: [] })), grays: TEXTS.map((_, i) => grayFor(i)) }),
+  // A 3-byte "PDF" has no readable page (an unreadable Alt file).
+  analyzeForPrep: async (data) => (data?.byteLength === 3 ? { layouts: [], grays: [] } : { layouts: TEXTS.map((text) => ({ text, boxes: [] })), grays: TEXTS.map((_, i) => grayFor(i)) }),
   renderPageJpeg: async (_d, page) => ({ pageNum: page, mimeType: "image/png", base64: PNG_1PX }),
   extractLectureMaterialContext: async () => null,
   getPageTexts: async () => TEXTS,
@@ -737,6 +738,11 @@ try {
     assert.equal(convRec.pdfPath, "Alt2Obsidian/CSED423/Lectures/L9.pdf");
     assert.deepEqual(bytes(binaries.get(convRec.pdfPath)), bytes(pdfBytes), "still the attached PDF");
     assert.equal((await plugin.prepareCliImport("", pv, "CSED423")).pdfSource, "attached", "remembered for later imports");
+    // Verification of the converted note compares with the slides (its old summary note sits in the backup).
+    files.set(vsrc, "# L9\n- slide 3 cache topic 3 details 23757\n");
+    const vconv = await plugin.prepareVerification({ targetPath: notePath, markdown: files.get(vsrc), source: "x", sourcePath: vsrc });
+    assert.equal(vconv.plan.unit, "slide", "a slide note is checked against its slides");
+    files.delete(vsrc);
     console.log("PASS: PDF attached from the vault: copied as <lecture>.pdf, alt_pdf_source marked; the next import is a slide import and keeps the summary note under 이전 노트 백업");
 
     // A URL lecture without a PDF: the same choice; a PDF from disk (read into memory) makes it a slide lecture.
@@ -757,9 +763,37 @@ try {
     assert.equal(urlRec.path, urlNote);
     assert.match(files.get(urlNote), /^alt_pdf_source: "attached"$/m);
     assert.match(files.get(urlNote), /^alt_id: "note-8"$/m);
-    // Replacing: attaching again overwrites the same file.
+    // Replacing: attaching again overwrites the same file (the mark is read from the note text: no second line).
     const att3 = await plugin.attachPdf(urlNote, { kind: "disk", name: "lec8-v2.pdf", data: enc("%PDF-1.7 v2") });
     assert.deepEqual([att3.replaced, att3.marked], [true, false]);
+    assert.equal((files.get(urlNote).match(/^alt_pdf_source:/gm) ?? []).length, 1);
+    // A slide note is never replaced by a summary note, even when its PDF is gone: stopped before any token.
+    files.delete("Alt2Obsidian/CSED311/Lectures/Lec8 Disk.pdf");
+    binaries.delete("Alt2Obsidian/CSED311/Lectures/Lec8 Disk.pdf");
+    const n2 = s.calls().length;
+    await assert.rejects(plugin.prepareCliImport("u8", urlPv, "CSED311", undefined, { withoutPdf: "summary" }), /이미 슬라이드별 노트가 있어/);
+    assert.equal(s.calls().length, n2);
+    // An Alt PDF without a readable page: the PDF the user attached next to the (new) note is used instead.
+    const badPv = preview();
+    badPv.pdfData = new ArrayBuffer(3);
+    badPv.altData = { ...badPv.altData, title: "Lec6 Broken", metadata: { ...badPv.altData.metadata, noteId: "note-6" } };
+    await assert.rejects(plugin.prepareCliImport("u6", badPv, "CSED311"), (e) => e.name === "MissingPdfError" && /읽지 못했습니다/.test(e.message));
+    await plugin.attachPdf("Alt2Obsidian/CSED311/Lectures/Lec6 Broken.md", { kind: "disk", name: "lec6.pdf", data: pdfBytes });
+    const fixed = await plugin.prepareCliImport("u6", badPv, "CSED311");
+    assert.equal(fixed.pdfSource, "attached", "no loop: the attached PDF takes over");
+    // An unmarked PDF next to an existing note is the plugin's own copy, not an attachment.
+    const copyNote = "Alt2Obsidian/CSED311/Lectures/Vault Copy.md";
+    files.set(copyNote, '---\ntitle: "Vault Copy"\nalt_id: "note-vc"\nsource: "alt2obsidian"\n---\n<!-- alt2obsidian:start -->\n# Vault Copy\n본문\n<!-- alt2obsidian:end -->\n\n## 내 메모\n');
+    files.set("Alt2Obsidian/CSED311/Lectures/Vault Copy.pdf", "<binary>");
+    binaries.set("Alt2Obsidian/CSED311/Lectures/Vault Copy.pdf", pdfBytes);
+    const vcPv = preview();
+    vcPv.pdfData = null;
+    vcPv.altData = { ...vcPv.altData, title: "Vault Copy", metadata: { ...vcPv.altData.metadata, noteId: "note-vc" } };
+    const vc = await plugin.prepareCliImport("uvc", vcPv, "CSED311");
+    assert.equal(vc.pdfSource, "vault");
+    await plugin.runCliImport(vc, { onConfirmUpdate: async () => true });
+    assert.ok(!/alt_pdf_source/.test(files.get(copyNote)), "not marked as attached");
+    assert.equal(plugin.lectureKindFor({ altType: null, hasSlides: false, hasTranscript: true, notePath: copyNote }), "transcript", "the sidebar does not call it attached either");
     console.log("PASS: URL lecture without a PDF: same choice (untimed summary or attach); a PDF from disk is read into memory, copied, and the import marks the note");
   }
 

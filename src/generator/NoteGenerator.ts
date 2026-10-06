@@ -32,6 +32,31 @@ function identityLines(altData: AltNoteData): string[] {
  * is none). A UTF-8 BOM is kept in front, and the file's own line ending
  * (LF or CRLF) is used.
  */
+/**
+ * Frontmatter carried over from the note an import updates, so both
+ * identities survive a re-import from either source (the merge replaces the
+ * frontmatter): a local import keeps a linked note's public `alt_id` and
+ * writes the new alignment; a URL import keeps `alt_local_id`, `alt_source`
+ * and `alt_alignment`. Shared by the plugin and the Skill CLI.
+ */
+export function preservedFrontmatterLines(
+  fm: Record<string, unknown> | null | undefined,
+  sourceKind: "alt-local" | "alt-url" | undefined,
+  alignmentValue: string | null
+): string[] {
+  const lines: string[] = [];
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  if (sourceKind === "alt-local") {
+    if (str(fm?.alt_id)) lines.push(`alt_id: ${JSON.stringify(fm!.alt_id)}`);
+    if (alignmentValue) lines.push(`alt_alignment: ${JSON.stringify(alignmentValue)}`);
+  } else {
+    if (str(fm?.alt_local_id)) lines.push(`alt_local_id: ${JSON.stringify(fm!.alt_local_id)}`);
+    if (str(fm?.alt_source)) lines.push(`alt_source: ${JSON.stringify(fm!.alt_source)}`);
+    if (str(fm?.alt_alignment)) lines.push(`alt_alignment: ${JSON.stringify(fm!.alt_alignment)}`);
+  }
+  return lines;
+}
+
 export function insertFrontmatterLine(content: string, line: string): string {
   const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
   const body = content.slice(bom.length);
@@ -75,7 +100,7 @@ export class NoteGenerator {
    *   > [!note] 내 메모
    *   >
    *
-   * Round 5 invariant — the per-slide `> [!note]` callout sits OUTSIDE the
+   * Round 5 invariant: the per-slide `> [!note]` callout sits OUTSIDE the
    * managed-block markers, so re-import preserves it via the multi-managed
    * merge algorithm validated in spike 1.0b.
    *
@@ -170,7 +195,7 @@ export class NoteGenerator {
   /**
    * Build a single slide section. The managed-block markers (start/end)
    * sandwich only the LLM commentary. The `> [!note] 내 메모` callout below
-   * the end marker is the user's free-space anchor — preserved on regen by
+   * the end marker is the user's free-space anchor, preserved on regen by
    * the multi-managed merge algorithm (Task 1.3).
    */
   private buildSlideSection(slide: SlideSection, conceptNames: string[], knownNames: string[]): string {

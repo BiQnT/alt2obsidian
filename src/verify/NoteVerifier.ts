@@ -104,11 +104,17 @@ function batchesOf(judged: ClaimEvidence[], perCall: number): ClaimEvidence[][] 
 function planSectionVerification(input: VerifyInput, sections: VerifySection[], perCall: number): VerifyPlan {
   const claims = splitClaims(input.noteMarkdown);
   const segments = input.transcript?.segments ?? [];
-  const chunks = transcriptChunks(segments, sectionSpans(sections));
-  const sectionTexts = sections.map((sec) => chunks.filter((c) => c.slide === sec.num).map((c) => c.text).join("\n"));
+  // Retrieval numbers the documents by position (1..n); the note's own
+  // section numbers are put back on every hit afterwards.
+  const byPos = sections.map((s, i) => ({ ...s, num: i + 1 }));
+  const chunks = transcriptChunks(segments, sectionSpans(byPos));
+  const sectionTexts = byPos.map((sec) => chunks.filter((c) => c.slide === sec.num).map((c) => c.text).join("\n"));
   const index = buildEvidenceIndex(sectionTexts, chunks);
-  // A hit's number is the section's position (1-based); sections are numbered 1..n in order.
-  const evidence = withSectionExcerpts(withContextEvidence(claims.map((c) => findEvidence(c, index)), index), index);
+  const numOf = (pos: number) => sections[pos - 1]?.num ?? pos;
+  const evidence = withSectionExcerpts(withContextEvidence(claims.map((c) => findEvidence(c, index)), index), index).map((e) => ({
+    ...e,
+    slides: e.slides.map((h) => ({ ...h, slide: numOf(h.slide) })),
+  }));
   const unmatched = evidence.filter((e) => e.unmatched);
   const judged = [...evidence.filter((e) => !e.unmatched && !e.likelyTrue), ...evidence.filter((e) => !e.unmatched && e.likelyTrue)];
   return {
@@ -127,9 +133,7 @@ function planSectionVerification(input: VerifyInput, sections: VerifySection[], 
 
 export function planVerification(input: VerifyInput, perCall = CLAIMS_PER_CALL): VerifyPlan {
   if (input.sections && input.sections.length > 0 && input.slideTexts.length === 0) {
-    // Sections are numbered 1..n so a hit's index maps to its number.
-    const sections = input.sections.map((s, i) => ({ ...s, num: i + 1 }));
-    return planSectionVerification(input, sections, perCall);
+    return planSectionVerification(input, input.sections, perCall);
   }
   const claims = splitClaims(input.noteMarkdown);
   const chunks = input.transcript ? transcriptChunks(input.transcript.segments, input.transcript.spans) : [];

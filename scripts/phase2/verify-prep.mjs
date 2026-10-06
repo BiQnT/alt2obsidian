@@ -527,6 +527,9 @@ var FILLER_RE = new RegExp(
   `(^|[\\s,.!?])(?:${[...KO_FILLERS, ...EN_FILLERS].sort((a, b) => b.length - a.length).map(escapeRegex).join("|")})(?:[,.\u2026]+|\\.{2,})?(?=$|[\\s,.!?])`,
   "giu"
 );
+function splitSentences(text) {
+  return text.replace(/\s+/g, " ").split(/(?<=[.!?…])\s+|(?<=(?:다|요|죠|까|니다|습니다)[.!?]?)\s+(?=\S)/u).map((s) => s.trim()).filter((s) => s.length > 0);
+}
 
 // src/core/slideHash.ts
 function normalizePageText(text) {
@@ -660,12 +663,40 @@ function spansFrom(segs, starts, timed) {
     };
   });
 }
+var UNTIMED_PIECE_CHARS = 600;
+function untimedPieces(text) {
+  const out = [];
+  let cur = "";
+  const push = (piece) => {
+    if (cur && cur.length + 1 + piece.length > UNTIMED_PIECE_CHARS) {
+      out.push(cur);
+      cur = "";
+    }
+    cur = cur ? `${cur} ${piece}` : piece;
+  };
+  for (const sentence of splitSentences(text)) {
+    let rest = sentence;
+    while (rest.length > UNTIMED_PIECE_CHARS) {
+      const cut = rest.lastIndexOf(" ", UNTIMED_PIECE_CHARS);
+      const at = cut > UNTIMED_PIECE_CHARS / 2 ? cut : UNTIMED_PIECE_CHARS;
+      push(rest.slice(0, at).trim());
+      rest = rest.slice(at).trim();
+    }
+    if (rest)
+      push(rest);
+  }
+  if (cur)
+    out.push(cur);
+  return out;
+}
 function cleanSegments(segments) {
   const withText = segments.filter((s) => s.text && s.text.trim());
   const timedCount = withText.filter((s) => s.startMs !== null && s.startMs !== void 0).length;
   const timed = withText.length > 0 && timedCount >= withText.length * 0.9;
-  if (!timed)
-    return { segs: withText.map((s) => ({ startMs: null, endMs: null, text: s.text.trim() })), timed: false };
+  if (!timed) {
+    const segs2 = withText.flatMap((s) => untimedPieces(s.text.trim()).map((text) => ({ startMs: null, endMs: null, text })));
+    return { segs: segs2, timed: false };
+  }
   let last = 0;
   const segs = withText.map((s) => {
     const start = s.startMs ?? last;
@@ -796,22 +827,35 @@ function splitSectionNote(content) {
       continue;
     used.add(i);
     used.add(k);
-    const lead = body.slice(ranges.length > 0 ? ranges[ranges.length - 1].endIdx : 0, s.idx);
-    const headings = Array.from(lead.matchAll(SECTION_H2));
-    const heading = headings.length > 0 ? headings[headings.length - 1][0].replace(/^\n/, "").trimEnd() : null;
-    sections.push({ num: s.num, hash: s.hash, heading, managed: body.slice(s.end, markers[k].idx), after: "" });
+    sections.push({ num: s.num, hash: s.hash, heading: null, lead: "", managed: body.slice(s.end, markers[k].idx), after: "" });
     ranges.push({ startIdx: s.idx, endIdx: markers[k].end });
   }
   if (sections.length === 0)
     return { frontmatter, preamble: body, sections };
-  let preamble = body.slice(0, ranges[0].startIdx);
-  const firstH2 = preamble.search(/(^|\n)## ⏱ 구간 \d+/);
-  if (firstH2 >= 0)
-    preamble = preamble.slice(0, firstH2 + (preamble[firstH2] === "\n" ? 1 : 0));
+  const firstHeading = (from, to) => {
+    const at = body.slice(from, to).search(/(^|\n)## ⏱ 구간 \d+/);
+    if (at < 0)
+      return -1;
+    return from + at + (body[from + at] === "\n" ? 1 : 0);
+  };
+  const firstH2 = firstHeading(0, ranges[0].startIdx);
+  const preamble = body.slice(0, firstH2 >= 0 ? firstH2 : ranges[0].startIdx);
+  let leadFrom = firstH2 >= 0 ? firstH2 : ranges[0].startIdx;
   for (let i = 0; i < sections.length; i++) {
-    const slice = body.slice(ranges[i].endIdx, i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length);
-    const nextH2 = slice.search(/(^|\n)## ⏱ 구간 \d+/);
-    sections[i].after = nextH2 >= 0 ? slice.slice(0, nextH2 + (slice[nextH2] === "\n" ? 1 : 0)) : slice;
+    const region = body.slice(leadFrom, ranges[i].startIdx);
+    const headings = Array.from(region.matchAll(SECTION_H2));
+    const last = headings.length > 0 ? headings[headings.length - 1] : null;
+    let lead = region;
+    if (last && last.index !== void 0) {
+      const lineStart = last.index + (last[0].startsWith("\n") ? 1 : 0);
+      sections[i].heading = last[0].replace(/^\n/, "").trimEnd();
+      lead = region.slice(0, lineStart) + region.slice(lineStart + sections[i].heading.length);
+    }
+    sections[i].lead = lead.split("\n").filter((l) => !/^## ⏱ 구간 \d+/.test(l) && !/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    const end = i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length;
+    const nextH2 = firstHeading(ranges[i].endIdx, end);
+    sections[i].after = body.slice(ranges[i].endIdx, nextH2 >= 0 ? nextH2 : end);
+    leadFrom = nextH2 >= 0 ? nextH2 : end;
   }
   return { frontmatter, preamble, sections };
 }
@@ -1575,10 +1619,15 @@ function batchesOf(judged, perCall) {
 function planSectionVerification(input, sections, perCall) {
   const claims = splitClaims(input.noteMarkdown);
   const segments = input.transcript?.segments ?? [];
-  const chunks = transcriptChunks(segments, sectionSpans(sections));
-  const sectionTexts = sections.map((sec) => chunks.filter((c) => c.slide === sec.num).map((c) => c.text).join("\n"));
+  const byPos = sections.map((s, i) => ({ ...s, num: i + 1 }));
+  const chunks = transcriptChunks(segments, sectionSpans(byPos));
+  const sectionTexts = byPos.map((sec) => chunks.filter((c) => c.slide === sec.num).map((c) => c.text).join("\n"));
   const index = buildEvidenceIndex(sectionTexts, chunks);
-  const evidence = withSectionExcerpts(withContextEvidence(claims.map((c) => findEvidence(c, index)), index), index);
+  const numOf = (pos) => sections[pos - 1]?.num ?? pos;
+  const evidence = withSectionExcerpts(withContextEvidence(claims.map((c) => findEvidence(c, index)), index), index).map((e) => ({
+    ...e,
+    slides: e.slides.map((h) => ({ ...h, slide: numOf(h.slide) }))
+  }));
   const unmatched = evidence.filter((e) => e.unmatched);
   const judged = [...evidence.filter((e) => !e.unmatched && !e.likelyTrue), ...evidence.filter((e) => !e.unmatched && e.likelyTrue)];
   return {
@@ -1596,8 +1645,7 @@ function planSectionVerification(input, sections, perCall) {
 }
 function planVerification(input, perCall = CLAIMS_PER_CALL) {
   if (input.sections && input.sections.length > 0 && input.slideTexts.length === 0) {
-    const sections = input.sections.map((s, i) => ({ ...s, num: i + 1 }));
-    return planSectionVerification(input, sections, perCall);
+    return planSectionVerification(input, input.sections, perCall);
   }
   const claims = splitClaims(input.noteMarkdown);
   const chunks = input.transcript ? transcriptChunks(input.transcript.segments, input.transcript.spans) : [];

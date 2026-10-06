@@ -34,3 +34,12 @@ export function looksLikePdf(data: ArrayBuffer): boolean {
 export function attachedPdfPath(notePath: string): string {
   return notePath.replace(/\.md$/i, "") + ".pdf";
 }
+
+/**
+ * The note's frontmatter (its text, not a metadata cache that may lag right
+ * after `attachPdf` wrote the line) marks an attached PDF.
+ */
+export function markedAttached(noteContent: string | null): boolean {
+  const fm = noteContent?.replace(/^\uFEFF/, "").match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/);
+  return !!fm && /^alt_pdf_source:[ \t]*["']?attached["']?[ \t]*\r?$/m.test(fm[1]);
+}

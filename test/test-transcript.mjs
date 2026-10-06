@@ -128,6 +128,15 @@ const segs2h = lecture();
   const chars = u.spans.map((s) => u.segs.slice(s.from, s.to).reduce((n, x) => n + x.text.length + 1, 0));
   assert.ok(chars.slice(0, -1).every((c) => c >= 2500 && c <= 5600), chars.join(","));
   console.log(`PASS: an untimed transcript is cut by characters (${u.spans.length} sections, no times)`);
+  // The URL source joins the whole transcript into one line: still cut into sections.
+  const oneLine = [{ startMs: null, endMs: null, text: segs2h.map((x) => x.text).join(" "), speaker: "" }];
+  const joined = m.splitTranscriptSections(oneLine);
+  const joinedChars = joined.spans.map((sp) => joined.segs.slice(sp.from, sp.to).reduce((n, x) => n + x.text.length + 1, 0));
+  assert.ok(joined.spans.length >= 10, `a space-joined transcript is not one section (${joined.spans.length})`);
+  assert.ok(joinedChars.slice(0, -1).every((c) => c >= 2500 && c <= 5600), joinedChars.join(","));
+  const noPunct = [{ startMs: null, endMs: null, text: "가나다라 ".repeat(5000), speaker: "" }];
+  assert.ok(m.splitTranscriptSections(noPunct).spans.length >= 4, "no sentence ends: cut at spaces");
+  console.log(`PASS: a URL transcript joined into one line is cut into ${joined.spans.length} sections of about 4,000 characters`);
 }
 
 // ---- the summary note and its grammar ----
@@ -228,6 +237,18 @@ function mergeBoth(existing, next) {
   // User text above and below the overview block is kept.
   const userText = withMemos.replace("# L9\n\n", "# L9\n\n내가 쓴 머리말\n\n");
   assert.ok(mergeBoth(userText, md).merged.includes("내가 쓴 머리말\n\n## 📋 전체 요약"));
+  // Text written under a section heading, and a section whose end marker was deleted, stay where they were.
+  const h3 = md.match(/## ⏱ 구간 3 [^\n]*/)[0];
+  const underHeading = withMemos.replace(`${h3}\n\n`, `${h3}\n\n제목 아래 내가 쓴 글\n\n`);
+  const kept2 = mergeBoth(underHeading, md).merged;
+  assert.ok(kept2.includes(`${h3}\n\n제목 아래 내가 쓴 글\n\n<!-- alt2obs:section:3 `), "text under the heading kept in place");
+  assert.equal(mergeBoth(kept2, md).merged, kept2, "and stays on the next re-import");
+  const s4 = plan.sections[3];
+  const broken = withMemos.replace(`<!-- alt2obs:section:4 hash:${s4.hash} end -->`, "");
+  const fromBroken = mergeBoth(broken, md).merged;
+  assert.ok(fromBroken.includes("memo 4") && fromBroken.includes("memo 5"), "a section without its end marker keeps its text and memo");
+  assert.equal((fromBroken.match(/<!-- alt2obs:section:4 hash:[0-9a-f]{8} start -->/g) ?? []).length, 1, "its leftover markers are not copied");
+  assert.equal(mergeBoth(fromBroken, md).merged, fromBroken, "stable on the next re-import");
   console.log("PASS: re-import merge: unchanged note untouched, only changed sections regenerated, memos follow their section (hash, else number), memos of removed sections kept under 사라진 구간");
 
   // The older (2.0.0-beta.5) lecture-level note of the same lecture: kept whole as a backup.
@@ -341,6 +362,12 @@ function mergeBoth(existing, next) {
     m.removeJobDir(job);
     s.cleanup();
   }
+  // Section numbers are the note's own, also when one was deleted by hand.
+  const gappy = sections.filter((x) => x.num !== 3);
+  const vg = m.planVerification({ lecture: "L9", notePath: "V/L9.md", noteMarkdown: note, slideTexts: [], transcript: { segments: timed, spans: null }, sections: gappy });
+  const hit = vg.claims[0].slides[0];
+  assert.equal(hit.slide, lalrSection, "the lalr section keeps its number with section 3 gone");
+  assert.ok(!vg.uncovered.some((u) => u.slide === 3));
   // A lecture-level note without section headings: the import's split, links without a heading.
   const plain = m.verifySectionsFromNote("# L9\n본문\n", timed);
   assert.equal(plain.length, plan.sections.length);
@@ -357,6 +384,10 @@ function mergeBoth(existing, next) {
   assert.equal(m.looksLikePdf(enc("\n\n%PDF-1.4")), true, "a little junk before the header");
   assert.equal(m.looksLikePdf(enc("hello, not a pdf")), false);
   assert.equal(m.attachedPdfPath("A/S/Lectures/L9.md"), "A/S/Lectures/L9.pdf");
+  assert.equal(m.markedAttached('---\ntitle: "L9"\nalt_pdf_source: "attached"\n---\nbody'), true, "read from the note text, not a lagging cache");
+  assert.equal(m.markedAttached('\uFEFF---\r\nalt_pdf_source: attached\r\n---\r\n'), true);
+  assert.equal(m.markedAttached("---\ntitle: x\n---\nalt_pdf_source: \"attached\"\n"), false, "only in the frontmatter");
+  assert.equal(m.markedAttached(null), false);
   const picked = await m.readPickedFile(new File([new Uint8Array([37, 80, 68, 70, 45, 49])], "lec9.pdf"));
   assert.equal(picked.kind, "disk");
   assert.equal(picked.name, "lec9.pdf");

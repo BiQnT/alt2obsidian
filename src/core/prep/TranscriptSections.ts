@@ -164,12 +164,48 @@ function spansFrom(segs: Seg[], starts: number[], timed: boolean): SectionSpan[]
   });
 }
 
+/** Untimed pieces are at most this long, so the split can cut between them. */
+const UNTIMED_PIECE_CHARS = 600;
+
+/**
+ * Untimed text in pieces of whole sentences up to 600 characters (a longer
+ * sentence is cut at a space). The URL source joins the whole transcript
+ * into one line, which would otherwise be a single segment and a single
+ * section.
+ */
+function untimedPieces(text: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  const push = (piece: string) => {
+    if (cur && cur.length + 1 + piece.length > UNTIMED_PIECE_CHARS) {
+      out.push(cur);
+      cur = "";
+    }
+    cur = cur ? `${cur} ${piece}` : piece;
+  };
+  for (const sentence of splitSentences(text)) {
+    let rest = sentence;
+    while (rest.length > UNTIMED_PIECE_CHARS) {
+      const cut = rest.lastIndexOf(" ", UNTIMED_PIECE_CHARS);
+      const at = cut > UNTIMED_PIECE_CHARS / 2 ? cut : UNTIMED_PIECE_CHARS;
+      push(rest.slice(0, at).trim());
+      rest = rest.slice(at).trim();
+    }
+    if (rest) push(rest);
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 /** Segments with text, in time order; timed only when (nearly) every segment has a time. */
 function cleanSegments(segments: TranscriptSegment[] | TimedSegment[]): { segs: Seg[]; timed: boolean } {
   const withText = (segments as Seg[]).filter((s) => s.text && s.text.trim());
   const timedCount = withText.filter((s) => s.startMs !== null && s.startMs !== undefined).length;
   const timed = withText.length > 0 && timedCount >= withText.length * 0.9;
-  if (!timed) return { segs: withText.map((s) => ({ startMs: null, endMs: null, text: s.text.trim() })), timed: false };
+  if (!timed) {
+    const segs = withText.flatMap((s) => untimedPieces(s.text.trim()).map((text) => ({ startMs: null, endMs: null, text })));
+    return { segs, timed: false };
+  }
   // An untimed segment takes the previous time, like the aligner.
   let last = 0;
   const segs = withText.map((s) => {

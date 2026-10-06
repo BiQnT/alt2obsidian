@@ -14,21 +14,24 @@
 //     transcript is unchanged reuse their summary. Prints
 //     {"timed","durationMs","sections":[{"num","range","hash","mode","chars"}],
 //      "batches":[{"file","sections"}],"estimate":{"calls","inputTokens","outputTokens"}}.
-//   node scripts/phase2/transcript-note.mjs followup <dir> --answers <answers.json> [--alt-summary <summary.md>] [--subject <S>]
+//   node scripts/phase2/transcript-note.mjs followup <dir> --answers <answers.json> [--alt-summary <summary.md>] [--subject <S>] [--language ko|en]
 //     Checks the {"sections":[...]} answers (an array of them, or one) like
 //     the plugin, and writes overview.md (the overview prompt: system, then
 //     user) and concepts.md (the concept prompt with its JSON schema) into
 //     <dir>. Prints {"ok":[...],"failed":[{"section","reason"}]}.
 //   node scripts/phase2/transcript-note.mjs render <dir> --answers <answers.json> --overview <overview.md>
-//        --concepts <concepts.json> --subject <S> --id <noteId> [--local] [--created <date>]
+//        --concepts <concepts.json> --subject <S> --id <noteId> [--local] [--created <date>] [--existing <note.md>]
 //     Prints the note (source "alt2obsidian-cc-skill"): the plugin's
-//     NoteGenerator with the concept names linked.
+//     NoteGenerator with the concept names linked. --existing (the note this
+//     import updates) carries its other identity over like the plugin (a
+//     linked note's alt_id, or alt_local_id and alt_source). Exits 1 when no
+//     section was answered (nothing to write).
 
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkSectionAnswer, assembleSections, buildSectionContextBlock, buildSectionSystemPrompt, buildSectionUserPrompt, SECTION_SCHEMA, sectionGistLines } from "../../src/generator/SectionSummaryGenerator";
 import { CONCEPT_SCHEMA, ConceptExtractor, validateConcepts } from "../../src/generator/ConceptExtractor";
-import { NoteGenerator } from "../../src/generator/NoteGenerator";
+import { NoteGenerator, preservedFrontmatterLines } from "../../src/generator/NoteGenerator";
 import { parseExistingSections, planTranscript, TranscriptPlan } from "../../src/pipeline/transcriptPlan";
 import { buildSectionOverviewPrompt, buildSectionOverviewSystemPrompt, estimateTranscriptSummary } from "../../src/pipeline/transcriptPipeline";
 import { wikilinkCandidates } from "../../src/pipeline/lecturePipeline";
@@ -119,6 +122,35 @@ async function prep(args: string[]): Promise<void> {
   );
 }
 
+/** `key: value` lines of a note's frontmatter (JSON string values decoded); null without a file or block. */
+function existingFrontmatter(file: string | undefined): Record<string, unknown> | null {
+  if (!file) return null;
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+  const block = text.replace(/^\uFEFF/, "").match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!block) return null;
+  const fm: Record<string, unknown> = {};
+  for (const line of block[1].split(/\r?\n/)) {
+    const m = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
+    if (!m) continue;
+    let v: unknown = m[2].trim();
+    if (typeof v === "string" && v.startsWith('"')) {
+      try {
+        v = JSON.parse(v);
+      } catch {
+        // keep the raw text
+      }
+    }
+    fm[m[1]] = v;
+  }
+  return fm;
+}
+
 function load(dir: string): Saved {
   return JSON.parse(readFileSync(join(dir, "plan.json"), "utf8")) as Saved;
 }
@@ -155,7 +187,7 @@ function followup(args: string[]): void {
     join(dir, "overview.md"),
     `${buildSectionOverviewSystemPrompt()}\n\n${buildSectionOverviewPrompt(saved.context.title, altSummary, result.gists, saved.plan)}\n`
   );
-  const extractor = new ConceptExtractor({} as never, "ko");
+  const extractor = new ConceptExtractor({} as never, option(args, "--language") === "en" ? "en" : "ko");
   const conceptPrompt = extractor.sectionPrompt({
     subject: option(args, "--subject") ?? "",
     gistLines: sectionGistLines(result.gists, saved.plan),
@@ -182,6 +214,9 @@ function render(args: string[]): void {
   if (!dir || dir.startsWith("--") || !answers || !overviewFile || !conceptsFile || !subject || !id) usage();
   const saved = load(dir);
   const { done, failures } = checked(saved, answers);
+  if (saved.plan.sections.some((x) => x.mode === "llm") && done.size === 0) {
+    throw new Error("no section was answered: nothing to write (the plugin keeps the existing note in this case)");
+  }
   const result = assembleSections(saved.plan, done, failures);
   const concepts = validateConcepts(JSON.parse(readFileSync(conceptsFile, "utf8")));
   const known = saved.context.knownConcepts;
@@ -199,7 +234,7 @@ function render(args: string[]): void {
     { sections: result.sections, errors: result.errors },
     { processedSummary: readFileSync(overviewFile, "utf8"), concepts: names, tags: concepts.tags, subjectSuggestion: subject, knownConceptNames: known },
     subject,
-    [],
+    preservedFrontmatterLines(existingFrontmatter(option(args, "--existing")), local ? "alt-local" : "alt-url", null),
     "alt2obsidian-cc-skill"
   );
   process.stdout.write(lectureMarkdown);

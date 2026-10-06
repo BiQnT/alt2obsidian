@@ -15,6 +15,8 @@ export interface VaultNoteInfo {
   kind?: string;
   /** `alt_pdf_source`: "attached" when the user attached the PDF in the plugin. */
   pdfSource?: string;
+  /** A slide note (`slide_count` in its frontmatter). */
+  slideNote?: boolean;
 }
 
 export function normalizeTitle(title: string): string {
