@@ -355,11 +355,26 @@ export interface PluginData {
    */
   resolvedModels?: Record<string, { id: string; at: string }>;
   /**
-   * Attached PDFs that are the user's own vault file at `<note>.pdf` (they
-   * picked the file already there, so no copy was made): never trashed or
-   * overwritten by "첨부 해제" or "Alt 슬라이드로 바꾸기" (spec 4.10).
+   * PDFs the plugin copied next to a lecture note when the user attached
+   * one (spec 4.10): path, size and SHA-1 at copy time. "첨부 해제" and "Alt
+   * 슬라이드로 바꾸기" move a file to the trash only when it still matches
+   * its record; any other file is the user's own and is never trashed.
+   * Kept up to date on vault renames; records of missing files are pruned.
+   */
+  attachedCopies?: AttachedCopy[];
+  /**
+   * 2.0.0-beta.6 development data: paths of user files attached in place.
+   * Read only, as "never trash" (renames still update it).
    */
   attachedInPlace?: string[];
+}
+
+/** A PDF the plugin copied when the user attached one. */
+export interface AttachedCopy {
+  path: string;
+  size: number;
+  /** Hex SHA-1 of the copied bytes. */
+  sha1: string;
 }
 
 export const DEFAULT_PLUGIN_DATA: PluginData = {

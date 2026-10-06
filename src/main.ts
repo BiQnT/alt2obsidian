@@ -27,7 +27,7 @@ import { computeSlideHash } from "./core/slideHash";
 import { hasMultiManagedMarkers, splitMultiManagedNote } from "./core/merge";
 import { isLinkCandidate, LectureKind, lectureKind, LocalNoteStatus, MissingPdfError, slideChangeCount, VaultNoteInfo } from "./core/noteStatus";
 import { hasSectionMarkers } from "./core/sections";
-import { ATTACHED_LINE, attachedPdfPath, looksLikePdf, markedAttached, MAX_ATTACH_BYTES } from "./core/pdfAttach";
+import { ATTACHED_LINE, attachedPdfPath, looksLikePdf, markedAttached, MAX_ATTACH_BYTES, sha1Hex } from "./core/pdfAttach";
 import { parseExistingSections, planTranscript, TranscriptPlan, verifySectionsFromNote } from "./pipeline/transcriptPlan";
 import { estimateTranscriptSummary, runTranscriptSummary } from "./pipeline/transcriptPipeline";
 import { choose, pickPdf, PickedPdf } from "./ui/attachPdf";
@@ -230,6 +230,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
       );
     });
 
+    // Attached PDF copies are tracked by path: follow renames and moves (spec 4.10).
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => void this.onVaultRename(file, oldPath).catch((e) => console.warn("[Alt2Obsidian] attach record update failed:", e))));
+
     // Live Preview: hide the alt2obs management comment lines (setting "관리 주석 숨기기").
     this.registerEditorExtension(this.editorExtensions);
     this.applyCommentHiding();
@@ -276,6 +279,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     // The login-shell lookup can take a moment: run it after startup.
     this.app.workspace.onLayoutReady(() => {
       this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obsidian] CLI default check failed:", e));
+      this.pruneAttachRecords().catch((e) => console.warn("[Alt2Obsidian] attach record prune failed:", e));
       // Lecture PDFs opened from now on go to the Synced Viewer (setting
       // "강의 PDF를 열면 뷰어로 열기"). Registered after the layout is
       // restored, and the PDF tabs it restored are left as plain PDFs.
@@ -1604,41 +1608,79 @@ export default class Alt2ObsidianPlugin extends Plugin {
     return lectureKind({ altType: input.altType, hasSlides: input.hasSlides, hasTranscript: input.hasTranscript, attachedPdf: attached, vaultCopy });
   }
 
-  /** The attached PDF at this path is the user's own vault file (no copy was made when it was attached). */
-  isAttachedInPlace(pdfPath: string): boolean {
-    return (this.data.attachedInPlace ?? []).includes(pdfPath);
+  /** Records of the PDFs the plugin copied when the user attached one (and the legacy "never trash" list). */
+  private async recordCopy(path: string, data: ArrayBuffer | null): Promise<void> {
+    const copies = (this.data.attachedCopies ?? []).filter((c) => c.path !== path);
+    if (data) copies.push({ path, size: data.byteLength, sha1: await sha1Hex(data) });
+    this.data.attachedCopies = copies;
+    if (data && this.data.attachedInPlace) this.data.attachedInPlace = this.data.attachedInPlace.filter((p) => p !== path);
+    await this.savePluginData();
   }
 
-  private async rememberInPlace(pdfPath: string, inPlace: boolean): Promise<void> {
-    const list = (this.data.attachedInPlace ?? []).filter((p) => p !== pdfPath);
-    if (inPlace) list.push(pdfPath);
-    this.data.attachedInPlace = list;
+  /** A vault rename (a note and its PDF moved, a folder renamed): the records follow the files. */
+  async onVaultRename(file: { path: string }, oldPath: string): Promise<void> {
+    const move = (p: string) => (p === oldPath ? file.path : p.startsWith(oldPath + "/") ? file.path + p.slice(oldPath.length) : p);
+    const copies = this.data.attachedCopies ?? [];
+    const inPlace = this.data.attachedInPlace ?? [];
+    if (!copies.some((c) => move(c.path) !== c.path) && !inPlace.some((p) => move(p) !== p)) return;
+    this.data.attachedCopies = copies.map((c) => ({ ...c, path: move(c.path) }));
+    if (this.data.attachedInPlace) this.data.attachedInPlace = inPlace.map(move);
+    await this.savePluginData();
+  }
+
+  /** Drops records whose file is gone. */
+  async pruneAttachRecords(): Promise<void> {
+    const exists = (p: string) => this.app.vault.getAbstractFileByPath(p) instanceof TFile;
+    const copies = this.data.attachedCopies ?? [];
+    const inPlace = this.data.attachedInPlace ?? [];
+    const keptCopies = copies.filter((c) => exists(c.path));
+    const keptInPlace = inPlace.filter(exists);
+    if (keptCopies.length === copies.length && keptInPlace.length === inPlace.length) return;
+    this.data.attachedCopies = keptCopies;
+    if (this.data.attachedInPlace) this.data.attachedInPlace = keptInPlace;
     await this.savePluginData();
   }
 
   /**
+   * The PDF next to a note is a copy the plugin made and nobody changed
+   * since: a record with its path, the same size and the same SHA-1. Any
+   * other file (the user's own, moved or renamed there, or a copy the user
+   * edited) is not, and is never trashed.
+   */
+  async attachedPdfIsCopy(notePath: string): Promise<boolean> {
+    const pdf = this.siblingPdf(notePath);
+    if (!pdf || (this.data.attachedInPlace ?? []).includes(pdf.path)) return false;
+    const record = (this.data.attachedCopies ?? []).find((c) => c.path === pdf.path);
+    if (!record) return false;
+    const data = await this.app.vault.readBinary(pdf);
+    return data.byteLength === record.size && (await sha1Hex(data)) === record.sha1;
+  }
+
+  /**
    * The attached PDF next to a note leaves its place: a copy the plugin made
-   * goes to the trash with the vault's documented recoverable path (the
-   * system trash, else the vault's .trash folder), never deleted for good;
-   * the user's own vault file is never trashed: it is kept, renamed to a
-   * free "<note> (첨부한 PDF).pdf" when `rename` (so an import cannot
-   * overwrite it), else left where it is.
+   * (see `attachedPdfIsCopy`) goes to the trash with the vault's documented
+   * recoverable path (the system trash, else the vault's .trash folder),
+   * never deleted for good; any other file is the user's own and is never
+   * trashed: renamed to a free "<note> (첨부한 PDF).pdf" when `rename` (so an
+   * import cannot overwrite it), else left where it is.
    */
   private async releaseAttachedPdf(notePath: string, rename: boolean): Promise<{ pdfPath: string | null; trashed: boolean; keptAt: string | null }> {
+    await this.pruneAttachRecords();
     const pdf = this.siblingPdf(notePath);
     if (!pdf) return { pdfPath: null, trashed: false, keptAt: null };
     const path = pdf.path;
-    if (this.isAttachedInPlace(path)) {
-      await this.rememberInPlace(path, false);
-      if (!rename) return { pdfPath: path, trashed: false, keptAt: path };
-      const stem = notePath.replace(/\.md$/i, "");
-      let target = `${stem} (첨부한 PDF).pdf`;
-      for (let n = 2; this.app.vault.getAbstractFileByPath(target); n++) target = `${stem} (첨부한 PDF ${n}).pdf`;
-      await this.app.fileManager.renameFile(pdf, target);
-      return { pdfPath: path, trashed: false, keptAt: target };
+    if (await this.attachedPdfIsCopy(notePath)) {
+      await this.app.vault.trash(pdf, true);
+      await this.recordCopy(path, null);
+      return { pdfPath: path, trashed: true, keptAt: null };
     }
-    await this.app.vault.trash(pdf, true);
-    return { pdfPath: path, trashed: true, keptAt: null };
+    if (!rename) return { pdfPath: path, trashed: false, keptAt: path };
+    const stem = notePath.replace(/\.md$/i, "");
+    let target = `${stem} (첨부한 PDF).pdf`;
+    for (let n = 2; this.app.vault.getAbstractFileByPath(target); n++) target = `${stem} (첨부한 PDF ${n}).pdf`;
+    await this.app.fileManager.renameFile(pdf, target);
+    await this.onVaultRename({ path: target }, path);
+    return { pdfPath: path, trashed: false, keptAt: target };
   }
 
   /** The note loses its `alt_pdf_source` line (as text; nothing else changes). */
@@ -1695,10 +1737,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
     if (!looksLikePdf(data)) throw new Error(`PDF 파일이 아닙니다: ${name}`);
     const existing = this.siblingPdf(notePath);
     const target = existing?.path ?? attachedPdfPath(notePath);
-    // The user's own file already at <note>.pdf is used where it is (no copy): remembered, so it is never trashed later.
+    // The user's own file already at <note>.pdf is used where it is (no copy, so no record: never trashed).
     const inPlace = picked.kind === "vault" && picked.path === target;
     if (!inPlace) await this.vaultManager!.saveRawFile(data, target);
-    await this.rememberInPlace(target, inPlace);
+    await this.recordCopy(target, inPlace ? null : data);
     let marked = false;
     const note = this.app.vault.getAbstractFileByPath(notePath);
     if (note instanceof TFile) {

@@ -479,9 +479,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
       if (kind === "attached") {
         const notePath = this.notePathOf(it);
         if (d?.hasSlides && d.pdfPath) {
-          button("Alt 슬라이드로 바꾸기", () => this.switchToAlt(it, notePath), { work: true, title: "다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 씁니다" });
+          button("Alt 슬라이드로 바꾸기", () => void this.switchToAlt(it, notePath), { work: true, title: "다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 씁니다" });
         }
-        button("첨부 해제", () => this.confirmDetach(it, notePath), { work: true, title: "첨부한 PDF 사본을 휴지통으로 옮기고 표시를 지웁니다 (보관함의 원래 파일은 그대로)" });
+        button("첨부 해제", () => void this.confirmDetach(it, notePath), { work: true, title: "첨부한 PDF 사본을 휴지통으로 옮기고 표시를 지웁니다 (보관함의 원래 파일은 그대로)" });
       }
     } else if (kind === "transcript") {
       button("PDF 첨부", () => void this.attachForLocal(it), { work: true, title: "강의 PDF를 골라 슬라이드 강의로 가져옵니다" });
@@ -491,16 +491,17 @@ export class Alt2ObsidianSidebarView extends ItemView {
     }
   }
 
-  /** What happens to the attached PDF, for the confirmation text. */
-  private attachedFate(notePath: string, rename: boolean): string {
+  /** What happens to the attached PDF, for the confirmation text (only a plugin-made copy goes to the trash). */
+  private attachedFate(notePath: string, rename: boolean, isCopy: boolean): string {
     const pdf = this.plugin.siblingPdf(notePath);
     const path = pdf?.path ?? attachedPdfPath(notePath);
-    if (pdf && this.plugin.isAttachedInPlace(pdf.path)) {
+    if (!pdf) return "";
+    if (!isCopy) {
       return rename
-        ? `첨부한 PDF(${path})는 보관함에 원래 있던 파일이라 지우지 않고, Alt PDF가 그 자리에 저장되지 않도록 "${path.replace(/\.pdf$/i, "")} (첨부한 PDF).pdf"로 이름을 바꿔 둡니다.`
-        : `첨부한 PDF(${path})는 보관함에 원래 있던 파일이라 지우지 않고 그대로 둡니다.`;
+        ? `${path}는 플러그인이 만든 사본이 아니거나 그 뒤 바뀐 파일이라 지우지 않고, Alt PDF가 그 자리에 저장되지 않도록 "${path.replace(/\.pdf$/i, "")} (첨부한 PDF).pdf"로 이름을 바꿔 둡니다.`
+        : `${path}는 플러그인이 만든 사본이 아니거나 그 뒤 바뀐 파일이라 지우지 않고 그대로 둡니다.`;
     }
-    return `첨부할 때 만든 사본(${path})은 시스템 휴지통으로 옮깁니다(안 되면 보관함의 .trash 폴더). 영구 삭제하지 않으며 원본 파일은 그대로입니다.`;
+    return `첨부할 때 플러그인이 만든 사본(${path})은 시스템 휴지통으로 옮깁니다(안 되면 보관함의 .trash 폴더). 영구 삭제하지 않으며 원본 파일은 그대로입니다.`;
   }
 
   /** Message after the attached PDF left. */
@@ -511,11 +512,12 @@ export class Alt2ObsidianSidebarView extends ItemView {
   }
 
   /** "Alt 슬라이드로 바꾸기" after a confirmation: the attached PDF leaves, the mark goes; the next import uses Alt's PDF. */
-  private switchToAlt(it: LocalItem, notePath: string): void {
+  private async switchToAlt(it: LocalItem, notePath: string): Promise<void> {
+    const isCopy = await this.plugin.attachedPdfIsCopy(notePath);
     new ConfirmModal(
       this.app,
       "Alt 슬라이드로 바꾸기",
-      `다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 쓰고, Alt PDF를 노트 옆에 저장합니다. ${this.attachedFate(notePath, true)} 노트에서는 alt_pdf_source 줄만 지웁니다.`,
+      `다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 쓰고, Alt PDF를 노트 옆에 저장합니다. ${this.attachedFate(notePath, true, isCopy)} 노트에서는 alt_pdf_source 줄만 지웁니다.`,
       "바꾸기",
       async () => {
         try {
@@ -530,11 +532,12 @@ export class Alt2ObsidianSidebarView extends ItemView {
   }
 
   /** "첨부 해제" after a confirmation: the attached PDF leaves, the mark goes. */
-  private confirmDetach(it: LocalItem, notePath: string): void {
+  private async confirmDetach(it: LocalItem, notePath: string): Promise<void> {
+    const isCopy = await this.plugin.attachedPdfIsCopy(notePath);
     new ConfirmModal(
       this.app,
       "첨부 해제",
-      `${this.attachedFate(notePath, false)} 노트에서는 alt_pdf_source 줄만 지우고 내용은 바꾸지 않습니다. 이미 슬라이드 노트로 가져왔다면 다음 가져오기에는 PDF를 다시 첨부해야 합니다.`,
+      `${this.attachedFate(notePath, false, isCopy)} 노트에서는 alt_pdf_source 줄만 지우고 내용은 바꾸지 않습니다. 이미 슬라이드 노트로 가져왔다면 다음 가져오기에는 PDF를 다시 첨부해야 합니다.`,
       "첨부 해제",
       async () => {
         try {

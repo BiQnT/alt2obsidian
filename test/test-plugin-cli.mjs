@@ -54,6 +54,7 @@ function makeApp() {
     });
   const app = {
     vault: {
+      on: () => ({}),
       getAbstractFileByPath: (p) => (files.has(p) ? tfile(p) : [...files.keys()].some((k) => k.startsWith(p + "/")) ? tfolder(p) : null),
       createFolder: async () => {},
       create: async (p, c) => void files.set(p, c),
@@ -795,7 +796,7 @@ try {
     files.set(own, "<binary>");
     binaries.set(own, enc("%PDF-1.7 my own scan"));
     await plugin.attachPdf(notePath, { kind: "vault", path: own });
-    assert.equal(plugin.isAttachedInPlace(own), true);
+    assert.equal(await plugin.attachedPdfIsCopy(notePath), false, "no copy was made: not a plugin copy");
     const before = trashed.length;
     assert.deepEqual(await plugin.detachPdf(notePath), { pdfPath: own, trashed: false, keptAt: own }, "only the mark goes");
     assert.ok(files.has(own) && trashed.length === before, "the user's file stays where it is");
@@ -804,7 +805,58 @@ try {
     const kept = await plugin.useAltSlides(notePath);
     assert.deepEqual(kept, { pdfPath: own, trashed: false, keptAt: "Alt2Obsidian/CSED423/Lectures/L9 (첨부한 PDF).pdf" });
     assert.ok(!files.has(own) && bytes(binaries.get(kept.keptAt)).length === enc("%PDF-1.7 my own scan").byteLength && trashed.length === before);
-    assert.equal(plugin.isAttachedInPlace(own), false);
+    // Only a recorded, unchanged plugin copy is ever trashed (size and SHA-1 at copy time).
+    const copyPath = "Alt2Obsidian/CSED423/Lectures/L9.pdf";
+    // A copy the user changed afterwards (annotations): kept.
+    await plugin.attachPdf(notePath, { kind: "disk", name: "c1.pdf", data: pdfBytes });
+    assert.equal(await plugin.attachedPdfIsCopy(notePath), true);
+    binaries.set(copyPath, enc("%PDF-1.7\nL9 slides, with my highlights"));
+    assert.equal(await plugin.attachedPdfIsCopy(notePath), false, "hash mismatch");
+    assert.deepEqual(await plugin.detachPdf(notePath), { pdfPath: copyPath, trashed: false, keptAt: copyPath }, "a modified copy is kept");
+    assert.ok(files.has(copyPath));
+    // The user's own file moved into the PDF's place (no record for it): never trashed.
+    files.delete(copyPath);
+    binaries.delete(copyPath);
+    await plugin.attachPdf(notePath, { kind: "disk", name: "c2.pdf", data: pdfBytes });
+    files.delete(copyPath);
+    files.set("내 자료/L9 원본.pdf", "<binary>");
+    binaries.set("내 자료/L9 원본.pdf", enc("%PDF-1.7 my original"));
+    await plugin.app.fileManager.renameFile({ path: "내 자료/L9 원본.pdf" }, copyPath);
+    await plugin.onVaultRename({ path: copyPath }, "내 자료/L9 원본.pdf");
+    assert.deepEqual(await plugin.useAltSlides(notePath), { pdfPath: copyPath, trashed: false, keptAt: "Alt2Obsidian/CSED423/Lectures/L9 (첨부한 PDF 2).pdf" }, "renamed out of the way (a free name), never trashed");
+    assert.deepEqual(bytes(binaries.get("Alt2Obsidian/CSED423/Lectures/L9 (첨부한 PDF 2).pdf")), bytes(enc("%PDF-1.7 my original")));
+    // A recorded copy moved with its note (a folder rename) is still recognised there, and trashed.
+    files.delete("Alt2Obsidian/CSED423/Lectures/L9 (첨부한 PDF).pdf");
+    files.delete("Alt2Obsidian/CSED423/Lectures/L9 (첨부한 PDF 2).pdf");
+    await plugin.attachPdf(notePath, { kind: "disk", name: "c3.pdf", data: pdfBytes });
+    const movedNote = "Alt2Obsidian/CSED423/Moved/L9.md";
+    for (const [from, to] of [[notePath, movedNote], [copyPath, "Alt2Obsidian/CSED423/Moved/L9.pdf"]]) {
+      files.set(to, files.get(from));
+      if (binaries.has(from)) binaries.set(to, binaries.get(from));
+      files.delete(from);
+      binaries.delete(from);
+    }
+    await plugin.onVaultRename({ path: "Alt2Obsidian/CSED423/Moved" }, "Alt2Obsidian/CSED423/Lectures");
+    const n3 = trashed.length;
+    assert.deepEqual(await plugin.detachPdf(movedNote), { pdfPath: "Alt2Obsidian/CSED423/Moved/L9.pdf", trashed: true, keptAt: null });
+    assert.equal(trashed.length, n3 + 1);
+    // Data from an earlier beta.6 build: its in-place list means "never trash", even with a matching record.
+    await plugin.attachPdf(movedNote, { kind: "disk", name: "c4.pdf", data: pdfBytes });
+    plugin.data.attachedInPlace = ["Alt2Obsidian/CSED423/Moved/L9.pdf"];
+    assert.equal((await plugin.detachPdf(movedNote)).trashed, false);
+    // Records of files that are gone are pruned.
+    plugin.data.attachedCopies.push({ path: "gone/x.pdf", size: 1, sha1: "00" });
+    await plugin.pruneAttachRecords();
+    assert.ok(!plugin.data.attachedCopies.some((c) => c.path === "gone/x.pdf"));
+    for (const [from, to] of [[movedNote, notePath], ["Alt2Obsidian/CSED423/Moved/L9.pdf", copyPath]]) {
+      files.set(to, files.get(from));
+      binaries.set(to, binaries.get(from));
+      files.delete(from);
+      binaries.delete(from);
+    }
+    plugin.data.attachedInPlace = [];
+    await plugin.detachPdf(notePath);
+    files.delete(copyPath);
     // Before the first import, a PDF attached next to the future note wins over Alt's and the estimate says so.
     const fresh = plugin.previewFromBundle({ ...noSlides("local-10"), title: "L10", pdf: new ArrayBuffer(8), pdfPath: "/alt/L10.pdf" });
     await plugin.attachPdf("Alt2Obsidian/CSED423/Lectures/L10.md", { kind: "disk", name: "l10.pdf", data: pdfBytes });

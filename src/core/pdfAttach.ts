@@ -46,3 +46,11 @@ export function markedAttached(noteContent: string | null): boolean {
   const fm = noteContent?.replace(/^\uFEFF/, "").match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/);
   return !!fm && /^alt_pdf_source:[ \t]*["']?attached["']?[ \t]*\r?$/m.test(fm[1]);
 }
+
+/** Hex SHA-1 of a file's bytes (Web Crypto: Electron and Node 19+). */
+export async function sha1Hex(data: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-1", data);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
