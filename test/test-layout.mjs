@@ -136,6 +136,7 @@ Object.assign(plugin, {
   addRibbonIcon: () => {},
   addCommand: () => {},
   addSettingTab: () => {},
+  registerEditorExtension: () => {},
 });
 await plugin.onload();
 const before = new Set(store.keys());

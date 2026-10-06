@@ -54,6 +54,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     this.renderTasks(containerEl);
     this.renderGeneration(containerEl);
     this.renderUsage(containerEl);
+    this.renderView(containerEl);
     this.renderStorage(containerEl);
     this.renderHelp(containerEl);
   }
@@ -343,6 +344,25 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
           };
           await this.save();
           this.display();
+        })
+      );
+  }
+
+  // ---- reading ----
+
+  private renderView(containerEl: HTMLElement): void {
+    containerEl.createEl("h3", { text: "보기" });
+    new Setting(containerEl)
+      .setName("관리 주석 숨기기")
+      .setDesc(
+        "강의 노트의 <!-- alt2obs:... --> 줄(슬라이드 표시, 해시, 메타데이터, 요약 구간 표시)을 Live Preview와 Synced Viewer에서 감춥니다. " +
+          "커서를 그 줄에 두면 보이고, 소스 모드에서는 항상 보입니다. 노트 내용은 바뀌지 않으며 이 줄들은 다시 가져올 때 메모를 지키는 데 쓰이니 지우지 마세요."
+      )
+      .addToggle((t) =>
+        t.setValue(this.settings.hideManagedComments).onChange(async (value) => {
+          this.settings.hideManagedComments = value;
+          await this.save();
+          this.plugin.applyCommentHiding();
         })
       );
   }

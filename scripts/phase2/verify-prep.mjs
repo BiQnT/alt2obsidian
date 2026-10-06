@@ -562,7 +562,8 @@ var DEFAULT_SETTINGS = {
   recentModels: {},
   generation: DEFAULT_GENERATION,
   altDataDir: "",
-  notionFetchTool: ""
+  notionFetchTool: "",
+  hideManagedComments: true
 };
 var EMPTY_USAGE = {
   calls: 0,

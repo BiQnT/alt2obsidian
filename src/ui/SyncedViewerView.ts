@@ -11,9 +11,13 @@
 // A4 contract:
 // - Render each PDF page to a `<canvas>` stacked vertically in the left pane
 //   (uses legacy pdfjs that PdfProcessor already proves working).
-// - IntersectionObserver tracks which page is currently the most visible
-//   and emits a synthetic page-change → drives the right pane to scroll
-//   the matching `## 📚 슬라이드 N` heading into view.
+// - Scroll listeners on both panes find the slide being read (the last page
+//   or `## 📚 슬라이드 N` heading above a line a quarter down the pane) and
+//   scroll the other pane to it. A scroll the viewer starts itself is not
+//   synced back (guarded until its scrollend). 2.0.0-beta.4 replaced the
+//   IntersectionObserver bands, which only fired while a page or heading
+//   crossed a thin band, dropped crossings during a 600 ms suppression
+//   window, and were wired only after every page had rendered.
 // - Page nav (◀/▶) scrolls the target canvas to the top of the pane.
 // - Zoom (− / +) re-renders all pages at the new DPI scale.
 // - "Obsidian native PDF" escape hatch button opens the file in Obsidian's
@@ -29,6 +33,8 @@ import {
 } from "obsidian";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { parseAlignment, segmentInSpan, spansForSlide, StoredSpan } from "../core/prep/TranscriptAligner";
+import { headingForSlide, PROBE_SHARE, sectionAt, slideNumberFromHeading } from "./viewerSync";
+import { stripManagedComments } from "../editor/managedComments";
 
 /** Timestamped transcript of a local note (plugin cache, else Alt). */
 export type TranscriptLoader = (altLocalId: string) => Promise<Array<{ startMs: number; endMs: number; text: string }> | null>;
@@ -47,6 +53,8 @@ interface SyncedViewerState {
   mdPath: string | null;
   pdfPath: string | null;
 }
+
+type Pane = "pdf" | "md";
 
 const SYNCED_VIEWER_STYLE_ID = "alt2obs-synced-viewer-style";
 
@@ -81,6 +89,7 @@ const SYNCED_VIEWER_CSS = `
 }
 .alt2obs-pdf-pane {
   flex: 1;
+  overflow-anchor: none;
   overflow: auto;
   background: var(--background-primary-alt);
   position: relative;
@@ -121,7 +130,9 @@ const SYNCED_VIEWER_CSS = `
 }
 .alt2obs-md-pane {
   flex: 1;
+  min-height: 0;
   overflow: auto;
+  overflow-anchor: none;
   padding: 16px 22px;
   background: var(--background-primary);
   border-left: 1px solid var(--background-modifier-border);
@@ -211,13 +222,17 @@ export class SyncedViewerView extends ItemView {
   private pageCanvases: HTMLCanvasElement[] = [];
   private pageWrappers: HTMLElement[] = [];
   private slideHeadings: Map<number, HTMLElement> = new Map();
-  private pdfObserver: IntersectionObserver | null = null;
-  private mdObserver: IntersectionObserver | null = null;
   private mdRenderComponent: Component = new Component();
-  private syncTimer: number | null = null;
-  private pendingPageNum: number | null = null;
-  private mdSyncTimer: number | null = null;
-  private pendingMdPageNum: number | null = null;
+  /** One animation frame per pane coalesces scroll events. */
+  private scrollFrame: Record<Pane, number> = { pdf: 0, md: 0 };
+  /** Scrolling the other pane waits until the reader settles on a slide. */
+  private followTimer: number | null = null;
+  /**
+   * A pane the viewer is scrolling itself: its scroll events are not synced
+   * back until the scroll ends (scrollend, or the time limit when the target
+   * was already in place and no scroll happened).
+   */
+  private guardUntil: Record<Pane, number> = { pdf: 0, md: 0 };
   /** `alt_alignment` of the note (spec 4.9); empty = scroll sync by headings only. */
   private alignment: StoredSpan[] = [];
   private altLocalId: string | null = null;
@@ -230,13 +245,12 @@ export class SyncedViewerView extends ItemView {
   private transcriptPanelEl: HTMLElement | null = null;
   private transcriptBtnEl: HTMLButtonElement | null = null;
   private syncModeEl: HTMLElement | null = null;
-  // Suppression: when ONE side initiates a programmatic scroll on the OTHER
-  // side, we ignore that other side's intersection events for a brief window
-  // so the smooth-scroll doesn't bounce a return sync back. Single shared
-  // timestamp keeps the logic simple.
-  private suppressSyncUntil = 0;
-
-  constructor(leaf: WorkspaceLeaf, private loadTranscript?: TranscriptLoader) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    private loadTranscript?: TranscriptLoader,
+    /** Setting "관리 주석 숨기기": drop the alt2obs comment lines before rendering. */
+    private hideManagedComments: () => boolean = () => true
+  ) {
     super(leaf);
   }
 
@@ -277,8 +291,7 @@ export class SyncedViewerView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    this.tearDownPdfObserver();
-    this.tearDownMdObserver();
+    this.cancelFollow();
     this.mdRenderComponent.unload();
     if (this.pdfDocument) {
       try {
@@ -377,6 +390,13 @@ export class SyncedViewerView extends ItemView {
     this.mdPaneEl = column.createDiv({ cls: "alt2obs-md-pane" });
     this.transcriptPanelEl = column.createDiv({ cls: "alt2obs-transcript-panel" });
     this.transcriptPanelEl.hide();
+    for (const pane of ["pdf", "md"] as Pane[]) {
+      const el = this.paneEl(pane);
+      this.registerDomEvent(el, "scroll", () => this.onPaneScroll(pane), { passive: true });
+      this.registerDomEvent(el, "scrollend", () => {
+        if (this.guardUntil[pane] > Date.now()) this.guardUntil[pane] = Date.now() + 50;
+      });
+    }
   }
 
   /** Alignment facts from the note's frontmatter (spec 4.9). */
@@ -505,7 +525,8 @@ export class SyncedViewerView extends ItemView {
       });
       return;
     }
-    const text = await this.app.vault.read(file);
+    const raw = await this.app.vault.read(file);
+    const text = this.hideManagedComments() ? stripManagedComments(raw) : raw;
     this.readAlignment(file);
     this.mdRenderComponent.unload();
     this.mdRenderComponent = new Component();
@@ -520,6 +541,7 @@ export class SyncedViewerView extends ItemView {
       this.mdRenderComponent
     );
     this.attachInternalLinkHandlers(target, file.path);
+    this.collectSlideHeadings();
   }
 
   /**
@@ -528,16 +550,18 @@ export class SyncedViewerView extends ItemView {
    * viewer). Must rebuild the md observer + link handlers since the
    * H2 elements get replaced.
    */
-  private async refreshMarkdownOnly(): Promise<void> {
+  async refreshMarkdownOnly(): Promise<void> {
     if (!this.mdPath) return;
-    this.tearDownMdObserver();
+    const top = this.mdPaneEl.scrollTop;
     try {
       await this.loadMarkdown(this.mdPath);
     } catch (e) {
       console.warn("[Alt2Obsidian] SyncedViewer markdown refresh failed:", e);
       return;
     }
-    this.setUpMdObserver();
+    // Keep the reading position after an edit elsewhere.
+    this.guardUntil.md = Date.now() + 300;
+    this.mdPaneEl.scrollTop = top;
   }
 
   /**
@@ -596,9 +620,8 @@ export class SyncedViewerView extends ItemView {
     }
     const buffer = await this.app.vault.readBinary(file);
 
-    // Tear down any previous document/observer/canvases.
-    this.tearDownPdfObserver();
-    this.tearDownMdObserver();
+    // Drop any previous document and canvases.
+    this.cancelFollow();
     if (this.pdfDocument) {
       try {
         await this.pdfDocument.destroy();
@@ -615,13 +638,15 @@ export class SyncedViewerView extends ItemView {
     this.updatePageInfo();
 
     // Render each page to a canvas wrapped in a labelled container, stacked
-    // vertically. Each wrapper carries data-page-num so the IntersectionObserver
+    // vertically. Each wrapper carries data-page-num so the scroll sync
     // (and the user) can identify which page they're looking at.
     this.pageCanvases = [];
     this.pageWrappers = [];
     for (let pageNum = 1; pageNum <= this.totalPages; pageNum++) {
       const wrapper = this.pdfPaneEl.createDiv({ cls: "alt2obs-pdf-page-wrapper" });
       wrapper.dataset.pageNum = String(pageNum);
+      // Listed before rendering, so sync works while later pages still render.
+      this.pageWrappers.push(wrapper);
       wrapper.createDiv({
         cls: "alt2obs-pdf-page-label",
         text: `슬라이드 ${pageNum} / ${this.totalPages}`,
@@ -636,7 +661,6 @@ export class SyncedViewerView extends ItemView {
         canvas.dataset.pageNum = String(pageNum);
         placeholder.replaceWith(canvas);
         this.pageCanvases.push(canvas);
-        this.pageWrappers.push(wrapper);
       } catch (renderErr) {
         placeholder.setText(`슬라이드 ${pageNum} 렌더 실패`);
         console.warn(
@@ -646,8 +670,6 @@ export class SyncedViewerView extends ItemView {
       }
     }
 
-    this.setUpPdfObserver();
-    this.setUpMdObserver();
     this.applyCurrentPageHighlight();
   }
 
@@ -663,141 +685,80 @@ export class SyncedViewerView extends ItemView {
     return canvas;
   }
 
-  /**
-   * PDF→md observer. Trigger band is a thin slice ~10–20% from the top of
-   * the pane. Exactly one wrapper intersects this band at a time as the
-   * user scrolls — much less jittery than a multi-threshold ratio compare.
-   */
-  private setUpPdfObserver(): void {
-    this.tearDownPdfObserver();
-    if (this.pageWrappers.length === 0) return;
-    this.pdfObserver = new IntersectionObserver(
-      (entries) => {
-        if (Date.now() < this.suppressSyncUntil) return;
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const target = entry.target as HTMLElement;
-          const num = parseInt(target.dataset.pageNum ?? "0", 10);
-          if (num === 0 || num === this.currentPage) continue;
-          this.schedulePdfDrivenSync(num);
-        }
-      },
-      {
-        root: this.pdfPaneEl,
-        rootMargin: "-10% 0px -80% 0px",
-        threshold: 0,
-      }
-    );
-    for (const w of this.pageWrappers) this.pdfObserver.observe(w);
+  private paneEl(pane: Pane): HTMLElement {
+    return pane === "pdf" ? this.pdfPaneEl : this.mdPaneEl;
   }
 
-  private tearDownPdfObserver(): void {
-    if (this.pdfObserver) {
-      this.pdfObserver.disconnect();
-      this.pdfObserver = null;
-    }
-    if (this.syncTimer !== null) {
-      window.clearTimeout(this.syncTimer);
-      this.syncTimer = null;
-    }
-    this.pendingPageNum = null;
-  }
-
-  /**
-   * md→PDF observer. Watches the `## 📚 슬라이드 N` h2 headings in the
-   * rendered markdown pane. When the user scrolls the right pane, we
-   * scroll the matching canvas wrapper into the left pane.
-   */
-  private setUpMdObserver(): void {
-    this.tearDownMdObserver();
+  /** `## 📚 슬라이드 N` headings of the rendered note (h2, or h3 in hand-made notes). */
+  private collectSlideHeadings(): void {
     this.slideHeadings.clear();
-    const headings = this.mdPaneEl.querySelectorAll("h2");
-    for (const h of Array.from(headings)) {
-      const t = (h.textContent || "").trim();
-      const m = t.match(/^📚 슬라이드 (\d+)/);
-      if (!m) continue;
-      const num = parseInt(m[1], 10);
-      this.slideHeadings.set(num, h as HTMLElement);
+    for (const h of Array.from(this.mdPaneEl.querySelectorAll("h2, h3"))) {
+      const num = slideNumberFromHeading(h.textContent || "");
+      if (num !== null && !this.slideHeadings.has(num)) this.slideHeadings.set(num, h as HTMLElement);
     }
-    if (this.slideHeadings.size === 0) return;
-    this.mdObserver = new IntersectionObserver(
-      (entries) => {
-        if (Date.now() < this.suppressSyncUntil) return;
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const target = entry.target as HTMLElement;
-          const text = (target.textContent || "").trim();
-          const m = text.match(/^📚 슬라이드 (\d+)/);
-          if (!m) continue;
-          const num = parseInt(m[1], 10);
-          if (num === this.currentPage) continue;
-          this.scheduleMdDrivenSync(num);
-        }
-      },
-      {
-        root: this.mdPaneEl,
-        rootMargin: "-10% 0px -80% 0px",
-        threshold: 0,
-      }
-    );
-    for (const h of this.slideHeadings.values()) this.mdObserver.observe(h);
   }
 
-  private tearDownMdObserver(): void {
-    if (this.mdObserver) {
-      this.mdObserver.disconnect();
-      this.mdObserver = null;
+  /** Top of an element in its pane's scroll coordinates. */
+  private topInPane(pane: HTMLElement, el: HTMLElement): number {
+    return el.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+  }
+
+  /** The slide the pane is showing, or null (above slide 1, or nothing rendered). */
+  private slideInPane(pane: Pane): number | null {
+    const el = this.paneEl(pane);
+    const probe = el.scrollTop + el.clientHeight * PROBE_SHARE;
+    const sections =
+      pane === "pdf"
+        ? this.pageWrappers.map((w) => ({ num: parseInt(w.dataset.pageNum ?? "0", 10), top: this.topInPane(el, w) }))
+        : Array.from(this.slideHeadings.entries())
+            .map(([num, h]) => ({ num, top: this.topInPane(el, h) }))
+            .sort((a, b) => a.top - b.top);
+    // At the very bottom the last section counts even if its top never reaches the probe line.
+    if (sections.length > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 2 && el.scrollTop > 0) {
+      return sections[sections.length - 1].num;
     }
-    if (this.mdSyncTimer !== null) {
-      window.clearTimeout(this.mdSyncTimer);
-      this.mdSyncTimer = null;
+    return sectionAt(sections, probe);
+  }
+
+  private onPaneScroll(pane: Pane): void {
+    if (this.scrollFrame[pane]) return;
+    this.scrollFrame[pane] = window.requestAnimationFrame(() => {
+      this.scrollFrame[pane] = 0;
+      if (this.guardUntil[pane] > Date.now()) return;
+      const slide = this.slideInPane(pane);
+      if (slide === null || slide === this.currentPage) return;
+      this.currentPage = slide;
+      this.updatePageInfo();
+      this.applyCurrentPageHighlight();
+      this.followLater(pane === "pdf" ? "md" : "pdf", slide);
+    });
+  }
+
+  /** Scroll the other pane once the reader has stayed on a slide for a moment. */
+  private followLater(pane: Pane, slide: number): void {
+    this.cancelFollow();
+    this.followTimer = window.setTimeout(() => {
+      this.followTimer = null;
+      if (slide !== this.currentPage) return;
+      if (pane === "md") this.scrollMarkdownToSlide(slide);
+      else this.scrollPdfToPage(slide);
+    }, 150);
+  }
+
+  private cancelFollow(): void {
+    if (this.followTimer !== null) {
+      window.clearTimeout(this.followTimer);
+      this.followTimer = null;
     }
-    this.pendingMdPageNum = null;
   }
 
-  /**
-   * Coalesce rapid PDF-side intersection events into a single md-pane sync.
-   * While the user is scrolling fast through several pages, we keep
-   * updating the pending target instead of firing N md-pane jumps; only
-   * the LAST page seen in the trigger band when the scroll settles wins.
-   */
-  private schedulePdfDrivenSync(pageNum: number): void {
-    this.pendingPageNum = pageNum;
-    if (this.syncTimer !== null) window.clearTimeout(this.syncTimer);
-    this.syncTimer = window.setTimeout(() => {
-      this.syncTimer = null;
-      const target = this.pendingPageNum;
-      this.pendingPageNum = null;
-      if (target !== null && target !== this.currentPage) {
-        this.suppressSyncUntil = Date.now() + 600;
-        this.handlePageChange(target);
-      }
-    }, 180);
-  }
-
-  /** Symmetric md→PDF coalescer. */
-  private scheduleMdDrivenSync(pageNum: number): void {
-    this.pendingMdPageNum = pageNum;
-    if (this.mdSyncTimer !== null) window.clearTimeout(this.mdSyncTimer);
-    this.mdSyncTimer = window.setTimeout(() => {
-      this.mdSyncTimer = null;
-      const target = this.pendingMdPageNum;
-      this.pendingMdPageNum = null;
-      if (target !== null && target !== this.currentPage) {
-        this.suppressSyncUntil = Date.now() + 600;
-        this.currentPage = target;
-        this.updatePageInfo();
-        this.applyCurrentPageHighlight();
-        this.scrollPdfToPage(target);
-      }
-    }, 180);
-  }
-
-  private handlePageChange(pageNum: number): void {
-    this.currentPage = pageNum;
-    this.updatePageInfo();
-    this.applyCurrentPageHighlight();
-    this.scrollMarkdownToSlide(pageNum);
+  /** A scroll started by the viewer; its own scroll events are not synced back. */
+  private scrollPaneTo(pane: Pane, top: number): void {
+    const el = this.paneEl(pane);
+    const target = Math.max(0, Math.min(top, el.scrollHeight - el.clientHeight));
+    if (Math.abs(el.scrollTop - target) < 2) return;
+    this.guardUntil[pane] = Date.now() + 1500;
+    el.scrollTo({ top: target, behavior: "smooth" });
   }
 
   private applyCurrentPageHighlight(): void {
@@ -807,46 +768,30 @@ export class SyncedViewerView extends ItemView {
     }
   }
 
-  /**
-   * Scroll the corresponding canvas wrapper to the top of the PDF pane.
-   * Used by md→PDF sync and by the page nav buttons.
-   */
+  /** Scroll the page's canvas to the top of the PDF pane (md to PDF sync, page buttons). */
   private scrollPdfToPage(pageNum: number): void {
     const wrapper = this.pageWrappers[pageNum - 1];
     if (!wrapper) return;
-    const wrapperTop = wrapper.offsetTop;
-    this.pdfPaneEl.scrollTo({ top: wrapperTop - 8, behavior: "smooth" });
+    this.scrollPaneTo("pdf", this.topInPane(this.pdfPaneEl, wrapper) - 8);
   }
 
   /**
-   * Scroll the matching `## 📚 슬라이드 N` heading into view in the right
-   * pane — but only if it isn't already comfortably visible. Avoids the
-   * "yank" feeling when the user is mid-scrolling on the PDF side and the
-   * corresponding md heading is already on screen.
+   * Scroll the slide's heading (or the closest earlier one, when the note
+   * has no section for that page) near the top of the note pane.
    */
   private scrollMarkdownToSlide(slideNum: number): void {
-    const targetText = `📚 슬라이드 ${slideNum}`;
-    const headings = this.mdPaneEl.querySelectorAll("h2");
-    for (const h of Array.from(headings)) {
-      const t = (h.textContent || "").trim();
-      if (!t.startsWith(targetText)) continue;
-      const el = h as HTMLElement;
-      const rect = el.getBoundingClientRect();
-      const paneRect = this.mdPaneEl.getBoundingClientRect();
-      const slack = 24; // a heading sitting just above/below the pane edge still counts as visible
-      const alreadyVisible =
-        rect.top >= paneRect.top - slack &&
-        rect.top <= paneRect.bottom - slack;
-      if (alreadyVisible) return;
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
+    const heading = headingForSlide(this.slideHeadings, slideNum);
+    if (!heading) return;
+    this.scrollPaneTo("md", this.topInPane(this.mdPaneEl, heading) - 8);
   }
 
   private gotoPage(pageNum: number): void {
     if (pageNum < 1 || pageNum > this.totalPages) return;
-    this.suppressSyncUntil = Date.now() + 600;
-    this.handlePageChange(pageNum);
+    this.cancelFollow();
+    this.currentPage = pageNum;
+    this.updatePageInfo();
+    this.applyCurrentPageHighlight();
+    this.scrollMarkdownToSlide(pageNum);
     this.scrollPdfToPage(pageNum);
   }
 
@@ -856,7 +801,6 @@ export class SyncedViewerView extends ItemView {
     this.scale = next;
     if (!this.pdfDocument) return;
     // Re-render: replace each canvas in place with a higher-DPI version.
-    this.tearDownPdfObserver();
     for (let i = 0; i < this.pageCanvases.length; i++) {
       const oldCanvas = this.pageCanvases[i];
       const pageNum = i + 1;
@@ -873,7 +817,8 @@ export class SyncedViewerView extends ItemView {
         );
       }
     }
-    this.setUpPdfObserver();
+    // Page heights changed: put the current page back at the top.
+    this.scrollPdfToPage(this.currentPage);
   }
 
   private async openInNativeView(): Promise<void> {

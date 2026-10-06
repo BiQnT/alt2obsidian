@@ -97,6 +97,7 @@ async function makePlugin(saved) {
     addRibbonIcon: () => {},
     addCommand: () => {},
     addSettingTab: () => {},
+    registerEditorExtension: () => {},
   });
   await plugin.onload();
   return { plugin, files, config, stored: () => stored };

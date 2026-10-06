@@ -380,8 +380,13 @@ export class Alt2ObsidianSidebarView extends ItemView {
 
     const actions = footer.createDiv({ cls: "alt2obsidian-footer-actions" });
     if (it.status.kind === "imported") {
-      const open = actions.createEl("button", { text: "노트 열기" });
       const path = it.status.path;
+      const pdf = this.plugin.siblingPdf(path);
+      if (pdf) {
+        const viewer = actions.createEl("button", { text: "뷰어로 열기", attr: { title: "PDF와 노트를 나란히, 스크롤을 맞춰 엽니다 (Synced Viewer)" } });
+        viewer.addEventListener("click", () => void this.plugin.openSyncedViewer(path, pdf.path));
+      }
+      const open = actions.createEl("button", { text: "노트 열기" });
       open.addEventListener("click", () => this.app.workspace.openLinkText(path, "", false));
     }
     this.localImportBtn = actions.createEl("button", {
@@ -811,26 +816,12 @@ export class Alt2ObsidianSidebarView extends ItemView {
     this.refreshRecentList();
     this.refreshStatuses();
 
-    // Open note and PDF side by side
-    await this.openSideBySide(result.path, result.pdfPath);
-  }
-
-  private async openSideBySide(notePath: string, pdfPath?: string): Promise<void> {
-    const noteFile = this.app.vault.getAbstractFileByPath(notePath);
-    if (!(noteFile instanceof TFile)) return;
-
-    const noteLeaf = this.app.workspace.getLeaf(false);
-    await noteLeaf.openFile(noteFile);
-
-    if (pdfPath) {
-      const pdfFile = this.app.vault.getAbstractFileByPath(pdfPath);
-      if (pdfFile instanceof TFile) {
-        // Split vertically: note on left, PDF on right
-        const pdfLeaf = (this.app.workspace as any).getLeaf("split", "vertical");
-        await pdfLeaf.openFile(pdfFile);
-        // Keep focus on the note
-        this.app.workspace.setActiveLeaf(noteLeaf, { focus: true });
-      }
+    // With slides: the Synced Viewer (PDF and note scroll together). Without: the note.
+    if (result.pdfPath && this.app.vault.getAbstractFileByPath(result.pdfPath) instanceof TFile) {
+      await this.plugin.openSyncedViewer(result.path, result.pdfPath);
+    } else {
+      const noteFile = this.app.vault.getAbstractFileByPath(result.path);
+      if (noteFile instanceof TFile) await this.app.workspace.getLeaf(false).openFile(noteFile);
     }
   }
 

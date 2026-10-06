@@ -1,4 +1,6 @@
-import { Plugin, Notice } from "obsidian";
+import { editorLivePreviewField, Plugin, Notice } from "obsidian";
+import type { Extension } from "@codemirror/state";
+import { managedCommentHider } from "./editor/managedComments";
 import {
   PluginData,
   DEFAULT_PLUGIN_DATA,
@@ -181,8 +183,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
     // Register Synced Viewer (Task 1.5 — A2 default)
     this.registerView(VIEW_TYPE_SYNCED_VIEWER, (leaf) => {
-      return new SyncedViewerView(leaf, (id) => this.loadTranscript(id));
+      return new SyncedViewerView(leaf, (id) => this.loadTranscript(id), () => this.data.settings.hideManagedComments);
     });
+
+    // Live Preview: hide the alt2obs management comment lines (setting "관리 주석 숨기기").
+    this.registerEditorExtension(this.editorExtensions);
+    this.applyCommentHiding();
 
     // Add ribbon icon
     this.addRibbonIcon("book-open", "Alt2Obsidian", () => {
@@ -251,25 +257,52 @@ export default class Alt2ObsidianPlugin extends Plugin {
    */
   async openSyncedViewerForActiveNote(): Promise<void> {
     const active = this.app.workspace.getActiveFile();
-    if (!active || active.extension !== "md") {
-      new Notice("강의 노트(.md)를 활성화한 뒤 다시 시도하세요.");
+    // The lecture PDF works too: its note is the .md with the same name.
+    const mdPath = active?.extension === "pdf" ? active.path.replace(/\.pdf$/, ".md") : active?.extension === "md" ? active.path : null;
+    if (!mdPath || !(this.app.vault.getAbstractFileByPath(mdPath) instanceof TFile)) {
+      new Notice("강의 노트(.md)나 그 PDF를 연 뒤 다시 시도하세요.");
       return;
     }
-    const pdfPath = active.path.replace(/\.md$/, ".pdf");
-    const pdfFile = this.siblingPdf(active.path);
+    const pdfFile = this.siblingPdf(mdPath);
     if (!pdfFile) {
-      new Notice(
-        `사이블링 PDF가 없습니다: ${pdfPath} — 강의를 import하면 PDF가 함께 저장됩니다.`
-      );
+      new Notice(`같은 폴더에 같은 이름의 PDF가 없습니다: ${mdPath.replace(/\.md$/, ".pdf")}. 강의를 가져오면 PDF가 함께 저장됩니다.`);
       return;
     }
-    const leaf = this.app.workspace.getLeaf(true);
+    await this.openSyncedViewer(mdPath, pdfFile.path);
+  }
+
+  /** The Synced Viewer for a note and its PDF, reusing an open viewer tab. */
+  async openSyncedViewer(mdPath: string, pdfPath: string): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE_SYNCED_VIEWER)[0];
+    const view = existing?.view;
+    if (view instanceof SyncedViewerView && view.getState().mdPath === mdPath && view.getState().pdfPath === pdfPath) {
+      // Same pair (a re-import): load both again, the PDF may have changed.
+      await view.openPair(mdPath, pdfPath);
+      this.app.workspace.revealLeaf(existing);
+      return;
+    }
+    const leaf = existing ?? this.app.workspace.getLeaf(true);
     await leaf.setViewState({
       type: VIEW_TYPE_SYNCED_VIEWER,
       active: true,
-      state: { mdPath: active.path, pdfPath: pdfFile.path },
+      state: { mdPath, pdfPath },
     });
     this.app.workspace.revealLeaf(leaf);
+  }
+
+  /** Editor extensions registered once; emptied or filled when the setting changes. */
+  private editorExtensions: Extension[] = [];
+
+  /** Applies "관리 주석 숨기기" to open editors and Synced Viewers. */
+  applyCommentHiding(): void {
+    this.editorExtensions.length = 0;
+    if (this.data.settings.hideManagedComments) {
+      this.editorExtensions.push(managedCommentHider((state) => state.field(editorLivePreviewField, false) ?? true));
+    }
+    this.app.workspace.updateOptions?.();
+    for (const leaf of this.app.workspace.getLeavesOfType?.(VIEW_TYPE_SYNCED_VIEWER) ?? []) {
+      if (leaf.view instanceof SyncedViewerView) void leaf.view.refreshMarkdownOnly();
+    }
   }
 
   // ---- 1.x layout migration (spec 4.5) ----

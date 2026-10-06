@@ -68,6 +68,12 @@ export interface Alt2ObsidianSettings {
    * "mcp__notion__notion-fetch". "" = found with `claude mcp list`.
    */
   notionFetchTool: string;
+  /**
+   * Hide the alt2obs management comments (slide markers, metadata, overview
+   * markers) in Live Preview and in the Synced Viewer. The note text is
+   * never changed.
+   */
+  hideManagedComments: boolean;
 }
 
 export const DEFAULT_GENERATION: GenerationOptions = {
@@ -120,6 +126,7 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   generation: DEFAULT_GENERATION,
   altDataDir: "",
   notionFetchTool: "",
+  hideManagedComments: true,
 };
 
 /** 1.x exam period tag. Exam summaries are gone (spec G5); old records may still carry it. */
