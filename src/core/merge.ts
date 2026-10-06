@@ -8,6 +8,7 @@ import {
   OVERVIEW_BLOCK_START,
   OVERVIEW_BLOCK_END,
 } from "../types";
+import { hasSectionMarkers, SECTION_MARKER_RE, sectionMarker } from "./sections";
 
 /**
  * A page-anchored note must never be overwritten by a single-block note
@@ -18,6 +19,17 @@ import {
 export const LEGACY_MIGRATION_NOTE =
   "기존 단일 블록 형식에서 페이지별 구조로 마이그레이션됩니다. 기존 노트 전체는 맨 아래 '이전 노트 백업'에 보관됩니다.";
 
+/**
+ * A transcript summary note (spec 4.10) becoming a slide note (a PDF was
+ * attached or Alt got slides) keeps the whole old note, memos included, as
+ * a backup; it never loses text the user wrote.
+ */
+export const TRANSCRIPT_TO_SLIDES_NOTE =
+  "전사 구간 요약 노트를 슬라이드별 노트로 바꿉니다. 기존 노트 전체(구간 요약과 내 메모)는 맨 아래 '이전 노트 백업'에 보관됩니다.";
+/** An older lecture-level note becoming a transcript summary note. */
+export const TRANSCRIPT_MIGRATION_NOTE =
+  "기존 강의 요약 노트를 전사 구간별 노트로 바꿉니다. 기존 노트 전체는 맨 아래 '이전 노트 백업'에 보관됩니다.";
+
 export function assertNoPageAnchoredDowngrade(currentContent: string, nextContent: string): void {
   if (
     hasMultiManagedMarkers(currentContent) &&
@@ -26,6 +38,13 @@ export function assertNoPageAnchoredDowngrade(currentContent: string, nextConten
     throw new Error(
       "기존 노트는 슬라이드별 형식인데 이번 결과에는 슬라이드별 해설이 없어 덮어쓰지 않고 가져오기를 중단했습니다. " +
         "PDF를 내려받거나 읽지 못한 경우입니다. PDF 접근을 확인한 뒤 다시 시도해주세요."
+    );
+  }
+  // A transcript summary note only becomes a slide note, never a single block.
+  if (hasSectionMarkers(currentContent) && !hasSectionMarkers(nextContent) && !hasMultiManagedMarkers(nextContent)) {
+    throw new Error(
+      "기존 노트는 전사 구간별 요약인데 이번 결과에는 구간 요약이 없어 덮어쓰지 않고 가져오기를 중단했습니다. " +
+        "Alt에서 전사를 읽지 못한 경우입니다. Alt에서 전사가 보이는지 확인한 뒤 다시 시도해주세요."
     );
   }
 }
@@ -238,6 +257,85 @@ function formatSlideMarker(
   return `<!-- alt2obs:slide:${slideNum} hash:${hash}${dupSuffix} ${kind} -->`;
 }
 
+/** A section's identity for pairing: its number and content hash. */
+interface SectionKey {
+  num: number;
+  hash: string;
+}
+
+/**
+ * Pairs incoming sections with existing ones (spike 1.0b two-pass rule,
+ * shared by slide and transcript sections): first by hash in order, then
+ * the unmatched ones by number ("drift"); what is left is an insertion
+ * (incoming) or an orphan (existing). `matched` maps an incoming index to
+ * an existing index.
+ */
+function pairSections(existing: SectionKey[], next: SectionKey[]): {
+  matched: Map<number, number>;
+  used: Set<number>;
+  reorders: Array<{ from: number; to: number; hash: string }>;
+  insertions: number[];
+  deletions: Array<{ slideNum: number; hash: string }>;
+  drifts: Array<{ slideNum: number; oldHash: string; newHash: string }>;
+} {
+  const used = new Set<number>();
+  const matched = new Map<number, number>();
+  const reorders: Array<{ from: number; to: number; hash: string }> = [];
+  const insertions: number[] = [];
+  const deletions: Array<{ slideNum: number; hash: string }> = [];
+  const drifts: Array<{ slideNum: number; oldHash: string; newHash: string }> = [];
+
+  // Bucket existing by hash for O(1) lookup; preserve deck order within bucket.
+  const buckets = new Map<string, number[]>();
+  existing.forEach((s, idx) => {
+    if (!buckets.has(s.hash)) buckets.set(s.hash, []);
+    buckets.get(s.hash)!.push(idx);
+  });
+
+  // PASS 1: hash-match (preferred): preserves callouts attached to identical content.
+  next.forEach((ns, i) => {
+    for (const idx of buckets.get(ns.hash) ?? []) {
+      if (!used.has(idx)) {
+        used.add(idx);
+        matched.set(i, idx);
+        if (existing[idx].num !== ns.num) reorders.push({ from: existing[idx].num, to: ns.num, hash: ns.hash });
+        break;
+      }
+    }
+  });
+
+  // PASS 2: N-match-with-drift for hash-unmatched incoming.
+  next.forEach((ns, i) => {
+    if (matched.has(i)) return;
+    const idx = existing.findIndex((s, j) => !used.has(j) && s.num === ns.num);
+    if (idx >= 0) {
+      used.add(idx);
+      matched.set(i, idx);
+      drifts.push({ slideNum: ns.num, oldHash: existing[idx].hash, newHash: ns.hash });
+    }
+  });
+
+  // PASS 3: insertions: hash-unmatched + N-unmatched
+  next.forEach((ns, i) => {
+    if (!matched.has(i)) insertions.push(ns.num);
+  });
+
+  // PASS 4: orphans
+  existing.forEach((s, i) => {
+    if (!used.has(i)) deletions.push({ slideNum: s.num, hash: s.hash });
+  });
+
+  return { matched, used, reorders, insertions, deletions, drifts };
+}
+
+/** User free-space under a section: kept when paired, else an empty memo callout; one blank line around it. */
+function freeSpace(after: string | undefined): string {
+  const kept = after && after.trim().length > 0 ? after : "\n\n> [!note] 내 메모\n> \n\n";
+  // Same shape for kept and default memos (one blank line before, one
+  // after) so re-importing an unchanged note leaves the file unchanged.
+  return "\n" + kept.replace(/^\n+|\n+$/g, "") + "\n\n";
+}
+
 /**
  * Multi-managed merge: preserves the user's per-slide free-space across
  * regen by mapping incoming sections to existing sections via two-pass
@@ -260,10 +358,11 @@ export function mergeMultiManagedNote(
   const next = splitMultiManagedNote(nextContent);
 
   if (existing.sections.length === 0) {
-    // No slide sections to map onto (1.0.x single-block note migrating to
-    // page-anchored): keep the old note, including user text inside and
-    // outside its managed block, as a backup instead of dropping it. Always
-    // append here, even over an older backup: nesting beats losing text.
+    // No slide sections to map onto (1.0.x single-block note, or a
+    // transcript summary note, migrating to page-anchored): keep the old
+    // note, including user text inside and outside its managed blocks, as a
+    // backup instead of dropping it. Always append here, even over an older
+    // backup: nesting beats losing text.
     return {
       merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false }),
       reorders: [],
@@ -271,71 +370,14 @@ export function mergeMultiManagedNote(
       deletions: [],
       drifts: [],
       confirmDeckReplacement: false,
-      notes: existingContent.trim() ? [LEGACY_MIGRATION_NOTE] : [],
+      notes: existingContent.trim() ? [hasSectionMarkers(existingContent) ? TRANSCRIPT_TO_SLIDES_NOTE : LEGACY_MIGRATION_NOTE] : [],
     };
   }
 
-  const used = new Set<number>();
-  const matched = new Map<number, (typeof existing.sections)[number]>();
-  const reorders: Array<{ from: number; to: number; hash: string }> = [];
-  const insertions: number[] = [];
-  const deletions: Array<{ slideNum: number; hash: string }> = [];
-  const drifts: Array<{ slideNum: number; oldHash: string; newHash: string }> = [];
-
-  // Bucket existing by hash for O(1) lookup; preserve deck order within bucket.
-  const buckets = new Map<string, (typeof existing.sections)[number][]>();
-  for (const s of existing.sections) {
-    if (!buckets.has(s.hash)) buckets.set(s.hash, []);
-    buckets.get(s.hash)!.push(s);
-  }
-
-  // PASS 1: hash-match (preferred): preserves callouts attached to identical content.
-  next.sections.forEach((ns, i) => {
-    const candidates = buckets.get(ns.hash) ?? [];
-    for (const c of candidates) {
-      const idx = existing.sections.indexOf(c);
-      if (!used.has(idx)) {
-        used.add(idx);
-        matched.set(i, c);
-        if (c.slideNum !== ns.slideNum) {
-          reorders.push({ from: c.slideNum, to: ns.slideNum, hash: ns.hash });
-        }
-        break;
-      }
-    }
-  });
-
-  // PASS 2: N-match-with-drift for hash-unmatched incoming.
-  next.sections.forEach((ns, i) => {
-    if (matched.has(i)) return;
-    const idx = existing.sections.findIndex(
-      (s, j) => !used.has(j) && s.slideNum === ns.slideNum
-    );
-    if (idx >= 0) {
-      used.add(idx);
-      matched.set(i, existing.sections[idx]);
-      drifts.push({
-        slideNum: ns.slideNum,
-        oldHash: existing.sections[idx].hash,
-        newHash: ns.hash,
-      });
-    }
-  });
-
-  // PASS 3: insertions: hash-unmatched + N-unmatched
-  next.sections.forEach((ns, i) => {
-    if (!matched.has(i)) insertions.push(ns.slideNum);
-  });
-
-  // PASS 4: orphans
-  for (let i = 0; i < existing.sections.length; i++) {
-    if (!used.has(i)) {
-      deletions.push({
-        slideNum: existing.sections[i].slideNum,
-        hash: existing.sections[i].hash,
-      });
-    }
-  }
+  const { matched, used, reorders, insertions, deletions, drifts } = pairSections(
+    existing.sections.map((s) => ({ num: s.slideNum, hash: s.hash })),
+    next.sections.map((s) => ({ num: s.slideNum, hash: s.hash }))
+  );
 
   // Plan §B v1.1 touch-up: deck-replacement confirm modal threshold.
   // Known limitation (spike doc §10): overlap on slide numbers can mask
@@ -347,22 +389,15 @@ export function mergeMultiManagedNote(
   // Re-emit: frontmatter + preamble + sections (with preserved free-space) + orphan footer
   const sectionMarkdown = next.sections
     .map((ns, i) => {
-      const cand = matched.get(i);
-      const startMarker = formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "start");
-      const endMarker = formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "end");
-      // Preserve user free-space if hash/N-matched, else default empty memo callout.
-      const after = cand && cand.after.trim().length > 0
-        ? cand.after
-        : "\n\n> [!note] 내 메모\n> \n\n";
+      const idx = matched.get(i);
+      const cand = idx === undefined ? undefined : existing.sections[idx];
       return [
         `## 📚 슬라이드 ${ns.slideNum}`,
         "",
-        startMarker,
+        formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "start"),
         ns.managed.trim(),
-        endMarker,
-        // Same shape for kept and default memos (one blank line before, one
-        // after) so re-importing an unchanged deck leaves the file unchanged.
-        "\n" + after.replace(/^\n+|\n+$/g, "") + "\n\n",
+        formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "end"),
+        freeSpace(cand?.after),
       ].join("\n");
     })
     .join("\n");
@@ -385,6 +420,118 @@ export function mergeMultiManagedNote(
   const merged = next.frontmatter + preamble + sectionMarkdown + orphanFooter;
 
   return { merged, reorders, insertions, deletions, drifts, confirmDeckReplacement, notes };
+}
+
+// ---- Transcript sections (spec 4.10): lectures without slides ----
+// Same rules as the slide sections above, with the section grammar of
+// src/core/sections.ts: `## ⏱ 구간 N [mm:ss~mm:ss]`, then the managed block
+// `<!-- alt2obs:section:N hash:H start --> ... <!-- ... end -->`, then the
+// user's free space (`> [!note] 내 메모`) up to the next section heading.
+
+/** "## ⏱ 구간 N" heading line, anywhere in a text. */
+const SECTION_H2 = /(^|\n)## ⏱ 구간 \d+[^\n]*/g;
+
+export interface NoteSection {
+  num: number;
+  hash: string;
+  /** The section's heading line as written ("## ⏱ 구간 3 [24:10~36:02]"), null when none precedes the block. */
+  heading: string | null;
+  managed: string;
+  after: string;
+}
+
+export function splitSectionNote(content: string): { frontmatter: string; preamble: string; sections: NoteSection[] } {
+  const fmMatch = content.match(/^---\n[\s\S]*?\n---\n*/);
+  const frontmatter = fmMatch ? fmMatch[0] : "";
+  const body = fmMatch ? content.slice(fmMatch[0].length) : content;
+
+  const markers: Array<{ idx: number; end: number; num: number; hash: string; type: "start" | "end" }> = [];
+  const re = new RegExp(SECTION_MARKER_RE.source, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    markers.push({ idx: m.index, end: m.index + m[0].length, num: parseInt(m[1], 10), hash: m[2], type: m[3] as "start" | "end" });
+  }
+  const sections: NoteSection[] = [];
+  const ranges: Array<{ startIdx: number; endIdx: number }> = [];
+  const used = new Set<number>();
+  for (let i = 0; i < markers.length; i++) {
+    const s = markers[i];
+    if (s.type !== "start" || used.has(i)) continue;
+    const k = markers.findIndex((e, j) => j > i && !used.has(j) && e.type === "end" && e.num === s.num && e.hash === s.hash);
+    if (k < 0) continue; // unpaired start: ignore
+    used.add(i);
+    used.add(k);
+    const lead = body.slice(ranges.length > 0 ? ranges[ranges.length - 1].endIdx : 0, s.idx);
+    const headings = Array.from(lead.matchAll(SECTION_H2));
+    const heading = headings.length > 0 ? headings[headings.length - 1][0].replace(/^\n/, "").trimEnd() : null;
+    sections.push({ num: s.num, hash: s.hash, heading, managed: body.slice(s.end, markers[k].idx), after: "" });
+    ranges.push({ startIdx: s.idx, endIdx: markers[k].end });
+  }
+  if (sections.length === 0) return { frontmatter, preamble: body, sections };
+
+  // The preamble stops before the first section's heading (headings are re-emitted).
+  let preamble = body.slice(0, ranges[0].startIdx);
+  const firstH2 = preamble.search(/(^|\n)## ⏱ 구간 \d+/);
+  if (firstH2 >= 0) preamble = preamble.slice(0, firstH2 + (preamble[firstH2] === "\n" ? 1 : 0));
+
+  // Free space: from the end marker to the next section heading (or start), or EOF.
+  for (let i = 0; i < sections.length; i++) {
+    const slice = body.slice(ranges[i].endIdx, i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length);
+    const nextH2 = slice.search(/(^|\n)## ⏱ 구간 \d+/);
+    sections[i].after = nextH2 >= 0 ? slice.slice(0, nextH2 + (slice[nextH2] === "\n" ? 1 : 0)) : slice;
+  }
+  return { frontmatter, preamble, sections };
+}
+
+/**
+ * Transcript summary note merge: memos follow their section (by transcript
+ * hash, else by number), the overview block is refreshed like a slide
+ * note's, sections that are gone keep their memos under "## 🗑️ 사라진 구간
+ * (orphan)". An older note without sections (the 2.0.0-beta.5 lecture-level
+ * note of the same lecture) is kept whole as a backup.
+ */
+export function mergeTranscriptNote(
+  existingContent: string,
+  nextContent: string
+): Omit<NoteMergeResult, "mode"> {
+  const existing = splitSectionNote(existingContent);
+  const next = splitSectionNote(nextContent);
+  if (existing.sections.length === 0) {
+    return {
+      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false }),
+      reorders: [],
+      insertions: next.sections.map((s) => s.num),
+      deletions: [],
+      drifts: [],
+      confirmDeckReplacement: false,
+      notes: existingContent.trim() ? [TRANSCRIPT_MIGRATION_NOTE] : [],
+    };
+  }
+  const { matched, used, reorders, insertions, deletions, drifts } = pairSections(existing.sections, next.sections);
+  const confirmDeckReplacement = deletions.length > 0.5 * existing.sections.length;
+  const sectionMarkdown = next.sections
+    .map((ns, i) => {
+      const idx = matched.get(i);
+      return [
+        ns.heading ?? `## ⏱ 구간 ${ns.num}`,
+        "",
+        sectionMarker(ns.num, ns.hash, "start"),
+        ns.managed.trim(),
+        sectionMarker(ns.num, ns.hash, "end"),
+        freeSpace(idx === undefined ? undefined : existing.sections[idx].after),
+      ].join("\n");
+    })
+    .join("\n");
+  let orphanFooter = "";
+  if (deletions.length > 0) {
+    const blocks = existing.sections
+      .filter((_, i) => !used.has(i))
+      .map((s) => `<!-- alt2obs:orphan section:${s.num} hash:${s.hash} -->\n${s.after.trim()}`)
+      .join("\n\n");
+    orphanFooter = `\n\n## 🗑️ 사라진 구간 (orphan)\n\n${blocks}\n`;
+  }
+  const { preamble, notes } = mergeOverviewPreamble(existing.preamble, next.preamble);
+  return { merged: next.frontmatter + preamble + sectionMarkdown + orphanFooter, reorders, insertions, deletions, drifts, confirmDeckReplacement, notes };
 }
 
 /**
@@ -472,8 +619,8 @@ export function findOverviewBlock(text: string): { bodyStart: number; bodyEnd: n
 /** Result of `mergeNote`, the same decision `VaultManager.saveManagedNote` makes. */
 export interface NoteMergeResult {
   merged: string;
-  /** "multi" = page-anchored merge, "legacy" = single managed block merge. */
-  mode: "multi" | "legacy";
+  /** "multi" = page-anchored merge, "sections" = transcript summary merge, "legacy" = single managed block merge. */
+  mode: "multi" | "sections" | "legacy";
   reorders: Array<{ from: number; to: number; hash: string }>;
   insertions: number[];
   deletions: Array<{ slideNum: number; hash: string }>;
@@ -484,14 +631,20 @@ export interface NoteMergeResult {
 
 /**
  * Merge a freshly generated note into the existing file content. Throws on a
- * page-anchored to single-block downgrade. Page-anchored merge when either
- * side uses slide markers, legacy single-block merge otherwise (which keeps
- * its "## 이전 노트 백업" behaviour for 1.0.x notes).
+ * page-anchored (or transcript summary) to single-block downgrade.
+ * Page-anchored merge when either side uses slide markers (a transcript
+ * summary note becoming a slide note is kept whole as a backup), transcript
+ * section merge when either side uses section markers, legacy single-block
+ * merge otherwise (which keeps its "## 이전 노트 백업" behaviour for 1.0.x
+ * notes).
  */
 export function mergeNote(currentContent: string, nextContent: string): NoteMergeResult {
   assertNoPageAnchoredDowngrade(currentContent, nextContent);
   if (hasMultiManagedMarkers(nextContent) || hasMultiManagedMarkers(currentContent)) {
     return { mode: "multi", ...mergeMultiManagedNote(currentContent, nextContent) };
+  }
+  if (hasSectionMarkers(nextContent) || hasSectionMarkers(currentContent)) {
+    return { mode: "sections", ...mergeTranscriptNote(currentContent, nextContent) };
   }
   return {
     merged: mergeManagedNote(currentContent, nextContent),

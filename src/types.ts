@@ -258,6 +258,8 @@ export interface ImportUpdateSummary {
   confirmDeckReplacement?: boolean;
   /** Free-text notes appended to the user-facing summary modal. */
   notes?: string[];
+  /** What the slide* fields count: slides (default) or transcript sections (spec 4.10). */
+  unit?: "slide" | "section";
 }
 
 export interface ImportRecord {

@@ -879,6 +879,10 @@ var DEFAULT_PLUGIN_DATA = {
   usageTotals: { ...EMPTY_USAGE, lectures: 0, byProvider: {}, since: "" }
 };
 
+// src/core/sections.ts
+var SECTION_HEADING_WORD = "\u23F1 \uAD6C\uAC04";
+var SECTION_HEADING_PREFIX = `## ${SECTION_HEADING_WORD}`;
+
 // src/core/merge.ts
 function splitMultiManagedNote(content) {
   const fmMatch = content.match(/^---\n[\s\S]*?\n---\n*/);
