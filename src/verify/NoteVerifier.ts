@@ -21,8 +21,23 @@ import { isAbortError } from "../llm/cli/CliRunner";
 import { estimateCalls } from "../core/budget/estimate";
 import { StoredSpan, TimedSegment } from "../core/prep/TranscriptAligner";
 import { Claim, splitClaims } from "./claims";
-import { buildEvidenceIndex, ClaimEvidence, findEvidence, transcriptChunks, UncoveredSlide, uncoveredSlides, withContextEvidence } from "./evidence";
+import {
+  buildEvidenceIndex,
+  ClaimEvidence,
+  findEvidence,
+  sectionSpans,
+  transcriptChunks,
+  UncoveredSlide,
+  uncoveredSections,
+  uncoveredSlides,
+  VerifySection,
+  withContextEvidence,
+  withSectionExcerpts,
+} from "./evidence";
+import { formatClock, headingLinkTarget, sectionRange } from "../core/sections";
 import systemTemplate from "../../prompts/note-verify.system.md";
+import transcriptSystemTemplate from "../../prompts/note-verify-transcript.system.md";
+import missingSectionsTemplate from "../../prompts/note-verify-missing-sections.md";
 import userTemplate from "../../prompts/note-verify.user.md";
 import claimTemplate from "../../prompts/note-verify.claim.md";
 import missingTemplate from "../../prompts/note-verify-missing.md";
@@ -46,7 +61,17 @@ export interface VerifyInput {
   slideTexts: string[];
   /** Timestamped transcript and the note's stored alignment, when known. */
   transcript?: { segments: TimedSegment[]; spans: StoredSpan[] | null } | null;
+  /**
+   * A lecture without slides (spec 4.10): its transcript sections. With
+   * these (and no slide texts) the transcript sections are the evidence.
+   */
+  sections?: VerifySection[] | null;
 }
+
+export type { VerifySection };
+
+/** What the evidence documents are: slides, or transcript sections of a lecture without slides. */
+export type EvidenceUnit = "slide" | "section";
 
 export interface VerifyPlan {
   lecture: string;
@@ -59,26 +84,70 @@ export interface VerifyPlan {
   unmatched: ClaimEvidence[];
   uncovered: UncoveredSlide[];
   hasTranscript: boolean;
+  /** Missing (plans saved before 2.0.0-beta.6) = "slide". */
+  unit?: EvidenceUnit;
+  /** The sections of a lecture without slides ([] for slides). */
+  sections?: VerifySection[];
+}
+
+function batchesOf(judged: ClaimEvidence[], perCall: number): ClaimEvidence[][] {
+  const batches: ClaimEvidence[][] = [];
+  for (let i = 0; i < judged.length; i += perCall) batches.push(judged.slice(i, i + perCall));
+  return batches;
+}
+
+/**
+ * A lecture without slides: the transcript sections are the documents (BM25
+ * over the section text and the glossary hints), each hit carrying the
+ * excerpt and time of its best chunk. Needs the timestamped transcript.
+ */
+function planSectionVerification(input: VerifyInput, sections: VerifySection[], perCall: number): VerifyPlan {
+  const claims = splitClaims(input.noteMarkdown);
+  const segments = input.transcript?.segments ?? [];
+  const chunks = transcriptChunks(segments, sectionSpans(sections));
+  const sectionTexts = sections.map((sec) => chunks.filter((c) => c.slide === sec.num).map((c) => c.text).join("\n"));
+  const index = buildEvidenceIndex(sectionTexts, chunks);
+  // A hit's number is the section's position (1-based); sections are numbered 1..n in order.
+  const evidence = withSectionExcerpts(withContextEvidence(claims.map((c) => findEvidence(c, index)), index), index);
+  const unmatched = evidence.filter((e) => e.unmatched);
+  const judged = [...evidence.filter((e) => !e.unmatched && !e.likelyTrue), ...evidence.filter((e) => !e.unmatched && e.likelyTrue)];
+  return {
+    lecture: input.lecture,
+    notePath: input.notePath ?? null,
+    claims: evidence,
+    judged,
+    batches: batchesOf(judged, perCall),
+    unmatched,
+    uncovered: uncoveredSections(sections, sectionTexts, evidence),
+    hasTranscript: chunks.length > 0,
+    unit: "section",
+    sections,
+  };
 }
 
 export function planVerification(input: VerifyInput, perCall = CLAIMS_PER_CALL): VerifyPlan {
+  if (input.sections && input.sections.length > 0 && input.slideTexts.length === 0) {
+    // Sections are numbered 1..n so a hit's index maps to its number.
+    const sections = input.sections.map((s, i) => ({ ...s, num: i + 1 }));
+    return planSectionVerification(input, sections, perCall);
+  }
   const claims = splitClaims(input.noteMarkdown);
   const chunks = input.transcript ? transcriptChunks(input.transcript.segments, input.transcript.spans) : [];
   const index = buildEvidenceIndex(input.slideTexts, chunks);
   const evidence = withContextEvidence(claims.map((c) => findEvidence(c, index)), index);
   const unmatched = evidence.filter((e) => e.unmatched);
   const judged = [...evidence.filter((e) => !e.unmatched && !e.likelyTrue), ...evidence.filter((e) => !e.unmatched && e.likelyTrue)];
-  const batches: ClaimEvidence[][] = [];
-  for (let i = 0; i < judged.length; i += perCall) batches.push(judged.slice(i, i + perCall));
   return {
     lecture: input.lecture,
     notePath: input.notePath ?? null,
     claims: evidence,
     judged,
-    batches,
+    batches: batchesOf(judged, perCall),
     unmatched,
     uncovered: uncoveredSlides(input.slideTexts, evidence),
     hasTranscript: chunks.length > 0,
+    unit: "slide",
+    sections: [],
   };
 }
 
@@ -86,20 +155,19 @@ export function planVerification(input: VerifyInput, perCall = CLAIMS_PER_CALL):
 
 /** "12:03", or "1:02:03" past an hour. */
 export function formatTimestamp(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const ms2 = `${pad(Math.floor((total % 3600) / 60))}:${pad(total % 60)}`;
-  return h > 0 ? `${h}:${ms2}` : ms2;
+  return formatClock(ms);
 }
 
-export function buildJudgeSystemPrompt(): string {
-  return renderPrompt(systemTemplate, {});
+/** The judge instructions: slides and transcript, or (a lecture without slides) the transcript only. */
+export function buildJudgeSystemPrompt(unit: EvidenceUnit = "slide"): string {
+  return renderPrompt(unit === "section" ? transcriptSystemTemplate : systemTemplate, {});
 }
 
-function claimBlock(e: ClaimEvidence): string {
+function claimBlock(e: ClaimEvidence, unit: EvidenceUnit): string {
   const lines = [
-    ...e.slides.map((h) => `- 슬라이드 ${h.slide}: ${h.excerpt}`),
+    ...e.slides.map((h) =>
+      unit === "section" ? `- 구간 ${h.slide}${h.startMs !== undefined ? ` [${formatClock(h.startMs)}]` : ""}: ${h.excerpt}` : `- 슬라이드 ${h.slide}: ${h.excerpt}`
+    ),
     ...e.transcript.map((h) => `- 전사 [${formatTimestamp(h.startMs)}]${h.slide ? ` (슬라이드 ${h.slide} 구간)` : ""}: ${h.excerpt}`),
   ];
   const evidenceNote =
@@ -111,17 +179,26 @@ function claimBlock(e: ClaimEvidence): string {
   return renderPrompt(claimTemplate, { id: e.claim.id, claim: e.claim.text, evidenceNote, evidence: lines.join("\n") || "- (없음)" });
 }
 
-export function buildJudgePrompt(lecture: string, batch: ClaimEvidence[]): string {
+export function buildJudgePrompt(lecture: string, batch: ClaimEvidence[], unit: EvidenceUnit = "slide"): string {
   return renderPrompt(userTemplate, {
     title: lecture,
     claimCount: batch.length,
     idList: batch.map((e) => e.claim.id).join(", "),
-    claimBlocks: batch.map(claimBlock).join("\n\n"),
+    claimBlocks: batch.map((e) => claimBlock(e, unit)).join("\n\n"),
   });
 }
 
 export function buildMissingPrompt(plan: VerifyPlan): string | null {
   if (plan.uncovered.length === 0) return null;
+  if (plan.unit === "section") {
+    const byNum = new Map((plan.sections ?? []).map((s) => [s.num, s]));
+    const lines = plan.uncovered.map((u) => {
+      const sec = byNum.get(u.slide);
+      const range = sec ? sectionRange(sec.startMs, sec.endMs) : "";
+      return `- 구간 ${u.slide}${range ? ` ${range}` : ""}: ${u.title}${u.keySentences ? ` / ${u.keySentences}` : ""}`;
+    });
+    return renderPrompt(missingSectionsTemplate, { title: plan.lecture, sections: lines.join("\n") });
+  }
   const slides = plan.uncovered.map((u) => `- 슬라이드 ${u.slide}: ${u.title || "(제목 없음)"}${u.keySentences ? ` / ${u.keySentences}` : ""}`).join("\n");
   return renderPrompt(missingTemplate, { title: plan.lecture, slides });
 }
@@ -187,9 +264,10 @@ export interface VerifyEstimate {
 
 /** Pre-run estimate from the exact prompts (spec 5.5). Evidence retrieval itself costs no tokens. */
 export function estimateVerification(plan: VerifyPlan, provider: ProviderId, effort: EffortLevel = ""): VerifyEstimate {
-  const system = buildJudgeSystemPrompt();
+  const unit = plan.unit ?? "slide";
+  const system = buildJudgeSystemPrompt(unit);
   const shapes = plan.batches.map((b) => ({
-    promptText: system + buildJudgePrompt(plan.lecture, b) + JSON.stringify(JUDGE_SCHEMA),
+    promptText: system + buildJudgePrompt(plan.lecture, b, unit) + JSON.stringify(JUDGE_SCHEMA),
     images: 0,
     schema: true,
     outputTokens: b.length * OUTPUT_TOKENS_PER_CLAIM,
@@ -235,6 +313,9 @@ export interface VerifyResult {
   unmatched: ClaimEvidence[];
   missing: MissingCandidate[];
   warnings: string[];
+  /** "section": a lecture without slides, the evidence is its transcript sections. */
+  unit?: EvidenceUnit;
+  sections?: VerifySection[];
 }
 
 export interface VerifyProgress {
@@ -288,14 +369,15 @@ export async function runVerification(
   opts: { signal?: AbortSignal; onProgress?(p: VerifyProgress): void } = {}
 ): Promise<VerifyResult> {
   const warnings: string[] = [];
-  const system = buildJudgeSystemPrompt();
+  const unit = plan.unit ?? "slide";
+  const system = buildJudgeSystemPrompt(unit);
   const { done, failures } = await runJsonBatches<ClaimEvidence, number, JudgeItem>({
     batches: plan.batches,
     key: (e) => e.claim.id,
     unitObject: "주장을",
     signal: opts.signal,
     call: (batch) =>
-      llm.generateJSON(buildJudgePrompt(plan.lecture, batch), (r) => r, {
+      llm.generateJSON(buildJudgePrompt(plan.lecture, batch, unit), (r) => r, {
         systemPrompt: system,
         schema: JUDGE_SCHEMA,
         signal: opts.signal,
@@ -347,7 +429,7 @@ function assembleResult(plan: VerifyPlan, done: Map<number, JudgeItem>, failures
   const failedCount = items.filter((i) => i.verdict === null).length;
   const out = [...warnings];
   if (failedCount > 0) out.push(`주장 ${failedCount}개는 판정하지 못했습니다.`);
-  return { lecture: plan.lecture, notePath: plan.notePath, items, unmatched: plan.unmatched, missing, warnings: out };
+  return { lecture: plan.lecture, notePath: plan.notePath, items, unmatched: plan.unmatched, missing, warnings: out, unit: plan.unit ?? "slide", sections: plan.sections ?? [] };
 }
 
 /**
@@ -400,6 +482,8 @@ export interface LectureRef {
   title: string;
   /** Vault path of the lecture note (".md"), or null (title-only links). */
   path: string | null;
+  /** A lecture without slides: links go to its section headings. */
+  sections?: VerifySection[];
 }
 
 /** Characters a wikilink target or alias cannot hold. */
@@ -435,11 +519,29 @@ export function frontmatterLectureLink(ref: LectureRef): string {
   return link.startsWith("[[") ? link : `[[${aliasText(ref.title)}]]`;
 }
 
+/**
+ * Link to a transcript section of a lecture without slides: the note's
+ * section heading (`[[<path>#⏱ 구간 3 24 10 36 02|<title> · 구간 3]]`, the
+ * heading as Obsidian matches it), or the note itself when it has no
+ * section headings.
+ */
+export function sectionLink(ref: LectureRef, num: number): string {
+  const sec = ref.sections?.find((s) => s.num === num);
+  const alias = aliasText(`${ref.title} · 구간 ${num}`);
+  const target = ref.path ? ref.path.replace(/\.md$/, "") : ref.title;
+  const heading = sec?.heading ? headingLinkTarget(sec.heading) : "";
+  if (!LINK_UNSAFE.test(target)) return `[[${target}${heading ? `#${heading}` : ""}|${alias}]]`;
+  const file = ref.path ?? `${ref.title}.md`;
+  const url = file.split("/").map(encodeURIComponent).join("/") + (heading ? `#${encodeURIComponent(heading)}` : "");
+  return `[${alias}](${url})`;
+}
+
 function refOf(result: VerifyResult): LectureRef {
-  return { title: result.lecture, path: result.notePath };
+  return { title: result.lecture, path: result.notePath, sections: result.unit === "section" ? result.sections ?? [] : undefined };
 }
 
 function evidenceLinks(ref: LectureRef, e: ClaimEvidence): string {
+  if (ref.sections) return e.slides.map((h) => `${sectionLink(ref, h.slide)}${h.startMs !== undefined ? ` [${formatClock(h.startMs)}]` : ""}`).join(" · ");
   const parts = e.slides.map((h) => lectureLink(ref, h.slide));
   for (const t of e.transcript) parts.push(`[${formatTimestamp(t.startMs)}]${t.slide ? ` (슬라이드 ${t.slide})` : ""}`);
   return parts.join(" · ");
@@ -489,7 +591,9 @@ export function renderVerificationNote(result: VerifyResult, meta: VerificationM
     `> [!abstract] 판정 요약`,
     `> 맞음 ${c["맞음"]} · 틀림 ${c["틀림"]} · 근거 없음 ${c["근거 없음"]} · 전사 불확실 ${c["전사 불확실"]} · 누락 후보 ${c.missing}${c.failed ? ` · 판정 실패 ${c.failed}` : ""}${c.unmatched ? ` · 근거 검색 실패 ${c.unmatched}` : ""}`,
     `> 대상 노트: ${meta.source} · 강의: ${lectureLink(ref)} · ${meta.model} · ${meta.date}`,
-    "> 근거 검색은 스크립트로 했고, 판정만 모델이 했습니다. 원본 노트는 바꾸지 않았습니다.",
+    ref.sections
+      ? "> 슬라이드가 없는 강의라 근거는 녹음 전사(음성 인식)뿐입니다. 근거 검색은 스크립트로 했고, 판정만 모델이 했습니다. 원본 노트는 바꾸지 않았습니다."
+      : "> 근거 검색은 스크립트로 했고, 판정만 모델이 했습니다. 원본 노트는 바꾸지 않았습니다.",
     "",
   ];
   for (const w of result.warnings) body.push(`> [!warning] ${w}`, "");
@@ -511,11 +615,11 @@ export function renderVerificationNote(result: VerifyResult, meta: VerificationM
   }
   if (result.missing.length > 0) {
     body.push(`## 📭 ${MISSING_LABEL} (${result.missing.length})`, "");
-    for (const m of result.missing) body.push(`- ${lectureLink(ref, m.slide)} ${m.title}${m.reason ? `: ${m.reason}` : ""}`);
+    for (const m of result.missing) body.push(`- ${ref.sections ? sectionLink(ref, m.slide) : lectureLink(ref, m.slide)} ${m.title}${m.reason ? `: ${m.reason}` : ""}`);
     body.push("");
   }
   if (result.unmatched.length > 0) {
-    body.push(`## 🔎 용어 불일치로 근거 검색 실패 (${result.unmatched.length})`, "", "판정이 아닙니다. 슬라이드와 전사, 같은 절의 문맥 어디에서도 근거 후보를 찾지 못해 모델에 보내지 않았습니다.", "");
+    body.push(`## 🔎 용어 불일치로 근거 검색 실패 (${result.unmatched.length})`, "", `판정이 아닙니다. ${ref.sections ? "전사 구간" : "슬라이드와 전사"}, 같은 절의 문맥 어디에서도 근거 후보를 찾지 못해 모델에 보내지 않았습니다.`, "");
     for (const e of result.unmatched) body.push(`- "${quote(e.claim.text)}"`);
     body.push("");
   }
