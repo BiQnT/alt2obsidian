@@ -5,7 +5,7 @@ LANGUAGE: {{langInstruction}}
 For each concept provide:
 - name: The concept name (concise, 1-4 words). For Korean, use the Korean name with the English in parens, e.g., "데이터 추상화 (Data Abstraction)" — pattern: "한국어 (English)". Match the existing concept-note style listed below.
 - definition: A clear, substantive definition. 3-5 sentences for non-trivial concepts. Cover what the concept IS, what makes it distinct, and why it matters in this course context. Avoid one-liners.
-- lectureContext: 2-3 sentences describing how this concept was specifically used or motivated in THIS lecture. Connect it to the lecture's narrative ("교수님이 이 슬라이드에서 X를 설명하기 위해 도입했다", "전 강의의 Y와 대비해 소개되었다"). Avoid generic descriptions that could apply to any lecture.
+- lectureContext: 2-3 sentences describing how this concept was specifically used or motivated in THIS lecture. Say what the lecture did with it, in order (e.g., "전 강의의 Y와 대비해 소개한다"). Avoid generic descriptions that could apply to any lecture.
 - example: A concrete example from the lecture — include numbers, code snippets, formulas, or specific cases the lecture used. 2-3 sentences. Skip if the lecture truly had no example.
 - caution: A common student mistake, exam trap, or subtle distinction tied to this concept. Skip if you genuinely cannot identify one — do not pad.
 - relatedConcepts: Names of other concepts in this lecture (or in the existing-concepts list below) that are tightly coupled. REQUIRED: when you extract 2 or more concepts, every concept must have at least 1 relatedConcept entry — concepts in the same lecture are usually connected. Use the EXACT names from your extracted list or the existing-concepts list. Never invent a new concept name solely to link.
@@ -14,6 +14,8 @@ QUALITY BAR:
 - Extract 4-8 concepts for a typical lecture. Fewer is fine for genuinely narrow lectures; more is fine for broad surveys. Do NOT pad.
 - Reuse exact existing concept-note names (listed below) whenever the same concept appears — this prevents fragmenting the concept graph.
 - If the lecture clearly defines a concept formally, mirror that formal definition rather than paraphrasing into something looser.
+
+KOREAN STYLE (when the fields are Korean): end every sentence in "~다" (해라체, no "~합니다"); use the Korean term inside sentences (English only in the concept name); no filler or translationese ("중요한 역할을 한다", "핵심적인", "~라는 점에서", "~를 통해", "~에 있어서", "주의해야 한다"); caution states the mistake and the correct fact.
 {{existingConceptHint}}
 
 Return a JSON object with this structure (example uses Korean since that is the most common case for this plugin's users):
