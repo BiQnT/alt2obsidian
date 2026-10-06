@@ -167,6 +167,31 @@ try {
     assert.deepEqual(loggedOut.plugin.data.settings.tasks.commentary, { provider: "codex-cli", model: "", effort: "medium" });
     assert.deepEqual(loggedOut.plugin.data.settings.tasks.concepts, { provider: "codex-cli", model: "", effort: "low" });
     assert.ok(notices.slice(before).some((n) => n.includes("Codex CLI로 설정했습니다")), "the user is told about Codex");
+    // Beta data: an Ollama task moves, the task the user set to the Claude CLI stays, and the user hears about the cloud.
+    const ollama = await makePlugin({
+      settings: {
+        settingsVersion: 2,
+        tasks: {
+          commentary: { provider: "claude-cli", model: "opus", effort: "high" },
+          concepts: { provider: "ollama", model: "gemma3:4b", effort: "" },
+          alignment: { provider: "none", model: "", effort: "" },
+          verification: { provider: "claude-cli", model: "", effort: "" },
+        },
+      },
+    });
+    ollama.plugin.data.settings.claudePath = FAKE_CLAUDE;
+    ollama.plugin.data.settings.codexPath = FAKE_CODEX;
+    const n0 = notices.length;
+    await ollama.plugin.applyCliDefaultOnce();
+    assert.deepEqual(ollama.plugin.data.settings.tasks.commentary, { provider: "claude-cli", model: "opus", effort: "high" }, "explicit Claude task untouched");
+    assert.deepEqual(ollama.plugin.data.settings.tasks.concepts, { provider: "codex-cli", model: "", effort: "low" }, "the Ollama task moved to Codex");
+    assert.deepEqual(ollama.plugin.data.settings.tasks.verification, { provider: "claude-cli", model: "sonnet", effort: "medium" }, "empty values filled, provider kept");
+    const told = notices.slice(n0);
+    assert.ok(told.some((n) => n.includes("Ollama 지원이 끝났습니다") && n.includes("Codex CLI로 옮겼습니다") && n.includes("클라우드")), "Ollama users hear their text goes to a cloud CLI");
+    assert.ok(told.some((n) => n.includes("작업 기본값으로 바꿨습니다") && n.includes("노트 검증: 모델 sonnet, effort medium")), "the filled defaults are listed once");
+    assert.equal(ollama.stored().pendingFilledNotice, undefined);
+    await ollama.plugin.applyCliDefaultOnce();
+    assert.equal(notices.length, n0 + 2, "each told once");
     delete process.env.FAKE_CLAUDE_LOGGED_OUT;
     assert.equal(s.calls().length, 0, "the login check never calls a model");
   }
@@ -180,7 +205,7 @@ try {
   });
   plugin.cacheRoot = cacheRoot;
   assert.equal(plugin.data.pendingCliDefault, true);
-  assert.equal(plugin.data.removedProviderNotice, true);
+  assert.deepEqual(plugin.data.removedProviderNotice, ["gemini"]);
   assert.equal(plugin.data.cliSwitchOffered, undefined, "the beta.3 switch offer is gone");
   assert.equal(plugin.data.recentImports[0].examPeriod, "midterm", "1.x record with an exam period loads as is");
   assert.equal(typeof plugin.generateExamSummary, "undefined", "exam summary generation removed (spec G5)");
@@ -190,9 +215,10 @@ try {
   await plugin.applyCliDefaultOnce();
   assert.deepEqual(plugin.data.settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.equal(plugin.data.settings.tasks.concepts.model, "haiku");
-  assert.ok(notices.slice(noticesBefore).some((n) => n.includes("Gemini API와 Ollama 지원이 끝나") && n.includes("Claude CLI로 설정했습니다")));
+  assert.ok(notices.slice(noticesBefore).some((n) => n.includes("Gemini API 지원이 끝났습니다") && n.includes("Claude CLI로 옮겼습니다") && !n.includes("클라우드")));
   assert.equal(stored().pendingCliDefault, undefined);
   assert.equal(stored().removedProviderNotice, undefined);
+  assert.equal(stored().pendingMovedTasks, undefined);
   await plugin.applyCliDefaultOnce();
   assert.equal(notices.length, noticesBefore + 1, "told once");
   assert.equal(stored().settings.apiKey, "old-key", "1.x values stay in the saved data (rollback)");

@@ -4,8 +4,9 @@ import { CliName, EffortLevel, PresetId, ProviderId, TaskId } from "../types";
 import {
   applyPreset,
   defaultTaskSetting,
+  CodexModels,
   describeDefault,
-  EFFORT_LEVELS,
+  effortChoices,
   isCliProvider,
   isSafeModelName,
   modelChoices,
@@ -18,6 +19,9 @@ import {
 } from "../settings/llmSettings";
 import { compactTokens } from "../llm/usage";
 
+
+/** API key fields of 1.x and 2.0.0-beta.3 settings that nothing reads any more. */
+const LEGACY_KEY_FIELDS = ["apiKey", "geminiApiKey", "claudeApiKey"];
 
 export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   plugin: Alt2ObsidianPlugin;
@@ -73,6 +77,46 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         "그래서 Codex는 배치 크기의 두 배로 묶어 보냅니다. 또 읽기 전용 샌드박스라도 Codex는 사용자 계정이 읽을 수 있는 파일을 읽을 수 있습니다. " +
         "프롬프트로 주어진 내용만 쓰라고 지시하지만, 이 위험을 감수하는 경우에만 쓰세요.",
     });
+    this.renderLegacyKeys(containerEl);
+  }
+
+  /**
+   * API keys kept from 1.x and beta.3 (Gemini, the old Claude API stub).
+   * Nothing uses them any more; they stay only so a rollback keeps working.
+   * Shown only while one is stored; removal asks for a second click.
+   */
+  private renderLegacyKeys(containerEl: HTMLElement): void {
+    const stored = this.settings as unknown as Record<string, unknown>;
+    const present = LEGACY_KEY_FIELDS.filter((k) => typeof stored[k] === "string" && (stored[k] as string).trim() !== "");
+    if (present.length === 0) return;
+    let armed = false;
+    new Setting(containerEl)
+      .setName("이전 API 키 지우기")
+      .setDesc(
+        `예전 버전에서 저장한 API 키(${present.join(", ")})가 data.json에 남아 있습니다. 지금 버전은 쓰지 않습니다. ` +
+          "지우면 2.0.0-beta.3 이하로 되돌렸을 때 Gemini 키를 다시 넣어야 합니다."
+      )
+      .addButton((b) =>
+        b.setButtonText("지우기").onClick(async () => {
+          if (!armed) {
+            armed = true;
+            b.setButtonText("한 번 더 누르면 지웁니다");
+            b.setWarning();
+            window.setTimeout(() => {
+              if (!armed) return;
+              armed = false;
+              b.setButtonText("지우기");
+              b.buttonEl.removeClass("mod-warning");
+            }, 5000);
+            return;
+          }
+          armed = false;
+          for (const k of LEGACY_KEY_FIELDS) delete stored[k];
+          await this.save();
+          new Notice("이전 API 키를 data.json에서 지웠습니다.");
+          this.display();
+        })
+      );
   }
 
   private renderCliCard(
@@ -151,6 +195,12 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
 
     const codexModels = this.plugin.codexModels();
     for (const id of TASK_IDS) this.renderTaskRow(containerEl, id, codexModels);
+    containerEl.createDiv({
+      cls: "alt2obsidian-muted alt2obsidian-settings-note",
+      text:
+        "effort 목록: Codex는 고른 모델이 지원하는 단계만 보여줍니다(Codex 모델 캐시 기준). Claude와 'CLI 기본값' 모델은 알 수 없어 모든 단계를 보여주며, " +
+        "모델이 지원하지 않는 단계를 고르면 그 처리는 CLI에 맡겨집니다(오류가 나면 effort를 낮추세요).",
+    });
 
     new Setting(containerEl)
       .setName("Notion MCP 조회 도구")
@@ -176,7 +226,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
    * the CLI's known models, "CLI 기본값" and "직접 입력" (a text field for
    * any other id). Changing the provider loads that provider's task defaults.
    */
-  private renderTaskRow(containerEl: HTMLElement, id: TaskId, codexModels: string[]): void {
+  private renderTaskRow(containerEl: HTMLElement, id: TaskId, codex: CodexModels): void {
     const task = this.settings.tasks[id];
     const notes: Partial<Record<TaskId, string>> = {
       alignment: "정렬은 스크립트로 항상 합니다. 프로바이더를 고르면 불확실한 구간만 한 번 더 확인합니다 (기본 끔).",
@@ -205,9 +255,11 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     const provider = task.provider;
 
     const CUSTOM = "*custom"; // never a model name: those start with a letter or digit
-    const choices = modelChoices(provider, task.model, this.settings.recentModels[provider] ?? [], codexModels);
+    const choices = modelChoices(provider, task.model, this.settings.recentModels[provider] ?? [], codex.models);
     let customInput: HTMLInputElement | null = null;
+    let modelSelect: HTMLSelectElement | null = null;
     setting.addDropdown((d) => {
+      modelSelect = d.selectEl;
       for (const c of choices) d.addOption(c.value, c.label);
       d.addOption(CUSTOM, "직접 입력...");
       d.setValue(task.model).onChange(async (value) => {
@@ -218,7 +270,8 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         }
         customInput?.hide();
         task.model = value;
-        await changed(false);
+        // Codex: the effort list depends on the model.
+        await changed(provider === "codex-cli");
       });
       d.selectEl.setAttr("aria-label", `${TASK_LABELS[id]} 모델`);
       d.selectEl.addClass("alt2obsidian-model-select");
@@ -231,6 +284,13 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       text.inputEl.addEventListener("input", () => {
         // Checked while typing: a model name is passed as one CLI argument (review N8).
         text.inputEl.toggleClass("is-invalid", !isSafeModelName(text.inputEl.value.trim()));
+      });
+      // Leaving the field empty puts the dropdown back on the saved model.
+      text.inputEl.addEventListener("blur", () => {
+        if (text.inputEl.value.trim()) return;
+        text.inputEl.hide();
+        text.inputEl.removeClass("is-invalid");
+        if (modelSelect) modelSelect.value = task.model;
       });
       text.inputEl.addEventListener("change", async () => {
         const value = text.inputEl.value.trim();
@@ -246,7 +306,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     });
 
     setting.addDropdown((d) => {
-      for (const level of EFFORT_LEVELS) d.addOption(level, level ? `effort ${level}` : "effort CLI 기본값");
+      for (const level of effortChoices(provider, task.model, task.effort, codex)) d.addOption(level, level ? `effort ${level}` : "effort CLI 기본값");
       d.setValue(task.effort).onChange(async (value) => {
         task.effort = value as EffortLevel;
         await changed(false);

@@ -77,12 +77,30 @@ function cloneTasks(tasks: Record<TaskId, TaskLLMSetting>): Record<TaskId, TaskL
   return out;
 }
 
+export type RemovedProvider = "gemini" | "ollama";
+
+/** A task whose empty model or effort ("CLI 기본값") the version 3 migration filled. */
+export interface FilledTask {
+  id: TaskId;
+  model?: string;
+  effort?: EffortLevel;
+}
+
 export interface MigrationOutcome {
   settings: Alt2ObsidianSettings;
   /** The CLI choice (Claude, else Codex) still has to be made once: see `chooseCli`. */
   needsCliDefault: boolean;
-  /** A task was on Gemini or Ollama (or the data is 1.x): the user is told once. */
-  removedProviders: boolean;
+  /**
+   * Tasks this migration put on the Claude CLI defaults (moved off
+   * Gemini/Ollama, or the default table of 1.x data and fresh installs).
+   * Only these may move on to Codex; a task the user set to the Claude CLI
+   * is never rewritten.
+   */
+  movedTasks: TaskId[];
+  /** Removed providers the data used (1.x data: its single provider). The user is told once. */
+  removedFrom: RemovedProvider[];
+  /** Empty model/effort filled with the task defaults (version 3); the user is told once. */
+  filled: FilledTask[];
 }
 
 /**
@@ -109,26 +127,34 @@ export function migrateSettings(saved: unknown): MigrationOutcome {
   };
   const savedTasks = raw.tasks && typeof raw.tasks === "object" ? (raw.tasks as unknown as Record<string, unknown>) : null;
   if (!savedTasks) {
-    return { settings, needsCliDefault: true, removedProviders: saved !== undefined && saved !== null && Object.keys(raw).length > 0 };
+    const has1x = saved !== undefined && saved !== null && Object.keys(raw).length > 0;
+    const removedFrom: RemovedProvider[] = has1x ? [(raw as { provider?: unknown }).provider === "ollama" ? "ollama" : "gemini"] : [];
+    const movedTasks = TASK_IDS.filter((id) => settings.tasks[id].provider === "claude-cli");
+    return { settings, needsCliDefault: true, movedTasks, removedFrom, filled: [] };
   }
-  let removed = false;
+  const movedTasks: TaskId[] = [];
+  const removedFrom = new Set<RemovedProvider>();
+  const filled: FilledTask[] = [];
   const before3 = typeof raw.settingsVersion !== "number" || raw.settingsVersion < SETTINGS_VERSION;
   for (const id of TASK_IDS) {
     const rawTask = savedTasks[id] as { provider?: unknown } | undefined;
     if (rawTask && REMOVED_PROVIDERS.includes(String(rawTask.provider))) {
       settings.tasks[id] = defaultTaskSetting("claude-cli", id);
-      removed = true;
+      movedTasks.push(id);
+      removedFrom.add(String(rawTask.provider) as RemovedProvider);
       continue;
     }
     const task = sanitizeTask(rawTask, CLAUDE_TASK_DEFAULTS[id]);
     if (before3 && isCliProvider(task.provider)) {
       const d = TASK_DEFAULTS[task.provider][id];
-      if (!task.model) task.model = d.model;
-      if (!task.effort) task.effort = d.effort;
+      const change: FilledTask = { id };
+      if (!task.model && d.model) task.model = change.model = d.model;
+      if (!task.effort && d.effort) task.effort = change.effort = d.effort;
+      if (change.model || change.effort) filled.push(change);
     }
     settings.tasks[id] = task;
   }
-  return { settings, needsCliDefault: removed, removedProviders: removed };
+  return { settings, needsCliDefault: movedTasks.length > 0, movedTasks, removedFrom: Array.from(removedFrom), filled };
 }
 
 function pickRecentModels(raw: unknown): Alt2ObsidianSettings["recentModels"] {
@@ -151,11 +177,34 @@ export function chooseCli(claudeUsable: boolean, codexFound: boolean): ProviderI
   return codexFound ? "codex-cli" : null;
 }
 
-/** Moves every Claude CLI task to the Codex CLI with the Codex task defaults. */
-export function moveClaudeTasksToCodex(settings: Alt2ObsidianSettings): void {
-  for (const id of TASK_IDS) {
+/**
+ * Moves the given tasks (the ones a migration just set) from the Claude CLI
+ * to the Codex CLI with the Codex task defaults. Other tasks, including
+ * ones the user set to the Claude CLI, stay.
+ */
+export function moveClaudeTasksToCodex(settings: Alt2ObsidianSettings, ids: TaskId[]): void {
+  for (const id of ids) {
     if (settings.tasks[id].provider === "claude-cli") settings.tasks[id] = defaultTaskSetting("codex-cli", id);
   }
+}
+
+/** One line per filled task, e.g. "슬라이드 해설: 모델 sonnet, effort medium". */
+export function describeFilled(filled: FilledTask[]): string[] {
+  return filled.map((f) => {
+    const parts = [f.model ? `모델 ${f.model}` : "", f.effort ? `effort ${f.effort}` : ""].filter(Boolean);
+    return `${TASK_LABELS[f.id]}: ${parts.join(", ")}`;
+  });
+}
+
+/** The once-only Notice after Gemini/Ollama tasks moved to a CLI. */
+export function removedProviderMessage(removedFrom: RemovedProvider[], cli: ProviderId | null): string {
+  const names = removedFrom.map((p) => (p === "ollama" ? "Ollama" : "Gemini API")).join("와 ") || "Gemini API와 Ollama";
+  const head = `Alt2Obsidian: ${names} 지원이 끝났습니다. `;
+  const where = cli ? `해당 작업을 ${PROVIDER_LABELS[cli]}로 옮겼습니다. 설정의 '작업별 모델'에서 확인하세요.` : "Claude Code나 Codex CLI를 설치하고 로그인한 뒤 설정의 'LLM 연결'에서 '다시 찾기'를 누르세요.";
+  const cloud = removedFrom.includes("ollama")
+    ? " 이제 슬라이드 텍스트와 전사가 이 컴퓨터의 Ollama 대신 클라우드 모델(Claude 또는 Codex 계정)로 보내집니다. 원하지 않으면 가져오기 전에 설정을 확인하세요."
+    : "";
+  return head + where + cloud;
 }
 
 /** Light model per CLI for the saving preset. Codex has no stable alias, so its default model is kept. */
@@ -196,25 +245,57 @@ export function rememberModel(settings: Alt2ObsidianSettings, provider: Provider
 /** Aliases the Claude CLI resolves to its current models (`claude --help`: "an alias for the latest model"). */
 export const CLAUDE_MODEL_ALIASES = ["sonnet", "opus", "haiku"];
 
+export interface CodexModels {
+  /** Visible model ids by Codex's priority. */
+  models: string[];
+  /** Effort levels each model lists (supported_reasoning_levels), limited to the plugin's levels. */
+  efforts: Record<string, EffortLevel[]>;
+}
+
 /**
- * Model ids the Codex CLI lists, from its own models cache
- * ($CODEX_HOME/models_cache.json, written by Codex; reading it costs
- * nothing): visible models by Codex's priority. [] when the file is
+ * Models from the Codex CLI's own cache ($CODEX_HOME/models_cache.json,
+ * written by Codex; reading it costs nothing). Empty when the file is
  * missing or not in the expected shape.
  */
-export function parseCodexModelsCache(text: string): string[] {
+export function parseCodexModels(text: string): CodexModels {
+  const out: CodexModels = { models: [], efforts: {} };
   try {
     const data = JSON.parse(text) as { models?: unknown };
-    if (!Array.isArray(data.models)) return [];
-    return data.models
-      .filter((m): m is { slug: string; visibility?: string; priority?: number } => !!m && typeof m.slug === "string")
+    if (!Array.isArray(data.models)) return out;
+    const visible = data.models
+      .filter((m): m is { slug: string; visibility?: string; priority?: number; supported_reasoning_levels?: unknown } => !!m && typeof m.slug === "string")
       .filter((m) => m.visibility === undefined || m.visibility === "list")
       .filter((m) => isSafeModelName(m.slug))
-      .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999))
-      .map((m) => m.slug);
+      .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
+    for (const m of visible) {
+      out.models.push(m.slug);
+      if (Array.isArray(m.supported_reasoning_levels)) {
+        const levels = m.supported_reasoning_levels
+          .map((l) => (l && typeof l === "object" ? (l as { effort?: unknown }).effort : l))
+          .filter((e): e is EffortLevel => typeof e === "string" && e !== "" && EFFORT_LEVELS.includes(e as EffortLevel));
+        if (levels.length > 0) out.efforts[m.slug] = levels;
+      }
+    }
   } catch {
-    return [];
+    return { models: [], efforts: {} };
   }
+  return out;
+}
+
+/** Visible Codex model ids only (see parseCodexModels). */
+export function parseCodexModelsCache(text: string): string[] {
+  return parseCodexModels(text).models;
+}
+
+/**
+ * Effort dropdown entries: "" (CLI 기본값) plus the levels the chosen model
+ * lists when that is known (Codex models cache), else every level. The
+ * saved value is always kept so the dropdown can show it.
+ */
+export function effortChoices(provider: ProviderId, model: string, current: EffortLevel, codex: CodexModels): EffortLevel[] {
+  const known = provider === "codex-cli" && model ? codex.efforts[model] : undefined;
+  if (!known) return EFFORT_LEVELS;
+  return EFFORT_LEVELS.filter((l) => l === "" || l === current || known.includes(l));
 }
 
 export interface ModelChoice {

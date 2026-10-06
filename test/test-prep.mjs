@@ -319,9 +319,11 @@ async function deck(n, visualPages = []) {
 {
   // 1.x data (Gemini was the only working provider): every value kept, the default table, told once.
   const v1 = { apiKey: "k1,k2", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Lectures", language: "ko", rateDelayMs: 6000 };
-  const { settings, needsCliDefault, removedProviders } = m.migrateSettings(v1);
+  const { settings, needsCliDefault, removedFrom, movedTasks } = m.migrateSettings(v1);
   assert.equal(needsCliDefault, true);
-  assert.equal(removedProviders, true, "1.x users are told Gemini/Ollama are gone");
+  assert.deepEqual(removedFrom, ["gemini"], "1.x users are told Gemini is gone");
+  assert.deepEqual(movedTasks, ["commentary", "concepts", "verification"], "the default table may still move to Codex");
+  assert.deepEqual(m.migrateSettings({ provider: "ollama", baseFolderPath: "A" }).removedFrom, ["ollama"]);
   assert.deepEqual([settings.apiKey, settings.geminiModel, settings.baseFolderPath, settings.rateDelayMs], ["k1,k2", "gemma-3-27b-it", "Lectures", 6000], "unknown 1.x keys kept (rollback)");
   assert.deepEqual(settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.deepEqual(settings.tasks.concepts, { provider: "claude-cli", model: "haiku", effort: "low" });
@@ -331,7 +333,7 @@ async function deck(n, visualPages = []) {
   assert.equal(settings.generation.batchSize, 8);
   assert.equal(settings.cliTimeoutSec, 300);
   const fresh = m.migrateSettings(undefined);
-  assert.deepEqual([fresh.needsCliDefault, fresh.removedProviders], [true, false], "fresh install: CLI chosen once, no removal notice");
+  assert.deepEqual([fresh.needsCliDefault, fresh.removedFrom, fresh.filled], [true, [], []], "fresh install: CLI chosen once, no removal notice");
 
   // 2.0 beta data with tasks on Gemini/Ollama: those tasks move to the Claude CLI defaults.
   const beta = m.migrateSettings({
@@ -343,7 +345,7 @@ async function deck(n, visualPages = []) {
       verification: { provider: "codex-cli", model: "gpt-5.6-luna", effort: "high" },
     },
   });
-  assert.deepEqual([beta.needsCliDefault, beta.removedProviders], [true, true]);
+  assert.deepEqual([beta.needsCliDefault, beta.removedFrom.sort(), beta.movedTasks], [true, ["gemini", "ollama"], ["commentary", "concepts"]]);
   assert.deepEqual(beta.settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.deepEqual(beta.settings.tasks.concepts, { provider: "claude-cli", model: "haiku", effort: "low" });
   assert.deepEqual(beta.settings.tasks.verification, { provider: "codex-cli", model: "gpt-5.6-luna", effort: "high" }, "a CLI task is kept");
@@ -351,10 +353,21 @@ async function deck(n, visualPages = []) {
   assert.equal(m.chooseCli(true, true), "claude-cli");
   assert.equal(m.chooseCli(false, true), "codex-cli");
   assert.equal(m.chooseCli(false, false), null);
-  m.moveClaudeTasksToCodex(beta.settings);
+  // A task the user set to the Claude CLI is not in movedTasks and never moves.
+  beta.settings.tasks.alignment = { provider: "claude-cli", model: "haiku", effort: "low" };
+  m.moveClaudeTasksToCodex(beta.settings, beta.movedTasks);
   assert.deepEqual(beta.settings.tasks.commentary, { provider: "codex-cli", model: "", effort: "medium" });
   assert.deepEqual(beta.settings.tasks.concepts, { provider: "codex-cli", model: "", effort: "low" });
-  assert.equal(beta.settings.tasks.alignment.provider, "none", "the alignment check stays off");
+  assert.deepEqual(beta.settings.tasks.alignment, { provider: "claude-cli", model: "haiku", effort: "low" }, "an explicit Claude task stays");
+  const mixed = m.migrateSettings({ settingsVersion: 2, tasks: { commentary: { provider: "claude-cli", model: "opus", effort: "high" }, concepts: { provider: "gemini", model: "", effort: "" } } });
+  assert.deepEqual(mixed.movedTasks, ["concepts"], "only the task moved off Gemini");
+  m.moveClaudeTasksToCodex(mixed.settings, mixed.movedTasks);
+  assert.deepEqual(mixed.settings.tasks.commentary, { provider: "claude-cli", model: "opus", effort: "high" });
+  assert.equal(mixed.settings.tasks.concepts.provider, "codex-cli");
+  // Notices: Ollama users are told their lecture text now goes to a cloud CLI.
+  assert.match(m.removedProviderMessage(["ollama"], "claude-cli"), /Ollama 지원이 끝났습니다.*Claude CLI로 옮겼습니다.*클라우드/);
+  assert.doesNotMatch(m.removedProviderMessage(["gemini"], "codex-cli"), /클라우드/);
+  assert.match(m.removedProviderMessage(["gemini", "ollama"], null), /Gemini API와 Ollama 지원이 끝났습니다.*설치하고 로그인/);
 
   // Before version 3 an empty model or effort meant "whatever the CLI uses": filled with the task default once.
   const empty = m.migrateSettings({
@@ -366,7 +379,8 @@ async function deck(n, visualPages = []) {
       verification: { provider: "codex-cli", model: "", effort: "" },
     },
   });
-  assert.deepEqual([empty.needsCliDefault, empty.removedProviders], [false, false]);
+  assert.deepEqual([empty.needsCliDefault, empty.removedFrom], [false, []]);
+  assert.deepEqual(m.describeFilled(empty.filled), ["슬라이드 해설: 모델 sonnet, effort medium", "개념 추출: 모델 haiku, effort low", "노트 검증: effort medium"], "the user is told what changed");
   assert.deepEqual(empty.settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.deepEqual(empty.settings.tasks.concepts, { provider: "claude-cli", model: "haiku", effort: "low" });
   assert.deepEqual(empty.settings.tasks.verification, { provider: "codex-cli", model: "", effort: "medium" });
@@ -375,7 +389,7 @@ async function deck(n, visualPages = []) {
   const chosen = JSON.parse(JSON.stringify(empty.settings));
   chosen.tasks.commentary = { provider: "claude-cli", model: "", effort: "" };
   const again = m.migrateSettings(chosen);
-  assert.deepEqual([again.needsCliDefault, again.removedProviders], [false, false], "version 3 data is not migrated twice");
+  assert.deepEqual([again.needsCliDefault, again.removedFrom, again.filled], [false, [], []], "version 3 data is not migrated twice");
   assert.deepEqual(again.settings.tasks.commentary, { provider: "claude-cli", model: "", effort: "" });
   assert.deepEqual(m.defaultTaskSetting("claude-cli", "alignment"), { provider: "claude-cli", model: "haiku", effort: "low" });
   assert.deepEqual(m.defaultTaskSetting("none", "alignment"), { provider: "none", model: "", effort: "" });
@@ -412,6 +426,15 @@ async function deck(n, visualPages = []) {
   ] });
   assert.deepEqual(m.parseCodexModelsCache(cache), ["gpt-6-astra", "gpt-6-sol"]);
   assert.deepEqual(m.parseCodexModelsCache("not json"), []);
+  const withLevels = m.parseCodexModels(JSON.stringify({ models: [
+    { slug: "gpt-6-luna", visibility: "list", priority: 4, supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }, { effort: "max" }] },
+    { slug: "gpt-5.5", visibility: "list", priority: 13, supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }, { effort: "ultra" }] },
+  ] }));
+  assert.deepEqual(withLevels.efforts["gpt-5.5"], ["low", "medium", "high", "xhigh"], "levels outside the plugin's list are dropped");
+  assert.deepEqual(m.effortChoices("codex-cli", "gpt-5.5", "medium", withLevels), ["", "low", "medium", "high", "xhigh"], "only what that Codex model lists");
+  assert.deepEqual(m.effortChoices("codex-cli", "gpt-5.5", "max", withLevels), ["", "low", "medium", "high", "xhigh", "max"], "the saved value stays visible");
+  assert.deepEqual(m.effortChoices("codex-cli", "", "", withLevels), m.EFFORT_LEVELS, "CLI default model: every level");
+  assert.deepEqual(m.effortChoices("claude-cli", "sonnet", "", withLevels), m.EFFORT_LEVELS);
   assert.deepEqual(m.parseCodexModelsCache("{}"), []);
   assert.deepEqual(m.modelChoices("claude-cli", "sonnet", [], []).map((c) => c.value), ["sonnet", "opus", "haiku", ""]);
   assert.deepEqual(m.modelChoices("claude-cli", "claude-sonnet-4-5", ["fable"], []).map((c) => c.value), ["sonnet", "opus", "haiku", "fable", "claude-sonnet-4-5", ""], "recent and current custom ids are listed");

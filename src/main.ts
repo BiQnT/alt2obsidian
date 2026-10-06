@@ -1,4 +1,5 @@
 import { editorLivePreviewField, Plugin, Notice } from "obsidian";
+import type { CodexModels } from "./settings/llmSettings";
 import type { Extension } from "@codemirror/state";
 import { managedCommentHider } from "./editor/managedComments";
 import {
@@ -40,8 +41,10 @@ import {
   batchSizeFor,
   chooseCli,
   migrateSettings,
+  describeFilled,
   moveClaudeTasksToCodex,
-  parseCodexModelsCache,
+  parseCodexModels,
+  removedProviderMessage,
   PROVIDER_LABELS,
   rememberModel,
 } from "./settings/llmSettings";
@@ -1448,22 +1451,25 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
   }
 
-  private codexModelsCache: string[] | null = null;
+  private codexModelsCache: CodexModels | null = null;
 
   /**
-   * Model ids for the Codex model dropdown, from Codex's own models cache
-   * ($CODEX_HOME or ~/.codex, models_cache.json). Read once per session; no
-   * process is started and no model is called. [] when Codex never ran.
+   * Models and their effort levels for the Codex dropdowns, from Codex's own
+   * models cache ($CODEX_HOME or ~/.codex, models_cache.json). No process is
+   * started and no model is called. A found list is kept for the session;
+   * an empty one (Codex never ran yet) is read again next time.
    */
-  codexModels(): string[] {
+  codexModels(): CodexModels {
     if (this.codexModelsCache) return this.codexModelsCache;
     const home = process.env.CODEX_HOME || joinPath(homedir(), ".codex");
+    let found: CodexModels = { models: [], efforts: {} };
     try {
-      this.codexModelsCache = parseCodexModelsCache(readFileSync(joinPath(home, "models_cache.json"), "utf8"));
+      found = parseCodexModels(readFileSync(joinPath(home, "models_cache.json"), "utf8"));
     } catch {
-      this.codexModelsCache = [];
+      // No cache yet.
     }
-    return this.codexModelsCache;
+    if (found.models.length > 0) this.codexModelsCache = found;
+    return found;
   }
 
   /** Path of the CLI for a call: the cached lookup when still valid, else a new lookup. */
@@ -1485,23 +1491,41 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * installed.
    */
   private async applyCliDefaultOnce(): Promise<void> {
+    await this.showFilledNotice();
     if (!this.data.pendingCliDefault) return;
     const claude = await this.detectCli("claude");
     const claudeUsable = !!claude && (await probeCliLogin("claude", claude.path));
     const codexFound = claudeUsable ? false : !!(await this.detectCli("codex"));
     const cli = chooseCli(claudeUsable, codexFound);
-    if (cli === "codex-cli") moveClaudeTasksToCodex(this.data.settings);
-    const removed = !!this.data.removedProviderNotice;
+    // Only the tasks the migration itself set; a task the user put on the Claude CLI stays.
+    const moved = this.data.pendingMovedTasks ?? [];
+    if (cli === "codex-cli") moveClaudeTasksToCodex(this.data.settings, moved);
+    const notice = this.data.removedProviderNotice;
+    const removedFrom = Array.isArray(notice) ? notice : notice ? (["gemini"] as Array<"gemini" | "ollama">) : [];
     delete this.data.pendingCliDefault;
+    delete this.data.pendingMovedTasks;
     delete this.data.removedProviderNotice;
-    const head = removed ? "Alt2Obsidian: Gemini API와 Ollama 지원이 끝나 " : "Alt2Obsidian: ";
-    if (cli) {
-      if (removed || cli === "codex-cli") {
-        new Notice(`${head}작업을 ${PROVIDER_LABELS[cli]}로 설정했습니다. 설정의 '작업별 모델'에서 모델과 effort를 확인하세요.`);
-      }
-    } else {
-      new Notice(`${head}Claude Code나 Codex CLI가 필요합니다. 설치하고 로그인한 뒤 설정의 'LLM 연결'에서 '다시 찾기'를 누르세요.`);
+    if (removedFrom.length > 0) {
+      new Notice(removedProviderMessage(removedFrom, cli), 15000);
+    } else if (cli === "codex-cli" && moved.length > 0) {
+      new Notice("Alt2Obsidian: 로그인된 Claude CLI가 없어 작업을 Codex CLI로 설정했습니다. 설정의 '작업별 모델'에서 확인하세요.");
+    } else if (!cli) {
+      new Notice("Alt2Obsidian: Claude Code나 Codex CLI가 필요합니다. 설치하고 로그인한 뒤 설정의 'LLM 연결'에서 '다시 찾기'를 누르세요.");
     }
+    await this.savePluginData();
+  }
+
+  /** Once after the version 3 migration filled empty model/effort values. */
+  private async showFilledNotice(): Promise<void> {
+    const lines = this.data.pendingFilledNotice;
+    if (!lines || lines.length === 0) return;
+    new Notice(
+      "Alt2Obsidian: 'CLI 기본값'(빈 칸)이던 모델과 effort를 작업 기본값으로 바꿨습니다.\n" +
+        lines.join("\n") +
+        "\n설정의 '작업별 모델'에서 다시 'CLI 기본값'으로 돌릴 수 있습니다.",
+      15000
+    );
+    delete this.data.pendingFilledNotice;
     await this.savePluginData();
   }
 
@@ -1812,7 +1836,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const saved = (await this.loadData()) || {};
     this.data = Object.assign({}, DEFAULT_PLUGIN_DATA, saved);
     // Keep every 1.x value; add the 2.0 per-task settings (spec 4.2).
-    const { settings, needsCliDefault, removedProviders } = migrateSettings(saved.settings);
+    const { settings, needsCliDefault, movedTasks, removedFrom, filled } = migrateSettings(saved.settings);
     this.data.settings = settings;
     // Removed in 2.0.0-beta.4 with the Gemini/Ollama providers.
     delete (this.data as { cliSwitchOffered?: boolean }).cliSwitchOffered;
@@ -1823,8 +1847,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
       ...(saved.usageTotals ?? {}),
       byProvider: { ...(saved.usageTotals?.byProvider ?? {}) },
     };
-    if (needsCliDefault) this.data.pendingCliDefault = true;
-    if (removedProviders) this.data.removedProviderNotice = true;
+    if (needsCliDefault) {
+      this.data.pendingCliDefault = true;
+      this.data.pendingMovedTasks = movedTasks;
+    }
+    if (removedFrom.length > 0) this.data.removedProviderNotice = removedFrom;
+    if (filled.length > 0) this.data.pendingFilledNotice = describeFilled(filled);
   }
 
   async savePluginData(): Promise<void> {

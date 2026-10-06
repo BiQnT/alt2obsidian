@@ -325,8 +325,15 @@ export interface PluginData {
    * Gemini/Ollama providers) until the CLI lookup has run once.
    */
   pendingCliDefault?: boolean;
-  /** Tasks were moved off Gemini/Ollama: tell the user once (with pendingCliDefault). */
-  removedProviderNotice?: boolean;
+  /** The tasks that migration set to the Claude CLI; only these may move on to Codex. */
+  pendingMovedTasks?: TaskId[];
+  /**
+   * Removed providers the saved data used ("gemini", "ollama"): the user is
+   * told once, with pendingCliDefault. `true` is the beta.4 form (Gemini).
+   */
+  removedProviderNotice?: Array<"gemini" | "ollama"> | boolean;
+  /** Lines of the once-only Notice about empty model/effort filled with the task defaults. */
+  pendingFilledNotice?: string[];
 }
 
 export const DEFAULT_PLUGIN_DATA: PluginData = {

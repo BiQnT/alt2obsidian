@@ -404,6 +404,10 @@
   justify-content: flex-start;
 }
 
+.alt2obsidian-settings-note {
+  margin: 4px 0 12px;
+}
+
 .alt2obsidian-model-select {
   max-width: 16em;
 }
