@@ -2,9 +2,9 @@
 
 Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그인입니다.
 
-컴퓨터에 설치된 Claude Code CLI나 Codex CLI(또는 Gemini API, Ollama)로 강의 슬라이드 1장당 한국어 해설을 만들고, 핵심 개념을 `[[Wikilink]]`와 `#태그`로 네트워크화하며, PDF와 노트를 좌우 동기 스크롤로 보여주는 전용 뷰어를 제공합니다.
+컴퓨터에 설치된 Claude Code CLI나 Codex CLI로 강의 슬라이드 1장당 한국어 해설을 만들고, 핵심 개념을 `[[Wikilink]]`와 `#태그`로 네트워크화하며, PDF와 노트를 좌우 동기 스크롤로 보여주는 전용 뷰어를 제공합니다.
 
-> **2.0.0-beta.3 (베타)**: 실사용 검수 중인 버전입니다. 검수가 끝나면 2.0.0으로 정식 배포합니다. 안정 버전이 필요하면 [v1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0)을 쓰세요. 처음에는 vault 사본에서 써 보길 권합니다.
+> **2.0.0-beta.4 (베타)**: 실사용 검수 중인 버전입니다. 검수가 끝나면 2.0.0으로 정식 배포합니다. 안정 버전이 필요하면 [v1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0)을 쓰세요. 처음에는 vault 사본에서 써 보길 권합니다.
 
 ### 확인한 환경
 
@@ -23,6 +23,16 @@ Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그�
 - **Notion MCP**: 직접 추가한 Notion 서버만 실제 호출로 확인했습니다. claude.ai 커넥터와 플러그인이 제공하는 서버는 가짜 CLI 테스트로만 확인했습니다.
 - **전사 정렬 정확도**: 초안 라벨 기준 수치이며(아래 2.0.0-beta.2 참고), 라벨 확인이 남아 있습니다.
 - **토큰**: 141분, 46장 강의 기준 Claude CLI 예상 입력은 약 7.3만 토큰으로, 1.1.0 Gemini 방식 예상치(약 10.8만)의 68%입니다. 실측 벤치마크는 아직입니다.
+
+## 2.0.0-beta.4에서 바뀐 점
+
+- **가져오면 Synced Viewer로 열기**: 슬라이드가 있는 강의를 가져오면 노트와 Obsidian 기본 PDF 창을 따로 여는 대신 Synced Viewer(PDF와 노트가 함께 스크롤)로 엽니다. 이미 연 뷰어가 있으면 그 탭을 다시 씁니다. 사이드바에서 가져온 노트를 고르면 **뷰어로 열기** 버튼이 보이고, 명령 **Open Synced Viewer**는 강의 PDF를 연 상태에서도 됩니다.
+- **동기 스크롤 고침**: 2.0.0-beta.3까지는 페이지 경계를 지나는 순간만 감지해서, 스크롤바를 끌어 크게 이동하면 노트가 따라오지 않거나 한 슬라이드 어긋나는 일이 있었습니다. 이제 두 창의 스크롤 위치에서 현재 슬라이드를 계산하고, 뷰어가 직접 움직인 스크롤은 되돌려 동기화하지 않습니다. 제목에 📚 이모지가 없는 예전 노트도 동기화됩니다.
+- **관리 주석 숨기기** (설정 → 보기, 기본 켬): 노트의 `<!-- alt2obs:slide:N hash:... -->`, `<!-- alt2obs:meta ... -->`, 요약 구간 표시 같은 관리용 주석 줄을 Live Preview와 Synced Viewer에서 감춥니다. 커서를 그 줄에 두면 보이고 소스 모드에서는 항상 보입니다. 노트 내용은 바뀌지 않으며, 이 줄들은 다시 가져올 때 메모를 지키는 데 쓰이니 지우지 마세요.
+- **프로바이더는 Claude CLI와 Codex CLI만**: Gemini API와 Ollama 지원을 없앴습니다. 저장된 설정에서 Gemini나 Ollama였던 작업은 로그인된 Claude CLI로, 없으면 설치된 Codex CLI로 옮기고 한 번 알려줍니다. 예전 Gemini 키 같은 값은 data.json에 그대로 남아 있어 이전 버전으로 되돌릴 수 있습니다.
+- **모델과 effort를 드롭다운으로**: 작업마다 프로바이더, 모델, effort를 드롭다운으로 고릅니다. Claude는 `sonnet`, `opus`, `haiku`, Codex는 Codex의 모델 캐시에 있는 모델이 보이고, 둘 다 **CLI 기본값**과 **직접 입력...**이 있습니다. 예전에는 빈 칸(= CLI 기본값)으로 저장되어 실제로 어떤 모델을 쓰는지 보이지 않았는데, 이번 업데이트에서 빈 값은 한 번 작업 기본값(해설 `sonnet` + medium, 개념 `haiku` + low, 검증 `sonnet` + medium)으로 채웁니다. 각 줄에 권장 설정이 보이고, 프리셋을 바꾸면 표가 바로 바뀝니다.
+- **설정 화면 배치 고침**: 좁은 카드 안에서 설명이 한 글자씩 세로로 늘어서던 문제를 고쳤습니다. 설명과 입력칸이 한 줄에 다 들어가지 않으면 입력칸이 아래로 내려갑니다.
+- **해설 문장 다듬기**: 해설, 개념 노트, 전체 요약 프롬프트에 문체 규칙을 넣었습니다. 한 출력 안에서 말투 하나, 용어는 처음에만 영어 병기, 한국어 문장 속 영어 일반 명사 금지, 같은 개념은 같은 이름, "이 슬라이드는 ~를 보여 줍니다" 같은 군말과 근거 없는 "자주 출제됩니다" 금지, 소리 나는 대로 적힌 전사는 인용하지 않기. 해설의 위키링크는 개념 노트 이름 형식(`[[로터리 스케줄링 (Lottery Scheduling)]]`)으로 걸어 개념 노트와 이어지게 했습니다. 출력 JSON 형식은 그대로입니다.
 
 ## 2.0.0-beta.3에서 바뀐 점
 
@@ -51,7 +61,7 @@ Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그�
 
 ## 2.0.0-beta.1에서 바뀐 점
 
-- **API 키 없이 생성**: 이미 구독 중인 Claude Code(`claude`)나 Codex(`codex`) CLI를 플러그인이 직접 실행합니다. Gemini API 키는 Gemini를 고를 때만 필요합니다.
+- **API 키 없이 생성**: 이미 구독 중인 Claude Code(`claude`)나 Codex(`codex`) CLI를 플러그인이 직접 실행합니다.
 - **작업별 모델 선택**: 슬라이드 해설과 개념 추출마다 프로바이더, 모델, effort를 따로 고릅니다. 프리셋 `절약` / `품질` / `사용자 지정`.
 - **토큰 절약**: 슬라이드를 8장씩 묶어 한 번에 보내고(이미지가 있으면 4장), 표지·목차·마무리·애니메이션 중복 슬라이드는 LLM에 보내지 않으며, 이미지는 도표 위주 슬라이드에만 1024px JPEG로 붙입니다. 전사는 군말과 반복을 지우고 슬라이드당 600자로 줄입니다. 모든 호출의 앞부분(지시문과 강의 공통 맥락)이 같아서 두 번째 묶음부터 프롬프트 캐시에 걸립니다.
 - **다시 가져오기**: 슬라이드 텍스트와 렌더링 이미지가 모두 그대로인 슬라이드는 기존 해설을 재사용하고, 바뀐 슬라이드만 생성합니다.
@@ -64,18 +74,15 @@ Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그�
 
 - **페이지-anchored 노트 구조**: 강의 1개당 1 .md 파일에 PDF 슬라이드와 1:1로 대응하는 `## 📚 슬라이드 N` 섹션 자동 생성. 각 섹션의 해설은 슬라이드 텍스트(도표 슬라이드는 이미지 포함)와 해당 구간 음성 전사 발췌로 만듭니다.
 - **사용자 메모 안전 보존**: 슬라이드별 `> [!note] 내 메모` 콜아웃은 관리 블록 바깥에 위치하며, 다음 import 때도 그대로 유지됩니다 (해시-augmented 마커가 슬라이드 reorder/insert/delete를 감지해 재정렬).
-- **Synced Viewer**: 명령 팔레트에서 'Open Synced Viewer (PDF + lecture .md)'를 실행하면 PDF(좌)와 강의 노트(우)가 좌우로 떠오릅니다. **양방향 동기 스크롤** (PDF↔md), 페이지 nav 버튼, 줌, 슬라이드 번호 라벨, **wikilink 클릭 이동** (Cmd-클릭 = 새 탭), **"📝 노트 편집"** 버튼으로 split-pane editor 열기 + 편집 시 우측 자동 refresh.
+- **Synced Viewer**: 강의를 가져오면 바로 열리고, 사이드바의 **뷰어로 열기**나 명령 팔레트의 'Open Synced Viewer (PDF + lecture .md)'로도 엽니다. PDF(좌)와 강의 노트(우)가 좌우로 떠오릅니다. **양방향 동기 스크롤** (PDF↔md), 페이지 nav 버튼, 줌, 슬라이드 번호 라벨, **wikilink 클릭 이동** (Cmd-클릭 = 새 탭), **"📝 노트 편집"** 버튼으로 split-pane editor 열기 + 편집 시 우측 자동 refresh.
 - **개념 네트워크**: LLM이 한국어 강의에 한국어 개념(영어 병기), 영어 강의엔 영어 개념을 추출하고, 모든 슬라이드 섹션에 걸쳐 `[[Wikilink]]`로 일관성 있게 연결합니다. 정의 3-5문장 + 강의 맥락 2-3문장 + 구체 예시 + 시험 함정.
 - **안전한 재가져오기**: 변경 요약 (reorder/insert/delete/drift 카운트)을 확인한 뒤 관리 구간만 업데이트, 사용자 메모는 보존. 슬라이드의 절반 이상이 사라지면 deck-replacement 확인 모달이 뜹니다 (실수로 다른 강의 URL을 import한 경우 방지).
 - **노트 검증**: 내 노트(노션 내보내기, Notion MCP, 붙여넣기)를 슬라이드와 전사에 대조해 틀린 문장과 빠진 슬라이드를 찾습니다.
 - **사이드바 UI**: Alt 노트 목록(폴더·검색·상태 칩), URL 붙여넣기, 노트 검증 탭과 과목 선택, 예상 사용량, 최근 노트를 한 곳에서 관리.
-- **다중 LLM 지원**:
-  - **Claude Code CLI**: `claude -p`를 실행. 기본은 슬라이드 해설 `sonnet` + medium, 개념 추출 `haiku` + low. 모델은 `sonnet`, `opus`, `haiku` 같은 별칭이나 전체 이름을 자유롭게 입력. 호출 하나가 모델 한 턴이고, CLI가 더하는 고정 입력은 약 0.45k 토큰입니다.
+- **LLM (Claude Code CLI, Codex CLI)**:
+  - **Claude Code CLI**: `claude -p`를 실행. 기본은 슬라이드 해설 `sonnet` + medium, 개념 추출 `haiku` + low. 모델은 드롭다운에서 `sonnet`, `opus`, `haiku`를 고르거나 **직접 입력...**으로 전체 이름을 넣습니다. 호출 하나가 모델 한 턴이고, CLI가 더하는 고정 입력은 약 0.45k 토큰입니다.
   - **Codex CLI**: `codex exec`를 실행. 호출마다 Codex 자체 지시문과 전역 `~/.codex/AGENTS.md`가 함께 실려 고정 비용이 큽니다(설정으로 줄일 수 있는 부분을 끈 뒤에도 이 컴퓨터 측정 약 12k 토큰, 끄기 전 18k). 플러그인은 사용자 파일을 건드리지 않고, 대신 Codex는 배치 크기의 두 배로 묶어 보냅니다.
-  - **Google AI Studio**: Gemini 2.5 Flash, **Gemma 3 27B/12B/4B** (모두 멀티모달, Gemma는 무료 등급 RPM ~30으로 더 여유). 모델명만 변경.
-  - **Multi-key rotation**: API 키 필드에 콤마로 여러 무료 키 입력 → 429 시 자동 round-robin (3개 키 ≈ 15 RPM).
-  - **Ollama (로컬)**: 멀티모달은 `llama3.2-vision:11b`, 텍스트는 `gemma3:4b` 권장. 무제한·무료·offline.
-  - 자세한 RPM 우회 옵션: [`docs/gemini-rpm-options.md`](docs/gemini-rpm-options.md) 참고.
+  - Gemini API와 Ollama는 2.0.0-beta.4에서 없앴습니다. 1.1.0의 Gemini 방식이 필요하면 [v1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0)을 쓰세요.
 - **Claude Code 스킬 (`/alt2obs`)**: 플러그인 없이 Claude Code 세션에서 강의를 가져옵니다. 이 컴퓨터의 Alt 노트(로컬) 또는 공개 URL을 입력으로 받고, 슬라이드 해시, 병합, 개념 링크, 노트 검증 준비를 플러그인과 같은 코드(`scripts/phase2/*.mjs`)로 처리해 결과 노트가 플러그인과 같습니다. 자세히는 [`scripts/phase2/`](scripts/phase2/) 참고.
 
 > 1.x → 2.0 업데이트: 기존 노트와 메모는 그대로 유지됩니다. 새 폴더 구조로 옮기려면 **Migrate 1.x vault layout**을 실행하세요. 1.x 노트를 처음 다시 가져오면 슬라이드 해시 방식이 바뀌어 모든 슬라이드가 한 번 `drift`로 표시되지만 메모는 보존됩니다. 1.0.x 단일 블록 노트는 새 노트 아래 `## 이전 노트 백업`으로 통째로 보관됩니다.
@@ -170,10 +177,8 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 ### 1단계: LLM 연결
 
 1. **설정 → Alt2Obsidian → LLM 연결**에서 Claude CLI / Codex CLI 카드에 경로와 버전이 보이는지 확인합니다.
-   - 새로 설치했고 Gemini 키가 없으면, 로그인된 Claude CLI가 있을 때 자동으로 Claude CLI를 씁니다. 로그인 여부는 `claude auth status`로만 확인하고 모델은 호출하지 않습니다.
-   - 1.x에서 Gemini 키(또는 Ollama)로 쓰고 있었다면 설정을 그대로 둡니다. Claude 카드의 **Claude CLI로 전환** 버튼을 누를 때만 바뀝니다.
-2. **작업별 모델** 표에서 작업마다 프로바이더, 모델, effort를 고릅니다. 모델 칸을 비우면 CLI 기본 모델을 씁니다. 기본값: 슬라이드 해설은 `sonnet` + medium, 개념 추출은 `haiku` + low.
-3. Gemini API를 쓰려면 [Google AI Studio](https://aistudio.google.com/apikey)에서 무료 API 키를 발급받아 Gemini 카드에 입력하고, 작업 표에서 Gemini를 고릅니다. 이때는 1.1.0과 같은 슬라이드별 호출 방식으로 동작합니다.
+   - 처음 설치했거나 1.x, 또는 Gemini/Ollama 설정에서 넘어오면 한 번 확인합니다. 로그인된 Claude CLI가 있으면 Claude CLI를, 없고 Codex CLI가 설치되어 있으면 Codex CLI를 씁니다. 확인은 `--version`, 도움말, `claude auth status`뿐이고 모델은 호출하지 않습니다.
+2. **작업별 모델**에서 작업마다 프로바이더, 모델, effort를 드롭다운으로 고릅니다. 기본값: 슬라이드 해설은 `sonnet` + medium, 개념 추출은 `haiku` + low, 노트 검증은 `sonnet` + medium. **CLI 기본값**을 고르면 CLI 쪽 기본 모델(Claude는 계정 기본 모델)을 씁니다. 목록에 없는 모델은 **직접 입력...**으로 넣습니다.
 
 ### 2단계: Alt 노트 가져오기
 
@@ -309,8 +314,8 @@ tags: [concept]
 
 | 설정 | 설명 | 기본값 |
 |------|------|--------|
-| LLM 연결 | Claude CLI / Codex CLI 경로(비우면 자동 탐색)와 버전, Gemini API 키, Ollama | 자동 탐색 |
-| 작업별 모델 | 슬라이드 해설, 개념 추출, 전사 정렬 확인(선택, 불확실한 구간만), 노트 검증마다 프로바이더·모델·effort | 해설: Claude CLI sonnet medium / 개념: Claude CLI haiku low (Gemini 키가 있던 1.x 사용자는 전환 버튼을 누르기 전까지 Gemini) |
+| LLM 연결 | Claude CLI / Codex CLI 경로(비우면 자동 탐색)와 버전 | 자동 탐색 |
+| 작업별 모델 | 슬라이드 해설, 개념 추출, 전사 정렬 확인(선택, 불확실한 구간만), 노트 검증마다 프로바이더(Claude CLI / Codex CLI)·모델·effort 드롭다운. 모델은 Claude 별칭이나 Codex 모델 캐시의 모델, CLI 기본값, 직접 입력 | 해설: Claude CLI sonnet medium / 개념: haiku low / 검증: sonnet medium (Codex는 모델 CLI 기본값, effort 같음) |
 | 프리셋 | `절약`: 모든 작업 경량 모델 + low. `품질`: 해설·검증 상위 모델 + high | 사용자 지정 |
 | 배치 크기 | CLI 호출 한 번에 보낼 슬라이드 수 (이미지가 있으면 절반) | 8 |
 | 이미지 전송 규칙 | 자동(도표 위주 슬라이드와 스캔 PDF만) / 텍스트만 | 자동 |
@@ -320,16 +325,10 @@ tags: [concept]
 | 바뀐 슬라이드만 다시 생성 | 텍스트 해시와 이미지 신호가 같으면 기존 해설 재사용 | 켜짐 |
 | 핵심 다이어그램 이미지 저장 | 그림 위주 슬라이드(최대 8장)를 `Attachments/`에 PNG로 저장하고 해설에 삽입 (CLI 경로) | 켜짐 |
 | Notion MCP 조회 도구 | 노트 검증에서 노션 URL을 가져올 도구. 비우면 `claude mcp list`로 찾음 | 자동 |
-| API 키 | Google AI Studio API 키. **콤마 구분으로 여러 키 입력하면 429 시 자동 rotation** | (직접 입력) |
-| Gemini 모델 | `gemini-2.5-flash` (기본), `gemini-2.5-flash-lite` (RPD 여유), **`gemma-3-27b-it`** (무료 RPM ~30, 멀티모달, 추천 무료 사용 모델) | gemini-2.5-flash |
-| Ollama endpoint | 로컬 Ollama 서버 URL (provider=ollama 일 때 노출) | http://localhost:11434 |
-| Ollama 모델 | `gemma3:4b` (텍스트), `llama3.2-vision:11b` (멀티모달) | gemma3:4b |
+| 관리 주석 숨기기 | `<!-- alt2obs:... -->` 관리 주석 줄을 Live Preview와 Synced Viewer에서 감춤(커서가 닿은 줄과 소스 모드에서는 보임). 노트 내용은 그대로 | 켜짐 |
 | 저장 폴더 | Vault 내 저장 경로 | Alt2Obsidian |
 | Alt 데이터 폴더 | Alt 노트 목록을 읽을 Alt 앱 데이터 폴더 (읽기 전용) | 비움 = 기본 위치 (macOS `~/Library/Application Support/alt`) |
-| 요청 간격 | Gemini API 호출 간 대기시간(ms). 슬라이드 30+ deck면 6000+ 권장 | 4000 |
 | 언어 | `ko` / `en` — concept 노트와 해설 출력 언어 | ko |
-
-**API 키가 부족할 때 (RPM/RPD 한도):** [`docs/gemini-rpm-options.md`](docs/gemini-rpm-options.md) 에 5개 우회 옵션 (Gemma 모델 변경, multi-key, Ollama, Tier 1, Phase 2 Skill) 비교.
 
 ## 지원 환경
 
