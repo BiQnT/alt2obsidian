@@ -4,16 +4,16 @@ Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그�
 
 컴퓨터에 설치된 Claude Code CLI나 Codex CLI로 강의 슬라이드 1장당 한국어 해설을 만들고, 핵심 개념을 `[[Wikilink]]`와 `#태그`로 네트워크화하며, PDF와 노트를 좌우 동기 스크롤로 보여주는 전용 뷰어를 제공합니다.
 
-> **2.0.0-beta.4 (베타)**: 실사용 검수 중인 버전입니다. 검수가 끝나면 2.0.0으로 정식 배포합니다. 안정 버전이 필요하면 [v1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0)을 쓰세요. 처음에는 vault 사본에서 써 보길 권합니다.
+> **2.0.0-beta.5 (베타)**: 실사용 검수 중인 버전입니다. 검수가 끝나면 2.0.0으로 정식 배포합니다. 안정 버전이 필요하면 [v1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0)을 쓰세요. 처음에는 vault 사본에서 써 보길 권합니다.
 
 ### 확인한 환경
 
 | 항목 | 버전 |
 |---|---|
 | OS | macOS (Windows, Linux는 단위 테스트만) |
-| Obsidian | 1.12.4 |
+| Obsidian | 1.14.4 (앱 코드, 설치본은 1.12.4. 설정 화면과 사이드바는 1.14.4의 app.css로 다시 그려 확인) |
 | Alt | 0.14.0 (로컬 데이터베이스 읽기 확인, 2026-10-06) / 0.12.0 (로컬 API 확인) |
-| Claude Code CLI | 2.1.290 (2.1.283에서 실제 호출로 확인) |
+| Claude Code CLI | 2.1.291 (모델 id와 별칭은 2026-10-06 실제 호출로 확인) |
 | Codex CLI | 0.155.1 |
 
 ### 알려진 한계
@@ -23,6 +23,16 @@ Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그�
 - **Notion MCP**: 직접 추가한 Notion 서버만 실제 호출로 확인했습니다. claude.ai 커넥터와 플러그인이 제공하는 서버는 가짜 CLI 테스트로만 확인했습니다.
 - **전사 정렬 정확도**: 초안 라벨 기준 수치이며(아래 2.0.0-beta.2 참고), 라벨 확인이 남아 있습니다.
 - **토큰**: 141분, 46장 강의 기준 Claude CLI 예상 입력은 약 7.3만 토큰으로, 1.1.0 Gemini 방식 예상치(약 10.8만)의 68%입니다. 실측 벤치마크는 아직입니다.
+
+## 2.0.0-beta.5에서 바뀐 점
+
+- **쓸 때 모델 고르기**: 사이드바에서 **가져오기**를 누르면 나오는 예상 사용량 패널과 **노트 검증**의 예상 사용량 패널에서, 이번 실행에 쓸 프로바이더, 모델, effort를 바로 바꿀 수 있습니다(가져오기는 해설·요약 모델과 개념 추출 모델, 검증은 판정 모델). 바꾸면 예상 호출과 토큰을 그 자리에서 다시 계산합니다. Codex로 바꾸면 슬라이드를 두 배씩 묶고 호출당 고정 비용을 더해 계산하고, effort가 높을수록 출력 토큰을 늘려 잡습니다(Claude Code가 쓰는 effort 비용 지수 기준, medium이 기준). 이 선택은 그 실행에만 쓰고 설정은 바꾸지 않습니다. 설정에 남기려면 **기본값으로 저장**을 누르세요. 진행 패널에는 처음에 고른 모델이, 첫 호출이 끝나면 CLI가 실제로 쓴 모델(예: `claude-opus-5-5`)이 보입니다. 노트의 `alt2obs_usage`에도 `model`, `effort`, 개념 모델이 다르면 `concept_model`이 실제로 쓴 값으로 남습니다.
+- **모델 이름에 버전 표시**: 모델 목록이 `opus`, `sonnet`, `haiku` 대신 `Opus 5.5 (claude-opus-5-5)`, `Sonnet 5.5 (claude-sonnet-5-5)`, `Fable 5.1 (claude-fable-5-1)`, `Haiku 4.5 (claude-haiku-4-5-20251001)`처럼 이름과 전체 id를 보여줍니다. 버전이 붙은 항목을 고르면 그 id를 그대로 CLI에 넘겨 늘 같은 모델로 실행합니다. 목록은 Claude Code가 저장해 둔 모델 목록(`~/.claude/cache/model-catalog`)에서 읽고, 없으면 플러그인에 넣어 둔 목록을 씁니다(모델 호출 없음). 별칭도 그대로 고를 수 있고 `opus (최신 Opus, 현재 Opus 5.5)`처럼 지금 가리키는 모델을 함께 보여줍니다. 실제로 실행하면 CLI가 알려 준 id를 기록해 다음부터 그 값을 보여주고, 설정의 작업별 모델에는 `마지막 실행: claude-sonnet-5-5 (Sonnet 5.5), 2026-10-06`처럼 나옵니다. 이미 저장된 `sonnet`, `haiku` 같은 별칭은 바꾸지 않고 그대로 씁니다. Codex는 모델 캐시의 표시 이름(예: `GPT-6-Astra (gpt-6-astra)`)과 설명을 보여주고, effort 목록은 Claude와 Codex 모두 고른 모델이 지원하는 단계만 보여줍니다(Haiku 4.5는 effort가 없어 CLI 기본값만).
+- **강의 PDF를 열면 Synced Viewer로**: 파일 탐색기나 링크로 강의 PDF(같은 폴더에 같은 이름의 강의 노트가 있는 PDF, `.PDF`도 포함)를 열면 그 탭이 PDF와 노트를 나란히 보여주는 Synced Viewer로 바뀝니다. 같은 강의의 뷰어가 이미 열려 있으면 그 탭을 보여주고 새 PDF 탭은 닫습니다. 강의 노트(.md)를 열 때는 바뀌지 않습니다. PDF만 따로 보고 싶으면 뷰어 위쪽의 **PDF만 보기**를 누르세요. 그렇게 연 탭과 Obsidian을 켤 때 이미 열려 있던 PDF 탭은 PDF로 남습니다. 설정 → 보기의 **강의 PDF를 열면 뷰어로 열기**(기본 켬)로 끌 수 있습니다.
+- **설정 화면의 CLI 카드 설명 고침**: Obsidian 1.14는 설정을 기본으로 별도 창(900x700, 최소 600x400)에 엽니다. 실제 1.14.4 app.css로 다시 그려 보니, 2.0.0-beta.3 스타일에서는 그 창의 CLI 카드 설명이 6px 폭, 27줄로 한 글자씩 늘어섰고, 2.0.0-beta.4 스타일에서는 카드가 정상이었습니다. 그래서 카드는 이제 Obsidian의 설정 줄(`Setting`)을 쓰지 않고 일반 블록으로 만들어, 어떤 스타일이 적용되어 있어도(예전 styles.css가 남아 있어도) 설명이 카드 폭 전체를 씁니다. 또 1.14는 설정 창 폭이 좁으면(창 폭 약 600px) 설정 줄을 세로로 바꾸는데, 2.0.0-beta.4 규칙이 그때 설명 아래에 큰 빈 칸을 만들던 것도 고쳤습니다.
+- **용어는 영어 원어로**: 해설, 전체 요약, 개념 노트, 검증 이유에서 학술 용어와 개념 이름은 `Lottery Scheduling`, `Context Switch`, `vruntime`, `stride`처럼 영어 원어로 쓰고, 설명하는 일반 낱말(무작위, 비율, 실행)과 프로세스, 스케줄러 같은 기본 낱말은 한국어로 씁니다. 한국어로 옮기거나 소리 나는 대로 적지 않습니다.
+- **개념 노트 이름은 `English (한국어)`**: 새 개념 노트는 `Lottery Scheduling (로터리 스케줄링).md`처럼 만듭니다. 해설의 링크는 `[[Lottery Scheduling (로터리 스케줄링)|Lottery Scheduling]]`처럼 노트 이름 전체를 대상으로 하고 문장에는 영어 이름이 보입니다. 예전에 만든 `로터리 스케줄링 (Lottery Scheduling).md` 같은 노트는 이름을 바꾸지 않습니다. 다시 가져오면 영어 부분이나 한국어 부분이 같은 이름(대소문자, 띄어쓰기 무시)을 같은 개념으로 보고 그 노트를 그대로 이어 씁니다. 다만 한국어 부분만 같고 영어 부분이 분명히 다르면(`Latency (지연)`과 `Delay (지연)`) 다른 개념으로 둡니다. 중복 노트를 만들지 않고, 링크도 그 노트 이름으로 겁니다. 플러그인이 넣는 링크는 슬라이드마다 개념이 처음 나오는 곳에 한 번만 겁니다. `/alt2obs` 스킬도 같은 규칙을 씁니다.
+- 실제 호출 확인 (2026-10-06, Claude Code 2.1.291): `fable`은 `claude-fable-5-1`, `sonnet`은 `claude-sonnet-5-5`로 실행되었고, `claude-sonnet-5`는 id 그대로 받아들였습니다. 6강 슬라이드 4장과 개념 추출(`sonnet`, low, 호출 2회)에서 해설은 영어 용어로 쓰였고, 개념 7개는 모두 예전 이름(`한국어 (English)`)의 기존 노트로 이어졌습니다.
 
 ## 2.0.0-beta.4에서 바뀐 점
 
@@ -178,7 +188,7 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 
 1. **설정 → Alt2Obsidian → LLM 연결**에서 Claude CLI / Codex CLI 카드에 경로와 버전이 보이는지 확인합니다.
    - 처음 설치했거나 1.x, 또는 Gemini/Ollama 설정에서 넘어오면 한 번 확인합니다. 로그인된 Claude CLI가 있으면 Claude CLI를, 없고 Codex CLI가 설치되어 있으면 Codex CLI를 씁니다. 확인은 `--version`, 도움말, `claude auth status`뿐이고 모델은 호출하지 않습니다.
-2. **작업별 모델**에서 작업마다 프로바이더, 모델, effort를 드롭다운으로 고릅니다. 기본값: 슬라이드 해설은 `sonnet` + medium, 개념 추출은 `haiku` + low, 노트 검증은 `sonnet` + medium. **CLI 기본값**을 고르면 CLI 쪽 기본 모델(Claude는 계정 기본 모델)을 씁니다. 목록에 없는 모델은 **직접 입력...**으로 넣습니다.
+2. **작업별 모델**에서 작업마다 프로바이더, 모델, effort를 드롭다운으로 고릅니다. 모델은 `Opus 5.5 (claude-opus-5-5)`처럼 버전과 id로 보이고, 별칭은 `sonnet (최신 Sonnet, 현재 Sonnet 5.5)`처럼 지금 가리키는 모델과 함께 보입니다. 기본값: 슬라이드 해설은 `sonnet` + medium, 개념 추출은 `haiku` + low, 노트 검증은 `sonnet` + medium. **CLI 기본값**을 고르면 CLI 쪽 기본 모델(Claude는 계정 기본 모델)을 씁니다. 목록에 없는 모델은 **직접 입력...**으로 넣습니다. 여기 값은 기본값이고, 가져오기와 노트 검증의 예상 사용량 패널에서 그 실행만 다른 모델로 바꿀 수 있습니다.
 
 ### 2단계: Alt 노트 가져오기
 
@@ -200,7 +210,7 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
    - 기존 과목이 있으면 칩을 클릭하여 선택 가능
    - 비워두면 자동 감지 시도
 
-4. **"가져오기"** 버튼을 클릭합니다. CLI 프로바이더라면 PDF를 분석한 뒤 **예상 사용량**(호출 수, 토큰, 이미지, 생략 슬라이드)이 먼저 나옵니다. **시작**을 누르면 생성이 시작되고, 진행 중 **취소**로 언제든 멈출 수 있습니다(취소하면 노트는 바뀌지 않습니다).
+4. **"가져오기"** 버튼을 클릭합니다. CLI 프로바이더라면 PDF를 분석한 뒤 **예상 사용량**(호출 수, 토큰, 이미지, 생략 슬라이드)이 먼저 나옵니다. 여기서 이번 실행의 해설·요약 모델과 개념 추출 모델을 바꿀 수 있고, 예상치가 바로 다시 계산됩니다. **시작**을 누르면 생성이 시작되고, 진행 중 **취소**로 언제든 멈출 수 있습니다(취소하면 노트는 바뀌지 않습니다).
 
 5. 잠시 후 Vault에 다음이 생성됩니다:
    ```
@@ -210,7 +220,7 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
        │   ├── CSED311 Lec7-pipelined-CPU.md    ← 강의 노트 (페이지별 섹션)
        │   └── CSED311 Lec7-pipelined-CPU.pdf   ← 원본 PDF (Synced Viewer가 노트 옆에서 찾음)
        ├── Concepts/                            ← 과목별 개념 노트
-       │   ├── 파이프라인 해저드 (Pipeline Hazard).md
+       │   ├── Pipeline Hazard (파이프라인 해저드).md
        │   └── ...
        ├── Verification/
        │   └── CSED311 Lec7-pipelined-CPU verification.md   ← 노트 검증 결과
@@ -222,7 +232,7 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 ### 3단계: 노트 검증 (선택)
 
 1. 노션 페이지를 마크다운으로 내보내 vault에 넣거나(**보관함 파일**), 노션 URL을 넣거나(**Notion MCP**), 내용을 붙여넣습니다.
-2. 사이드바 **노트 검증** 탭에서 입력과 **대상 강의**를 고르고 **예상 사용량 보기**를 누릅니다. `주장 N개 → 판정 M개`, `근거 검색 (스크립트): 토큰 0`, 예상 호출·토큰이 나옵니다.
+2. 사이드바 **노트 검증** 탭에서 입력과 **대상 강의**를 고르고 **예상 사용량 보기**를 누릅니다. `주장 N개 → 판정 M개`, `근거 검색 (스크립트): 토큰 0`, 예상 호출·토큰이 나오고, 이번 검증의 **판정 모델**을 바꿀 수 있습니다.
 3. **검증 실행**을 누르면 판정이 끝난 뒤 판정별 개수와 **결과 노트 열기** 버튼이 보입니다.
 
 **Notion MCP 설정**: 터미널에서 `claude mcp add --transport http notion https://mcp.notion.com/mcp`를 실행하고 `claude`를 열어 `/mcp`에서 Notion에 로그인합니다. 플러그인은 `claude mcp list`와 `claude mcp get`(둘 다 모델 호출 없음)으로 Notion 서버를 찾고, 가져오기 호출은 다음처럼 제한합니다.
@@ -249,7 +259,7 @@ source: "alt2obsidian"
 slide_count: 32
 alt_local_id: "019e8c4f-..."
 alt_alignment: "1:0-95.2 2:95.2-210 ..."
-alt2obs_usage: {provider: "Claude CLI", calls: 14, ...}
+alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-4-5-20251001", calls: 14, ...}
 ---
 
 # CSED311 Lec7-pipelined-CPU
@@ -265,12 +275,12 @@ alt2obs_usage: {provider: "Claude CLI", calls: 14, ...}
 <!-- alt2obs:slide:1 hash:a3f5b2c1 start -->
 [슬라이드 텍스트(도표 슬라이드는 이미지 포함)와 그 슬라이드 구간의 전사를 보고 작성한 한국어 해설]
 
-> [!definition] 파이프라인 (Pipeline)
-> 복수의 명령어를 동시에 서로 다른 단계에서 실행해 처리량을 높이는 기법.
+> [!definition] Pipelining
+> 여러 명령어를 서로 다른 단계에서 동시에 실행해 throughput을 높이는 기법.
 
-> "교수님이 강조: pipelining의 핵심은 latency 단축이 아니라 throughput 증가"
+> "교수님이 강조: pipelining의 목적은 latency 단축이 아니라 throughput 증가"
 
-[[파이프라인 해저드 (Pipeline Hazard)]]는 다음 슬라이드에서 다룹니다.
+[[Pipeline Hazard (파이프라인 해저드)|Pipeline Hazard]]는 다음 슬라이드에서 다룹니다.
 <!-- alt2obs:slide:1 hash:a3f5b2c1 end -->
 
 > [!note] 내 메모
@@ -296,18 +306,20 @@ alt2obs_usage: {provider: "Claude CLI", calls: 14, ...}
 tags: [concept]
 ---
 
-# 파이프라인 해저드 (Pipeline Hazard)
+# Pipeline Hazard (파이프라인 해저드)
 
-**정의:** 파이프라인된 CPU에서 다음 명령어가 다음 사이클에 정상 실행되지 못하게 하는 상황을 말한다. 명령어 간 데이터 의존성, 분기 결정 지연, 또는 하드웨어 자원 충돌로 발생한다. 해저드를 해결하지 못하면 잘못된 결과가 나오거나 stall로 성능이 떨어진다.
+**정의:** Pipeline Hazard는 pipeline CPU에서 다음 명령어가 다음 사이클에 정상 실행되지 못하는 상황이다. 명령어 사이의 Data Dependency, 분기 결정 지연, 하드웨어 자원 충돌로 생긴다. 해결하지 못하면 잘못된 결과가 나오거나 Stall로 성능이 떨어진다.
 
-**강의 맥락:** 이번 강의에서는 5단계 MIPS 파이프라인을 도입한 직후, 단순 파이프라이닝만으로는 정합성이 깨질 수 있다는 점을 보이기 위해 도입되었다. 교수님은 load-use 의존성을 가장 먼저 그림으로 보여주고, forwarding과 stall 메커니즘 도입을 정당화했다.
+**강의 맥락:** 5단계 MIPS pipeline을 도입한 직후, 단순 pipelining만으로는 결과가 틀릴 수 있음을 보이려고 소개한다. load-use 의존성을 그림으로 먼저 보이고, 이어서 Forwarding과 Stall을 도입한다.
 
-**예시:** `lw $t0, 0($s0)` 바로 뒤에 `add $t1, $t0, $t2`가 오는 코드. $t0의 값이 EX 단계에 도달하기 전 다음 명령어가 그 값을 필요로 하므로 1 사이클 stall 또는 forwarding이 필요하다.
+**예시:** `lw $t0, 0($s0)` 바로 뒤에 `add $t1, $t0, $t2`가 오는 코드다. $t0의 값이 EX 단계에 이르기 전에 다음 명령어가 그 값을 쓰므로 1 사이클 Stall이나 Forwarding이 필요하다.
 
-**주의:** 데이터 해저드와 구조 해저드를 혼동하기 쉽다. 데이터 해저드는 의존성, 구조 해저드는 자원 충돌. 시험에서는 분기 해저드도 자주 같이 나온다.
+**주의:** Data Hazard와 Structural Hazard를 혼동하기 쉽다. Data Hazard는 의존성, Structural Hazard는 자원 충돌이다.
 
 **관련 강의:** [[CSED311 Lec7-pipelined-CPU]]
-**관련 개념:** [[데이터 해저드 (Data Hazard)]], [[포워딩 (Forwarding)]], [[분기 해저드 (Control Hazard)]]
+**관련 개념:** [[Data Hazard (데이터 해저드)]], [[Forwarding (포워딩)]], [[Control Hazard (분기 해저드)]]
+
+새 개념 노트는 `English (한국어)` 이름으로 만듭니다. 2.0.0-beta.4까지 만든 `한국어 (English)` 노트는 이름을 그대로 두고, 같은 개념(영어 부분이나 한국어 부분이 같은 이름)이 다시 나오면 그 노트에 이어 씁니다.
 ```
 
 ## 설정
@@ -315,7 +327,7 @@ tags: [concept]
 | 설정 | 설명 | 기본값 |
 |------|------|--------|
 | LLM 연결 | Claude CLI / Codex CLI 경로(비우면 자동 탐색)와 버전 | 자동 탐색 |
-| 작업별 모델 | 슬라이드 해설, 개념 추출, 전사 정렬 확인(선택, 불확실한 구간만), 노트 검증마다 프로바이더(Claude CLI / Codex CLI)·모델·effort 드롭다운. 모델은 Claude 별칭이나 Codex 모델 캐시의 모델, CLI 기본값, 직접 입력 | 해설: Claude CLI sonnet medium / 개념: haiku low / 검증: sonnet medium (Codex는 모델 CLI 기본값, effort 같음) |
+| 작업별 모델 | 슬라이드 해설, 개념 추출, 전사 정렬 확인(선택, 불확실한 구간만), 노트 검증마다 프로바이더(Claude CLI / Codex CLI)·모델·effort 드롭다운. 모델은 버전과 id가 보이는 목록(Claude Code와 Codex의 모델 목록), 별칭(지금 가리키는 모델 표시), CLI 기본값, 직접 입력. 실행 직전 사이드바에서 그 실행만 바꿀 수 있음 | 해설: Claude CLI sonnet medium / 개념: haiku low / 검증: sonnet medium (Codex는 모델 CLI 기본값, effort 같음) |
 | 프리셋 | `절약`: 모든 작업 경량 모델 + low. `품질`: 해설·검증 상위 모델 + high | 사용자 지정 |
 | 배치 크기 | CLI 호출 한 번에 보낼 슬라이드 수 (이미지가 있으면 절반) | 8 |
 | 이미지 전송 규칙 | 자동(도표 위주 슬라이드와 스캔 PDF만) / 텍스트만 | 자동 |
@@ -326,9 +338,10 @@ tags: [concept]
 | 핵심 다이어그램 이미지 저장 | 그림 위주 슬라이드(최대 8장)를 `Attachments/`에 PNG로 저장하고 해설에 삽입 (CLI 경로) | 켜짐 |
 | Notion MCP 조회 도구 | 노트 검증에서 노션 URL을 가져올 도구. 비우면 `claude mcp list`로 찾음 | 자동 |
 | 관리 주석 숨기기 | `<!-- alt2obs:... -->` 관리 주석 줄을 Live Preview와 Synced Viewer에서 감춤(커서가 닿은 줄과 소스 모드에서는 보임). 노트 내용은 그대로 | 켜짐 |
+| 강의 PDF를 열면 뷰어로 열기 | 강의 PDF를 열면 그 탭을 Synced Viewer로 바꿈. 뷰어의 **PDF만 보기**로 연 탭은 그대로 | 켜짐 |
 | 저장 폴더 | Vault 내 저장 경로 | Alt2Obsidian |
 | Alt 데이터 폴더 | Alt 노트 목록을 읽을 Alt 앱 데이터 폴더 (읽기 전용) | 비움 = 기본 위치 (macOS `~/Library/Application Support/alt`) |
-| 언어 | `ko` / `en` — concept 노트와 해설 출력 언어 | ko |
+| 언어 | `ko` / `en`: concept 노트와 해설 출력 언어 | ko |
 
 ## 지원 환경
 

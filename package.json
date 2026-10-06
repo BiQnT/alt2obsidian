@@ -1,6 +1,6 @@
 {
 	"name": "alt2obsidian",
-	"version": "2.0.0-beta.4",
+	"version": "2.0.0-beta.5",
 	"description": "Import Alt lecture notes (local Alt app or share URL) into Obsidian as page-anchored markdown with transcript-to-slide alignment, per-slide commentary from the Claude Code or Codex CLI, a built-in Synced PDF viewer and note verification against the slides and transcript",
 	"main": "main.js",
 	"scripts": {
