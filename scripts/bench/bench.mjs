@@ -7,7 +7,7 @@
 //     [--model M] [--effort low|medium|high|xhigh|max] \
 //     [--concept-model haiku] [--concept-effort low] [--batch 8] [--cap 600] \
 //     [--image-rule auto|text-only] [--fewer-images] [--bin /path/to/cli] \
-//     [--api-key KEY] [--timeout 300] [--out note.md] [--json] [--dry-run]
+//     [--timeout 300] [--out note.md] [--json] [--dry-run]
 
 import esbuild from "esbuild";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -18,20 +18,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
 
-// GeminiProvider imports requestUrl from obsidian; give it fetch.
 const OBSIDIAN_STUB = `
 export class Notice { constructor(m) { console.error(m); } }
 export class TFile {}
 export class TFolder {}
 export const normalizePath = (p) => p;
-export async function requestUrl({ url, method = "GET", headers, body }) {
-  const res = await fetch(url, { method, headers, body });
-  const text = await res.text();
-  if (res.status >= 400) throw new Error("Request failed, status " + res.status + ": " + text.slice(0, 300));
-  let json = null;
-  try { json = JSON.parse(text); } catch {}
-  return { status: res.status, text, json, arrayBuffer: new TextEncoder().encode(text).buffer };
-}
 `;
 
 function parseArgs(argv) {
@@ -55,7 +46,7 @@ if (args.help || !args.pdf) {
   process.exit(args.help ? 0 : 2);
 }
 const provider = args.provider ?? "claude-cli";
-if (!["claude-cli", "codex-cli", "gemini"].includes(provider)) throw new Error(`unknown provider ${provider}`);
+if (!["claude-cli", "codex-cli"].includes(provider)) throw new Error(`unknown provider ${provider}`);
 const read = (f) => (f ? readFileSync(f, "utf8") : null);
 if (!existsSync(args.pdf)) throw new Error(`no such PDF: ${args.pdf}`);
 
@@ -67,15 +58,14 @@ const options = {
   subject: args.subject ?? "BENCH",
   provider,
   model: args.model ?? "",
-  effort: args.effort ?? (provider === "gemini" ? "" : "medium"),
+  effort: args.effort ?? "medium",
   conceptModel: args["concept-model"] ?? (provider === "claude-cli" ? "haiku" : args.model ?? ""),
-  conceptEffort: args["concept-effort"] ?? (provider === "gemini" ? "" : "low"),
+  conceptEffort: args["concept-effort"] ?? "low",
   batchSize: parseInt(args.batch ?? "8", 10),
   capChars: parseInt(args.cap ?? "600", 10),
   imageRule: args["image-rule"] === "text-only" ? "text-only" : "auto",
   fewerImages: !!args["fewer-images"],
   bin: args.bin ? resolve(args.bin) : "",
-  apiKey: args["api-key"] ?? process.env.GEMINI_API_KEY ?? "",
   timeoutSec: parseInt(args.timeout ?? "300", 10),
   out: args.out ? resolve(args.out) : null,
   dryRun: !!args["dry-run"],

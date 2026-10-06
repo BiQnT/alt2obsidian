@@ -1,4 +1,4 @@
-// Per-task LLM settings (spec 4.2): 1.x migration, presets, recent models.
+// Per-task LLM settings (spec 4.2): migrations, presets, recent models.
 // Pure module (no obsidian import) so it is unit-tested in Node.
 
 import {
@@ -9,6 +9,7 @@ import {
   EffortLevel,
   PresetId,
   ProviderId,
+  TASK_DEFAULTS,
   TaskId,
   TaskLLMSetting,
 } from "../types";
@@ -22,11 +23,12 @@ export const TASK_LABELS: Record<TaskId, string> = {
   verification: "노트 검증",
 };
 
+/** The providers a task can use (the alignment check can also be "none"). */
+export const TASK_PROVIDERS: ProviderId[] = ["claude-cli", "codex-cli"];
+
 export const PROVIDER_LABELS: Record<ProviderId | "none", string> = {
   "claude-cli": "Claude CLI",
   "codex-cli": "Codex CLI",
-  gemini: "Gemini API",
-  ollama: "Ollama",
   none: "없음 (스크립트만)",
 };
 
@@ -36,28 +38,34 @@ export const PRESET_LABELS: Record<PresetId, string> = {
   custom: "사용자 지정",
 };
 
+/** "" = the CLI's own default. Both CLIs accept the rest (`claude --help`, Codex models cache). */
 export const EFFORT_LEVELS: EffortLevel[] = ["", "low", "medium", "high", "xhigh", "max"];
 
-export function isCliProvider(p: ProviderId | "none"): p is "claude-cli" | "codex-cli" {
+/** Providers of 2.0.0-beta.3 and earlier that are gone; their tasks move to a CLI. */
+const REMOVED_PROVIDERS = ["gemini", "ollama"];
+
+const SETTINGS_VERSION = 3;
+
+export function isCliProvider(p: ProviderId | "none"): p is ProviderId {
   return p === "claude-cli" || p === "codex-cli";
 }
-
-/** 1.x single provider mapped to a 2.0 provider. The 1.x Claude/OpenAI entries were empty stubs. */
-function legacyProvider(p: unknown): ProviderId {
-  return p === "ollama" ? "ollama" : "gemini";
-}
-
-const PROVIDER_IDS: Array<ProviderId | "none"> = ["claude-cli", "codex-cli", "gemini", "ollama", "none"];
 
 /** Model names are passed as one argv entry: refuse anything that could read as a flag. */
 export function isSafeModelName(model: string): boolean {
   return model === "" || /^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,120}$/.test(model);
 }
 
+/** A task's setting with the provider's defaults (spec 4.2 / D5). */
+export function defaultTaskSetting(provider: ProviderId | "none", id: TaskId): TaskLLMSetting {
+  if (!isCliProvider(provider)) return { provider: "none", model: "", effort: "" };
+  return { provider, ...TASK_DEFAULTS[provider][id] };
+}
+
 /** Saved task settings with unknown provider, unknown effort or unsafe model reset to defaults. */
 export function sanitizeTask(raw: unknown, fallback: TaskLLMSetting): TaskLLMSetting {
   const t = (raw && typeof raw === "object" ? raw : {}) as Partial<TaskLLMSetting>;
-  const provider = PROVIDER_IDS.includes(t.provider as ProviderId) ? (t.provider as TaskLLMSetting["provider"]) : fallback.provider;
+  const known: Array<ProviderId | "none"> = [...TASK_PROVIDERS, "none"];
+  const provider = known.includes(t.provider as ProviderId) ? (t.provider as TaskLLMSetting["provider"]) : fallback.provider;
   const effort = EFFORT_LEVELS.includes(t.effort as EffortLevel) ? (t.effort as EffortLevel) : "";
   const model = typeof t.model === "string" && isSafeModelName(t.model.trim()) ? t.model.trim() : "";
   return { provider, model, effort };
@@ -69,52 +77,84 @@ function cloneTasks(tasks: Record<TaskId, TaskLLMSetting>): Record<TaskId, TaskL
   return out;
 }
 
+export interface MigrationOutcome {
+  settings: Alt2ObsidianSettings;
+  /** The CLI choice (Claude, else Codex) still has to be made once: see `chooseCli`. */
+  needsCliDefault: boolean;
+  /** A task was on Gemini or Ollama (or the data is 1.x): the user is told once. */
+  removedProviders: boolean;
+}
+
 /**
- * Settings from saved plugin data. Every existing value is kept. When the
- * data has no `tasks` (1.x, or a fresh install) the tasks use the 1.x
- * provider and `needsCliDefault` is true: see `cliDefaultAction`.
+ * Settings from saved plugin data.
+ * - No `tasks` (1.x data or a fresh install): the default table (Claude CLI).
+ *   1.x could only run Gemini or Ollama, so 1.x data counts as moved.
+ * - A task on Gemini or Ollama: that task gets the Claude CLI defaults.
+ * - Data before version 3: a CLI task with an empty model or effort gets the
+ *   task default, so the table shows what actually runs (an empty value used
+ *   to mean "whatever the CLI is set to"). "CLI 기본값" stays selectable.
+ * Unknown keys (the 1.x Gemini key and model) are kept as they are.
  */
-export function migrateSettings(saved: unknown): { settings: Alt2ObsidianSettings; needsCliDefault: boolean } {
-  const raw = (saved && typeof saved === "object" ? saved : {}) as Partial<Alt2ObsidianSettings>;
+export function migrateSettings(saved: unknown): MigrationOutcome {
+  const raw = (saved && typeof saved === "object" ? saved : {}) as Partial<Alt2ObsidianSettings> & Record<string, unknown>;
   const settings: Alt2ObsidianSettings = {
     ...DEFAULT_SETTINGS,
     ...raw,
     generation: { ...DEFAULT_GENERATION, ...(raw.generation ?? {}) },
-    recentModels: { ...(raw.recentModels ?? {}) },
-    tasks: cloneTasks(DEFAULT_SETTINGS.tasks),
-    settingsVersion: 2,
+    recentModels: pickRecentModels(raw.recentModels),
+    tasks: cloneTasks(CLAUDE_TASK_DEFAULTS),
+    settingsVersion: SETTINGS_VERSION,
     notionFetchTool: typeof raw.notionFetchTool === "string" ? raw.notionFetchTool.trim() : "",
   };
-  const hadTasks = !!raw.tasks && typeof raw.tasks === "object";
-  if (hadTasks) {
-    for (const id of TASK_IDS) settings.tasks[id] = sanitizeTask((raw.tasks as any)[id], DEFAULT_SETTINGS.tasks[id]);
-  } else {
-    const p = legacyProvider(raw.provider);
-    for (const id of ["commentary", "concepts", "verification"] as TaskId[]) {
-      settings.tasks[id] = { provider: p, model: "", effort: "" };
-    }
+  const savedTasks = raw.tasks && typeof raw.tasks === "object" ? (raw.tasks as unknown as Record<string, unknown>) : null;
+  if (!savedTasks) {
+    return { settings, needsCliDefault: true, removedProviders: saved !== undefined && saved !== null && Object.keys(raw).length > 0 };
   }
-  return { settings, needsCliDefault: !hadTasks };
+  let removed = false;
+  const before3 = typeof raw.settingsVersion !== "number" || raw.settingsVersion < SETTINGS_VERSION;
+  for (const id of TASK_IDS) {
+    const rawTask = savedTasks[id] as { provider?: unknown } | undefined;
+    if (rawTask && REMOVED_PROVIDERS.includes(String(rawTask.provider))) {
+      settings.tasks[id] = defaultTaskSetting("claude-cli", id);
+      removed = true;
+      continue;
+    }
+    const task = sanitizeTask(rawTask, CLAUDE_TASK_DEFAULTS[id]);
+    if (before3 && isCliProvider(task.provider)) {
+      const d = TASK_DEFAULTS[task.provider][id];
+      if (!task.model) task.model = d.model;
+      if (!task.effort) task.effort = d.effort;
+    }
+    settings.tasks[id] = task;
+  }
+  return { settings, needsCliDefault: removed, removedProviders: removed };
+}
+
+function pickRecentModels(raw: unknown): Alt2ObsidianSettings["recentModels"] {
+  const out: Alt2ObsidianSettings["recentModels"] = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const p of TASK_PROVIDERS) {
+    const list = (raw as Record<string, unknown>)[p];
+    if (Array.isArray(list)) out[p] = list.filter((m): m is string => typeof m === "string" && isSafeModelName(m));
+  }
+  return out;
 }
 
 /**
- * What to do once after a migration (review H2): a user with a working 1.x
- * setup (Gemini key, or Ollama) keeps it and is only offered the switch; a
- * user without one gets the Claude CLI when it is installed and logged in.
+ * The CLI to use after a migration: the Claude CLI when it is installed and
+ * logged in, else the Codex CLI when it is installed, else null (nothing
+ * changes; the user installs one).
  */
-export function cliDefaultAction(settings: Alt2ObsidianSettings, claudeUsable: boolean): "switch" | "offer" | "none" {
-  if (!claudeUsable) return "none";
-  const p = settings.tasks.commentary.provider;
-  const working = (p === "gemini" && settings.apiKey.trim() !== "") || p === "ollama";
-  return working ? "offer" : "switch";
+export function chooseCli(claudeUsable: boolean, codexFound: boolean): ProviderId | null {
+  if (claudeUsable) return "claude-cli";
+  return codexFound ? "codex-cli" : null;
 }
 
-/** Spec 4.2 / D5 defaults: commentary and verification on sonnet (medium), concepts on haiku (low). */
-export function applyClaudeDefaults(settings: Alt2ObsidianSettings): void {
-  for (const id of ["commentary", "concepts", "verification"] as TaskId[]) {
-    settings.tasks[id] = { ...CLAUDE_TASK_DEFAULTS[id] };
+/** Moves every Claude CLI task to the Codex CLI with the Codex task defaults. */
+export function moveClaudeTasksToCodex(settings: Alt2ObsidianSettings): void {
+  for (const id of TASK_IDS) {
+    if (settings.tasks[id].provider === "claude-cli") settings.tasks[id] = defaultTaskSetting("codex-cli", id);
   }
-  settings.preset = "custom";
 }
 
 /** Light model per CLI for the saving preset. Codex has no stable alias, so its default model is kept. */
@@ -126,6 +166,7 @@ const TOP_MODEL: Partial<Record<ProviderId, string>> = { "claude-cli": "opus" };
  * - saving: every task on the light model with low effort.
  * - quality: commentary and verification on the top model with high effort;
  *   concepts stay light.
+ * - custom: nothing changes (it is what any manual edit switches to).
  */
 export function applyPreset(settings: Alt2ObsidianSettings, preset: PresetId): void {
   settings.preset = preset;
@@ -149,14 +190,6 @@ export function rememberModel(settings: Alt2ObsidianSettings, provider: Provider
   if (!m) return;
   const list = (settings.recentModels[provider] ?? []).filter((x) => x !== m);
   settings.recentModels[provider] = [m, ...list].slice(0, 8);
-}
-
-/** Model actually used for a task: the task's model, or the 1.x field for Gemini/Ollama. */
-export function effectiveModel(settings: Alt2ObsidianSettings, task: TaskLLMSetting): string {
-  if (task.model.trim()) return task.model.trim();
-  if (task.provider === "gemini") return settings.geminiModel;
-  if (task.provider === "ollama") return settings.ollamaModel;
-  return "";
 }
 
 /**

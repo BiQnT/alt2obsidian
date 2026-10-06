@@ -12,12 +12,12 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { importTs } from "./helpers/bundle-ts.mjs";
-import { FAKE_CLAUDE, fakeSession } from "./helpers/fake-cli.mjs";
+import { FAKE_CLAUDE, FAKE_CODEX, fakeSession } from "./helpers/fake-cli.mjs";
 
 // pdfjs (bundled via PdfProcessor) warns about missing canvas polyfills on load.
 const quiet = { log: console.log, warn: console.warn };
 console.log = console.warn = () => {};
-const { default: Plugin, TFile, insertFrontmatterLine } = await importTs("test/helpers/plugin-entry.ts");
+const { default: Plugin, TFile, insertFrontmatterLine, notices } = await importTs("test/helpers/plugin-entry.ts");
 Object.assign(console, quiet);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -148,43 +148,53 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
 const s = fakeSession("ok");
 const cacheRoot = mkdtempSync(join(tmpdir(), "alt2obs-cache-test-"));
 try {
-  // Fresh install without a Gemini key: the logged-in Claude CLI becomes the default.
+  // Fresh install: the Claude CLI table stays when Claude is logged in; no notice.
   {
     const fresh = await makePlugin(undefined);
     fresh.plugin.data.settings.claudePath = FAKE_CLAUDE;
+    fresh.plugin.data.settings.codexPath = FAKE_CODEX;
     await fresh.plugin.applyCliDefaultOnce();
     assert.deepEqual(fresh.plugin.data.settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
-    // Logged out: nothing switches.
+    assert.equal(fresh.plugin.data.pendingCliDefault, undefined);
+    // Claude logged out, Codex installed: the tasks move to Codex.
     process.env.FAKE_CLAUDE_LOGGED_OUT = "1";
     const loggedOut = await makePlugin(undefined);
     loggedOut.plugin.data.settings.claudePath = FAKE_CLAUDE;
+    loggedOut.plugin.data.settings.codexPath = FAKE_CODEX;
+    const before = notices.length;
     await loggedOut.plugin.applyCliDefaultOnce();
-    assert.equal(loggedOut.plugin.data.settings.tasks.commentary.provider, "gemini");
-    await assert.rejects(loggedOut.plugin.switchToClaudeCli(), /로그인되어 있지 않습니다/);
+    assert.deepEqual(loggedOut.plugin.data.settings.tasks.commentary, { provider: "codex-cli", model: "", effort: "medium" });
+    assert.deepEqual(loggedOut.plugin.data.settings.tasks.concepts, { provider: "codex-cli", model: "", effort: "low" });
+    assert.ok(notices.slice(before).some((n) => n.includes("Codex CLI로 설정했습니다")), "the user is told about Codex");
     delete process.env.FAKE_CLAUDE_LOGGED_OUT;
     assert.equal(s.calls().length, 0, "the login check never calls a model");
   }
 
-  // 1.x data with a Gemini key: kept, the switch is only offered (review H2).
+  // 1.x data (Gemini key): the Gemini/Ollama tasks move to the Claude CLI and the user is told once.
   const { plugin, files, config, stored } = await makePlugin({
     settings: { apiKey: "old-key", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Alt2Obsidian", language: "ko", rateDelayMs: 5000 },
     // 1.x record of a lecture imported with an exam period (exam summaries are gone in 2.0).
     recentImports: [{ url: "u", title: "old", subject: "CSED311", path: "Alt2Obsidian/CSED311/old.md", date: "2026-03-01", parseQuality: "full", examPeriod: "midterm" }],
+    cliSwitchOffered: true,
   });
   plugin.cacheRoot = cacheRoot;
   assert.equal(plugin.data.pendingCliDefault, true);
+  assert.equal(plugin.data.removedProviderNotice, true);
+  assert.equal(plugin.data.cliSwitchOffered, undefined, "the beta.3 switch offer is gone");
   assert.equal(plugin.data.recentImports[0].examPeriod, "midterm", "1.x record with an exam period loads as is");
   assert.equal(typeof plugin.generateExamSummary, "undefined", "exam summary generation removed (spec G5)");
+  assert.equal(typeof plugin.importNote, "undefined", "the Gemini/Ollama import path is gone");
   plugin.data.settings.claudePath = FAKE_CLAUDE;
+  const noticesBefore = notices.length;
   await plugin.applyCliDefaultOnce();
-  assert.equal(plugin.data.settings.tasks.commentary.provider, "gemini", "working Gemini setup kept");
-  assert.equal(plugin.data.cliSwitchOffered, true);
-  assert.equal(stored().pendingCliDefault, undefined);
-  await plugin.switchToClaudeCli();
-  assert.equal(plugin.data.settings.tasks.commentary.provider, "claude-cli");
+  assert.deepEqual(plugin.data.settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.equal(plugin.data.settings.tasks.concepts.model, "haiku");
-  assert.equal(plugin.data.settings.apiKey, "old-key");
-  assert.equal(plugin.data.settings.geminiModel, "gemma-3-27b-it");
+  assert.ok(notices.slice(noticesBefore).some((n) => n.includes("Gemini API와 Ollama 지원이 끝나") && n.includes("Claude CLI로 설정했습니다")));
+  assert.equal(stored().pendingCliDefault, undefined);
+  assert.equal(stored().removedProviderNotice, undefined);
+  await plugin.applyCliDefaultOnce();
+  assert.equal(notices.length, noticesBefore + 1, "told once");
+  assert.equal(stored().settings.apiKey, "old-key", "1.x values stay in the saved data (rollback)");
   assert.equal(plugin.data.cliDetection.claude.version, "2.1.283 (Claude Code)");
   assert.equal(plugin.data.cliDetection.claude.featuresOk, true);
   delete plugin.data.cliDetection.claude.featuresOk;
@@ -192,9 +202,8 @@ try {
   assert.equal(await plugin.resolveBin("claude"), FAKE_CLAUDE);
   assert.equal(plugin.data.cliDetection.claude.version, "2.1.283 (Claude Code)", "a cached path from before the feature check is checked again");
   assert.equal(plugin.data.cliDetection.claude.featuresOk, true);
-  assert.ok(plugin.isCliCommentary());
   plugin.pdfProcessor = pdfStub;
-  console.log("PASS: CLI default only without a working setup and after a free login check; 1.x Gemini users get an offer");
+  console.log("PASS: migration picks Claude CLI (logged in) else Codex CLI after free checks; Gemini/Ollama users are moved and told once");
 
   // Prepare: no CLI call, estimate matches the plan.
   const prepared = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");

@@ -417,11 +417,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
   }
 
   private async handleLocalImport(it: LocalItem): Promise<void> {
-    const settings = this.plugin.data.settings;
-    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
-      this.showError("API 키를 설정에서 입력해주세요");
-      return;
-    }
     const subject = this.localSubjectInput?.value.trim() || inferSubject(it.note.folderPath, it.note.title);
     this.setLoading(true);
     this.clearMessage();
@@ -429,11 +424,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
       this.updateProgress(5, "Alt에서 노트 읽는 중...");
       const preview = await this.plugin.previewLocal(it.note.id);
       for (const w of preview.bundle?.warnings ?? []) this.showNotice(w);
-      if (this.plugin.isCliCommentary()) {
-        await this.executeCliImport("", preview, subject);
-      } else {
-        await this.executeImport("", preview, subject);
-      }
+      await this.executeCliImport("", preview, subject);
       this.drafts.delete(it.note.id);
     } catch (e) {
       this.showError(e instanceof Error ? e.message : "알 수 없는 오류");
@@ -605,12 +596,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
       return;
     }
 
-    const settings = this.plugin.data.settings;
-    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
-      this.showError("API 키를 설정에서 입력해주세요");
-      return;
-    }
-
     this.setLoading(true);
     this.clearMessage();
 
@@ -628,11 +613,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
       }
 
       const subject = this.subjectInput?.value?.trim() || undefined;
-      if (this.plugin.isCliCommentary()) {
-        await this.executeCliImport(url, preview, subject);
-      } else {
-        await this.executeImport(url, preview, subject);
-      }
+      await this.executeCliImport(url, preview, subject);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "알 수 없는 오류";
       this.showError(msg);
@@ -815,23 +796,6 @@ export class Alt2ObsidianSidebarView extends ItemView {
         detail.textContent = text;
       },
     };
-  }
-
-  private async executeImport(url: string, preview: ImportPreview, subject: string | undefined): Promise<void> {
-    this.updateProgress(0, "LLM 처리 시작...");
-
-    const result = await this.plugin.importNote(
-      url,
-      preview,
-      subject,
-      (stage, pct) => {
-        this.updateProgress(pct, stage);
-      },
-      (summary) => this.confirmUpdate(summary)
-    );
-
-    this.hideProgress();
-    await this.afterImport(result);
   }
 
   private async afterImport(result: import("../types").ImportRecord): Promise<void> {

@@ -57,7 +57,7 @@ export class NoteGenerator {
   /**
    * Page-anchored assembly path (plan Task 1.2). Used when per-slide
    * commentary is available (full-quality + PDF available + per-slide
-   * Gemini calls succeeded). Output structure:
+   * LLM calls succeeded). Output structure:
    *
    *   ---
    *   frontmatter
@@ -67,7 +67,7 @@ export class NoteGenerator {
    *
    *   ## 📚 슬라이드 N
    *   <!-- alt2obs:slide:N hash:HHHHHHHH start -->
-   *   [Gemini commentary, with [[Concept]] wikilinks injected]
+   *   [LLM commentary, with [[Concept]] wikilinks injected]
    *   <!-- alt2obs:slide:N hash:HHHHHHHH end -->
    *
    *   > [!note] 내 메모

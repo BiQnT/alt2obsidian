@@ -317,25 +317,68 @@ async function deck(n, visualPages = []) {
 
 // ---- settings migration and presets ----
 {
+  // 1.x data (Gemini was the only working provider): every value kept, the default table, told once.
   const v1 = { apiKey: "k1,k2", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Lectures", language: "ko", rateDelayMs: 6000 };
-  const { settings, needsCliDefault } = m.migrateSettings(v1);
+  const { settings, needsCliDefault, removedProviders } = m.migrateSettings(v1);
   assert.equal(needsCliDefault, true);
-  assert.deepEqual([settings.apiKey, settings.geminiModel, settings.baseFolderPath, settings.rateDelayMs], ["k1,k2", "gemma-3-27b-it", "Lectures", 6000]);
-  assert.equal(settings.tasks.commentary.provider, "gemini");
-  assert.equal(m.effectiveModel(settings, settings.tasks.commentary), "gemma-3-27b-it");
-  assert.equal(settings.generation.batchSize, 8);
-  assert.equal(settings.cliTimeoutSec, 300);
-  assert.equal(m.migrateSettings({ provider: "ollama" }).settings.tasks.concepts.provider, "ollama");
-  assert.equal(m.migrateSettings({ provider: "claude" }).settings.tasks.commentary.provider, "gemini", "1.x Claude stub maps to Gemini");
-
-  m.applyClaudeDefaults(settings);
+  assert.equal(removedProviders, true, "1.x users are told Gemini/Ollama are gone");
+  assert.deepEqual([settings.apiKey, settings.geminiModel, settings.baseFolderPath, settings.rateDelayMs], ["k1,k2", "gemma-3-27b-it", "Lectures", 6000], "unknown 1.x keys kept (rollback)");
   assert.deepEqual(settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.deepEqual(settings.tasks.concepts, { provider: "claude-cli", model: "haiku", effort: "low" });
+  assert.deepEqual(settings.tasks.verification, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.equal(settings.tasks.alignment.provider, "none");
+  assert.equal(settings.settingsVersion, 3);
+  assert.equal(settings.generation.batchSize, 8);
+  assert.equal(settings.cliTimeoutSec, 300);
+  const fresh = m.migrateSettings(undefined);
+  assert.deepEqual([fresh.needsCliDefault, fresh.removedProviders], [true, false], "fresh install: CLI chosen once, no removal notice");
 
-  const again = m.migrateSettings(JSON.parse(JSON.stringify(settings)));
-  assert.equal(again.needsCliDefault, false, "2.0 data is not migrated twice");
-  assert.deepEqual(again.settings.tasks, settings.tasks);
+  // 2.0 beta data with tasks on Gemini/Ollama: those tasks move to the Claude CLI defaults.
+  const beta = m.migrateSettings({
+    settingsVersion: 2,
+    tasks: {
+      commentary: { provider: "gemini", model: "gemini-2.5-flash", effort: "" },
+      concepts: { provider: "ollama", model: "gemma3:4b", effort: "" },
+      alignment: { provider: "none", model: "", effort: "" },
+      verification: { provider: "codex-cli", model: "gpt-5.6-luna", effort: "high" },
+    },
+  });
+  assert.deepEqual([beta.needsCliDefault, beta.removedProviders], [true, true]);
+  assert.deepEqual(beta.settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
+  assert.deepEqual(beta.settings.tasks.concepts, { provider: "claude-cli", model: "haiku", effort: "low" });
+  assert.deepEqual(beta.settings.tasks.verification, { provider: "codex-cli", model: "gpt-5.6-luna", effort: "high" }, "a CLI task is kept");
+  // No logged-in Claude CLI but Codex installed: the Claude tasks move to Codex.
+  assert.equal(m.chooseCli(true, true), "claude-cli");
+  assert.equal(m.chooseCli(false, true), "codex-cli");
+  assert.equal(m.chooseCli(false, false), null);
+  m.moveClaudeTasksToCodex(beta.settings);
+  assert.deepEqual(beta.settings.tasks.commentary, { provider: "codex-cli", model: "", effort: "medium" });
+  assert.deepEqual(beta.settings.tasks.concepts, { provider: "codex-cli", model: "", effort: "low" });
+  assert.equal(beta.settings.tasks.alignment.provider, "none", "the alignment check stays off");
+
+  // Before version 3 an empty model or effort meant "whatever the CLI uses": filled with the task default once.
+  const empty = m.migrateSettings({
+    settingsVersion: 2,
+    tasks: {
+      commentary: { provider: "claude-cli", model: "", effort: "" },
+      concepts: { provider: "claude-cli", model: "", effort: "" },
+      alignment: { provider: "none", model: "", effort: "" },
+      verification: { provider: "codex-cli", model: "", effort: "" },
+    },
+  });
+  assert.deepEqual([empty.needsCliDefault, empty.removedProviders], [false, false]);
+  assert.deepEqual(empty.settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
+  assert.deepEqual(empty.settings.tasks.concepts, { provider: "claude-cli", model: "haiku", effort: "low" });
+  assert.deepEqual(empty.settings.tasks.verification, { provider: "codex-cli", model: "", effort: "medium" });
+  assert.deepEqual(empty.settings.tasks.alignment, { provider: "none", model: "", effort: "" });
+  // From version 3 on, "" is the explicit "CLI 기본값" choice and stays.
+  const chosen = JSON.parse(JSON.stringify(empty.settings));
+  chosen.tasks.commentary = { provider: "claude-cli", model: "", effort: "" };
+  const again = m.migrateSettings(chosen);
+  assert.deepEqual([again.needsCliDefault, again.removedProviders], [false, false], "version 3 data is not migrated twice");
+  assert.deepEqual(again.settings.tasks.commentary, { provider: "claude-cli", model: "", effort: "" });
+  assert.deepEqual(m.defaultTaskSetting("claude-cli", "alignment"), { provider: "claude-cli", model: "haiku", effort: "low" });
+  assert.deepEqual(m.defaultTaskSetting("none", "alignment"), { provider: "none", model: "", effort: "" });
 
   m.applyPreset(settings, "saving");
   assert.deepEqual([settings.tasks.commentary.model, settings.tasks.commentary.effort], ["haiku", "low"]);
@@ -349,20 +392,17 @@ async function deck(n, visualPages = []) {
   m.rememberModel(settings, "claude-cli", "haiku");
   m.rememberModel(settings, "claude-cli", "sonnet");
   assert.deepEqual(settings.recentModels["claude-cli"], ["sonnet", "haiku"]);
-  // Review H2: a working 1.x setup is only offered the switch.
-  const keyed = m.migrateSettings({ apiKey: "k", provider: "gemini" }).settings;
-  assert.equal(m.cliDefaultAction(keyed, true), "offer");
-  assert.equal(m.cliDefaultAction(m.migrateSettings({ provider: "ollama" }).settings, true), "offer");
-  assert.equal(m.cliDefaultAction(m.migrateSettings({ provider: "gemini" }).settings, true), "switch", "no key: nothing working to keep");
-  assert.equal(m.cliDefaultAction(m.migrateSettings(undefined).settings, false), "none", "CLI missing or logged out");
-  // Review L9: unsafe saved values are dropped.
+  // Review L9: unsafe saved values are dropped; unknown providers fall back to the default.
   const bad = m.migrateSettings({
+    settingsVersion: 3,
     tasks: { commentary: { provider: "claude-cli", model: "--dangerously-skip-permissions", effort: "ultra; rm" }, concepts: { provider: "evil", model: "haiku", effort: "low" } },
+    recentModels: { "claude-cli": ["sonnet", "-x"], gemini: ["gemini-2.5-flash"] },
   }).settings;
   assert.deepEqual(bad.tasks.commentary, { provider: "claude-cli", model: "", effort: "" });
-  assert.equal(bad.tasks.concepts.provider, "gemini");
+  assert.equal(bad.tasks.concepts.provider, "claude-cli");
+  assert.deepEqual(bad.recentModels, { "claude-cli": ["sonnet"] }, "recent models only for the CLI providers");
   assert.ok(m.isSafeModelName("claude-sonnet-4-5[1m]") && m.isSafeModelName("gpt-5.6-luna") && !m.isSafeModelName("-m") && !m.isSafeModelName("a b"));
-  console.log("PASS: 1.x settings kept, CLI defaults (sonnet/haiku), switch only without a working setup, presets, recent models, unsafe values dropped");
+  console.log("PASS: settings migration (Gemini/Ollama tasks to a CLI, empty model/effort to task defaults once), presets, recent models, unsafe values dropped");
 }
 
 // ---- key diagram selection and embed (spec 4.8) ----

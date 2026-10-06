@@ -1,38 +1,7 @@
 import { Alt2ObsidianSettings, CliName, LLMProvider, TaskLLMSetting } from "../types";
-import { GeminiProvider } from "./GeminiProvider";
-import { OllamaProvider } from "./OllamaProvider";
 import { ClaudeCliProvider } from "./cli/ClaudeCliProvider";
 import { CodexCliProvider } from "./cli/CodexCliProvider";
 import { UsageTracker } from "./usage";
-import { effectiveModel } from "../settings/llmSettings";
-
-export interface CreateProviderOptions {
-  /** Used by Ollama provider only. */
-  ollamaEndpoint?: string;
-  /** Used by Ollama provider only. */
-  ollamaModel?: string;
-}
-
-/** API providers (1.x path). The CLI providers are built by `createTaskProvider`. */
-export function createProvider(
-  type: string,
-  apiKey: string,
-  model?: string,
-  rateDelayMs = 4000,
-  options: CreateProviderOptions = {}
-): LLMProvider {
-  switch (type) {
-    case "gemini":
-      return new GeminiProvider(apiKey, model || "gemini-2.5-flash", rateDelayMs);
-    case "ollama":
-      return new OllamaProvider(
-        options.ollamaEndpoint || "http://localhost:11434",
-        options.ollamaModel || "gemma3:4b"
-      );
-    default:
-      throw new Error(`Unknown LLM provider: ${type}`);
-  }
-}
 
 export interface TaskProviderContext {
   settings: Alt2ObsidianSettings;
@@ -66,14 +35,6 @@ export async function createTaskProvider(task: TaskLLMSetting, ctx: TaskProvider
       };
       return task.provider === "claude-cli" ? new ClaudeCliProvider(config) : new CodexCliProvider(config);
     }
-    case "gemini": {
-      if (!s.apiKey) throw new Error("Gemini API 키를 설정에서 입력해주세요");
-      const p = new GeminiProvider(s.apiKey, effectiveModel(s, task) || "gemini-2.5-flash", s.rateDelayMs);
-      p.setUsageTracker(ctx.usage, ctx.task);
-      return p;
-    }
-    case "ollama":
-      return new OllamaProvider(s.ollamaEndpoint || "http://localhost:11434", effectiveModel(s, task) || "gemma3:4b");
     default:
       throw new Error("이 작업에는 LLM이 설정되어 있지 않습니다");
   }

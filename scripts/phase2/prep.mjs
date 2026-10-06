@@ -828,25 +828,34 @@ var DEFAULT_GENERATION = {
   saveKeyDiagrams: true,
   onlyChangedSlides: true
 };
+var TASK_DEFAULTS = {
+  "claude-cli": {
+    commentary: { model: "sonnet", effort: "medium" },
+    concepts: { model: "haiku", effort: "low" },
+    alignment: { model: "haiku", effort: "low" },
+    verification: { model: "sonnet", effort: "medium" }
+  },
+  "codex-cli": {
+    commentary: { model: "", effort: "medium" },
+    concepts: { model: "", effort: "low" },
+    alignment: { model: "", effort: "low" },
+    verification: { model: "", effort: "medium" }
+  }
+};
+var CLAUDE_TASK_DEFAULTS = {
+  commentary: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].commentary },
+  concepts: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].concepts },
+  alignment: { provider: "none", model: "", effort: "" },
+  verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification }
+};
 var DEFAULT_SETTINGS = {
-  apiKey: "",
-  provider: "gemini",
-  geminiModel: "gemini-2.5-flash",
-  ollamaEndpoint: "http://localhost:11434",
-  ollamaModel: "gemma3:4b",
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
-  rateDelayMs: 4e3,
-  settingsVersion: 2,
+  settingsVersion: 3,
   claudePath: "",
   codexPath: "",
   cliTimeoutSec: 300,
-  tasks: {
-    commentary: { provider: "gemini", model: "", effort: "" },
-    concepts: { provider: "gemini", model: "", effort: "" },
-    alignment: { provider: "none", model: "", effort: "" },
-    verification: { provider: "gemini", model: "", effort: "" }
-  },
+  tasks: CLAUDE_TASK_DEFAULTS,
   preset: "custom",
   recentModels: {},
   generation: DEFAULT_GENERATION,

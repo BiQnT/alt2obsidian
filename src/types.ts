@@ -1,7 +1,11 @@
 import type { LectureBundle, SourceKind } from "./sources/types";
 
-/** LLM backends. The CLI providers run the user's installed `claude` / `codex`. */
-export type ProviderId = "claude-cli" | "codex-cli" | "gemini" | "ollama";
+/**
+ * LLM backends: the user's installed `claude` / `codex`. Gemini API and
+ * Ollama were removed in 2.0.0-beta.4; saved settings naming them are
+ * mapped to a CLI on load (src/settings/llmSettings.ts).
+ */
+export type ProviderId = "claude-cli" | "codex-cli";
 
 /**
  * Tasks with their own provider, model and effort (spec 4.2). `alignment`
@@ -40,21 +44,12 @@ export interface GenerationOptions {
 }
 
 export interface Alt2ObsidianSettings {
-  apiKey: string;
-  /**
-   * 1.x single provider. Kept for Gemini/Ollama users and as the migration
-   * source for `tasks`; 2.0 code reads `tasks` instead.
-   */
-  provider: "gemini" | "openai" | "claude" | "ollama";
-  geminiModel: string;
-  /** Ollama endpoint (http://localhost:11434 default). Used when provider="ollama". */
-  ollamaEndpoint: string;
-  /** Ollama model id, e.g. "gemma3:4b" (text), "llama3.2-vision:11b" (multimodal). */
-  ollamaModel: string;
   baseFolderPath: string;
   language: "ko" | "en";
-  rateDelayMs: number;
-  /** 2 since 2.0.0-beta.1. Missing = 1.x data. */
+  /**
+   * 2 since 2.0.0-beta.1, 3 since 2.0.0-beta.4 (CLI providers only, empty
+   * model and effort filled with the task defaults). Missing = 1.x data.
+   */
   settingsVersion: number;
   /** Absolute path overrides. "" = auto-detect (spec 4.2 rule 1). */
   claudePath: string;
@@ -84,33 +79,42 @@ export const DEFAULT_GENERATION: GenerationOptions = {
   onlyChangedSlides: true,
 };
 
-/** Spec 4.2 / D5 defaults, used when the Claude CLI is chosen. */
+/**
+ * Model and effort a task gets when its provider is chosen (spec 4.2 / D5).
+ * Codex has no stable model alias, so its model stays "" (the model in
+ * ~/.codex/config.toml) and only the effort is set.
+ */
+export const TASK_DEFAULTS: Record<ProviderId, Record<TaskId, { model: string; effort: EffortLevel }>> = {
+  "claude-cli": {
+    commentary: { model: "sonnet", effort: "medium" },
+    concepts: { model: "haiku", effort: "low" },
+    alignment: { model: "haiku", effort: "low" },
+    verification: { model: "sonnet", effort: "medium" },
+  },
+  "codex-cli": {
+    commentary: { model: "", effort: "medium" },
+    concepts: { model: "", effort: "low" },
+    alignment: { model: "", effort: "low" },
+    verification: { model: "", effort: "medium" },
+  },
+};
+
+/** Default task table: everything on the Claude CLI, the alignment check off. */
 export const CLAUDE_TASK_DEFAULTS: Record<TaskId, TaskLLMSetting> = {
-  commentary: { provider: "claude-cli", model: "sonnet", effort: "medium" },
-  concepts: { provider: "claude-cli", model: "haiku", effort: "low" },
+  commentary: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].commentary },
+  concepts: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].concepts },
   alignment: { provider: "none", model: "", effort: "" },
-  verification: { provider: "claude-cli", model: "sonnet", effort: "medium" },
+  verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification },
 };
 
 export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
-  apiKey: "",
-  provider: "gemini",
-  geminiModel: "gemini-2.5-flash",
-  ollamaEndpoint: "http://localhost:11434",
-  ollamaModel: "gemma3:4b",
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
-  rateDelayMs: 4000,
-  settingsVersion: 2,
+  settingsVersion: 3,
   claudePath: "",
   codexPath: "",
   cliTimeoutSec: 300,
-  tasks: {
-    commentary: { provider: "gemini", model: "", effort: "" },
-    concepts: { provider: "gemini", model: "", effort: "" },
-    alignment: { provider: "none", model: "", effort: "" },
-    verification: { provider: "gemini", model: "", effort: "" },
-  },
+  tasks: CLAUDE_TASK_DEFAULTS,
   preset: "custom",
   recentModels: {},
   generation: DEFAULT_GENERATION,
@@ -180,8 +184,7 @@ export interface LectureMaterialContext {
 }
 
 /**
- * Reference to a single PDF page rendered to a base64 PNG, suitable for
- * inline-data multimodal LLM calls (e.g., Gemini's `inlineData`).
+ * A single PDF page rendered to a base64 PNG (key diagram images).
  * Produced by `PdfProcessor.renderPagesToImages`.
  */
 export interface VisionImageRef {
@@ -190,7 +193,7 @@ export interface VisionImageRef {
 }
 
 /**
- * Per-slide commentary produced by `PerSlideCommentaryGenerator`. The hash is
+ * Per-slide commentary produced by `BatchCommentaryGenerator`. The hash is
  * the 8-hex SHA-1 of the rendered slide PNG and drives the page-anchored
  * managed-block markers (plan §B Decision B). `commentary` is the LLM's
  * markdown body for that slide — no headers, no markers; the assembler
@@ -310,10 +313,13 @@ export interface PluginData {
   recentImports: ImportRecord[];
   cliDetection: Partial<Record<CliName, CliDetection>>;
   usageTotals: UsageTotals;
-  /** Set by the 1.x migration until the Claude CLI lookup has run once. */
+  /**
+   * Set by a migration (fresh install, 1.x data, or a task on the removed
+   * Gemini/Ollama providers) until the CLI lookup has run once.
+   */
   pendingCliDefault?: boolean;
-  /** A working 1.x setup was kept although a logged-in Claude CLI exists: show the switch button. */
-  cliSwitchOffered?: boolean;
+  /** Tasks were moved off Gemini/Ollama: tell the user once (with pendingCliDefault). */
+  removedProviderNotice?: boolean;
 }
 
 export const DEFAULT_PLUGIN_DATA: PluginData = {
@@ -360,17 +366,6 @@ export interface LLMProvider {
     validate: (raw: unknown) => T,
     options?: JsonCallOptions
   ): Promise<T>;
-  /**
-   * Optional multimodal call (text prompt + 1+ inline images). Required for
-   * the per-slide commentary path (plan Task 1.1). GeminiProvider implements
-   * it via the `inlineData` field; OpenAI/Claude/Ollama providers without
-   * vision support throw or return a useful error.
-   */
-  generateMultimodal?(
-    prompt: string,
-    images: VisionImageRef[],
-    options?: { systemPrompt?: string; maxOutputTokens?: number }
-  ): Promise<string>;
   estimateTokens(text: string): number;
   /** Releases temp files (CLI providers). */
   dispose?(): void;

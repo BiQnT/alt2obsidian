@@ -9,13 +9,13 @@ import {
   PRESET_LABELS,
   PROVIDER_LABELS,
   TASK_IDS,
+  TASK_PROVIDERS,
   TASK_LABELS,
 } from "../settings/llmSettings";
 import { compactTokens } from "../llm/usage";
 
 /** Aliases the Claude CLI resolves to its current models; offered as suggestions only. */
 const CLAUDE_ALIASES = ["sonnet", "opus", "haiku"];
-const TASK_PROVIDERS: ProviderId[] = ["claude-cli", "codex-cli", "gemini", "ollama"];
 
 export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   plugin: Alt2ObsidianPlugin;
@@ -61,28 +61,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   private renderConnections(containerEl: HTMLElement): void {
     containerEl.createEl("h3", { text: "LLM 연결" });
     const grid = containerEl.createDiv({ cls: "alt2obsidian-cards" });
-    const claudeCard = this.renderCliCard(grid, "claude", "Claude CLI", "claudePath");
-    if (this.settings.tasks.commentary.provider !== "claude-cli") {
-      new Setting(claudeCard)
-        .setName("Claude CLI로 전환")
-        .setDesc(
-          (this.plugin.data.cliSwitchOffered ? "기존 설정을 그대로 두었습니다. " : "") +
-            "슬라이드 해설은 sonnet (medium), 개념 추출은 haiku (low)로 바꿉니다. 로그인 여부만 확인하고 모델은 호출하지 않습니다."
-        )
-        .addButton((b) =>
-          b.setButtonText("전환").onClick(async () => {
-            b.setDisabled(true);
-            try {
-              await this.plugin.switchToClaudeCli();
-              new Notice("슬라이드 해설과 개념 추출을 Claude CLI로 바꿨습니다.");
-              this.display();
-            } catch (e) {
-              new Notice(e instanceof Error ? e.message : String(e));
-              b.setDisabled(false);
-            }
-          })
-        );
-    }
+    this.renderCliCard(grid, "claude", "Claude CLI", "claudePath");
     const codexCard = this.renderCliCard(grid, "codex", "Codex CLI", "codexPath");
     codexCard.createDiv({
       cls: "alt2obsidian-muted",
@@ -91,75 +70,6 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         "그래서 Codex는 배치 크기의 두 배로 묶어 보냅니다. 또 읽기 전용 샌드박스라도 Codex는 사용자 계정이 읽을 수 있는 파일을 읽을 수 있습니다. " +
         "프롬프트로 주어진 내용만 쓰라고 지시하지만, 이 위험을 감수하는 경우에만 쓰세요.",
     });
-
-    const gemini = grid.createDiv({ cls: "alt2obsidian-card" });
-    gemini.createEl("h4", { text: "Gemini API" });
-    gemini.createDiv({ cls: "alt2obsidian-card-status", text: this.settings.apiKey ? "API 키 입력됨" : "API 키 없음 (Gemini를 쓸 때만 필요)" });
-    new Setting(gemini)
-      .setName("API 키")
-      .setDesc("Google AI Studio 키. 콤마로 여러 개를 넣으면 429 때 돌아가며 씁니다.")
-      .addText((text) =>
-        text
-          .setPlaceholder("API 키 입력...")
-          .setValue(this.settings.apiKey)
-          .then((t) => {
-            t.inputEl.type = "password";
-          })
-          .onChange(async (value) => {
-            this.settings.apiKey = value;
-            await this.save();
-          })
-      );
-    new Setting(gemini)
-      .setName("Gemini 모델")
-      .setDesc("작업 표에서 모델을 비워 둔 Gemini 작업이 쓰는 모델")
-      .addText((text) =>
-        text
-          .setPlaceholder("gemini-2.5-flash")
-          .setValue(this.settings.geminiModel)
-          .onChange(async (value) => {
-            this.settings.geminiModel = value || "gemini-2.5-flash";
-            await this.save();
-          })
-      );
-    new Setting(gemini)
-      .setName("API 요청 간격 (ms)")
-      .setDesc("Gemini 호출 사이 대기 시간. 무료 등급이면 4000 이상 권장.")
-      .addText((text) =>
-        text
-          .setPlaceholder("4000")
-          .setValue(String(this.settings.rateDelayMs))
-          .onChange(async (value) => {
-            this.settings.rateDelayMs = Math.max(1000, parseInt(value) || 4000);
-            await this.save();
-          })
-      );
-
-    const ollama = grid.createDiv({ cls: "alt2obsidian-card" });
-    ollama.createEl("h4", { text: "Ollama (로컬)" });
-    new Setting(ollama)
-      .setName("Endpoint")
-      .addText((text) =>
-        text
-          .setPlaceholder("http://localhost:11434")
-          .setValue(this.settings.ollamaEndpoint)
-          .onChange(async (value) => {
-            this.settings.ollamaEndpoint = value || "http://localhost:11434";
-            await this.save();
-          })
-      );
-    new Setting(ollama)
-      .setName("기본 모델")
-      .setDesc("슬라이드 해설에는 멀티모달 모델(예: llama3.2-vision:11b)")
-      .addText((text) =>
-        text
-          .setPlaceholder("gemma3:4b")
-          .setValue(this.settings.ollamaModel)
-          .onChange(async (value) => {
-            this.settings.ollamaModel = value || "gemma3:4b";
-            await this.save();
-          })
-      );
   }
 
   private renderCliCard(
@@ -335,10 +245,6 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       case "claude-cli":
       case "codex-cli":
         return "비우면 CLI 기본 모델";
-      case "gemini":
-        return this.settings.geminiModel;
-      case "ollama":
-        return this.settings.ollamaModel;
       default:
         return "";
     }

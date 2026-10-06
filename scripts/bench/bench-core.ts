@@ -2,11 +2,9 @@
 // PDF + transcript without Obsidian and reports tokens, cache hits, calls,
 // images and time. Bundled and started by scripts/bench/bench.mjs.
 //
-// Providers:
-//   claude-cli, codex-cli  the 2.0 batched path (src/pipeline), same code as the plugin
-//   gemini                 the 1.1.0 path: summary passes, concepts from the
-//                          summary, one multimodal call per slide (mirrors
-//                          Alt2ObsidianPlugin.runLegacyImport)
+// Providers: claude-cli, codex-cli (the batched path in src/pipeline, same
+// code as the plugin). The 1.1.0 Gemini mode was removed with the Gemini
+// provider in 2.0.0-beta.4.
 
 import { spawnSync } from "child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
@@ -16,32 +14,15 @@ import { webcrypto } from "crypto";
 import type { GrayImage } from "../../src/core/prep/SlideAnalyzer";
 import { analyzeSlides } from "../../src/core/prep/SlideAnalyzer";
 import { ANALYSIS_LONG_EDGE, extractPageLayouts, parsePgm } from "../../src/core/prep/pageLayout";
-import { extractLectureMaterialContext } from "../../src/core/lectureMaterial";
-import { extractPageTexts } from "../../src/core/slideHash";
 import { planDeck, planCounts, withFewerImages } from "../../src/pipeline/batchPlan";
 import { estimateLecture, runBatchedLecture } from "../../src/pipeline/lecturePipeline";
 import { ClaudeCliProvider } from "../../src/llm/cli/ClaudeCliProvider";
 import { CodexCliProvider } from "../../src/llm/cli/CodexCliProvider";
 import { createJobDir, removeJobDir, resolveCliBinary } from "../../src/llm/cli/CliRunner";
-import { GeminiProvider } from "../../src/llm/GeminiProvider";
 import { UsageTracker } from "../../src/llm/usage";
 import { NoteGenerator } from "../../src/generator/NoteGenerator";
-import { buildSlidePrompt, PerSlideCommentaryGenerator } from "../../src/generator/PerSlideCommentaryGenerator";
-import { ConceptExtractor } from "../../src/generator/ConceptExtractor";
-import { renderPrompt } from "../../src/prompts/render";
 import { batchSizeFor } from "../../src/settings/llmSettings";
-import type { AltNoteData, EffortLevel, ImageInput, LLMProvider, VisionImageRef } from "../../src/types";
-import summaryFromTranscriptTemplate from "../../prompts/summary-from-transcript.md";
-import summaryFromTranscriptSystemTemplate from "../../prompts/summary-from-transcript.system.md";
-import summaryEnhanceTranscriptTemplate from "../../prompts/summary-enhance-transcript.md";
-import summaryEnhanceTranscriptSystemTemplate from "../../prompts/summary-enhance-transcript.system.md";
-import summaryEnhanceMaterialTemplate from "../../prompts/summary-enhance-material.md";
-import summaryEnhanceMaterialSystemTemplate from "../../prompts/summary-enhance-material.system.md";
-import slideCommentarySystemTemplate from "../../prompts/slide-commentary.system.md";
-import conceptExtractionTemplate from "../../prompts/concept-extraction.md";
-import { splitTranscriptEvenly } from "../../src/core/prep/TranscriptCompressor";
-import { CallShape, estimateCalls } from "../../src/core/budget/estimate";
-import type { LectureMaterialContext } from "../../src/types";
+import type { AltNoteData, EffortLevel, ImageInput } from "../../src/types";
 
 export interface BenchOptions {
   pdf: string;
@@ -49,7 +30,7 @@ export interface BenchOptions {
   summary: string;
   title: string;
   subject: string;
-  provider: "claude-cli" | "codex-cli" | "gemini";
+  provider: "claude-cli" | "codex-cli";
   model: string;
   effort: EffortLevel;
   conceptModel: string;
@@ -59,7 +40,6 @@ export interface BenchOptions {
   imageRule: "auto" | "text-only";
   fewerImages: boolean;
   bin: string;
-  apiKey: string;
   timeoutSec: number;
   out: string | null;
   dryRun: boolean;
@@ -129,13 +109,6 @@ async function openPdf(path: string) {
   if (!globalThis.crypto) (globalThis as { crypto: unknown }).crypto = webcrypto;
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   return pdfjs.getDocument({ data: new Uint8Array(readFileSync(path)), verbosity: 0 }).promise;
-}
-
-function truncateForPrompt(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  const head = text.slice(0, Math.floor(maxChars * 0.7));
-  const tail = text.slice(text.length - Math.floor(maxChars * 0.3));
-  return `${head}\n\n[...중간 내용 생략...]\n\n${tail}`;
 }
 
 function altData(o: BenchOptions): AltNoteData {
@@ -232,128 +205,8 @@ async function runCli(o: BenchOptions): Promise<BenchResult> {
   }
 }
 
-// ---- 1.1.0 Gemini path ----
-
-/**
- * 1.1.0 estimate from the exact 1.1.0 prompts: the summary passes, concept
- * extraction from the summary, then one multimodal call per slide (prompt
- * built like PerSlideCommentaryGenerator.buildSlidePrompt, raw even-split
- * transcript chunk, one 1024px PNG). Summaries the passes would write are
- * assumed to be 4000 characters.
- */
-export function estimateGeminiLegacy(
-  pageCount: number,
-  transcript: string | null,
-  summary: string,
-  material: LectureMaterialContext | null
-): { calls: number; inputTokens: number; outputTokens: number; imagesSent: number } {
-  const calls: CallShape[] = [];
-  const t = (transcript ?? "").slice(0, 15000);
-  let summaryLen = summary.length;
-  if (t && summary.length < 2500) {
-    calls.push({ promptText: summaryEnhanceTranscriptSystemTemplate + summaryEnhanceTranscriptTemplate + summary + t, images: 0, outputTokens: 3500, schema: false });
-    summaryLen = Math.max(summaryLen, 4000);
-  }
-  if (material) {
-    calls.push({ promptText: summaryEnhanceMaterialSystemTemplate + summaryEnhanceMaterialTemplate + "가".repeat(summaryLen) + material.text, images: 0, outputTokens: 3500, schema: false });
-    summaryLen = Math.max(summaryLen, 4000);
-  }
-  calls.push({ promptText: conceptExtractionTemplate + "가".repeat(summaryLen), images: 0, outputTokens: 3800, schema: false });
-  const chunks = splitTranscriptEvenly(transcript, pageCount);
-  const system = renderPrompt(slideCommentarySystemTemplate, {});
-  for (let i = 0; i < pageCount; i++) {
-    const prompt = buildSlidePrompt(i + 1, pageCount, chunks[i] ?? null, []);
-    calls.push({ promptText: system + prompt, images: 1, outputTokens: 450, schema: false });
-  }
-  return estimateCalls(calls, "gemini");
-}
-
-async function runGemini(o: BenchOptions): Promise<BenchResult> {
-  const started = Date.now();
-  const doc = await openPdf(o.pdf);
-  const texts = await extractPageTexts(doc);
-  const material = await extractLectureMaterialContext(doc, `${o.title}\n\n${o.summary}`);
-  await doc.destroy();
-  const slidesBase = { total: texts.length, generated: texts.length, templated: 0, deduped: 0, reused: 0, failed: 0 };
-  const estimate = estimateGeminiLegacy(texts.length, o.transcript, o.summary, material);
-  if (o.dryRun) {
-    return {
-      provider: "gemini (1.1.0 per-slide)", model: o.model, effort: "-", slides: slidesBase, calls: 0, inputTokens: 0, cachedInputTokens: 0,
-      cacheHitPct: 0, outputTokens: 0, imagesSent: 0, costUsd: 0, estimate, transcriptChars: null, wallTimeMs: Date.now() - started, dryRun: true,
-    };
-  }
-  if (!o.apiKey) throw new Error("gemini needs --api-key or GEMINI_API_KEY");
-  const usage = new UsageTracker();
-  const llm = new GeminiProvider(o.apiKey, o.model || "gemini-2.5-flash", 4000);
-  llm.setUsageTracker(usage, "commentary");
-  const data = altData(o);
-
-  // Summary passes, as in Alt2ObsidianPlugin.runLegacyImport.
-  if (data.transcript) {
-    const transcriptText = data.transcript.slice(0, 15000);
-    if (!data.summary || data.summary.length < 500) {
-      data.summary = await llm.generateText(
-        renderPrompt(summaryFromTranscriptTemplate, { memoContext: data.summary ? `\n\n[학생 메모]\n${data.summary}` : "", transcript: transcriptText }),
-        { systemPrompt: renderPrompt(summaryFromTranscriptSystemTemplate, {}), maxOutputTokens: 4096 }
-      );
-    } else if (data.summary.length < 2500) {
-      data.summary = await llm.generateText(
-        renderPrompt(summaryEnhanceTranscriptTemplate, { summary: data.summary, transcript: transcriptText }),
-        { systemPrompt: renderPrompt(summaryEnhanceTranscriptSystemTemplate, {}), maxOutputTokens: 8192 }
-      );
-    }
-  }
-  if (material) {
-    data.summary = await llm.generateText(
-      renderPrompt(summaryEnhanceMaterialTemplate, {
-        summary: truncateForPrompt(data.summary, 18000),
-        pageCount: material.pageCount,
-        excerptPageCount: material.pages.length,
-        excerptScope: material.truncated ? "일부 발췌" : "전체 발췌",
-        materialText: material.text,
-      }),
-      { systemPrompt: renderPrompt(summaryEnhanceMaterialSystemTemplate, {}), maxOutputTokens: 8192 }
-    );
-  }
-  await new ConceptExtractor(llm as LLMProvider, "ko").extract(data.summary, o.subject, []);
-
-  const pdfProcessor = {
-    getPageCount: async () => texts.length,
-    getPageTexts: async () => texts,
-    renderPagesToImages: async (_d: ArrayBuffer, pages: number[]): Promise<VisionImageRef[]> =>
-      pages.flatMap((pageNum) => {
-        const b64 = renderOne(o.pdf, pageNum, "png");
-        return b64 ? [{ pageNum, base64Png: b64 }] : [];
-      }),
-  };
-  const res = await new PerSlideCommentaryGenerator(llm as LLMProvider, pdfProcessor as never).generate(new ArrayBuffer(0), {
-    transcript: data.transcript,
-    existingConceptNames: [],
-    sourceId: "bench",
-    onProgress: (n, total, stage) => stage === "calling" && process.stderr.write(`slide ${n}/${total}\n`),
-  });
-  const t = usage.total();
-  return {
-    provider: "gemini (1.1.0 per-slide)",
-    model: o.model || "gemini-2.5-flash",
-    effort: "-",
-    slides: { ...slidesBase, failed: res.errors.length },
-    calls: t.calls,
-    inputTokens: t.inputTokens,
-    cachedInputTokens: t.cachedInputTokens,
-    cacheHitPct: t.inputTokens > 0 ? Math.round((t.cachedInputTokens / t.inputTokens) * 1000) / 10 : 0,
-    outputTokens: t.outputTokens,
-    imagesSent: t.imagesSent,
-    costUsd: 0,
-    estimate,
-    transcriptChars: null,
-    wallTimeMs: Date.now() - started,
-    dryRun: false,
-  };
-}
-
 export async function runBench(o: BenchOptions): Promise<BenchResult> {
-  return o.provider === "gemini" ? runGemini(o) : runCli(o);
+  return runCli(o);
 }
 
 export function formatTable(r: BenchResult): string {

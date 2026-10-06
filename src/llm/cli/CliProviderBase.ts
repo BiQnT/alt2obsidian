@@ -11,7 +11,6 @@ import {
   LLMUsage,
   ProviderId,
   TextCallOptions,
-  VisionImageRef,
 } from "../../types";
 import { UsageTracker } from "../usage";
 import { EFFORT_LEVELS, isSafeModelName } from "../../settings/llmSettings";
@@ -152,16 +151,6 @@ export abstract class CliProviderBase implements LLMProvider {
 
   async generateText(prompt: string, options?: TextCallOptions): Promise<string> {
     const res = await this.call({ prompt, systemPrompt: options?.systemPrompt, signal: options?.signal });
-    return res.text.trim();
-  }
-
-  async generateMultimodal(prompt: string, images: VisionImageRef[], options?: TextCallOptions): Promise<string> {
-    const res = await this.call({
-      prompt,
-      systemPrompt: options?.systemPrompt,
-      signal: options?.signal,
-      images: images.map((img) => ({ pageNum: img.pageNum, mimeType: "image/png", base64: img.base64Png })),
-    });
     return res.text.trim();
   }
 

@@ -45,9 +45,6 @@ export const PROVIDER_COSTS: Record<
 > = {
   "claude-cli": { fixedPerTurn: 300, schemaTurns: 0, imageTurns: 0, perImage: 1060 },
   "codex-cli": { fixedPerTurn: 11900, schemaTurns: 0, imageTurns: 0, perImage: 1750 },
-  // Gemini: 258 tokens per 768px tile; a 1024px slide is 2 tiles.
-  gemini: { fixedPerTurn: 0, schemaTurns: 0, imageTurns: 0, perImage: 516 },
-  ollama: { fixedPerTurn: 0, schemaTurns: 0, imageTurns: 0, perImage: 600 },
 };
 
 /** Expected output per generated slide: commentary + gist + JSON keys. */

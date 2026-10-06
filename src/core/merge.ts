@@ -25,8 +25,7 @@ export function assertNoPageAnchoredDowngrade(currentContent: string, nextConten
   ) {
     throw new Error(
       "기존 노트는 슬라이드별 형식인데 이번 결과에는 슬라이드별 해설이 없어 덮어쓰지 않고 가져오기를 중단했습니다. " +
-        "PDF를 내려받거나 읽지 못했거나, 현재 LLM 공급자가 이미지 입력(멀티모달)을 지원하지 않는 경우입니다. " +
-        "PDF 접근과 LLM 공급자 설정(Gemini 권장)을 확인한 뒤 다시 시도해주세요."
+        "PDF를 내려받거나 읽지 못한 경우입니다. PDF 접근을 확인한 뒤 다시 시도해주세요."
     );
   }
 }

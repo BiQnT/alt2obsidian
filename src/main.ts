@@ -35,11 +35,10 @@ import {
 } from "./llm/cli/CliRunner";
 import { UsageTracker, accumulateTotals, formatUsageFrontmatter } from "./llm/usage";
 import {
-  applyClaudeDefaults,
   batchSizeFor,
-  cliDefaultAction,
-  isCliProvider,
+  chooseCli,
   migrateSettings,
+  moveClaudeTasksToCodex,
   PROVIDER_LABELS,
   rememberModel,
 } from "./settings/llmSettings";
@@ -51,8 +50,6 @@ import { BudgetEstimate, CallShape, estimateCalls, exceedsCap } from "./core/bud
 import conceptExtractionTemplateText from "../prompts/concept-extraction.md";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { insertFrontmatterLine, NoteGenerator } from "./generator/NoteGenerator";
-import { PerSlideCommentaryGenerator } from "./generator/PerSlideCommentaryGenerator";
-import type { PerSlideGenerationResult } from "./types";
 import { VaultManager } from "./vault/VaultManager";
 import { Alt2ObsidianSettingsTab } from "./ui/SettingsTab";
 import {
@@ -693,37 +690,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
   }
 
-  /** True when slide commentary runs on a CLI provider (batched 2.0 path). */
-  isCliCommentary(): boolean {
-    return isCliProvider(this.data.settings.tasks.commentary.provider);
-  }
-
-  /**
-   * Phase 2: Import with the Gemini/Ollama per-slide path (1.x flow,
-   * unchanged prompts).
-   */
-  async importNote(
-    url: string,
-    preview: ImportPreview,
-    subjectOverride?: string,
-    onProgress?: (stage: string, percent: number) => void,
-    onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>
-  ): Promise<ImportRecord> {
-    const settings = this.data.settings;
-    if (settings.tasks.commentary.provider === "gemini" && !settings.apiKey) {
-      throw new Error("API 키를 설정에서 입력해주세요");
-    }
-    const job = createJobDir();
-    const usage = new UsageTracker();
-    try {
-      const llm = await this.providerFor("commentary", job, usage);
-      const conceptLlm = await this.providerFor("concepts", job, usage);
-      return await this.runLegacyImport(url, preview, subjectOverride, llm, conceptLlm, onProgress, onConfirmUpdate);
-    } finally {
-      removeJobDir(job);
-    }
-  }
-
   private async providerFor(
     task: TaskId,
     workDir: string,
@@ -849,45 +815,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
     onProgress?.("개념 추출 완료", 50);
 
-    // Per-slide commentary (page-anchored path) when PDF is available.
-    // If the PDF is missing OR per-slide generation fails entirely,
-    // slidesResult stays null and we fall back to the lecture-level
-    // single-block generator below.
+    // Lecture-level note: this path runs only when there is no slide plan
+    // (no PDF, or a PDF without pages). Slides go through runCliImport.
     const pdfData = await pdfDataPromise;
     const notePath = notePathOverride ?? this.resolveNotePath(preview, subject);
-    let slidesResult: PerSlideGenerationResult | null = null;
-    let alignment: LectureAlignment | null = null;
-    if (pdfData && this.pdfProcessor) {
-      // Timestamped transcript (local sources): per-slide chunks by alignment (spec 4.3).
-      if (preview.bundle?.transcript.some((s) => s.startMs !== null)) {
-        try {
-          alignment = alignLecture((await this.pdfProcessor.getPageLayouts(pdfData)).map(layoutAlignmentText), preview.bundle.transcript);
-        } catch (e) {
-          console.warn("[Alt2Obsidian] alignment skipped, even split used:", e);
-        }
-      }
-      onProgress?.("PDF 슬라이드 해설 생성 중...", 55);
-      const slideGen = new PerSlideCommentaryGenerator(llm, this.pdfProcessor);
-      try {
-        slidesResult = await slideGen.generate(pdfData, {
-          transcript: altData.transcript,
-          transcriptChunks: alignment?.chunks,
-          existingConceptNames: Array.from(existingConceptNames),
-          sourceId: altData.metadata.noteId,
-          onProgress: (slideNum, total) => {
-            onProgress?.(
-              `슬라이드 ${slideNum}/${total} 해설 중...`,
-              55 + Math.round((slideNum / total) * 15)
-            );
-          },
-        });
-      } catch (e) {
-        console.warn(
-          "[Alt2Obsidian] per-slide gen failed, falling back to lecture-level:",
-          e
-        );
-      }
-    }
 
     // Generate markdown
     onProgress?.("마크다운 노트 생성 중...", 70);
@@ -899,19 +830,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
       subjectSuggestion: subject,
     };
 
-    const noteGenerator = new NoteGenerator(llm);
-    const withSlides = !!slidesResult && slidesResult.slides.length > 0;
-    const extraFrontmatter = this.preservedFrontmatter(notePath, altData.metadata.sourceKind, withSlides ? alignment : null);
-    const { lectureMarkdown, conceptNotes } =
-      slidesResult && withSlides
-        ? await noteGenerator.generatePageAnchored(
-            altData,
-            slidesResult,
-            llmResult,
-            subject,
-            extraFrontmatter
-          )
-        : await noteGenerator.generate(altData, llmResult, subject, extraFrontmatter);
+    const { lectureMarkdown, conceptNotes } = await new NoteGenerator(llm).generate(
+      altData,
+      llmResult,
+      subject,
+      this.preservedFrontmatter(notePath, altData.metadata.sourceKind, null)
+    );
 
     return this.saveLecture({
       url,
@@ -1501,37 +1425,30 @@ export default class Alt2ObsidianPlugin extends Plugin {
   }
 
   /**
-   * Once after a 1.x migration or a fresh install (review H2). Nothing here
-   * calls a model: the check is `claude auth status`.
-   * - A working 1.x setup (Gemini key, or Ollama) is kept; the settings show
-   *   a "switch to Claude CLI" button and a Notice says so.
-   * - Without one, the Claude CLI becomes the default when it is installed
-   *   and logged in.
+   * Once after a migration (fresh install, 1.x data, or tasks moved off the
+   * removed Gemini/Ollama providers). Nothing here calls a model: the checks
+   * are `--version`, `--help` and `claude auth status`. The Claude CLI stays
+   * when it is logged in; otherwise the Codex CLI takes its tasks when it is
+   * installed.
    */
   private async applyCliDefaultOnce(): Promise<void> {
     if (!this.data.pendingCliDefault) return;
     const claude = await this.detectCli("claude");
-    const usable = !!claude && (await probeCliLogin("claude", claude.path));
+    const claudeUsable = !!claude && (await probeCliLogin("claude", claude.path));
+    const codexFound = claudeUsable ? false : !!(await this.detectCli("codex"));
+    const cli = chooseCli(claudeUsable, codexFound);
+    if (cli === "codex-cli") moveClaudeTasksToCodex(this.data.settings);
+    const removed = !!this.data.removedProviderNotice;
     delete this.data.pendingCliDefault;
-    const action = cliDefaultAction(this.data.settings, usable);
-    if (action === "switch") {
-      applyClaudeDefaults(this.data.settings);
-      new Notice("Alt2Obsidian 2.0: 로그인된 Claude CLI를 찾아 슬라이드 해설과 개념 추출에 쓰도록 설정했습니다. 설정에서 바꿀 수 있습니다.");
-    } else if (action === "offer") {
-      this.data.cliSwitchOffered = true;
-      new Notice("Alt2Obsidian 2.0: Claude CLI를 찾았습니다. 기존 설정은 그대로 두었습니다. API 키 없이 쓰려면 설정 > LLM 연결에서 'Claude CLI로 전환'을 누르세요.");
+    delete this.data.removedProviderNotice;
+    const head = removed ? "Alt2Obsidian: Gemini API와 Ollama 지원이 끝나 " : "Alt2Obsidian: ";
+    if (cli) {
+      if (removed || cli === "codex-cli") {
+        new Notice(`${head}작업을 ${PROVIDER_LABELS[cli]}로 설정했습니다. 설정의 '작업별 모델'에서 모델과 effort를 확인하세요.`);
+      }
+    } else {
+      new Notice(`${head}Claude Code나 Codex CLI가 필요합니다. 설치하고 로그인한 뒤 설정의 'LLM 연결'에서 '다시 찾기'를 누르세요.`);
     }
-    await this.savePluginData();
-  }
-
-  /** Settings button: switch the tasks to the Claude CLI after a free login check. */
-  async switchToClaudeCli(): Promise<void> {
-    const bin = await this.resolveBin("claude");
-    if (!(await probeCliLogin("claude", bin))) {
-      throw new Error("Claude CLI에 로그인되어 있지 않습니다. 터미널에서 claude를 한 번 실행해 로그인한 뒤 다시 시도하세요.");
-    }
-    applyClaudeDefaults(this.data.settings);
-    delete this.data.cliSwitchOffered;
     await this.savePluginData();
   }
 
@@ -1842,8 +1759,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const saved = (await this.loadData()) || {};
     this.data = Object.assign({}, DEFAULT_PLUGIN_DATA, saved);
     // Keep every 1.x value; add the 2.0 per-task settings (spec 4.2).
-    const { settings, needsCliDefault } = migrateSettings(saved.settings);
+    const { settings, needsCliDefault, removedProviders } = migrateSettings(saved.settings);
     this.data.settings = settings;
+    // Removed in 2.0.0-beta.4 with the Gemini/Ollama providers.
+    delete (this.data as { cliSwitchOffered?: boolean }).cliSwitchOffered;
     this.data.recentImports = Array.isArray(saved.recentImports) ? saved.recentImports : [];
     this.data.cliDetection = { ...(saved.cliDetection ?? {}) };
     this.data.usageTotals = {
@@ -1852,6 +1771,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       byProvider: { ...(saved.usageTotals?.byProvider ?? {}) },
     };
     if (needsCliDefault) this.data.pendingCliDefault = true;
+    if (removedProviders) this.data.removedProviderNotice = true;
   }
 
   async savePluginData(): Promise<void> {

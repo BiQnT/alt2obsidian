@@ -12,25 +12,34 @@ var DEFAULT_GENERATION = {
   saveKeyDiagrams: true,
   onlyChangedSlides: true
 };
+var TASK_DEFAULTS = {
+  "claude-cli": {
+    commentary: { model: "sonnet", effort: "medium" },
+    concepts: { model: "haiku", effort: "low" },
+    alignment: { model: "haiku", effort: "low" },
+    verification: { model: "sonnet", effort: "medium" }
+  },
+  "codex-cli": {
+    commentary: { model: "", effort: "medium" },
+    concepts: { model: "", effort: "low" },
+    alignment: { model: "", effort: "low" },
+    verification: { model: "", effort: "medium" }
+  }
+};
+var CLAUDE_TASK_DEFAULTS = {
+  commentary: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].commentary },
+  concepts: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].concepts },
+  alignment: { provider: "none", model: "", effort: "" },
+  verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification }
+};
 var DEFAULT_SETTINGS = {
-  apiKey: "",
-  provider: "gemini",
-  geminiModel: "gemini-2.5-flash",
-  ollamaEndpoint: "http://localhost:11434",
-  ollamaModel: "gemma3:4b",
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
-  rateDelayMs: 4e3,
-  settingsVersion: 2,
+  settingsVersion: 3,
   claudePath: "",
   codexPath: "",
   cliTimeoutSec: 300,
-  tasks: {
-    commentary: { provider: "gemini", model: "", effort: "" },
-    concepts: { provider: "gemini", model: "", effort: "" },
-    alignment: { provider: "none", model: "", effort: "" },
-    verification: { provider: "gemini", model: "", effort: "" }
-  },
+  tasks: CLAUDE_TASK_DEFAULTS,
   preset: "custom",
   recentModels: {},
   generation: DEFAULT_GENERATION,
@@ -61,7 +70,7 @@ var LEGACY_MIGRATION_NOTE = "\uAE30\uC874 \uB2E8\uC77C \uBE14\uB85D \uD615\uC2DD
 function assertNoPageAnchoredDowngrade(currentContent, nextContent) {
   if (hasMultiManagedMarkers(currentContent) && !hasMultiManagedMarkers(nextContent)) {
     throw new Error(
-      "\uAE30\uC874 \uB178\uD2B8\uB294 \uC2AC\uB77C\uC774\uB4DC\uBCC4 \uD615\uC2DD\uC778\uB370 \uC774\uBC88 \uACB0\uACFC\uC5D0\uB294 \uC2AC\uB77C\uC774\uB4DC\uBCC4 \uD574\uC124\uC774 \uC5C6\uC5B4 \uB36E\uC5B4\uC4F0\uC9C0 \uC54A\uACE0 \uAC00\uC838\uC624\uAE30\uB97C \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4. PDF\uB97C \uB0B4\uB824\uBC1B\uAC70\uB098 \uC77D\uC9C0 \uBABB\uD588\uAC70\uB098, \uD604\uC7AC LLM \uACF5\uAE09\uC790\uAC00 \uC774\uBBF8\uC9C0 \uC785\uB825(\uBA40\uD2F0\uBAA8\uB2EC)\uC744 \uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uC6B0\uC785\uB2C8\uB2E4. PDF \uC811\uADFC\uACFC LLM \uACF5\uAE09\uC790 \uC124\uC815(Gemini \uAD8C\uC7A5)\uC744 \uD655\uC778\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694."
+      "\uAE30\uC874 \uB178\uD2B8\uB294 \uC2AC\uB77C\uC774\uB4DC\uBCC4 \uD615\uC2DD\uC778\uB370 \uC774\uBC88 \uACB0\uACFC\uC5D0\uB294 \uC2AC\uB77C\uC774\uB4DC\uBCC4 \uD574\uC124\uC774 \uC5C6\uC5B4 \uB36E\uC5B4\uC4F0\uC9C0 \uC54A\uACE0 \uAC00\uC838\uC624\uAE30\uB97C \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4. PDF\uB97C \uB0B4\uB824\uBC1B\uAC70\uB098 \uC77D\uC9C0 \uBABB\uD55C \uACBD\uC6B0\uC785\uB2C8\uB2E4. PDF \uC811\uADFC\uC744 \uD655\uC778\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574\uC8FC\uC138\uC694."
     );
   }
 }
