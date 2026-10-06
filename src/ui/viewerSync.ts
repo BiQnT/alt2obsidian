@@ -12,6 +12,30 @@ export function slideNumberFromHeading(text: string): number | null {
 }
 
 /**
+ * Which rendered headings are slide sections. The plugin and the Skill write
+ * `## 📚 슬라이드 N` (h2 with the emoji); when a note has any of those, only
+ * they count, so an overview subheading like "### 슬라이드 2~3 정리" is not
+ * taken for slide 2. A note without them (hand-made) falls back to h2/h3
+ * headings starting with "슬라이드 N". The first heading per number wins.
+ */
+export function pickSlideHeadings(headings: Array<{ level: number; text: string }>): Array<{ index: number; num: number }> {
+  const pick = (ok: (h: { level: number; text: string }) => boolean) => {
+    const out: Array<{ index: number; num: number }> = [];
+    const seen = new Set<number>();
+    headings.forEach((h, index) => {
+      if (!ok(h)) return;
+      const num = slideNumberFromHeading(h.text);
+      if (num === null || seen.has(num)) return;
+      seen.add(num);
+      out.push({ index, num });
+    });
+    return out;
+  };
+  const primary = pick((h) => h.level === 2 && /^\s*📚/.test(h.text));
+  return primary.length > 0 ? primary : pick((h) => h.level === 2 || h.level === 3);
+}
+
+/**
  * The section a pane is reading: the last section whose top is at or above
  * the probe line (scrollTop plus a fraction of the pane height). `sections`
  * are in document order. null when the probe is above the first section

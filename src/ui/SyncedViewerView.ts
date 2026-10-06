@@ -33,7 +33,7 @@ import {
 } from "obsidian";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { parseAlignment, segmentInSpan, spansForSlide, StoredSpan } from "../core/prep/TranscriptAligner";
-import { headingForSlide, PROBE_SHARE, sectionAt, slideNumberFromHeading } from "./viewerSync";
+import { headingForSlide, pickSlideHeadings, PROBE_SHARE, sectionAt } from "./viewerSync";
 import { stripManagedComments } from "../editor/managedComments";
 
 /** Timestamped transcript of a local note (plugin cache, else Alt). */
@@ -233,6 +233,12 @@ export class SyncedViewerView extends ItemView {
    * was already in place and no scroll happened).
    */
   private guardUntil: Record<Pane, number> = { pdf: 0, md: 0 };
+  /** Re-checks a pane once its guard has run out (a scroll the guard swallowed is synced then). */
+  private guardTimer: Record<Pane, number | null> = { pdf: null, md: null };
+  /** Pairs loaded at least once: reloading the same pair keeps both reading positions. */
+  private loadedPair: string | null = null;
+  /** Set by onClose: scroll events that still arrive are ignored. */
+  private closed = false;
   /** `alt_alignment` of the note (spec 4.9); empty = scroll sync by headings only. */
   private alignment: StoredSpan[] = [];
   private altLocalId: string | null = null;
@@ -269,6 +275,7 @@ export class SyncedViewerView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.closed = false;
     this.injectGlobalStyles();
     const root = this.containerEl.children[1] as HTMLElement;
     root.empty();
@@ -291,7 +298,14 @@ export class SyncedViewerView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.closed = true;
     this.cancelFollow();
+    for (const pane of ["pdf", "md"] as Pane[]) {
+      if (this.scrollFrame[pane]) window.cancelAnimationFrame(this.scrollFrame[pane]);
+      this.scrollFrame[pane] = 0;
+      if (this.guardTimer[pane] !== null) window.clearTimeout(this.guardTimer[pane]!);
+      this.guardTimer[pane] = null;
+    }
     this.mdRenderComponent.unload();
     if (this.pdfDocument) {
       try {
@@ -394,7 +408,7 @@ export class SyncedViewerView extends ItemView {
       const el = this.paneEl(pane);
       this.registerDomEvent(el, "scroll", () => this.onPaneScroll(pane), { passive: true });
       this.registerDomEvent(el, "scrollend", () => {
-        if (this.guardUntil[pane] > Date.now()) this.guardUntil[pane] = Date.now() + 50;
+        if (this.guardUntil[pane] > Date.now()) this.guard(pane, 50);
       });
     }
   }
@@ -501,21 +515,45 @@ export class SyncedViewerView extends ItemView {
       this.renderEmptyState();
       return;
     }
+    // The same pair again (a re-import): keep where the reader was in both panes.
+    const pair = `${this.mdPath}\n${this.pdfPath}`;
+    const reload = this.loadedPair === pair;
+    this.loadedPair = pair;
+    const mdTop = reload ? this.mdPaneEl.scrollTop : undefined;
+    const pdfTop = reload ? this.pdfPaneEl.scrollTop : undefined;
     try {
-      await this.loadMarkdown(this.mdPath);
+      await this.loadMarkdown(this.mdPath, mdTop);
     } catch (e) {
       console.warn("[Alt2Obsidian] SyncedViewer markdown load failed:", e);
       new Notice("강의 노트를 불러올 수 없습니다.");
     }
     try {
-      await this.loadPdf(this.pdfPath);
+      await this.loadPdf(this.pdfPath, pdfTop);
     } catch (e) {
       console.warn("[Alt2Obsidian] SyncedViewer PDF load failed:", e);
       new Notice("PDF를 불러올 수 없습니다.");
     }
   }
 
-  private async loadMarkdown(path: string): Promise<void> {
+  /**
+   * Render the note into the right pane. The pane is guarded for the whole
+   * load: emptying it resets its scroll and fires a scroll event while the
+   * old headings are gone, which must not move the PDF. `restoreTop` puts
+   * the reading position back before the guard is released.
+   */
+  private async loadMarkdown(path: string, restoreTop?: number): Promise<void> {
+    this.cancelFollow();
+    this.guard("md", 60000);
+    this.slideHeadings.clear();
+    try {
+      await this.renderMarkdown(path);
+      if (restoreTop !== undefined) this.mdPaneEl.scrollTop = restoreTop;
+    } finally {
+      this.guard("md", 100);
+    }
+  }
+
+  private async renderMarkdown(path: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
       this.mdPaneEl.empty();
@@ -552,16 +590,12 @@ export class SyncedViewerView extends ItemView {
    */
   async refreshMarkdownOnly(): Promise<void> {
     if (!this.mdPath) return;
-    const top = this.mdPaneEl.scrollTop;
     try {
-      await this.loadMarkdown(this.mdPath);
+      // Keep the reading position after an edit elsewhere.
+      await this.loadMarkdown(this.mdPath, this.mdPaneEl.scrollTop);
     } catch (e) {
       console.warn("[Alt2Obsidian] SyncedViewer markdown refresh failed:", e);
-      return;
     }
-    // Keep the reading position after an edit elsewhere.
-    this.guardUntil.md = Date.now() + 300;
-    this.mdPaneEl.scrollTop = top;
   }
 
   /**
@@ -606,7 +640,17 @@ export class SyncedViewerView extends ItemView {
     });
   }
 
-  private async loadPdf(path: string): Promise<void> {
+  private async loadPdf(path: string, restoreTop?: number): Promise<void> {
+    this.cancelFollow();
+    this.guard("pdf", 60000);
+    try {
+      await this.renderPdf(path, restoreTop);
+    } finally {
+      this.guard("pdf", 100);
+    }
+  }
+
+  private async renderPdf(path: string, restoreTop?: number): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
       this.pdfPaneEl.empty();
@@ -630,6 +674,7 @@ export class SyncedViewerView extends ItemView {
       }
     }
     this.pageCanvases = [];
+    this.pageWrappers = [];
     this.pdfPaneEl.empty();
 
     this.pdfDocument = await pdfjsLib.getDocument({ data: buffer.slice(0) }).promise;
@@ -670,6 +715,11 @@ export class SyncedViewerView extends ItemView {
       }
     }
 
+    if (restoreTop !== undefined) {
+      this.pdfPaneEl.scrollTop = restoreTop;
+      this.currentPage = this.slideInPane("pdf") ?? 1;
+      this.updatePageInfo();
+    }
     this.applyCurrentPageHighlight();
   }
 
@@ -689,13 +739,16 @@ export class SyncedViewerView extends ItemView {
     return pane === "pdf" ? this.pdfPaneEl : this.mdPaneEl;
   }
 
-  /** `## 📚 슬라이드 N` headings of the rendered note (h2, or h3 in hand-made notes). */
+  /**
+   * Slide sections of the rendered note: the `## 📚 슬라이드 N` h2 headings;
+   * only a note without any falls back to h2/h3 headings starting with
+   * "슬라이드 N" (hand-made notes), so overview subheadings never count.
+   */
   private collectSlideHeadings(): void {
     this.slideHeadings.clear();
-    for (const h of Array.from(this.mdPaneEl.querySelectorAll("h2, h3"))) {
-      const num = slideNumberFromHeading(h.textContent || "");
-      if (num !== null && !this.slideHeadings.has(num)) this.slideHeadings.set(num, h as HTMLElement);
-    }
+    const els = Array.from(this.mdPaneEl.querySelectorAll("h2, h3")) as HTMLElement[];
+    const picked = pickSlideHeadings(els.map((h) => ({ level: h.tagName === "H2" ? 2 : 3, text: h.textContent || "" })));
+    for (const { index, num } of picked) this.slideHeadings.set(num, els[index]);
   }
 
   /** Top of an element in its pane's scroll coordinates. */
@@ -709,8 +762,9 @@ export class SyncedViewerView extends ItemView {
     const probe = el.scrollTop + el.clientHeight * PROBE_SHARE;
     const sections =
       pane === "pdf"
-        ? this.pageWrappers.map((w) => ({ num: parseInt(w.dataset.pageNum ?? "0", 10), top: this.topInPane(el, w) }))
+        ? this.pageWrappers.filter((w) => w.isConnected).map((w) => ({ num: parseInt(w.dataset.pageNum ?? "0", 10), top: this.topInPane(el, w) }))
         : Array.from(this.slideHeadings.entries())
+            .filter(([, h]) => h.isConnected)
             .map(([num, h]) => ({ num, top: this.topInPane(el, h) }))
             .sort((a, b) => a.top - b.top);
     // At the very bottom the last section counts even if its top never reaches the probe line.
@@ -721,7 +775,7 @@ export class SyncedViewerView extends ItemView {
   }
 
   private onPaneScroll(pane: Pane): void {
-    if (this.scrollFrame[pane]) return;
+    if (this.closed || this.scrollFrame[pane]) return;
     this.scrollFrame[pane] = window.requestAnimationFrame(() => {
       this.scrollFrame[pane] = 0;
       if (this.guardUntil[pane] > Date.now()) return;
@@ -745,6 +799,19 @@ export class SyncedViewerView extends ItemView {
     }, 150);
   }
 
+  /**
+   * Ignore the pane's scroll events for `ms`. When the guard runs out the
+   * pane is checked once, so a scroll the reader made meanwhile still syncs.
+   */
+  private guard(pane: Pane, ms: number): void {
+    this.guardUntil[pane] = Date.now() + ms;
+    if (this.guardTimer[pane] !== null) window.clearTimeout(this.guardTimer[pane]!);
+    this.guardTimer[pane] = window.setTimeout(() => {
+      this.guardTimer[pane] = null;
+      if (this.guardUntil[pane] <= Date.now()) this.onPaneScroll(pane);
+    }, ms + 10);
+  }
+
   private cancelFollow(): void {
     if (this.followTimer !== null) {
       window.clearTimeout(this.followTimer);
@@ -757,7 +824,7 @@ export class SyncedViewerView extends ItemView {
     const el = this.paneEl(pane);
     const target = Math.max(0, Math.min(top, el.scrollHeight - el.clientHeight));
     if (Math.abs(el.scrollTop - target) < 2) return;
-    this.guardUntil[pane] = Date.now() + 1500;
+    this.guard(pane, 1500);
     el.scrollTo({ top: target, behavior: "smooth" });
   }
 

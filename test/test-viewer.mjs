@@ -21,6 +21,22 @@ assert.equal(sync.slideNumberFromHeading("슬라이드 2~3 정리"), 2);
 assert.equal(sync.slideNumberFromHeading("📚 슬라이드 1x"), 1);
 assert.equal(sync.slideNumberFromHeading("📚 슬라이드 10"), 10, "10 is not read as 1");
 
+// ---- which headings are slide sections ----
+const heads = [
+  { level: 2, text: "📋 전체 요약" },
+  { level: 3, text: "슬라이드 2~3 정리" },
+  { level: 2, text: "📚 슬라이드 1" },
+  { level: 2, text: "📚 슬라이드 2" },
+  { level: 3, text: "슬라이드 4 이후" },
+  { level: 2, text: "📚 슬라이드 2" },
+];
+assert.deepEqual(sync.pickSlideHeadings(heads), [{ index: 2, num: 1 }, { index: 3, num: 2 }], "with 📚 h2 headings, overview subheadings and repeats do not count");
+assert.deepEqual(
+  sync.pickSlideHeadings([{ level: 3, text: "슬라이드 1 소개" }, { level: 2, text: "슬라이드 2" }, { level: 2, text: "정리" }]),
+  [{ index: 0, num: 1 }, { index: 1, num: 2 }],
+  "a hand-made note without them falls back to h2/h3 headings"
+);
+
 // ---- the section a pane shows ----
 const sections = [
   { num: 1, top: 400 },
