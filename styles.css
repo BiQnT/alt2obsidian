@@ -334,48 +334,64 @@
 }
 
 /*
- * Obsidian lays a setting row out as one flex line with no wrapping. The
- * description (.setting-item-info) may shrink to its min-content width, and
- * Hangul text can break after every syllable, so next to a control that
- * cannot shrink (a path input plus a button in a 280px card) the description
- * became a one-character column. Rows here wrap instead: the description
- * keeps at least ~16em and the control moves to its own line when both do
- * not fit.
+ * Setting rows of this tab wrap: the description keeps at least ~16em (or
+ * the whole row when narrower) and the control moves to its own line when
+ * both do not fit, so a description never collapses to a one-character
+ * column next to a control that cannot shrink.
+ * The doubled class outranks Obsidian 1.14's container query for narrow
+ * settings panes (the settings window at its 600px minimum): it turns rows
+ * into columns, where the 16em basis would have become a 16em-tall gap.
  */
-.alt2obsidian-settings .setting-item {
+.alt2obsidian-settings.alt2obsidian-settings .setting-item {
+  flex-direction: row;
   flex-wrap: wrap;
   column-gap: 12px;
   row-gap: 6px;
 }
 
-.alt2obsidian-settings .setting-item-info {
+.alt2obsidian-settings.alt2obsidian-settings .setting-item-info {
   flex: 1 1 16em;
-  min-width: 0;
+  min-width: min(16em, 100%);
   margin-inline-end: 0;
 }
 
-.alt2obsidian-settings .setting-item-control {
+.alt2obsidian-settings.alt2obsidian-settings .setting-item-control {
   flex: 0 1 auto;
   flex-wrap: wrap;
   min-width: 0;
 }
 
-/* Cards are narrow: description on top, control below at full width. */
-.alt2obsidian-card .setting-item {
-  padding: 6px 0;
+/*
+ * CLI cards: plain blocks, not Setting rows (src/ui/SettingsTab.ts), so the
+ * description is always as wide as the card.
+ */
+.alt2obsidian-card-field {
+  display: flex;
   flex-direction: column;
-  align-items: stretch;
+  gap: 4px;
+  margin-top: 8px;
 }
 
-.alt2obsidian-card .setting-item-info {
-  flex: 0 0 auto;
+.alt2obsidian-card-label {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium, 500);
 }
 
-.alt2obsidian-card .setting-item-control {
-  justify-content: flex-start;
+.alt2obsidian-card-desc {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
 }
 
-.alt2obsidian-card .setting-item-control input[type="text"] {
+.alt2obsidian-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.alt2obsidian-card-row input[type="text"] {
   flex: 1 1 10em;
   min-width: 0;
 }

@@ -151,28 +151,30 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       this.plugin.detectCli(name).then(renderStatus, renderStatus);
     }
 
-    new Setting(card)
-      .setName("실행 파일 경로")
-      .setDesc("비워 두면 자동으로 찾습니다 (로그인 셸의 command -v 결과를 한 번 저장).")
-      .addText((text) =>
-        text
-          .setPlaceholder(`/.../bin/${name}`)
-          .setValue(this.settings[pathKey])
-          .onChange(async (value) => {
-            this.settings[pathKey] = value.trim();
-            await this.save();
-          })
-      )
-      .addButton((button) =>
-        button.setButtonText("다시 찾기").onClick(async () => {
-          button.setDisabled(true);
-          button.setButtonText("찾는 중...");
-          await this.plugin.detectCli(name, true);
-          button.setDisabled(false);
-          button.setButtonText("다시 찾기");
-          renderStatus();
-        })
-      );
+    // Plain blocks, not a Setting row: Obsidian lays a Setting out as one
+    // flex line whose description may shrink to a one-character column next
+    // to a control that cannot shrink. Here the description is a block of
+    // the card's full width whatever Obsidian's setting-item rules are.
+    const field = card.createDiv({ cls: "alt2obsidian-card-field" });
+    field.createDiv({ cls: "alt2obsidian-card-label", text: "실행 파일 경로" });
+    field.createDiv({ cls: "alt2obsidian-card-desc", text: "비워 두면 자동으로 찾습니다 (로그인 셸의 command -v 결과를 한 번 저장)." });
+    const row = field.createDiv({ cls: "alt2obsidian-card-row" });
+    const input = row.createEl("input", { type: "text", placeholder: `/.../bin/${name}` });
+    input.value = this.settings[pathKey];
+    input.setAttr("aria-label", `${label} 실행 파일 경로`);
+    input.addEventListener("input", async () => {
+      this.settings[pathKey] = input.value.trim();
+      await this.save();
+    });
+    const button = row.createEl("button", { text: "다시 찾기" });
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.setText("찾는 중...");
+      await this.plugin.detectCli(name, true);
+      button.disabled = false;
+      button.setText("다시 찾기");
+      renderStatus();
+    });
     return card;
   }
 

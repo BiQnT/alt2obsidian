@@ -1,16 +1,25 @@
-// Browser stand-in for the parts of the obsidian API the Synced Viewer uses
-// (test/dom-viewer.mjs). The markdown "renderer" handles what the layout
-// needs: headings, paragraphs, and HTML comment lines (dropped, like
-// Obsidian's reading view).
+// Browser stand-in for the parts of the obsidian API the Synced Viewer and
+// the settings tab use (test/dom-viewer.mjs, test/dom-settings.mjs). The
+// markdown "renderer" handles what the layout needs: headings, paragraphs,
+// and HTML comment lines (dropped, like Obsidian's reading view). Setting
+// builds the DOM Obsidian 1.14 builds (div.setting-item > div.setting-item-info
+// > name + description, then div.setting-item-control; a dropdown adds a
+// hidden measuring select).
 const P = HTMLElement.prototype;
 P.createEl = function (tag, o = {}) {
+  if (typeof o === "string") o = { cls: o };
   const el = document.createElement(tag);
   if (o.cls) el.className = o.cls;
   if (o.text !== undefined) el.textContent = o.text;
+  if (o.type) el.setAttribute("type", o.type);
+  if (o.placeholder) el.setAttribute("placeholder", o.placeholder);
   if (o.attr) for (const [k, v] of Object.entries(o.attr)) el.setAttribute(k, v);
   this.appendChild(el);
   return el;
 };
+P.setAttr = function (k, v) { this.setAttribute(k, v); };
+P.appendText = function (t) { this.appendChild(document.createTextNode(t)); };
+P.removeClass = function (c) { this.classList.remove(c); };
 P.createDiv = function (o) { return this.createEl("div", o); };
 P.createSpan = function (o) { return this.createEl("span", o); };
 P.empty = function () { this.innerHTML = ""; };
@@ -58,3 +67,50 @@ export const MarkdownRenderer = {
     el.innerHTML = html.join("\n");
   },
 };
+
+export class Setting {
+  constructor(containerEl) {
+    this.settingEl = containerEl.createDiv({ cls: "setting-item" });
+    this.infoEl = this.settingEl.createDiv({ cls: "setting-item-info" });
+    this.nameEl = this.infoEl.createDiv({ cls: "setting-item-name" });
+    this.descEl = this.infoEl.createDiv({ cls: "setting-item-description" });
+    this.controlEl = this.settingEl.createDiv({ cls: "setting-item-control" });
+  }
+  setName(t) { this.nameEl.setText(t); return this; }
+  setDesc(t) { this.descEl.setText(t); return this; }
+  addText(cb) {
+    const inputEl = this.controlEl.createEl("input", { type: "text" });
+    const c = { inputEl, setPlaceholder: (p) => (inputEl.placeholder = p, c), setValue: (v) => (inputEl.value = v, c), onChange: () => c };
+    cb(c);
+    return this;
+  }
+  addButton(cb) {
+    const buttonEl = this.controlEl.createEl("button");
+    const c = { buttonEl, setButtonText: (t) => (buttonEl.textContent = t, c), setWarning: () => c, setDisabled: (d) => (buttonEl.disabled = d, c), onClick: () => c };
+    cb(c);
+    return this;
+  }
+  addDropdown(cb) {
+    const selectEl = this.controlEl.createEl("select", { cls: "dropdown" });
+    this.controlEl.createEl("select", { cls: "dropdown is-measuring" });
+    const c = { selectEl, addOption: (v, t) => (selectEl.createEl("option", { text: t, attr: { value: v } }), c), setValue: (v) => (selectEl.value = v, c), onChange: () => c };
+    cb(c);
+    return this;
+  }
+  addToggle(cb) {
+    const toggleEl = this.controlEl.createEl("label", { cls: "checkbox-container" });
+    const c = { toggleEl, setValue: () => c, onChange: () => c };
+    cb(c);
+    return this;
+  }
+}
+export class PluginSettingTab {
+  constructor(app, plugin) {
+    this.app = app;
+    this.plugin = plugin;
+    this.containerEl = document.createElement("div");
+    this.containerEl.className = "vertical-tab-content";
+  }
+}
+export class Modal { constructor(app) { this.app = app; this.contentEl = document.createElement("div"); } open() {} close() {} }
+export const setIcon = () => {};
