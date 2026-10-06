@@ -105,7 +105,7 @@ export class VerifyPanel {
     select.empty();
     const targets = this.plugin.verifyTargets();
     if (targets.length === 0) select.createEl("option", { text: "가져온 강의 노트가 없습니다", attr: { value: "" } });
-    for (const t of targets) select.createEl("option", { text: `${t.subject ? t.subject + " · " : ""}${t.title}`, attr: { value: t.path } });
+    for (const t of targets) select.createEl("option", { text: `${t.subject ? t.subject + " · " : ""}${t.title}${t.kind === "transcript" ? " (전사 요약)" : ""}`, attr: { value: t.path } });
     if (targets.some((t) => t.path === current)) select.value = current;
   }
 
@@ -231,17 +231,26 @@ export class VerifyPanel {
       onSaveDefault: (next) => this.plugin.saveTaskDefault("verification", next),
     });
     const rows = panel.createEl("ul", { cls: "alt2obsidian-estimate-list" });
-    rows.createEl("li", { text: `근거 검색 (스크립트): 토큰 0 · 슬라이드 상위 2개${prepared.plan.hasTranscript ? ", 전사 상위 2개" : " (전사 없음)"}` });
-    if (e.contextEvidence > 0) rows.createEl("li", { text: `슬라이드와 겹치는 용어가 없는 ${e.contextEvidence}개는 같은 절의 문맥(주변 주장, 제목)으로 근거 후보를 찾아 판정` });
+    const sections = prepared.plan.unit === "section";
+    rows.createEl("li", {
+      text: sections
+        ? "근거 검색 (스크립트): 토큰 0 · 전사 구간 상위 2개 (슬라이드가 없는 강의라 녹음 전사만 근거, 전사 불확실 판정이 늘 수 있음)"
+        : `근거 검색 (스크립트): 토큰 0 · 슬라이드 상위 2개${prepared.plan.hasTranscript ? ", 전사 상위 2개" : " (전사 없음)"}`,
+    });
+    if (e.contextEvidence > 0) rows.createEl("li", { text: `${sections ? "전사" : "슬라이드"}와 겹치는 용어가 없는 ${e.contextEvidence}개는 같은 절의 문맥(주변 주장, 제목)으로 근거 후보를 찾아 판정` });
     if (e.unmatched > 0) rows.createEl("li", { text: `근거 후보를 전혀 찾지 못한 ${e.unmatched}개는 판정하지 않고 결과 노트에 따로 적음` });
     if (e.likelyTrue > 0) rows.createEl("li", { text: `맞음 후보 ${e.likelyTrue}개는 묶음 뒤쪽에서 판정` });
-    rows.createEl("li", { text: `누락 확인: 주장과 이어지지 않은 슬라이드 ${e.uncoveredSlides}장${e.uncoveredSlides > 0 ? " (제목과 핵심 문장만, 1회)" : ""}` });
+    rows.createEl("li", {
+      text: sections
+        ? `누락 확인: 주장과 이어지지 않은 구간 ${e.uncoveredSlides}개${e.uncoveredSlides > 0 ? " (구간 요지만, 1회)" : ""}`
+        : `누락 확인: 주장과 이어지지 않은 슬라이드 ${e.uncoveredSlides}장${e.uncoveredSlides > 0 ? " (제목과 핵심 문장만, 1회)" : ""}`,
+    });
     rows.createEl("li", { text: `예상: 호출 ${e.calls}회 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰 (출력은 effort에 따라 늘려 잡음)` });
     rows.createEl("li", { text: `결과: ${prepared.outPath}` });
     if (e.unmatchedWarning) {
       panel.createDiv({
         cls: "alt2obsidian-error",
-        text: `주장의 ${Math.round((e.unmatched / Math.max(1, e.claims)) * 100)}%가 슬라이드와 용어가 맞지 않아 근거를 찾지 못했습니다. 대상 강의가 맞는지, 노트에 영어 용어(괄호 병기)가 있는지 확인하세요.`,
+        text: `주장의 ${Math.round((e.unmatched / Math.max(1, e.claims)) * 100)}%가 ${sections ? "전사" : "슬라이드"}와 용어가 맞지 않아 근거를 찾지 못했습니다. 대상 강의가 맞는지, 노트에 영어 용어(괄호 병기)가 있는지 확인하세요.`,
       });
     }
     if (prepared.overCap) panel.createDiv({ cls: "alt2obsidian-error", text: "강의당 토큰 상한을 넘을 것 같습니다. 한 번 더 누르면 그래도 시작합니다." });

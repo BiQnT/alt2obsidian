@@ -8,7 +8,7 @@
 		"build": "node esbuild.config.mjs production && npm run build:scripts",
 		"build:scripts": "node scripts/build-scripts.mjs",
 		"test:dom": "node test/dom-viewer.mjs && node test/dom-settings.mjs",
-		"test": "node test/test-prompts.mjs && node test/test-cli-providers.mjs && node test/test-windows.mjs && node test/test-prep.mjs && node test/test-batch.mjs && node test/test-bench.mjs && node test/test-plugin-cli.mjs && node test/test-viewer.mjs && node test/test-markdown.mjs && node test/test-merge.mjs && node test/test-slide-hash.mjs && node test/test-skill-clis.mjs && node test/test-skill-prompts.mjs && node test/test-alignment.mjs && node test/test-sources.mjs && node test/test-layout.mjs && node test/test-verify.mjs"
+		"test": "node test/test-prompts.mjs && node test/test-cli-providers.mjs && node test/test-windows.mjs && node test/test-prep.mjs && node test/test-batch.mjs && node test/test-bench.mjs && node test/test-plugin-cli.mjs && node test/test-viewer.mjs && node test/test-markdown.mjs && node test/test-merge.mjs && node test/test-slide-hash.mjs && node test/test-skill-clis.mjs && node test/test-skill-prompts.mjs && node test/test-alignment.mjs && node test/test-sources.mjs && node test/test-layout.mjs && node test/test-verify.mjs && node test/test-transcript.mjs"
 	},
 	"keywords": [
 		"obsidian",

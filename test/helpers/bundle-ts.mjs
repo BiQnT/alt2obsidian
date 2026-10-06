@@ -15,7 +15,8 @@ export class Notice { constructor(message) { notices.push(message); } }
 export class TFolder {}
 export class TFile {}
 export class Plugin {}
-export class Modal {}
+export class Modal { constructor(app) { this.app = app; } }
+export class FuzzySuggestModal extends Modal { setPlaceholder() {} }
 export class ItemView {}
 export class PluginSettingTab {}
 export class Setting {}

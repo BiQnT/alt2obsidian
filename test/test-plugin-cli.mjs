@@ -39,6 +39,8 @@ function frontmatterOf(content) {
 function makeApp() {
   const files = new Map();
   const config = new Map();
+  // Binary contents by path (PDFs); a path without one reads as 8 zero bytes.
+  const binaries = new Map();
   const tfile = (path) => Object.assign(new TFile(), { path, basename: path.split("/").pop().replace(/\.md$/, "") });
   // A folder holds the files under it (VaultManager lists concept notes this way).
   const tfolder = (path) =>
@@ -56,10 +58,10 @@ function makeApp() {
       read: async (f) => files.get(f.path),
       modify: async (f, c) => void files.set(f.path, c),
       cachedRead: async (f) => files.get(f.path),
-      readBinary: async () => new ArrayBuffer(8),
+      readBinary: async (f) => binaries.get(f.path) ?? new ArrayBuffer(8),
       getMarkdownFiles: () => [...files.keys()].filter((p) => p.endsWith(".md")).map(tfile),
-      createBinary: async (p) => void files.set(p, "<binary>"),
-      modifyBinary: async (f) => void files.set(f.path, "<binary>"),
+      createBinary: async (p, d) => void (files.set(p, "<binary>"), binaries.set(p, d)),
+      modifyBinary: async (f, d) => void (files.set(f.path, "<binary>"), binaries.set(f.path, d)),
       adapter: {
         getResourcePath: (p) => p,
         exists: async (p) => config.has(p) || [...config.keys()].some((k) => k.startsWith(p + "/")),
@@ -88,11 +90,11 @@ function makeApp() {
     },
     workspace: { onLayoutReady: () => {} },
   };
-  return { app, files, config };
+  return { app, files, config, binaries };
 }
 
 async function makePlugin(saved) {
-  const { app, files, config } = makeApp();
+  const { app, files, config, binaries } = makeApp();
   const plugin = new Plugin();
   let stored = saved;
   Object.assign(plugin, {
@@ -108,7 +110,7 @@ async function makePlugin(saved) {
     registerEditorExtension: () => {},
   });
   await plugin.onload();
-  return { plugin, files, config, stored: () => stored };
+  return { plugin, files, config, binaries, stored: () => stored };
 }
 
 // Deck: cover, 6 content slides (one visual), closing slide.
@@ -227,7 +229,7 @@ try {
   }
 
   // 1.x data (Gemini key): the Gemini/Ollama tasks move to the Claude CLI and the user is told once.
-  const { plugin, files, config, stored } = await makePlugin({
+  const { plugin, files, config, binaries, stored } = await makePlugin({
     settings: { apiKey: "old-key", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Alt2Obsidian", language: "ko", rateDelayMs: 5000 },
     // 1.x record of a lecture imported with an exam period (exam summaries are gone in 2.0).
     recentImports: [{ url: "u", title: "old", subject: "CSED311", path: "Alt2Obsidian/CSED311/old.md", date: "2026-03-01", parseQuality: "full", examPeriod: "midterm" }],
@@ -629,6 +631,136 @@ try {
     console.log("PASS: URL re-import keeps alt_local_id and alt_alignment; transcript cache lives outside the vault (0600) and is pruned");
 
     console.log(`PASS: link offer and confirmed link keep the note and its public id; the optional alignment check (${low} uncertain spans) is estimated and run once`);
+  }
+
+  // Lectures without slides (spec 4.10): kind, no silent fallback, the
+  // summary note and its re-import, verification against the transcript,
+  // a PDF attached from the vault (the note becomes a slide note, the memo
+  // kept) and from disk.
+  {
+    process.env.FAKE_CLI_MODE = "ok";
+    plugin.data.settings.generation.onlyChangedSlides = true;
+    const enc = (t) => new TextEncoder().encode(t).buffer;
+    const bytes = (b) => Array.from(new Uint8Array(b));
+    // 30 minutes, three topics of ten minutes, a segment every 6 s.
+    const talk = [];
+    for (let t = 0, i = 0; t < 30 * 60000; t += 6000, i++) {
+      const topic = t < 10 * 60000 ? "cache line tag" : t < 20 * 60000 ? "write back policy" : "coherence protocol snooping";
+      talk.push({ startMs: t, endMs: t + 4800, text: `음 오늘은 ${topic} 설명 ${i}번입니다.`, speaker: "" });
+    }
+    const noSlides = (id) => ({ sourceId: id, sourceKind: "alt-local", title: "L9", lectureDate: "2026-09-30", folderPath: ["CSED423: 컴파일러설계"], pdf: null, pdfPath: null, slideTexts: null, transcript: talk, warnings: [] });
+    const pv = plugin.previewFromBundle(noSlides("local-9"));
+    const notePath = plugin.notePathForLocal({ id: "local-9", title: "L9", lectureDate: "2026-09-30" }, "CSED423");
+    assert.equal(notePath, "Alt2Obsidian/CSED423/Lectures/L9.md");
+    assert.equal(plugin.lectureKindFor({ altType: "note", hasSlides: false, hasTranscript: true, notePath }), "transcript");
+    assert.equal(plugin.lectureKindFor({ altType: "slide", hasSlides: false, hasTranscript: true, notePath }), "slides-missing");
+    assert.equal(plugin.lectureKindFor({ altType: "slide", hasSlides: true, hasTranscript: true, notePath }), "slides");
+    const n0 = s.calls().length;
+    await assert.rejects(plugin.prepareCliImport("", pv, "CSED423"), (e) => e.name === "MissingPdfError" && e.notePath === notePath && e.hasTranscript === true, "no silent fallback without a PDF");
+    const prep = await plugin.prepareCliImport("", pv, "CSED423", undefined, { withoutPdf: "summary" });
+    assert.equal(s.calls().length, n0, "prepare spends no tokens");
+    assert.equal(prep.plan, null);
+    assert.equal(prep.pdfSource, null);
+    assert.deepEqual(prep.transcriptPlan.sections.map((x) => Math.round(x.startMs / 60000)), [0, 10, 20], "cut where the topic changes");
+    assert.equal(prep.estimate.calls, 3);
+    const steps = [];
+    const rec = await plugin.runCliImport(prep, { onStep: (st) => steps.push(st) });
+    assert.deepEqual(steps, ["commentary", "overview", "concepts", "save"]);
+    assert.equal(s.calls().length - n0, prep.estimate.calls, "estimated call count");
+    const note = files.get(rec.path);
+    assert.equal(rec.path, notePath);
+    assert.match(note, /^alt_kind: "transcript"$/m);
+    assert.match(note, /^alt_local_id: "local-9"$/m);
+    assert.ok(!/alt_alignment|slide_count/.test(note), "no alignment, no slides");
+    assert.match(note, /\n## ⏱ 구간 1 \[00:00~09:5\d\]\n\n<!-- alt2obs:section:1 hash:[0-9a-f]{8} start -->/);
+    assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", model: "claude-sonnet-5-5"/);
+    assert.ok(files.has("Alt2Obsidian/CSED423/Concepts/캐시.md"), "concepts from the section gists");
+    assert.equal(rec.pdfPath, undefined);
+    assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf"));
+    assert.equal(plugin.vaultLectureNotes().find((v) => v.path === notePath).kind, "transcript");
+    // Re-import: every section unchanged (2 calls), the memo kept.
+    files.set(notePath, note.replace(/(<!-- alt2obs:section:2 hash:[0-9a-f]{8} end -->\n\n> \[!note\] 내 메모\n> )/, "$1구간 2 메모"));
+    const again = await plugin.prepareCliImport("", pv, "CSED423", undefined, { withoutPdf: "summary" });
+    assert.deepEqual([again.estimate.sectionsReused, again.estimate.calls], [3, 2]);
+    let confirmed = null;
+    const n1 = s.calls().length;
+    await plugin.runCliImport(again, { onConfirmUpdate: async (sum) => ((confirmed = sum), true) });
+    assert.equal(s.calls().length - n1, 2);
+    assert.equal(confirmed.unit, "section");
+    assert.deepEqual([confirmed.slideDrifts.length, confirmed.slideDeletions.length], [0, 0]);
+    assert.ok(files.get(notePath).includes("구간 2 메모"));
+    console.log("PASS: a lecture without slides stops before any token unless the user chose 요약 노트; the summary note (3 calls, sections, concepts) and its re-import (2 calls, memo kept)");
+
+    // Verification against the transcript sections (no PDF).
+    const vsrc = "노트/L9 정리.md";
+    files.set(vsrc, "# L9\n- write back policy를 설명했다\n- coherence protocol snooping은 다루지 않았다 (거짓)\n");
+    const vprep = await plugin.prepareVerification({ targetPath: notePath, markdown: files.get(vsrc), source: "[[노트/L9 정리]]", sourcePath: vsrc });
+    assert.equal(vprep.plan.unit, "section");
+    assert.equal(vprep.plan.sections.length, 3);
+    const vres = await plugin.runVerification(vprep);
+    const vout = files.get(vprep.outPath);
+    assert.match(vout, /\[\[Alt2Obsidian\/CSED423\/Lectures\/L9#⏱ 구간 \d \d\d \d\d \d\d \d\d\|L9 · 구간 \d\]\] \[\d\d:\d\d\]/, "links to the section heading and the time");
+    assert.equal(vres.counts["틀림"], 1);
+    files.delete(vsrc);
+    console.log("PASS: verification of a summary note: transcript sections as evidence, links to 구간 headings with [mm:ss]");
+
+    // Attach from the vault: a non-PDF is refused; a PDF is copied next to the note and the note marked.
+    files.set("자료/readme.pdf", "<binary>");
+    binaries.set("자료/readme.pdf", enc("hello"));
+    await assert.rejects(plugin.attachPdf(notePath, { kind: "vault", path: "자료/readme.pdf" }), /PDF 파일이 아닙니다/);
+    assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf"));
+    const pdfBytes = enc("%PDF-1.7\nL9 slides");
+    files.set("자료/compiler-L9.pdf", "<binary>");
+    binaries.set("자료/compiler-L9.pdf", pdfBytes);
+    const beforeAttach = files.get(notePath);
+    const att = await plugin.attachPdf(notePath, { kind: "vault", path: "자료/compiler-L9.pdf" });
+    assert.deepEqual(att, { pdfPath: "Alt2Obsidian/CSED423/Lectures/L9.pdf", replaced: false, marked: true });
+    assert.deepEqual(bytes(binaries.get(att.pdfPath)), bytes(pdfBytes), "the picked PDF's bytes");
+    assert.equal(files.get(notePath).replace('alt_pdf_source: "attached"\n', ""), beforeAttach, "one frontmatter line added, nothing else");
+    assert.ok(files.has("자료/compiler-L9.pdf"), "the source stays where it was");
+    assert.equal(plugin.lectureKindFor({ altType: "note", hasSlides: false, hasTranscript: true, notePath }), "attached");
+    // The next import treats it as a slide lecture; the summary note becomes a slide note, nothing lost.
+    const conv = await plugin.prepareCliImport("", pv, "CSED423");
+    assert.equal(conv.pdfSource, "attached");
+    assert.ok(conv.plan && !conv.transcriptPlan);
+    assert.ok(conv.alignment, "the timestamped transcript is aligned to the attached slides");
+    let convSummary = null;
+    const convRec = await plugin.runCliImport(conv, { onConfirmUpdate: async (sum) => ((convSummary = sum), true) });
+    const converted = files.get(notePath);
+    const convFm = converted.slice(0, converted.indexOf("\n---\n", 4));
+    assert.match(convFm, /\nalt_pdf_source: "attached"(\n|$)/);
+    assert.match(convFm, /\nalt_alignment: "/);
+    assert.ok(!/\nalt_kind:/.test(convFm), "no longer a summary note");
+    assert.match(converted, /\n## 📚 슬라이드 2\n/);
+    assert.ok(converted.includes("## 이전 노트 백업") && converted.includes("구간 2 메모"), "the old note and the memo kept");
+    assert.ok(convSummary.notes.some((x) => x.includes("전사 구간 요약 노트를 슬라이드별 노트로")));
+    assert.equal(convRec.pdfPath, "Alt2Obsidian/CSED423/Lectures/L9.pdf");
+    assert.deepEqual(bytes(binaries.get(convRec.pdfPath)), bytes(pdfBytes), "still the attached PDF");
+    assert.equal((await plugin.prepareCliImport("", pv, "CSED423")).pdfSource, "attached", "remembered for later imports");
+    console.log("PASS: PDF attached from the vault: copied as <lecture>.pdf, alt_pdf_source marked; the next import is a slide import and keeps the summary note under 이전 노트 백업");
+
+    // A URL lecture without a PDF: the same choice; a PDF from disk (read into memory) makes it a slide lecture.
+    const urlPv = preview();
+    urlPv.pdfData = null;
+    urlPv.altData = { ...urlPv.altData, title: "Lec8 Disk", metadata: { ...urlPv.altData.metadata, noteId: "note-8" } };
+    urlPv.bundle = { sourceId: "note-8", sourceKind: "alt-url", title: "Lec8 Disk", pdf: null, slideTexts: null, transcript: urlPv.altData.transcript.split(/(?<=다\.) /).map((text) => ({ startMs: null, endMs: null, text, speaker: "" })) };
+    const urlNote = "Alt2Obsidian/CSED311/Lectures/Lec8 Disk.md";
+    await assert.rejects(plugin.prepareCliImport("u8", urlPv, "CSED311"), (e) => e.name === "MissingPdfError" && e.notePath === urlNote);
+    const summaryUrl = await plugin.prepareCliImport("u8", urlPv, "CSED311", undefined, { withoutPdf: "summary" });
+    assert.equal(summaryUrl.transcriptPlan.timed, false, "a URL transcript has no times");
+    await assert.rejects(plugin.attachPdf(urlNote, { kind: "disk", name: "notes.txt", data: enc("plain text") }), /PDF 파일이 아닙니다: notes.txt/);
+    const att2 = await plugin.attachPdf(urlNote, { kind: "disk", name: "lec8.pdf", data: pdfBytes });
+    assert.deepEqual(att2, { pdfPath: "Alt2Obsidian/CSED311/Lectures/Lec8 Disk.pdf", replaced: false, marked: false }, "no note yet: nothing to mark");
+    const urlPrep = await plugin.prepareCliImport("u8", urlPv, "CSED311");
+    assert.equal(urlPrep.pdfSource, "attached");
+    const urlRec = await plugin.runCliImport(urlPrep);
+    assert.equal(urlRec.path, urlNote);
+    assert.match(files.get(urlNote), /^alt_pdf_source: "attached"$/m);
+    assert.match(files.get(urlNote), /^alt_id: "note-8"$/m);
+    // Replacing: attaching again overwrites the same file.
+    const att3 = await plugin.attachPdf(urlNote, { kind: "disk", name: "lec8-v2.pdf", data: enc("%PDF-1.7 v2") });
+    assert.deepEqual([att3.replaced, att3.marked], [true, false]);
+    console.log("PASS: URL lecture without a PDF: same choice (untimed summary or attach); a PDF from disk is read into memory, copied, and the import marks the note");
   }
 
   // Model choice for one run (the sidebar's picker): the estimate follows, the settings never change, the note says what ran.

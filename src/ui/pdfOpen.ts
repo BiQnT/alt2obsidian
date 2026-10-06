@@ -25,13 +25,17 @@ export function isLectureFrontmatter(fm: Record<string, unknown> | null | undefi
  * The lecture note of a PDF: `<stem>.md` next to it (the PDF may end in
  * .pdf, .PDF or any other case) when that note is a lecture note: Alt or
  * plugin frontmatter, or the plugin's slide markers in its text. Null for
- * any other PDF.
+ * any other PDF, and for a transcript summary note (`alt_kind:
+ * "transcript"`, spec 4.10): a PDF attached to it is shown as a plain PDF
+ * until the next import turns the note into a slide note.
  */
 export async function lectureNoteForPdf(pdfPath: string, notes: NoteLookup): Promise<string | null> {
   if (!/\.pdf$/i.test(pdfPath)) return null;
   const mdPath = pdfPath.replace(/\.pdf$/i, ".md");
   if (!notes.exists(mdPath)) return null;
-  if (isLectureFrontmatter(notes.frontmatter(mdPath))) return mdPath;
+  const fm = notes.frontmatter(mdPath);
+  if (fm?.alt_kind === "transcript") return null;
+  if (isLectureFrontmatter(fm)) return mdPath;
   try {
     return SLIDE_MARKER.test(await notes.read(mdPath)) ? mdPath : null;
   } catch {
