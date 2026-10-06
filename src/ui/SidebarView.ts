@@ -873,6 +873,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
         }
         const rows = panel.createEl("ul", { cls: "alt2obsidian-estimate-list" });
         if (prepared.plan) {
+          const pdfPath = this.plugin.siblingPdf(prepared.notePath)?.path ?? attachedPdfPath(prepared.notePath);
+          if (prepared.pdfSource === "attached") rows.createEl("li", { text: `첨부한 PDF를 슬라이드로 씁니다: ${pdfPath}` });
+          if (prepared.pdfSource === "vault") rows.createEl("li", { text: `Alt의 슬라이드 파일을 읽지 못해 노트 옆에 저장해 둔 PDF를 씁니다: ${pdfPath}` });
           const skipped = e.slidesTemplated + e.slidesDeduped + e.slidesReused;
           rows.createEl("li", {
             text: `슬라이드 ${e.slidesTotal}장 중 ${e.slidesGenerated}장 생성, ${skipped}장 생략 (표지·목차·마무리 ${e.slidesTemplated}, 중복 ${e.slidesDeduped}, 변경 없음 ${e.slidesReused})`,
