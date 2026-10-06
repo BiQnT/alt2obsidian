@@ -323,3 +323,14 @@ assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "�
     s.cleanup();
   }
 }
+
+// Link names the commentary used, including alias links and the escaped alias pipe inside a table.
+{
+  const names = m.wikilinkCandidates([
+    "[[로터리 스케줄링 (Lottery Scheduling)]]은 ... [[티켓 (Ticket)|티켓]]",
+    "| 개념 | 설명 |\n|---|---|\n| [[스트라이드 스케줄링 (Stride Scheduling)\\|스트라이드]] | 결정적 |",
+    "[[개념#제목]] ![[그림.png]]",
+  ]);
+  assert.deepEqual(names.slice(0, 3), ["로터리 스케줄링 (Lottery Scheduling)", "티켓 (Ticket)", "스트라이드 스케줄링 (Stride Scheduling)"]);
+  console.log("PASS: link candidates from plain, alias and table-escaped alias links");
+}

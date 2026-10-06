@@ -63,7 +63,8 @@ export function wikilinkCandidates(bodies: string[]): string[] {
   for (const body of bodies) {
     const re = /\[\[([^\]|#\n]+?)(?:\|[^\]]+)?\]\]/g;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(body)) !== null) names.add(m[1].trim());
+    // Inside a table the alias pipe is written `\|`: drop the backslash from the name.
+    while ((m = re.exec(body)) !== null) names.add(m[1].trim().replace(/\\$/, "").trim());
   }
   return Array.from(names);
 }
