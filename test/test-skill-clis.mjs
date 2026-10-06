@@ -1,7 +1,7 @@
 /**
  * Test: the Skill CLIs lecture-material.mjs, overview-block.mjs,
- * link-concepts.mjs, prep.mjs and verify-prep.mjs produce exactly what the plugin code
- * produces for the same input. (merge-note.mjs is covered by test-merge.mjs, slide-hashes.mjs
+ * link-concepts.mjs, prep.mjs, verify-prep.mjs and transcript-note.mjs produce
+ * exactly what the plugin code produces for the same input. (merge-note.mjs is covered by test-merge.mjs, slide-hashes.mjs
  * by test-slide-hash.mjs.)
  * Run: node test/test-skill-clis.mjs [pdfPath]
  *
@@ -223,6 +223,86 @@ try {
       assert.ok(again.includes("내가 쓴 줄"));
       console.log(`PASS: verify-prep.mjs matches the plugin verifier (${res.claims} claims, ${res.batches.length} batch, estimate ${res.estimate.inputTokens} input tokens) and renders the same note`);
     }
+  }
+
+  // transcript-note: a lecture without slides (spec 4.10), the plugin's
+  // sections, prompts, answer checks and note; verify-prep against its sections.
+  {
+    const t = await importTs("test/helpers/transcript-entry.ts");
+    const talk = [];
+    for (let ms = 0, i = 0; ms < 40 * 60000; ms += 6000, i++) {
+      const topic = ms < 12 * 60000 ? "lexer token regex" : ms < 25 * 60000 ? "parser grammar derivation" : ms < 33 * 60000 ? "first follow nullable" : "lalr merging yacc";
+      talk.push({ startMs: ms, endMs: ms + 4800, text: `음 ${topic} 이야기 ${i}번입니다.`, speaker: "" });
+    }
+    const tb = join(dir, "t-bundle.json");
+    writeFileSync(tb, JSON.stringify({ sourceId: "local-t", sourceKind: "alt-local", title: "L9", transcript: talk }));
+    writeFileSync(join(dir, "t-known.json"), JSON.stringify(["캐시"]));
+    writeFileSync(join(dir, "t-tags.json"), JSON.stringify(["parsing"]));
+    const out = join(dir, "tn");
+    const res = JSON.parse(cli("transcript-note", ["prep", tb, "--title", "L9", "--out", out, "--known", join(dir, "t-known.json"), "--tags", join(dir, "t-tags.json")]));
+    const plan = await t.planTranscript({ segments: talk, sourceId: "local-t" });
+    const context = { title: "L9", subjectTags: ["parsing"], knownConcepts: ["캐시"] };
+    assert.equal(res.timed, true);
+    assert.deepEqual(res.sections.map((x) => [x.num, x.hash, x.mode]), plan.sections.map((x) => [x.num, x.hash, x.mode]));
+    assert.deepEqual(res.batches.map((b) => b.sections), plan.batches);
+    const byNum = new Map(plan.sections.map((x) => [x.num, x]));
+    res.batches.forEach((b, i) =>
+      assert.equal(readFileSync(join(out, b.file), "utf8"), t.buildSectionUserPrompt(t.buildSectionContextBlock(context, plan), plan.batches[i].map((n) => byNum.get(n))) + "\n", "same batch prompt as the plugin")
+    );
+    assert.ok(readFileSync(join(out, "system.md"), "utf8").startsWith(t.buildSectionSystemPrompt()));
+    const est = t.estimateTranscriptSummary(plan, context, "", "claude-cli", "claude-cli");
+    assert.deepEqual(res.estimate, { calls: est.calls, inputTokens: est.inputTokens, outputTokens: est.outputTokens }, "same estimate as the plugin");
+    assert.equal(statSync(out).mode & 0o777, 0o700);
+    assert.equal(statSync(join(out, "plan.json")).mode & 0o777, 0o600);
+    // followup: the answers checked like the plugin's; the overview and concept prompts from the gists.
+    const answers = [{ sections: plan.sections.map((x) => ({ section: x.num, summary: `- 구간 ${x.num}: 캐시 내용 정리 [${t.formatClock(x.startMs)}]\n- ${"설명 ".repeat(12).trim()}`, gist: `구간 ${x.num} 요지다` })) }];
+    writeFileSync(join(dir, "t-answers.json"), JSON.stringify(answers));
+    const fu = JSON.parse(cli("transcript-note", ["followup", out, "--answers", join(dir, "t-answers.json"), "--subject", "CSED423"]));
+    assert.deepEqual(fu, { ok: plan.sections.map((x) => x.num), failed: [] });
+    const gists = new Map(plan.sections.map((x) => [x.num, `구간 ${x.num} 요지다`]));
+    assert.equal(readFileSync(join(out, "overview.md"), "utf8"), `${t.buildSectionOverviewSystemPrompt()}\n\n${t.buildSectionOverviewPrompt("L9", "", gists, plan)}\n`);
+    const conceptPrompt = readFileSync(join(out, "concepts.md"), "utf8");
+    assert.ok(conceptPrompt.includes("구간 1 [00:00]: 구간 1 요지다") && conceptPrompt.includes('Cite sections as "구간 3"') && conceptPrompt.includes("JSON schema:"));
+    // render: the plugin's NoteGenerator for the same answers.
+    writeFileSync(join(dir, "t-overview.md"), "## 흐름\n- lexer에서 parser로 (구간 1~2)");
+    const conceptsAnswer = { concepts: [{ name: "Cache (캐시)", definition: "Cache는 자주 쓰는 데이터를 프로세서 가까이에 두는 작고 빠른 메모리다. 접근 지역성을 이용해 평균 접근 시간을 줄인다.", lectureContext: "", example: "", caution: "", relatedConcepts: [] }], tags: ["parsing"] };
+    writeFileSync(join(dir, "t-concepts.json"), JSON.stringify(conceptsAnswer));
+    const md = cli("transcript-note", ["render", out, "--answers", join(dir, "t-answers.json"), "--overview", join(dir, "t-overview.md"), "--concepts", join(dir, "t-concepts.json"), "--subject", "CSED423", "--id", "local-t", "--local", "--created", "2026-09-30"]);
+    const done = new Map(answers[0].sections.map((x) => [x.section, { summary: x.summary, gist: x.gist }]));
+    const assembled = t.assembleSections(plan, done, new Map());
+    const expected = new t.NoteGenerator(null).generateTranscriptNote(
+      { title: "L9", summary: "", pdfUrl: null, transcript: null, parseQuality: "full", metadata: { noteId: "local-t", createdAt: "2026-09-30", visibility: null, sourceKind: "alt-local" } },
+      { sections: assembled.sections, errors: assembled.errors },
+      { processedSummary: "## 흐름\n- lexer에서 parser로 (구간 1~2)", concepts: t.normalizeConcepts(conceptsAnswer.concepts, ["캐시"]), tags: ["parsing"], subjectSuggestion: "CSED423", knownConceptNames: ["캐시"] },
+      "CSED423",
+      [],
+      "alt2obsidian-cc-skill"
+    ).lectureMarkdown;
+    assert.equal(md, expected, "the same note as the plugin");
+    assert.match(md, /\nsource: "alt2obsidian-cc-skill"\nalt_kind: "transcript"\n/);
+    assert.match(md, /\nalt_local_id: "local-t"\nalt_source: "alt-local"\n/);
+    // Re-import with --existing: every section reused, nothing to send.
+    writeFileSync(join(dir, "t-note.md"), md);
+    const again = JSON.parse(cli("transcript-note", ["prep", tb, "--title", "L9", "--out", join(dir, "tn2"), "--existing", join(dir, "t-note.md")]));
+    assert.deepEqual([again.sections.every((x) => x.mode === "reuse"), again.batches], [true, []]);
+    console.log(`PASS: transcript-note.mjs matches the plugin (${res.sections.length} sections, ${res.batches.length} batch, prompts, answer checks, overview and concept prompts, the note; --existing reuses every section)`);
+
+    // verify-prep "-": a lecture without slides, evidence from the note's sections.
+    const vnote = join(dir, "t-my-note.md");
+    writeFileSync(vnote, "# 정리\n- lalr merging은 yacc가 쓴다\n- parser grammar derivation은 다루지 않았다\n");
+    const vout = join(dir, "tv");
+    const vres = JSON.parse(cli("verify-prep", ["prep", "-", vnote, "--lecture", "L9", "--out", vout, "--bundle", tb, "--lecture-note", join(dir, "t-note.md"), "--note-path", "V/S/Lectures/L9.md"]));
+    const timed = t.timedSegments(talk);
+    const vplan = t.planVerification({ lecture: "L9", notePath: "V/S/Lectures/L9.md", noteMarkdown: readFileSync(vnote, "utf8"), slideTexts: [], transcript: { segments: timed, spans: null }, sections: t.verifySectionsFromNote(md, timed) });
+    assert.equal(vres.unit, "section");
+    assert.equal(vres.claims, vplan.claims.length);
+    vres.batches.forEach((b, i) => assert.equal(readFileSync(join(vout, b.file), "utf8"), t.buildJudgePrompt("L9", vplan.batches[i], "section") + "\n"));
+    assert.ok(readFileSync(join(vout, "system.md"), "utf8").startsWith(t.buildJudgeSystemPrompt("section")));
+    writeFileSync(join(dir, "tv-answers.json"), JSON.stringify([{ results: vplan.judged.map((e) => ({ id: e.claim.id, v: "맞음", r: "전사 확인" })) }]));
+    const vmd = cli("verify-prep", ["render", vout, "--answers", join(dir, "tv-answers.json"), "--source", "[[정리]]"]);
+    assert.match(vmd, /\[\[V\/S\/Lectures\/L9#⏱ 구간 \d \d\d \d\d \d\d \d\d\|L9 · 구간 \d\]\] \[\d\d:\d\d\]/);
+    assert.throws(() => execFileSync("node", [join(repo, "scripts/phase2/verify-prep.mjs"), "prep", "-", vnote, "--lecture", "L9", "--out", join(dir, "tv2")], { stdio: "pipe" }), "no slides needs the timestamped transcript");
+    console.log("PASS: verify-prep.mjs - (no slides) matches the plugin's section verification and links to the section headings");
   }
 
   const deck = optionalRealDeck();

@@ -4,17 +4,10 @@
 
 import { AltNoteData } from "../types";
 import { AltScraper } from "../scraper/AltScraper";
-import { LectureBundle, TranscriptSegment } from "./types";
+import { LectureBundle } from "./types";
+import { untimedSegments } from "./segments";
 
-/** Transcript text lines as untimed segments. */
-export function untimedSegments(transcript: string | null): TranscriptSegment[] {
-  if (!transcript) return [];
-  return transcript
-    .split(/\n+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0)
-    .map((text) => ({ startMs: null, endMs: null, text, speaker: "" }));
-}
+export { untimedSegments };
 
 export function bundleFromAltData(altData: AltNoteData, pdf: ArrayBuffer | null): LectureBundle {
   return {

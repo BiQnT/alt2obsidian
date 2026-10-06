@@ -3,7 +3,7 @@
 import esbuild from "esbuild";
 
 const outdir = process.argv[2] ?? "scripts/phase2";
-const entries = ["slide-hashes", "slide-prompt", "lecture-material", "overview-block", "link-concepts", "merge-note", "prep", "alt-local", "verify-prep"];
+const entries = ["slide-hashes", "slide-prompt", "lecture-material", "overview-block", "link-concepts", "merge-note", "prep", "alt-local", "verify-prep", "transcript-note"];
 
 esbuild
   .build({
