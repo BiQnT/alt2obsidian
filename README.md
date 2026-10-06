@@ -4,6 +4,26 @@ Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그�
 
 컴퓨터에 설치된 Claude Code CLI나 Codex CLI(또는 Gemini API, Ollama)로 강의 슬라이드 1장당 한국어 해설을 만들고, 핵심 개념을 `[[Wikilink]]`와 `#태그`로 네트워크화하며, PDF와 노트를 좌우 동기 스크롤로 보여주는 전용 뷰어를 제공합니다.
 
+> **2.0.0-beta.3 (베타)**: 실사용 검수 중인 버전입니다. 검수가 끝나면 2.0.0으로 정식 배포합니다. 안정 버전이 필요하면 [v1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0)을 쓰세요. 처음에는 vault 사본에서 써 보길 권합니다.
+
+### 확인한 환경
+
+| 항목 | 버전 |
+|---|---|
+| OS | macOS (Windows, Linux는 단위 테스트만) |
+| Obsidian | 1.12.4 |
+| Alt | 0.14.0 (로컬 데이터베이스 읽기 확인, 2026-10-06) / 0.12.0 (로컬 API 확인) |
+| Claude Code CLI | 2.1.290 (2.1.283에서 실제 호출로 확인) |
+| Codex CLI | 0.155.1 |
+
+### 알려진 한계
+
+- **슬라이드 PDF가 없는 강의**: Alt에 슬라이드를 첨부하지 않은 강의(녹음과 전사만 있는 강의)는 슬라이드별 해설, 전사 정렬, Synced Viewer를 쓸 수 없고 강의 단위 노트로만 만들어집니다. 노트 검증도 슬라이드 PDF가 있어야 합니다. PDF를 직접 골라 붙이는 기능과 전사 구간 기반 노트는 다음 버전에서 추가할 예정입니다.
+- **Windows**: CLI 실행 경로는 단위 테스트로만 확인했습니다.
+- **Notion MCP**: 직접 추가한 Notion 서버만 실제 호출로 확인했습니다. claude.ai 커넥터와 플러그인이 제공하는 서버는 가짜 CLI 테스트로만 확인했습니다.
+- **전사 정렬 정확도**: 초안 라벨 기준 수치이며(아래 2.0.0-beta.2 참고), 라벨 확인이 남아 있습니다.
+- **토큰**: 141분, 46장 강의 기준 Claude CLI 예상 입력은 약 7.3만 토큰으로, 1.1.0 Gemini 방식 예상치(약 10.8만)의 68%입니다. 실측 벤치마크는 아직입니다.
+
 ## 2.0.0-beta.3에서 바뀐 점
 
 - **새 폴더 구조 (영어 폴더명)**: 새로 가져오는 강의는 과목 폴더 아래 `Lectures/`에 노트와 PDF가 함께 저장됩니다. 개념 노트는 `Concepts/`, 노트 검증 결과는 `Verification/`, 핵심 다이어그램 이미지는 `Attachments/`에 들어갑니다(아래 구조 참고).
@@ -56,9 +76,9 @@ Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그�
   - **Multi-key rotation**: API 키 필드에 콤마로 여러 무료 키 입력 → 429 시 자동 round-robin (3개 키 ≈ 15 RPM).
   - **Ollama (로컬)**: 멀티모달은 `llama3.2-vision:11b`, 텍스트는 `gemma3:4b` 권장. 무제한·무료·offline.
   - 자세한 RPM 우회 옵션: [`docs/gemini-rpm-options.md`](docs/gemini-rpm-options.md) 참고.
-- **Phase 2 Skill (Claude Code Max 사용자)**: `/alt2obs <alt-url>` 명령으로 Claude Code의 native vision으로 import. Gemini 쿼터 무관, 자세히는 [`scripts/phase2/`](scripts/phase2/) 참고.
+- **Claude Code 스킬 (`/alt2obs`)**: 플러그인 없이 Claude Code 세션에서 강의를 가져옵니다. 이 컴퓨터의 Alt 노트(로컬) 또는 공개 URL을 입력으로 받고, 슬라이드 해시, 병합, 개념 링크, 노트 검증 준비를 플러그인과 같은 코드(`scripts/phase2/*.mjs`)로 처리해 결과 노트가 플러그인과 같습니다. 자세히는 [`scripts/phase2/`](scripts/phase2/) 참고.
 
-> 1.0.x → 1.1.0 마이그레이션: 기존에 import한 노트는 그대로 유지됩니다. 새로 import하는 강의부터 페이지-anchored 구조로 생성됩니다.
+> 1.x → 2.0 업데이트: 기존 노트와 메모는 그대로 유지됩니다. 새 폴더 구조로 옮기려면 **Migrate 1.x vault layout**을 실행하세요. 1.x 노트를 처음 다시 가져오면 슬라이드 해시 방식이 바뀌어 모든 슬라이드가 한 번 `drift`로 표시되지만 메모는 보존됩니다. 1.0.x 단일 블록 노트는 새 노트 아래 `## 이전 노트 백업`으로 통째로 보관됩니다.
 
 ## 설치 방법
 
@@ -82,7 +102,7 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 
 ### 방법 1: 수동 설치 (지금 바로 사용)
 
-1. [최신 Release](https://github.com/BiQnT/alt2obsidian/releases)에서 아래 파일을 다운로드합니다:
+1. [Releases](https://github.com/BiQnT/alt2obsidian/releases)에서 원하는 버전(베타는 `2.0.0-beta.N` pre-release, 안정 버전은 `1.1.0`)의 아래 파일을 다운로드합니다:
    - `main.js`
    - `manifest.json`
    - `styles.css`
@@ -108,9 +128,13 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 
 6. 설치된 플러그인 목록에서 **Alt2Obsidian**을 활성화합니다.
 
-### 방법 2: 커뮤니티 플러그인
+### 방법 2: BRAT (베타 자동 업데이트)
 
-> **현재 Obsidian 커뮤니티 플러그인 등록 리뷰 진행 중입니다.** 승인 전까지는 방법 1(수동 설치)을 사용해주세요.
+[BRAT](https://github.com/TfTHacker/obsidian42-brat) 플러그인을 설치하고 **Add Beta plugin**에 `BiQnT/alt2obsidian`을 넣으면 베타 릴리스를 받아 자동으로 업데이트합니다.
+
+### 방법 3: 커뮤니티 플러그인
+
+> **현재 Obsidian 커뮤니티 플러그인 등록 리뷰 진행 중입니다.** 승인 전까지는 방법 1이나 2를 사용해주세요. 커뮤니티 플러그인에는 2.0.0 정식 배포 후 올립니다.
 
 1. **설정 → 커뮤니티 플러그인 → 탐색**에서 "Alt2Obsidian"을 검색합니다.
 2. **설치** → **활성화**를 클릭합니다.
@@ -209,24 +233,32 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 
 ## 생성되는 노트 구조
 
-### 강의 노트 (페이지-anchored 1.1.0)
+### 강의 노트 (슬라이드별 구조)
 ```markdown
 ---
 title: "CSED311 Lec7-pipelined-CPU"
 subject: "CSED311"
-tags: [csed311, midterm, pipeline, cpu-architecture, hazard]
+tags: [csed311, pipeline, cpu-architecture, hazard]
 date: "2026-03-25"
 source: "alt2obsidian"
 slide_count: 32
-alt_id: "0a471d1c-..."
+alt_local_id: "019e8c4f-..."
+alt_alignment: "1:0-95.2 2:95.2-210 ..."
+alt2obs_usage: {provider: "Claude CLI", calls: 14, ...}
 ---
 
 # CSED311 Lec7-pipelined-CPU
 
+## 📋 전체 요약
+
+<!-- alt2obs:overview start -->
+[Alt 요약과 슬라이드별 한 줄 요약으로 만든 강의 전체 요약]
+<!-- alt2obs:overview end -->
+
 ## 📚 슬라이드 1
 
 <!-- alt2obs:slide:1 hash:a3f5b2c1 start -->
-[Gemini가 슬라이드 이미지 + 음성 전사 chunk를 보고 작성한 한국어 해설]
+[슬라이드 텍스트(도표 슬라이드는 이미지 포함)와 그 슬라이드 구간의 전사를 보고 작성한 한국어 해설]
 
 > [!definition] 파이프라인 (Pipeline)
 > 복수의 명령어를 동시에 서로 다른 단계에서 실행해 처리량을 높이는 기법.
@@ -301,8 +333,9 @@ tags: [concept]
 
 ## 지원 환경
 
-- macOS / Windows / Linux (데스크톱 Obsidian)
-- Obsidian v0.15.0 이상
+- 데스크톱 Obsidian (macOS / Windows / Linux), v0.15.0 이상. 실제로 확인한 버전은 위 **확인한 환경** 표 참고
+- Alt 로컬 노트 목록: 이 컴퓨터에 Alt 데스크톱 앱이 설치되어 있어야 합니다. Alt가 꺼져 있을 때 데이터베이스를 읽으려면 Obsidian에 Node 22.5 이상(`node:sqlite`)이 들어 있어야 합니다.
+- CLI 경로: Claude Code CLI 또는 Codex CLI 설치와 로그인. 이 플러그인이 쓰는 옵션을 모두 지원하는 버전이어야 합니다(설정 화면이 확인해 줍니다).
 
 ## 개발
 
