@@ -254,6 +254,8 @@ export interface ModelInfo {
   description?: string;
   /** Effort levels the model lists; undefined = unknown (every level), [] = none. */
   efforts?: EffortLevel[];
+  /** The level the CLI uses when none is given (Claude Code's "Recommended" option, Codex's default_reasoning_level). */
+  defaultEffort?: EffortLevel;
   /** Listed after the current models (Claude's "overflow" section). */
   older?: boolean;
 }
@@ -338,7 +340,12 @@ export function parseClaudeModelCatalog(text: string): ModelInfo[] {
       const info: ModelInfo = { id: r.id, name: typeof r.name === "string" && r.name.trim() ? r.name.trim() : r.id };
       if (typeof r.description === "string" && r.description) info.description = r.description;
       if (r.thinking?.type === "none") info.efforts = [];
-      else if (Array.isArray(r.thinking?.effort_options)) info.efforts = effortList(r.thinking!.effort_options);
+      else if (Array.isArray(r.thinking?.effort_options)) {
+        info.efforts = effortList(r.thinking!.effort_options);
+        const recommended = (r.thinking!.effort_options as Array<{ id?: unknown; badge?: { message?: unknown } }>).find((o) => o?.badge?.message === "Recommended");
+        const level = effortList(recommended ? [recommended] : [])[0];
+        if (level) info.defaultEffort = level;
+      }
       if (r.section !== undefined && r.section !== "main") info.older = true;
       out.push(info);
     }
@@ -353,8 +360,8 @@ export interface CodexModels {
   models: string[];
   /** Effort levels each model lists (supported_reasoning_levels), limited to the plugin's levels. */
   efforts: Record<string, EffortLevel[]>;
-  /** Display names and descriptions from the cache (display_name, description). */
-  info?: Record<string, { name: string; description?: string }>;
+  /** Display names, descriptions and default levels from the cache (display_name, description, default_reasoning_level). */
+  info?: Record<string, { name: string; description?: string; defaultEffort?: EffortLevel }>;
 }
 
 /**
@@ -368,7 +375,7 @@ export function parseCodexModels(text: string): CodexModels {
     const data = JSON.parse(text) as { models?: unknown };
     if (!Array.isArray(data.models)) return out;
     const visible = data.models
-      .filter((m): m is { slug: string; display_name?: unknown; description?: unknown; visibility?: string; priority?: number; supported_reasoning_levels?: unknown } => !!m && typeof m.slug === "string")
+      .filter((m): m is { slug: string; display_name?: unknown; description?: unknown; default_reasoning_level?: unknown; visibility?: string; priority?: number; supported_reasoning_levels?: unknown } => !!m && typeof m.slug === "string")
       .filter((m) => m.visibility === undefined || m.visibility === "list")
       .filter((m) => isSafeModelName(m.slug))
       .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
@@ -377,7 +384,11 @@ export function parseCodexModels(text: string): CodexModels {
       const levels = effortList(m.supported_reasoning_levels);
       if (levels.length > 0) out.efforts[m.slug] = levels;
       const name = typeof m.display_name === "string" && m.display_name.trim() ? m.display_name.trim() : m.slug;
-      out.info![m.slug] = typeof m.description === "string" && m.description ? { name, description: m.description } : { name };
+      const entry: { name: string; description?: string; defaultEffort?: EffortLevel } = { name };
+      if (typeof m.description === "string" && m.description) entry.description = m.description;
+      const def = effortList([m.default_reasoning_level])[0];
+      if (def) entry.defaultEffort = def;
+      out.info![m.slug] = entry;
     }
   } catch {
     return { models: [], efforts: {}, info: {} };
@@ -396,6 +407,9 @@ export function aliasTarget(alias: string, catalog: Pick<ModelCatalog, "resolved
   return seen || CLAUDE_ALIASES.find((a) => a.alias === alias)?.knownId || null;
 }
 
+/** When the built-in alias table was checked (shown next to a target no run has confirmed yet). */
+export const CLAUDE_ALIASES_CHECKED = "2026-10";
+
 /** Catalog entry for a Claude id or alias (aliases through their current target). */
 function claudeInfo(model: string, catalog: ModelCatalog): ModelInfo | undefined {
   const list = catalog.claude.length > 0 ? catalog.claude : CLAUDE_FALLBACK_MODELS;
@@ -409,18 +423,36 @@ export function modelName(provider: ProviderId, id: string, catalog: ModelCatalo
   return claudeInfo(id, catalog)?.name ?? id;
 }
 
+/** What the catalog knows about a model's effort levels (undefined: unknown model). */
+function effortInfo(provider: ProviderId, model: string, catalog: ModelCatalog): { efforts?: EffortLevel[]; defaultEffort?: EffortLevel } {
+  if (!model) return {};
+  if (provider === "codex-cli") return { efforts: catalog.codex.efforts[model], defaultEffort: catalog.codex.info?.[model]?.defaultEffort };
+  const info = claudeInfo(model, catalog);
+  return { efforts: info?.efforts, defaultEffort: info?.defaultEffort };
+}
+
 /**
  * Effort dropdown entries: "" (CLI 기본값) plus the levels the chosen model
  * lists when that is known (Claude Code's or Codex's model cache), else
  * every level. The saved value is always kept so the dropdown can show it.
  */
-export function effortChoices(provider: ProviderId, model: string, current: EffortLevel, catalog: ModelCatalog | CodexModels): EffortLevel[] {
-  const full: ModelCatalog = "codex" in catalog ? catalog : { claude: [], codex: catalog, resolved: {} };
-  let known: EffortLevel[] | undefined;
-  if (provider === "codex-cli") known = model ? full.codex.efforts[model] : undefined;
-  else if (model) known = claudeInfo(model, full)?.efforts;
+export function effortChoices(provider: ProviderId, model: string, current: EffortLevel, catalog: ModelCatalog): EffortLevel[] {
+  const known = effortInfo(provider, model, catalog).efforts;
   if (!known) return EFFORT_LEVELS;
-  return EFFORT_LEVELS.filter((l) => l === "" || l === current || known!.includes(l));
+  return EFFORT_LEVELS.filter((l) => l === "" || l === current || known.includes(l));
+}
+
+/**
+ * The effort level the estimate counts for a task: none (factor 1) for a
+ * model without effort levels (Haiku 4.5 ignores it); for "" (CLI 기본값)
+ * the model's own default level when the catalog names it, else unknown
+ * (factor 1); otherwise the chosen level.
+ */
+export function estimateEffort(provider: ProviderId | "none", model: string, effort: EffortLevel, catalog: ModelCatalog): EffortLevel {
+  if (!isCliProvider(provider)) return effort;
+  const info = effortInfo(provider, model, catalog);
+  if (info.efforts && info.efforts.length === 0) return "";
+  return effort || info.defaultEffort || "";
 }
 
 export interface ModelChoice {
@@ -433,8 +465,9 @@ export interface ModelChoice {
 /**
  * How a model value reads in the dropdowns and the run panels:
  * - a versioned id: "Opus 5.5 (claude-opus-5-5)", or the bare id when unknown;
- * - an alias: "opus (최신 Opus, 현재 Opus 5.5)" (the current target as the
- *   last run resolved it, else as checked), "opus (최신 Opus)" when unknown;
+ * - an alias: "opus (최신 Opus, 현재 Opus 5.5)" when a run recorded what it
+ *   resolved to, else "opus (최신 Opus, Opus 5.5, 기준일 2026-10)" from the
+ *   built-in table;
  * - "": the CLI's own default.
  */
 export function modelLabel(provider: ProviderId, model: string, catalog: ModelCatalog): string {
@@ -442,8 +475,9 @@ export function modelLabel(provider: ProviderId, model: string, catalog: ModelCa
   if (provider === "claude-cli") {
     const alias = CLAUDE_ALIASES.find((a) => a.alias === model);
     if (alias) {
-      const target = aliasTarget(model, catalog);
-      return target ? `${model} (최신 ${alias.family}, 현재 ${modelName(provider, target, catalog)})` : `${model} (최신 ${alias.family})`;
+      const seen = catalog.resolved[resolvedKey("claude-cli", model)]?.id;
+      if (seen) return `${model} (최신 ${alias.family}, 현재 ${modelName(provider, seen, catalog)})`;
+      return `${model} (최신 ${alias.family}, ${modelName(provider, alias.knownId, catalog)}, 기준일 ${CLAUDE_ALIASES_CHECKED})`;
     }
   }
   const name = modelName(provider, model, catalog);
@@ -457,8 +491,7 @@ export function modelLabel(provider: ProviderId, model: string, catalog: ModelCa
  * value if it is none of these, then "CLI 기본값" (""). The settings tab
  * adds "직접 입력".
  */
-export function modelChoices(provider: ProviderId, current: string, recent: string[], catalog: ModelCatalog | string[]): ModelChoice[] {
-  const full: ModelCatalog = Array.isArray(catalog) ? { claude: [], codex: { models: catalog, efforts: {} }, resolved: {} } : catalog;
+export function modelChoices(provider: ProviderId, current: string, recent: string[], full: ModelCatalog): ModelChoice[] {
   let known: string[];
   const titles = new Map<string, string>();
   if (provider === "claude-cli") {
@@ -487,6 +520,11 @@ export function describeModel(provider: ProviderId | "none", model: string, cata
   return model ? modelLabel(provider, model, catalog) : "CLI 기본 모델";
 }
 
+/** "effort high", or "effort CLI 기본값" for "" (never counted as medium in the label). */
+export function describeEffort(effort: EffortLevel): string {
+  return `effort ${effort || "CLI 기본값"}`;
+}
+
 /** "sonnet · medium" for a task's recommended setting, "" for "none". */
 export function describeDefault(provider: ProviderId | "none", id: TaskId): string {
   if (!isCliProvider(provider)) return "";
@@ -498,8 +536,9 @@ export function describeDefault(provider: ProviderId | "none", id: TaskId): stri
  * Output-token multiplier of an effort level, relative to medium (the
  * level the per-slide output estimates were fitted at). From the relative
  * effort cost index Claude Code 2.1.291 ships (low 0.6, medium 0.77, high 1,
- * xhigh 1.74, max 1.91); Codex is assumed to scale the same way. "" (the
- * CLI default) counts as medium.
+ * xhigh 1.74, max 1.91); Codex is assumed to scale the same way. "" is an
+ * unknown level (a model without effort levels, or a CLI default the
+ * catalog does not name; see `estimateEffort`): factor 1.
  */
 export const EFFORT_OUTPUT_FACTOR: Record<EffortLevel, number> = {
   "": 1,

@@ -13,6 +13,7 @@ import {
   LectureMaterialContext,
   CliDetection,
   CliName,
+  EffortLevel,
   LLMUsage,
   ProviderId,
   TaskId,
@@ -52,6 +53,7 @@ import {
   rememberModel,
   resolvedKey,
   sanitizeTask,
+  estimateEffort,
 } from "./settings/llmSettings";
 import { analyzeSlides, selectKeyDiagrams } from "./core/prep/SlideAnalyzer";
 import { DeckPlan, makeBatches, parseExistingSlides, planDeck, withFewerImages, withTranscriptChunks } from "./pipeline/batchPlan";
@@ -253,10 +255,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       // Lecture PDFs opened from now on go to the Synced Viewer (setting
       // "강의 PDF를 열면 뷰어로 열기"). Registered after the layout is
       // restored, and the PDF tabs it restored are left as plain PDFs.
-      for (const leaf of this.app.workspace.getLeavesOfType?.("pdf") ?? []) {
-        const file = (leaf.getViewState?.().state as { file?: unknown } | undefined)?.file;
-        if (typeof file === "string") this.nativePdfLeaves.set(leaf, file);
-      }
+      if (this.data.settings.openPdfInViewer) this.keepOpenPdfTabsPlain();
       this.registerEvent(
         this.app.workspace.on("file-open", (file) => {
           if (file instanceof TFile) void this.onPdfOpened(file).catch((e) => console.warn("[Alt2Obsidian] lecture PDF redirect failed:", e));
@@ -314,6 +313,18 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * PDF opened in the same tab still is.
    */
   private nativePdfLeaves = new WeakMap<WorkspaceLeaf, string>();
+  /**
+   * PDF tabs open right now stay plain PDFs: called when the redirect starts
+   * (startup, the setting turned on), so only PDFs opened afterwards are
+   * turned into the viewer, not tabs the user already had.
+   */
+  keepOpenPdfTabsPlain(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType?.("pdf") ?? []) {
+      const file = (leaf.getViewState?.().state as { file?: unknown } | undefined)?.file ?? (leaf.view as { file?: TFile | null })?.file?.path;
+      if (typeof file === "string") this.nativePdfLeaves.set(leaf, file);
+    }
+  }
+
   /** PDFs being turned into a viewer right now (no second redirect while it runs). */
   private redirecting = new Set<string>();
 
@@ -358,8 +369,13 @@ export default class Alt2ObsidianPlugin extends Plugin {
         return st?.mdPath === decision.mdPath && st?.pdfPath === decision.pdfPath;
       });
       if (same && same !== leaf) {
-        // The pair is already open: show that tab, close the plain PDF one.
-        leaf.detach();
+        // The pair is already open: show that tab. The PDF tab goes back to
+        // what it showed before (the file explorer opens a PDF in the
+        // current tab); only a tab opened just for this PDF is closed. This
+        // is what Obsidian itself does when a tab's file is deleted.
+        const history = (leaf as unknown as { history?: { backHistory?: unknown[]; back?: () => Promise<void> } }).history;
+        if (history?.back && (history.backHistory?.length ?? 0) > 0) await history.back();
+        else leaf.detach();
         this.app.workspace.revealLeaf(same);
         return;
       }
@@ -1187,6 +1203,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
     return this.withEstimate({ ...prepared, plan, overrides });
   }
 
+  /** The effort the estimate counts for a task (see `estimateEffort`: none for Haiku 4.5, the model's default for "CLI 기본값"). */
+  private estimatedEffort(t: TaskLLMSetting): EffortLevel {
+    return estimateEffort(t.provider, t.model, t.effort, this.modelCatalog());
+  }
+
   private withEstimate(p: Omit<PreparedImport, "estimate" | "overCap">): PreparedImport {
     const commentary = this.runTask(p, "commentary");
     const concepts = this.runTask(p, "concepts");
@@ -1194,14 +1215,14 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const asProvider = (id: ProviderId | "none"): ProviderId => (id === "none" ? "claude-cli" : id);
     let estimate: BudgetEstimate = p.plan
       ? estimateLecture(p.plan, p.context, p.preview.altData.summary, asProvider(commentary.provider), asProvider(concepts.provider), {
-          commentaryEffort: commentary.effort,
-          conceptEffort: concepts.effort,
+          commentaryEffort: this.estimatedEffort(commentary),
+          conceptEffort: this.estimatedEffort(concepts),
         })
-      : this.estimateLectureLevel(p.preview, asProvider(commentary.provider), asProvider(concepts.provider), commentary, concepts);
+      : this.estimateLectureLevel(p.preview, commentary, concepts);
     // Optional alignment check (spec 4.3 step 3): one small text call.
     const checkPrompt = p.alignment && alignmentTask.provider !== "none" ? buildAlignmentCheckPrompt(p.preview.altData.title, p.alignment, p.slideTexts) : null;
     if (checkPrompt && alignmentTask.provider !== "none") {
-      const check = estimateCalls([{ promptText: checkPrompt, images: 0, schema: true, outputTokens: 200 }], alignmentTask.provider, alignmentTask.effort);
+      const check = estimateCalls([{ promptText: checkPrompt, images: 0, schema: true, outputTokens: 200 }], alignmentTask.provider, this.estimatedEffort(alignmentTask));
       estimate = { ...estimate, calls: estimate.calls + check.calls, inputTokens: estimate.inputTokens + check.inputTokens, outputTokens: estimate.outputTokens + check.outputTokens };
     }
     return { ...p, estimate, overCap: exceedsCap(estimate, this.data.settings.generation.tokenCapPerLecture) };
@@ -1211,13 +1232,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * No PDF: the 1.x lecture-level flow (one transcript pass when there is a
    * transcript, then concepts), estimated from the same prompt templates.
    */
-  private estimateLectureLevel(
-    preview: ImportPreview,
-    commentary: ProviderId,
-    concepts: ProviderId,
-    commentaryTask?: TaskLLMSetting,
-    conceptTask?: TaskLLMSetting
-  ): BudgetEstimate {
+  private estimateLectureLevel(preview: ImportPreview, commentaryTask: TaskLLMSetting, conceptTask: TaskLLMSetting): BudgetEstimate {
+    const asProvider = (id: ProviderId | "none"): ProviderId => (id === "none" ? "claude-cli" : id);
     const alt = preview.altData;
     const transcript = (alt.transcript ?? "").slice(0, 15000);
     const calls: CallShape[] = [];
@@ -1229,12 +1245,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
         schema: false,
       });
     }
-    const main = estimateCalls(calls, commentary, commentaryTask?.effort);
+    const main = estimateCalls(calls, asProvider(commentaryTask.provider), this.estimatedEffort(commentaryTask));
     // Concepts read the (enhanced) summary: assume about 6000 characters.
     const concept = estimateCalls(
       [{ promptText: conceptExtractionTemplateText + "가".repeat(Math.max(alt.summary.length, 6000)), images: 0, outputTokens: 3800, schema: false }],
-      concepts,
-      conceptTask?.effort
+      asProvider(conceptTask.provider),
+      this.estimatedEffort(conceptTask)
     );
     return {
       calls: main.calls + concept.calls,
@@ -1334,9 +1350,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
         subject,
         [
           formatUsageFrontmatter(usage.total(), providerLabel, {
-            model: usage.modelFor("commentary")?.used || commentaryTask.model,
+            model: usage.modelFor("commentary") || commentaryTask.model,
             effort: commentaryTask.effort,
-            conceptModel: usage.modelFor("concepts")?.used,
+            conceptModel: usage.modelFor("concepts") ?? undefined,
           }),
           ...this.preservedFrontmatter(prepared.notePath, altData.metadata.sourceKind, alignment),
         ]
@@ -1367,7 +1383,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
   /** "기본값으로 저장" of a run's model choice: the task's saved setting (the preset becomes 사용자 지정). */
   async saveTaskDefault(task: TaskId, setting: TaskLLMSetting): Promise<void> {
-    this.data.settings.tasks[task] = sanitizeTask(setting, this.data.settings.tasks[task]);
+    // In place: the settings tab and open panels hold this object.
+    Object.assign(this.data.settings.tasks[task], sanitizeTask(setting, this.data.settings.tasks[task]));
     this.data.settings.preset = "custom";
     await this.savePluginData();
   }
@@ -1499,7 +1516,13 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * is on the Claude CLI, else the CLI default, low effort. Cancel with
    * `signal`; plugin unload cancels it too.
    */
-  async fetchNotionMarkdown(url: string, signal?: AbortSignal): Promise<NotionFetchResult> {
+  /** The model the Notion fetch runs on: the concept task's model on the Claude CLI, else the CLI default; low effort. */
+  notionFetchModel(): { model: string; effort: EffortLevel } {
+    const concepts = this.data.settings.tasks.concepts;
+    return { model: concepts.provider === "claude-cli" ? concepts.model.trim() : "", effort: "low" };
+  }
+
+  async fetchNotionMarkdown(url: string, signal?: AbortSignal): Promise<NotionFetchResult & { model: string }> {
     const settings = this.data.settings;
     const bin = await this.resolveBin("claude");
     const job = createJobDir();
@@ -1510,11 +1533,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
     signal?.addEventListener("abort", forward, { once: true });
     this.activeJobs.add(controller);
     try {
-      const concepts = settings.tasks.concepts;
+      const { model, effort } = this.notionFetchModel();
       const provider = new NotionFetchProvider({
         bin,
-        model: concepts.provider === "claude-cli" ? concepts.model.trim() : "",
-        effort: "low",
+        model,
+        effort,
         timeoutMs: Math.max(30, settings.cliTimeoutSec || 300) * 1000,
         workDir: job,
         usage,
@@ -1522,7 +1545,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         signal: controller.signal,
         ownsWorkDir: false,
       });
-      return await fetchNotionPage(provider, {
+      const page = await fetchNotionPage(provider, {
         bin,
         url,
         cacheDir: joinPath(this.vaultCacheDir(), "notion"),
@@ -1530,6 +1553,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         toolName: settings.notionFetchTool,
         signal: controller.signal,
       });
+      return { ...page, model: usage.modelFor("notion-fetch") ?? model };
     } finally {
       signal?.removeEventListener("abort", forward);
       this.activeJobs.delete(controller);
@@ -1574,7 +1598,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
    */
   withVerifyChoice(p: Pick<PreparedVerification, "targetPath" | "outPath" | "source" | "plan">, choice: TaskLLMSetting): PreparedVerification {
     const task = sanitizeTask(choice, this.data.settings.tasks.verification);
-    const estimate = estimateVerification(p.plan, isCliProvider(task.provider) ? task.provider : "claude-cli", task.effort);
+    const estimate = estimateVerification(p.plan, isCliProvider(task.provider) ? task.provider : "claude-cli", this.estimatedEffort(task));
     return {
       targetPath: p.targetPath,
       outPath: p.outPath,
@@ -1615,7 +1639,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       if (judged.length > 0 && judged.every((i) => i.verdict === null)) {
         throw new Error(`주장을 하나도 판정하지 못해 결과 노트를 쓰지 않았습니다: ${judged[0].reason}`);
       }
-      const used = usage.modelFor("verification")?.used || task.model;
+      const used = usage.modelFor("verification") || task.model;
       const label = `${PROVIDER_LABELS[task.provider]}${task.model ? " " + task.model : ""}`;
       const next = renderVerificationNote(result, {
         source: prepared.source,

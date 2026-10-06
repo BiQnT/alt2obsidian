@@ -170,10 +170,13 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     button.addEventListener("click", async () => {
       button.disabled = true;
       button.setText("찾는 중...");
-      await this.plugin.detectCli(name, true);
-      button.disabled = false;
-      button.setText("다시 찾기");
-      renderStatus();
+      try {
+        await this.plugin.detectCli(name, true);
+      } finally {
+        button.disabled = false;
+        button.setText("다시 찾기");
+        renderStatus();
+      }
     });
     return card;
   }
@@ -445,12 +448,14 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       .setName("강의 PDF를 열면 뷰어로 열기")
       .setDesc(
         "파일 탐색기나 링크로 강의 PDF(같은 폴더에 같은 이름의 강의 노트가 있는 PDF)를 열면 그 탭이 PDF와 노트를 나란히 보여주는 Synced Viewer로 바뀝니다. " +
-          "같은 강의의 뷰어가 이미 열려 있으면 그 탭을 보여줍니다. 뷰어의 'PDF만 보기'로 연 탭과 Obsidian을 켤 때 이미 열려 있던 PDF 탭은 그대로 둡니다. " +
+          "같은 강의의 뷰어가 이미 열려 있으면 그 탭을 보여줍니다. 뷰어의 'PDF만 보기'로 연 탭, Obsidian을 켤 때나 이 설정을 켤 때 이미 열려 있던 PDF 탭은 그대로 둡니다. " +
           "강의 노트(.md)를 열 때는 바뀌지 않습니다."
       )
       .addToggle((t) =>
         t.setValue(this.settings.openPdfInViewer).onChange(async (value) => {
           this.settings.openPdfInViewer = value;
+          // PDF tabs already open stay PDFs; only PDFs opened from now on become the viewer.
+          if (value) this.plugin.keepOpenPdfTabsPlain();
           await this.save();
         })
       );

@@ -438,10 +438,11 @@ async function deck(n, visualPages = []) {
     { slug: "gpt-5.5", visibility: "list", priority: 13, supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }, { effort: "high" }, { effort: "xhigh" }, { effort: "ultra" }] },
   ] }));
   assert.deepEqual(withLevels.efforts["gpt-5.5"], ["low", "medium", "high", "xhigh"], "levels outside the plugin's list are dropped");
-  assert.deepEqual(m.effortChoices("codex-cli", "gpt-5.5", "medium", withLevels), ["", "low", "medium", "high", "xhigh"], "only what that Codex model lists");
-  assert.deepEqual(m.effortChoices("codex-cli", "gpt-5.5", "max", withLevels), ["", "low", "medium", "high", "xhigh", "max"], "the saved value stays visible");
-  assert.deepEqual(m.effortChoices("codex-cli", "", "", withLevels), m.EFFORT_LEVELS, "CLI default model: every level");
-  assert.deepEqual(m.effortChoices("claude-cli", "sonnet", "", withLevels), m.EFFORT_LEVELS);
+  const codexOnly = { claude: [], codex: withLevels, resolved: {} };
+  assert.deepEqual(m.effortChoices("codex-cli", "gpt-5.5", "medium", codexOnly), ["", "low", "medium", "high", "xhigh"], "only what that Codex model lists");
+  assert.deepEqual(m.effortChoices("codex-cli", "gpt-5.5", "max", codexOnly), ["", "low", "medium", "high", "xhigh", "max"], "the saved value stays visible");
+  assert.deepEqual(m.effortChoices("codex-cli", "", "", codexOnly), m.EFFORT_LEVELS, "CLI default model: every level");
+  assert.deepEqual(m.effortChoices("claude-cli", "claude-opus-4-1", "", codexOnly), m.EFFORT_LEVELS, "a Claude model the catalog does not know: every level");
   assert.deepEqual(m.parseCodexModelsCache("{}"), []);
   // Claude model dropdown: versioned models with names and ids, then the aliases with what they stand for now, then older models.
   const noCatalog = { claude: [], codex: { models: [], efforts: {} }, resolved: {} };
@@ -450,8 +451,8 @@ async function deck(n, visualPages = []) {
   const labels = Object.fromEntries(m.modelChoices("claude-cli", "", [], noCatalog).map((c) => [c.value, c.label]));
   assert.equal(labels["claude-opus-5-5"], "Opus 5.5 (claude-opus-5-5)");
   assert.equal(labels["claude-haiku-4-5-20251001"], "Haiku 4.5 (claude-haiku-4-5-20251001)");
-  assert.equal(labels.opus, "opus (최신 Opus, 현재 Opus 5.5)", "an alias with its checked target");
-  assert.equal(labels.fable, "fable (최신 Fable, 현재 Fable 5.1)");
+  assert.equal(labels.opus, "opus (최신 Opus, Opus 5.5, 기준일 2026-10)", "an alias with the built-in target and when it was checked");
+  assert.equal(labels.fable, "fable (최신 Fable, Fable 5.1, 기준일 2026-10)");
   assert.match(labels[""], /CLI 기본값/);
   // A run recorded what an alias resolved to: that wins over the checked mapping.
   const seen = { ...noCatalog, resolved: { "claude-cli:opus": { id: "claude-opus-6", at: "2026-11-01" } } };
@@ -481,7 +482,21 @@ async function deck(n, visualPages = []) {
   const codexCat = { ...noCatalog, codex: m.parseCodexModels(JSON.stringify({ models: [{ slug: "gpt-6-astra", display_name: "GPT-6-Astra", description: "Frontier intelligence.", visibility: "list", priority: 2 }, { slug: "gpt-6-luna", visibility: "list", priority: 4 }] })) };
   const codexChoices = m.modelChoices("codex-cli", "", [], codexCat);
   assert.deepEqual(codexChoices.map((c) => [c.value, c.label, c.title]), [["gpt-6-astra", "GPT-6-Astra (gpt-6-astra)", "Frontier intelligence."], ["gpt-6-luna", "gpt-6-luna", undefined], ["", "CLI 기본값 (Codex 기본 모델)", undefined]]);
-  assert.deepEqual(m.modelChoices("codex-cli", "", [], ["gpt-6-astra"]).map((c) => c.value), ["gpt-6-astra", ""], "a plain id list still works");
+  // Effort the estimate counts: none for a model without levels, the model's default for "CLI 기본값".
+  const withDefaults = {
+    claude: m.parseClaudeModelCatalog(JSON.stringify({ catalog: { config: { models: [
+      { id: "claude-fable-5-1", name: "Fable 5.1", section: "main", thinking: { type: "effort", effort_options: [{ id: "low" }, { id: "high", badge: { message: "Recommended" } }] } },
+      { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", section: "main", thinking: { type: "none" } },
+    ] } } })),
+    codex: m.parseCodexModels(JSON.stringify({ models: [{ slug: "gpt-6-luna", visibility: "list", default_reasoning_level: "medium", supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }] }] })),
+    resolved: {},
+  };
+  assert.equal(m.estimateEffort("claude-cli", "claude-haiku-4-5-20251001", "low", withDefaults), "", "Haiku ignores effort: factor 1");
+  assert.equal(m.estimateEffort("claude-cli", "claude-fable-5-1", "", withDefaults), "high", "CLI default: the model's recommended level");
+  assert.equal(m.estimateEffort("codex-cli", "gpt-6-luna", "", withDefaults), "medium", "Codex default_reasoning_level");
+  assert.equal(m.estimateEffort("claude-cli", "claude-fable-5-1", "low", withDefaults), "low");
+  assert.equal(m.estimateEffort("claude-cli", "my-model", "", withDefaults), "", "unknown model and level: factor 1");
+  assert.equal(m.describeEffort(""), "effort CLI 기본값");
   assert.equal(m.describeModel("claude-cli", "", noCatalog), "CLI 기본 모델");
   assert.equal(m.describeModel("claude-cli", "claude-sonnet-5-5", noCatalog), "Sonnet 5.5 (claude-sonnet-5-5)");
   assert.equal(m.describeDefault("claude-cli", "concepts"), "haiku · effort low");

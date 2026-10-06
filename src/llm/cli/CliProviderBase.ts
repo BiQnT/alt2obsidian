@@ -214,7 +214,6 @@ export abstract class CliProviderBase implements LLMProvider {
         provider: this.providerId,
         model: this.config.model,
         resolvedModel: res.model ?? "",
-        effort: this.config.effort,
         task: this.config.task ?? "",
       });
       return res;

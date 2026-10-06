@@ -8,7 +8,7 @@ import { App, setIcon } from "obsidian";
 import type Alt2ObsidianPlugin from "../main";
 import type { PreparedVerification } from "../main";
 import { compactTokens } from "../llm/usage";
-import { describeModel } from "../settings/llmSettings";
+import { describeEffort, describeModel } from "../settings/llmSettings";
 import { renderModelPicker } from "./modelPicker";
 import { NotionMcpMissingError } from "../verify/notionFetch";
 import { normalizeTitle } from "../core/noteStatus";
@@ -69,7 +69,11 @@ export class VerifyPanel {
     this.notionInput = row.createEl("input", { type: "text", placeholder: "https://www.notion.so/..." });
     const fetchBtn = row.createEl("button", { text: "가져오기" });
     fetchBtn.addEventListener("click", () => void this.fetchNotion(fetchBtn));
-    this.notionStatus = notionBox.createDiv({ cls: "alt2obsidian-muted", text: "Claude CLI가 Notion 조회 도구 하나만 불러 페이지 원문을 가져옵니다 (호출 1회, 내용은 도구 결과를 그대로 씀)." });
+    const nm = this.plugin.notionFetchModel();
+    this.notionStatus = notionBox.createDiv({
+      cls: "alt2obsidian-muted",
+      text: `Claude CLI가 Notion 조회 도구 하나만 불러 페이지 원문을 가져옵니다 (호출 1회, 내용은 도구 결과를 그대로 씀). 모델: ${describeModel("claude-cli", nm.model, this.plugin.modelCatalog())} · ${describeEffort(nm.effort)}.`,
+    });
     this.inputBoxes.set("notion", notionBox);
 
     // Paste.
@@ -143,7 +147,8 @@ export class VerifyPanel {
         text:
           `가져왔습니다: ${res.markdown.length.toLocaleString()}자` +
           (res.lastEdited ? ` · 마지막 수정 ${res.lastEdited}` : "") +
-          (res.unchanged ? " · 지난번과 같은 페이지" : ""),
+          (res.unchanged ? " · 지난번과 같은 페이지" : "") +
+          (res.model ? ` · 모델 ${res.model}` : ""),
       });
       for (const w of res.warnings) this.notionStatus.createDiv({ cls: "alt2obsidian-error", text: w });
     } catch (e) {
@@ -207,6 +212,9 @@ export class VerifyPanel {
    */
   private showEstimate(prepared: PreparedVerification): void {
     const panel = this.estimateEl!;
+    // The picker that changed keeps the keyboard focus across the redraw.
+    const active = panel.ownerDocument.activeElement as HTMLElement | null;
+    const focused = active && panel.contains(active) ? active.getAttribute("aria-label") : null;
     panel.empty();
     const e = prepared.estimate;
     const settings = this.plugin.data.settings;
@@ -253,6 +261,7 @@ export class VerifyPanel {
       panel.empty();
       panel.hide();
     });
+    if (focused) (panel.querySelector(`select[aria-label="${CSS.escape(focused)}"]`) as HTMLElement | null)?.focus();
   }
 
   private async run(prepared: PreparedVerification): Promise<void> {
@@ -266,7 +275,7 @@ export class VerifyPanel {
     const bar = barOuter.createDiv({ cls: "alt2obsidian-progress-bar-fill" });
     const detail = panel.createDiv({ cls: "alt2obsidian-progress-text", text: "판정 시작" });
     const t = prepared.task;
-    const effort = t.effort ? ` · effort ${t.effort}` : "";
+    const effort = ` · ${describeEffort(t.effort)}`;
     const modelLine = panel.createDiv({ cls: "alt2obsidian-usage-line alt2obsidian-model-line", text: `모델: ${describeModel(t.provider, t.model, this.plugin.modelCatalog())}${effort}` });
     const usage = panel.createDiv({ cls: "alt2obsidian-usage-line", text: "사용량: 아직 호출 없음" });
     const cancel = panel.createEl("button", { text: "취소", cls: "alt2obsidian-cancel-btn" });

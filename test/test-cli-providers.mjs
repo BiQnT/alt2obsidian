@@ -274,10 +274,10 @@ for (const [label, Provider, bin] of [
   const tracker = new m.UsageTracker();
   const seenRecords = [];
   tracker.onRecord((e) => seenRecords.push(e.task));
-  tracker.record({ calls: 1, inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, imagesSent: 0, costUsd: 0, provider: "claude-cli", model: "sonnet", resolvedModel: "claude-sonnet-5-5", effort: "medium", task: "commentary" });
-  tracker.record({ calls: 1, inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, imagesSent: 0, costUsd: 0, provider: "codex-cli", model: "", resolvedModel: "", effort: "low", task: "concepts" });
-  assert.deepEqual(tracker.modelFor("commentary"), { requested: "sonnet", used: "claude-sonnet-5-5", provider: "claude-cli", effort: "medium" });
-  assert.deepEqual(tracker.modelFor("concepts"), { requested: "", used: "", provider: "codex-cli", effort: "low" });
+  tracker.record({ calls: 1, inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, imagesSent: 0, costUsd: 0, provider: "claude-cli", model: "sonnet", resolvedModel: "claude-sonnet-5-5", task: "commentary" });
+  tracker.record({ calls: 1, inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, imagesSent: 0, costUsd: 0, provider: "codex-cli", model: "gpt-6-luna", resolvedModel: "", task: "concepts" });
+  assert.equal(tracker.modelFor("commentary"), "claude-sonnet-5-5", "the id the CLI reported");
+  assert.equal(tracker.modelFor("concepts"), "gpt-6-luna", "else the requested model");
   assert.equal(tracker.modelFor("verification"), null);
   assert.deepEqual(seenRecords, ["commentary", "concepts"]);
   // Robust JSON extraction (review N2).

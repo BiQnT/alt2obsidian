@@ -3,7 +3,7 @@ import type Alt2ObsidianPlugin from "../main";
 import type { PreparedImport } from "../main";
 import { ImportPreview, ImportUpdateSummary, LLMUsage, TaskId } from "../types";
 import { compactTokens } from "../llm/usage";
-import { describeModel, PROVIDER_LABELS } from "../settings/llmSettings";
+import { describeEffort, describeModel, PROVIDER_LABELS } from "../settings/llmSettings";
 import { renderModelPicker } from "./modelPicker";
 import { AltNoteDetails, AltNoteSummary, inferSubject } from "../sources";
 import { AltApiError } from "../sources/AltLocalApiSource";
@@ -694,6 +694,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
     let prepared = initial;
     return new Promise((resolve) => {
       const render = () => {
+        // The picker that changed keeps the keyboard focus across the redraw.
+        const active = panel.ownerDocument.activeElement as HTMLElement | null;
+        const focused = active && panel.contains(active) ? active.getAttribute("aria-label") : null;
         panel.empty();
         const e = prepared.estimate;
         const settings = this.plugin.data.settings;
@@ -731,7 +734,12 @@ export class Alt2ObsidianSidebarView extends ItemView {
           if (prepared.alignment) {
             const low = prepared.alignment.lowSpans.length;
             const align = this.plugin.runTask(prepared, "alignment");
-            const check = align.provider !== "none" && low > 0 ? `, 불확실한 ${low}개는 ${PROVIDER_LABELS[align.provider]}로 확인` : low > 0 ? `, 불확실 ${low}개` : "";
+            const check =
+              align.provider !== "none" && low > 0
+                ? `, 불확실한 ${low}개는 ${PROVIDER_LABELS[align.provider]} ${describeModel(align.provider, align.model, catalog)} · ${describeEffort(align.effort)}로 확인`
+                : low > 0
+                  ? `, 불확실 ${low}개`
+                  : "";
             rows.createEl("li", { text: `전사 정렬: 슬라이드별 구간 ${prepared.alignment.result.spans.length}개${check}` });
           } else if (prepared.preview.altData.transcript) {
             rows.createEl("li", { text: "전사 타임스탬프가 없어 슬라이드마다 균등 분할합니다." });
@@ -773,6 +781,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
         }
         const cancel = actions.createEl("button", { text: "취소" });
         cancel.addEventListener("click", () => resolve({ choice: "cancel", prepared }));
+        if (focused) (panel.querySelector(`select[aria-label="${CSS.escape(focused)}"]`) as HTMLElement | null)?.focus();
       };
       render();
     });
@@ -803,9 +812,11 @@ export class Alt2ObsidianSidebarView extends ItemView {
     const catalog = this.plugin.modelCatalog();
     const labels: Partial<Record<string, string>> = { commentary: "해설", concepts: "개념", alignment: "정렬 확인" };
     const used = new Map<string, string>();
-    for (const task of ["commentary", "concepts"] as TaskId[]) {
+    const align = this.plugin.runTask(prepared, "alignment");
+    const tasks: TaskId[] = align.provider !== "none" && (prepared.alignment?.lowSpans.length ?? 0) > 0 ? ["commentary", "concepts", "alignment"] : ["commentary", "concepts"];
+    for (const task of tasks) {
       const t = this.plugin.runTask(prepared, task);
-      used.set(task, `${describeModel(t.provider, t.model, catalog)}${t.effort ? ` · effort ${t.effort}` : ""}`);
+      used.set(task, `${describeModel(t.provider, t.model, catalog)} · ${describeEffort(t.effort)}`);
     }
     const modelLine = panel.createDiv({ cls: "alt2obsidian-usage-line alt2obsidian-model-line" });
     const showModels = () => modelLine.setText(`모델: ${Array.from(used.entries()).map(([t, m]) => `${labels[t] ?? t} ${m}`).join(" / ")}`);
@@ -847,7 +858,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
       model: (task: string, model: string) => {
         if (!labels[task] || !model) return;
         const t = this.plugin.runTask(prepared, task as TaskId);
-        used.set(task, `${model}${t.effort ? ` · effort ${t.effort}` : ""} (실제 실행)`);
+        used.set(task, `${model} · ${describeEffort(t.effort)} (실제 실행)`);
         showModels();
       },
     };

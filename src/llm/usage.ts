@@ -21,7 +21,6 @@ export interface UsageRecord extends LLMUsage {
   model: string;
   /** The id the CLI reported it used ("" when it does not say, e.g. Codex). */
   resolvedModel?: string;
-  effort?: string;
   task: string;
 }
 
@@ -48,13 +47,13 @@ export class UsageTracker {
 
   /**
    * The model a task's calls actually used: the resolved id of its last
-   * call, else what was requested. Null when the task made no call.
+   * call, else what was requested ("" = the CLI default). Null when the
+   * task made no call.
    */
-  modelFor(task: string): { requested: string; used: string; provider: ProviderId; effort: string } | null {
+  modelFor(task: string): string | null {
     for (let i = this.records.length - 1; i >= 0; i--) {
       const r = this.records[i];
-      if (r.task !== task) continue;
-      return { requested: r.model, used: r.resolvedModel || r.model, provider: r.provider, effort: r.effort ?? "" };
+      if (r.task === task) return r.resolvedModel || r.model;
     }
     return null;
   }

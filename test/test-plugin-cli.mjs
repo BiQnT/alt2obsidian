@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { importTs } from "./helpers/bundle-ts.mjs";
@@ -475,8 +475,29 @@ try {
       viewer.getViewType = () => VIEW_TYPE_SYNCED_VIEWER;
       active = leaf("pdf", pdf);
       await plugin.onPdfOpened(pdf);
-      assert.equal(active.detached, true);
+      assert.equal(active.detached, true, "a tab opened just for this PDF is closed");
       assert.equal(revealed, viewerLeaf);
+      // The PDF replaced a note in the user's tab: that tab goes back to the note, it is not closed.
+      revealed = null;
+      active = leaf("pdf", pdf);
+      const prevNote = Object.assign(new TFile(), { path: rec.path });
+      active.history = {
+        backHistory: [{ state: { type: "markdown", state: { file: rec.path } } }],
+        back: async () => {
+          active.history.backHistory.pop();
+          active.view = { getViewType: () => "markdown", file: prevNote };
+          active.wentBack = true;
+        },
+      };
+      await plugin.onPdfOpened(pdf);
+      assert.deepEqual([active.detached, active.wentBack, active.view.getViewType()], [false, true, "markdown"], "the tab and its history are kept");
+      assert.equal(revealed, viewerLeaf);
+      // Turning the setting on later leaves the PDF tabs already open as they are.
+      const openBefore = leaf("pdf", pdf);
+      plugin.keepOpenPdfTabsPlain();
+      active = openBefore;
+      await plugin.onPdfOpened(pdf);
+      assert.deepEqual([openBefore.state, openBefore.detached], [null, false], "a PDF tab open when the redirect started stays a PDF");
       // Setting off: nothing changes.
       plugin.data.settings.openPdfInViewer = false;
       active = leaf("pdf", pdf);
@@ -635,8 +656,10 @@ try {
     assert.match(files.get(rec.path), /alt2obs_usage: \{provider: "Claude CLI claude-opus-5-5", model: "claude-opus-5-5", effort: "high", concept_model: "claude-haiku-4-5-20251001", /);
     assert.equal(JSON.stringify(plugin.data.settings.tasks), saved, "still unchanged after the run");
     assert.equal(plugin.data.resolvedModels["claude-cli:claude-opus-5-5"].id, "claude-opus-5-5");
-    // "기본값으로 저장" makes it the saved setting.
+    // "기본값으로 저장" makes it the saved setting, in the same object the settings tab holds.
+    const held = plugin.data.settings.tasks.commentary;
     await plugin.saveTaskDefault("commentary", { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" });
+    assert.equal(plugin.data.settings.tasks.commentary, held, "updated in place");
     assert.deepEqual(stored().settings.tasks.commentary, { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" });
     assert.equal(plugin.data.settings.preset, "custom");
     plugin.data.settings.tasks = JSON.parse(saved);
@@ -674,6 +697,34 @@ try {
     assert.ok(files.has(`${folder}/Stride Scheduling (스트라이드 스케줄링).md`), "a new concept uses the new order");
     assert.equal([...files.keys()].filter((k) => k.startsWith(folder)).length, before + 1);
     console.log("PASS: concept notes match in either name order (English or Korean part): existing notes reused and kept, new ones named English (한국어)");
+  }
+
+  // Claude Code's model catalog: the newest *-cc.json under CLAUDE_CONFIG_DIR, kept once found.
+  {
+    const cfg = mkdtempSync(join(tmpdir(), "alt2obs-claude-config-"));
+    const saved = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = cfg;
+    try {
+      const fresh = await makePlugin(undefined);
+      assert.deepEqual(fresh.plugin.claudeModels(), [], "no catalog yet: the built-in list is used");
+      const dir = join(cfg, "cache", "model-catalog");
+      mkdirSync(dir, { recursive: true });
+      const cat = (id, name) => JSON.stringify({ catalog: { config: { models: [{ id, name, section: "main", thinking: { type: "effort", effort_options: [{ id: "low" }] } }] } } });
+      writeFileSync(join(dir, "old-cc.json"), cat("claude-old-1", "Old 1"));
+      writeFileSync(join(dir, "new-cc.json"), cat("claude-new-2", "New 2"));
+      writeFileSync(join(dir, "other.json"), cat("claude-other", "Other"));
+      const past = (Date.now() - 3600 * 1000) / 1000;
+      utimesSync(join(dir, "old-cc.json"), past, past);
+      assert.deepEqual(fresh.plugin.claudeModels().map((m) => m.id), ["claude-new-2"], "read again after an empty result; the newest -cc.json wins");
+      writeFileSync(join(dir, "new-cc.json"), cat("claude-newer-3", "Newer 3"));
+      assert.deepEqual(fresh.plugin.claudeModels().map((m) => m.id), ["claude-new-2"], "kept for the session once found");
+      assert.equal(fresh.plugin.modelCatalog().claude[0].name, "New 2");
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved;
+      rmSync(cfg, { recursive: true, force: true });
+    }
+    console.log("PASS: Claude Code's model catalog: newest -cc.json under CLAUDE_CONFIG_DIR, read again until found, then kept");
   }
 
   // Unload aborts running jobs (review M2).
