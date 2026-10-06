@@ -3,7 +3,7 @@
 // concept wikilinks identically. No obsidian import.
 
 import { OVERVIEW_BLOCK_END, OVERVIEW_BLOCK_START } from "../types";
-import { conceptKey, parseConceptName, sameConcept } from "./conceptNames";
+import { ambiguousKorean, conceptKey, parseConceptName, sameConcept } from "./conceptNames";
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -16,10 +16,11 @@ const HANGUL_SYLLABLE = /[가-힣]/;
 
 /**
  * Text that is never linked, as one capturing group (the split keeps it at
- * odd indexes): fenced and indented code, inline code (also with double
- * backticks), HTML comments and tags, wikilinks, Markdown links and images,
- * other bracketed text (callout types, footnotes), URLs, math and heading
- * lines.
+ * odd indexes): fenced code, inline code (also with double backticks), HTML
+ * comments and tags, wikilinks, Markdown links and images, other bracketed
+ * text (callout types, footnotes), URLs, math and heading lines. Indented
+ * code is found line by line (`indentedCode`), since a nested list item is
+ * indented the same way.
  */
 const PROTECTED = new RegExp(
   "(" +
@@ -37,10 +38,73 @@ const PROTECTED = new RegExp(
       "\\$[^\\s$](?:[^$\\n]*[^\\s$])?\\$",
       "<[^<>\\n]+>",
       "(?<=^|\\n)[ ]{0,3}#{1,6}[ \\t][^\\n]*",
-      "(?<=^|\\n)(?: {4}|\\t)[^\\n]*",
     ].join("|") +
     ")"
 );
+
+/**
+ * Lines of indented code (four spaces or a tab) as [start, end) offsets: an
+ * indented line after a blank line or more code, outside a list (a nested
+ * list item or list content is indented the same way) and outside fenced
+ * code (the fence rule takes that).
+ */
+function indentedCode(text: string): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  let pos = 0;
+  let fence: string | null = null;
+  let list = false;
+  let prevBlank = true;
+  let prevCode = false;
+  for (const line of text.split("\n")) {
+    const start = pos;
+    pos += line.length + 1;
+    const blank = line.trim() === "";
+    const f = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+      prevBlank = false;
+      prevCode = false;
+      continue;
+    }
+    if (blank) {
+      prevBlank = true;
+      continue;
+    }
+    const indented = /^( {4}|\t)/.test(line);
+    if (indented && !list && (prevBlank || prevCode)) {
+      out.push([start, start + line.length]);
+      prevCode = true;
+      prevBlank = false;
+      continue;
+    }
+    if (f) fence = f[1];
+    if (/^\s*([-*+]|\d{1,9}[.)])\s/.test(line)) list = true;
+    else if (!indented) list = false;
+    prevCode = false;
+    prevBlank = false;
+  }
+  return out;
+}
+
+/** The text split into alternating plain and protected pieces (protected at odd indexes). */
+function splitProtected(text: string): string[] {
+  const parts = [""];
+  const plain = (seg: string) => {
+    const sub = seg.split(PROTECTED);
+    for (let j = 0; j < sub.length; j++) {
+      if (j % 2 === 0) parts[parts.length - 1] += sub[j];
+      else parts.push(sub[j], "");
+    }
+  };
+  let pos = 0;
+  for (const [a, b] of indentedCode(text)) {
+    plain(text.slice(pos, a));
+    parts.push(text.slice(a, b), "");
+    pos = b;
+  }
+  plain(text.slice(pos));
+  return parts;
+}
 
 /** Words that start a sentence or a phrase, not a longer term ("The Lottery Scheduling"). */
 const SENTENCE_WORDS = new Set(["The", "A", "An", "In", "On", "Of", "For", "To", "And", "Or", "With", "By", "At", "As", "Is", "It", "This", "That"]);
@@ -59,10 +123,24 @@ const DETERMINERS = new Set([
   "그", "이", "저", "이런", "그런", "저런", "각", "새", "모든", "여러", "두", "세", "네", "한", "첫", "다른", "어떤",
   "매", "약", "총", "몇", "온", "이번", "다음", "해당", "같은", "또", "즉", "곧", "바로", "다시", "먼저", "또는",
   "그리고", "그러나", "하지만", "또한", "따라서", "그래서", "반면", "대신", "특히", "다만", "이때", "이제", "결국", "보통", "항상",
+  "자기", "자신", "각자", "서로", "우리", "이들", "그들", "모두", "일부", "때", "후", "전", "뒤", "동안",
 ]);
 
-/** Endings of a word that already carries a particle ("프로세스의 트리"). */
-const PARTICLE_ENDINGS = ["의", "와", "과", "을", "를", "은", "는", "에", "에서", "으로", "로서", "에게", "까지", "부터", "처럼", "보다", "하고", "이고", "이며", "하며", "하면", "되면"];
+/** Words after a term that do not make a compound with it ("트리 같은", "캐시 때문에", "트리 및"). */
+const FOLLOWERS = [
+  "같은", "같이", "등", "및", "또는", "혹은", "덕분에", "때문에", "대신", "대신에", "중", "중에", "중에서", "기반", "기반의", "기반으로",
+  "자체", "만큼", "외", "외에", "이외", "관련", "관련된", "하나", "각각", "모두",
+];
+
+/**
+ * Endings of a word that already carries a particle or a verb ending, so it
+ * does not make a compound with the next word ("프로세스가 티켓을", "(화폐)로
+ * 티켓을", "빠르게 트리를", "위해 캐시를").
+ */
+const PARTICLE_ENDINGS = [
+  "의", "와", "과", "을", "를", "은", "는", "에", "가", "이", "도", "만", "로", "께", "서", "에서", "으로", "로서", "에게",
+  "까지", "부터", "처럼", "보다", "게", "해", "며", "고", "지만", "면", "어", "아", "워", "눠", "려", "도록", "면서", "는데",
+];
 
 /** The Hangul right after a term is nothing but particles (at most three). */
 function onlyParticles(run: string, depth = 0): boolean {
@@ -86,13 +164,14 @@ function modifiesAsNoun(word: string): boolean {
  * compound noun with the word before or after it ("로터리 스케줄링",
  * "캐시 일관성").
  */
-function koreanStandsAlone(text: string, start: number, end: number): boolean {
+export function koreanStandsAlone(text: string, start: number, end: number): boolean {
   const after = text.slice(end);
   const run = after.match(/^[가-힣]+/);
   if (run) {
     if (!onlyParticles(run[0])) return false;
-  } else if (/^[ \t][가-힣]/.test(after)) {
-    return false;
+  } else {
+    const next = after.match(/^[ \t]([가-힣]+)/);
+    if (next && !FOLLOWERS.some((f) => next[1].startsWith(f) && onlyParticles(next[1].slice(f.length)))) return false;
   }
   const prev = text.slice(0, start).match(/([가-힣]+)[ \t]$/);
   return !(prev && modifiesAsNoun(prev[1]));
@@ -162,26 +241,29 @@ export function linkConceptNames(text: string, conceptNames: string[], knownName
   const inTableRow = tableLines(text);
 
   // Existing wikilinks: point a concept link at the note's real name; note which concepts are linked.
-  const parts = text.split(PROTECTED);
+  const parts = splitProtected(text);
+  const linkRe = /^\[\[([^\]|#\n]+?)(#[^\]|\\]*)?(?:(\\?\|)([^\]]*))?\]\]$/;
+  // A Korean-only note takes no link when two different concepts here share its Korean name.
+  const ambiguous = ambiguousKorean([...targets, ...parts.filter((_, i) => i % 2 === 1).map((p) => p.match(linkRe)?.[1].trim() ?? "").filter(Boolean)]);
   const linked = new Set<string>();
   let base = 0;
   for (let i = 0; i < parts.length; i++) {
     const at = base;
     base += parts[i].length;
     if (i % 2 === 0) continue;
-    const m = parts[i].match(/^\[\[([^\]|#\n]+?)(#[^\]|\\]*)?(?:(\\?\|)([^\]]*))?\]\]$/);
+    const m = parts[i].match(linkRe);
     if (!m) continue;
     const target = m[1].trim();
     let real = target;
     if (!targets.some((t) => t.toLowerCase() === target.toLowerCase())) {
-      const same = targets.find((t) => sameConcept(target, t));
+      const same = targets.find((t) => sameConcept(target, t, ambiguous));
       if (same) {
         real = same;
         const pipe = m[3] ?? (inTableRow(at) ? "\\|" : "|");
         parts[i] = `[[${same}${m[2] ?? ""}${pipe}${m[3] ? m[4] : target}]]`;
       }
     }
-    for (const name of names) if (sameConcept(real, name)) linked.add(name);
+    for (const name of names) if (sameConcept(real, name, ambiguous)) linked.add(name);
   }
   if (names.length === 0) return parts.join("");
 

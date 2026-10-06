@@ -100,35 +100,62 @@ function acronymOf(acronym, expansion) {
   const a = acronym.replace(/[^A-Z0-9]/g, "");
   return a.length >= 2 && (initials(expansion, true) === a || initials(expansion, false) === a);
 }
-function englishRelated(x, y) {
+function sameWords(x, y) {
   const kx = conceptKey(x);
   const ky = conceptKey(y);
-  if (kx.startsWith(ky) || ky.startsWith(kx))
+  if (kx === ky)
+    return true;
+  const [short, long] = kx.length <= ky.length ? [kx, ky] : [ky, kx];
+  return short.length >= 4 && long.startsWith(short) && long.length - short.length <= 3;
+}
+function englishRelated(x, y) {
+  if (sameWords(x, y))
     return true;
   const tokens = (s) => s.split(/\s+/).filter(isAcronym);
   return tokens(x).some((t) => acronymOf(t, y)) || tokens(y).some((t) => acronymOf(t, x));
+}
+function ambiguousKorean(names) {
+  const byKorean = /* @__PURE__ */ new Map();
+  for (const n of names) {
+    const p = parseConceptName(n);
+    if (!p.korean || p.aliases.length === 0)
+      continue;
+    const k = conceptKey(p.korean);
+    byKorean.set(k, [...byKorean.get(k) ?? [], n]);
+  }
+  const out = /* @__PURE__ */ new Set();
+  for (const [k, list] of byKorean) {
+    if (list.some((a, i) => list.slice(i + 1).some((b) => !sameConcept(a, b))))
+      out.add(k);
+  }
+  return out;
 }
 function sameConcept(a, b, ambiguous) {
   if (conceptKey(a) === conceptKey(b))
     return true;
   const pa = parseConceptName(a);
   const pb = parseConceptName(b);
-  for (const x of pa.aliases) {
-    for (const y of pb.aliases) {
-      if (conceptKey(x) === conceptKey(y))
-        return true;
-      if (isAcronym(x) && x.replace(/[^A-Z0-9]/g, "").length >= 3 && acronymOf(x, y) || isAcronym(y) && y.replace(/[^A-Z0-9]/g, "").length >= 3 && acronymOf(y, x))
-        return true;
+  const acr = (p) => p.aliases.filter(isAcronym);
+  const exp = (p) => p.aliases.filter((x) => !isAcronym(x));
+  if (pa.korean && pb.korean) {
+    const k = conceptKey(pa.korean);
+    if (k === conceptKey(pb.korean)) {
+      if (pa.aliases.length === 0 || pb.aliases.length === 0)
+        return !ambiguous?.has(k);
+      return pa.aliases.some((x) => pb.aliases.some((y) => englishRelated(x, y)));
     }
+    return exp(pa).some((x) => exp(pb).some((y) => conceptKey(x) === conceptKey(y)));
   }
-  if (!pa.korean || !pb.korean)
-    return false;
-  const k = conceptKey(pa.korean);
-  if (k !== conceptKey(pb.korean))
-    return false;
-  if (pa.aliases.length === 0 || pb.aliases.length === 0)
-    return !ambiguous?.has(k);
-  return pa.aliases.some((x) => pb.aliases.some((y) => englishRelated(x, y)));
+  const ea = exp(pa);
+  const eb = exp(pb);
+  if (ea.length > 0 && eb.length > 0)
+    return ea.some((x) => eb.some((y) => sameWords(x, y)));
+  const aa = acr(pa);
+  const ab = acr(pb);
+  if (aa.some((x) => ab.some((y) => conceptKey(x) === conceptKey(y))))
+    return true;
+  const long = (x) => x.replace(/[^A-Z0-9]/g, "").length >= 3;
+  return aa.some((x) => long(x) && eb.some((y) => acronymOf(x, y))) || ab.some((y) => long(y) && ea.some((x) => acronymOf(y, x)));
 }
 
 // src/core/markdown.ts
@@ -151,10 +178,70 @@ var PROTECTED = new RegExp(
     "\\$\\$[\\s\\S]*?\\$\\$",
     "\\$[^\\s$](?:[^$\\n]*[^\\s$])?\\$",
     "<[^<>\\n]+>",
-    "(?<=^|\\n)[ ]{0,3}#{1,6}[ \\t][^\\n]*",
-    "(?<=^|\\n)(?: {4}|\\t)[^\\n]*"
+    "(?<=^|\\n)[ ]{0,3}#{1,6}[ \\t][^\\n]*"
   ].join("|") + ")"
 );
+function indentedCode(text) {
+  const out = [];
+  let pos = 0;
+  let fence = null;
+  let list = false;
+  let prevBlank = true;
+  let prevCode = false;
+  for (const line of text.split("\n")) {
+    const start = pos;
+    pos += line.length + 1;
+    const blank = line.trim() === "";
+    const f = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (f && f[1][0] === fence[0] && f[1].length >= fence.length)
+        fence = null;
+      prevBlank = false;
+      prevCode = false;
+      continue;
+    }
+    if (blank) {
+      prevBlank = true;
+      continue;
+    }
+    const indented = /^( {4}|\t)/.test(line);
+    if (indented && !list && (prevBlank || prevCode)) {
+      out.push([start, start + line.length]);
+      prevCode = true;
+      prevBlank = false;
+      continue;
+    }
+    if (f)
+      fence = f[1];
+    if (/^\s*([-*+]|\d{1,9}[.)])\s/.test(line))
+      list = true;
+    else if (!indented)
+      list = false;
+    prevCode = false;
+    prevBlank = false;
+  }
+  return out;
+}
+function splitProtected(text) {
+  const parts = [""];
+  const plain = (seg) => {
+    const sub = seg.split(PROTECTED);
+    for (let j = 0; j < sub.length; j++) {
+      if (j % 2 === 0)
+        parts[parts.length - 1] += sub[j];
+      else
+        parts.push(sub[j], "");
+    }
+  };
+  let pos = 0;
+  for (const [a, b] of indentedCode(text)) {
+    plain(text.slice(pos, a));
+    parts.push(text.slice(a, b), "");
+    pos = b;
+  }
+  plain(text.slice(pos));
+  return parts;
+}
 var SENTENCE_WORDS = /* @__PURE__ */ new Set(["The", "A", "An", "In", "On", "Of", "For", "To", "And", "Or", "With", "By", "At", "As", "Is", "It", "This", "That"]);
 var PARTICLES = [
   "\uC73C\uB85C\uC368",
@@ -271,9 +358,89 @@ var DETERMINERS = /* @__PURE__ */ new Set([
   "\uC774\uC81C",
   "\uACB0\uAD6D",
   "\uBCF4\uD1B5",
-  "\uD56D\uC0C1"
+  "\uD56D\uC0C1",
+  "\uC790\uAE30",
+  "\uC790\uC2E0",
+  "\uAC01\uC790",
+  "\uC11C\uB85C",
+  "\uC6B0\uB9AC",
+  "\uC774\uB4E4",
+  "\uADF8\uB4E4",
+  "\uBAA8\uB450",
+  "\uC77C\uBD80",
+  "\uB54C",
+  "\uD6C4",
+  "\uC804",
+  "\uB4A4",
+  "\uB3D9\uC548"
 ]);
-var PARTICLE_ENDINGS = ["\uC758", "\uC640", "\uACFC", "\uC744", "\uB97C", "\uC740", "\uB294", "\uC5D0", "\uC5D0\uC11C", "\uC73C\uB85C", "\uB85C\uC11C", "\uC5D0\uAC8C", "\uAE4C\uC9C0", "\uBD80\uD130", "\uCC98\uB7FC", "\uBCF4\uB2E4", "\uD558\uACE0", "\uC774\uACE0", "\uC774\uBA70", "\uD558\uBA70", "\uD558\uBA74", "\uB418\uBA74"];
+var FOLLOWERS = [
+  "\uAC19\uC740",
+  "\uAC19\uC774",
+  "\uB4F1",
+  "\uBC0F",
+  "\uB610\uB294",
+  "\uD639\uC740",
+  "\uB355\uBD84\uC5D0",
+  "\uB54C\uBB38\uC5D0",
+  "\uB300\uC2E0",
+  "\uB300\uC2E0\uC5D0",
+  "\uC911",
+  "\uC911\uC5D0",
+  "\uC911\uC5D0\uC11C",
+  "\uAE30\uBC18",
+  "\uAE30\uBC18\uC758",
+  "\uAE30\uBC18\uC73C\uB85C",
+  "\uC790\uCCB4",
+  "\uB9CC\uD07C",
+  "\uC678",
+  "\uC678\uC5D0",
+  "\uC774\uC678",
+  "\uAD00\uB828",
+  "\uAD00\uB828\uB41C",
+  "\uD558\uB098",
+  "\uAC01\uAC01",
+  "\uBAA8\uB450"
+];
+var PARTICLE_ENDINGS = [
+  "\uC758",
+  "\uC640",
+  "\uACFC",
+  "\uC744",
+  "\uB97C",
+  "\uC740",
+  "\uB294",
+  "\uC5D0",
+  "\uAC00",
+  "\uC774",
+  "\uB3C4",
+  "\uB9CC",
+  "\uB85C",
+  "\uAED8",
+  "\uC11C",
+  "\uC5D0\uC11C",
+  "\uC73C\uB85C",
+  "\uB85C\uC11C",
+  "\uC5D0\uAC8C",
+  "\uAE4C\uC9C0",
+  "\uBD80\uD130",
+  "\uCC98\uB7FC",
+  "\uBCF4\uB2E4",
+  "\uAC8C",
+  "\uD574",
+  "\uBA70",
+  "\uACE0",
+  "\uC9C0\uB9CC",
+  "\uBA74",
+  "\uC5B4",
+  "\uC544",
+  "\uC6CC",
+  "\uB220",
+  "\uB824",
+  "\uB3C4\uB85D",
+  "\uBA74\uC11C",
+  "\uB294\uB370"
+];
 function onlyParticles(run, depth = 0) {
   if (run === "")
     return true;
@@ -294,8 +461,10 @@ function koreanStandsAlone(text, start, end) {
   if (run) {
     if (!onlyParticles(run[0]))
       return false;
-  } else if (/^[ \t][가-힣]/.test(after)) {
-    return false;
+  } else {
+    const next = after.match(/^[ \t]([가-힣]+)/);
+    if (next && !FOLLOWERS.some((f) => next[1].startsWith(f) && onlyParticles(next[1].slice(f.length))))
+      return false;
   }
   const prev = text.slice(0, start).match(/([가-힣]+)[ \t]$/);
   return !(prev && modifiesAsNoun(prev[1]));
@@ -344,7 +513,9 @@ function linkConceptNames(text, conceptNames, knownNames = []) {
   if (targets.length === 0)
     return text;
   const inTableRow = tableLines(text);
-  const parts = text.split(PROTECTED);
+  const parts = splitProtected(text);
+  const linkRe = /^\[\[([^\]|#\n]+?)(#[^\]|\\]*)?(?:(\\?\|)([^\]]*))?\]\]$/;
+  const ambiguous = ambiguousKorean([...targets, ...parts.filter((_, i) => i % 2 === 1).map((p) => p.match(linkRe)?.[1].trim() ?? "").filter(Boolean)]);
   const linked = /* @__PURE__ */ new Set();
   let base = 0;
   for (let i = 0; i < parts.length; i++) {
@@ -352,13 +523,13 @@ function linkConceptNames(text, conceptNames, knownNames = []) {
     base += parts[i].length;
     if (i % 2 === 0)
       continue;
-    const m = parts[i].match(/^\[\[([^\]|#\n]+?)(#[^\]|\\]*)?(?:(\\?\|)([^\]]*))?\]\]$/);
+    const m = parts[i].match(linkRe);
     if (!m)
       continue;
     const target = m[1].trim();
     let real = target;
     if (!targets.some((t) => t.toLowerCase() === target.toLowerCase())) {
-      const same = targets.find((t) => sameConcept(target, t));
+      const same = targets.find((t) => sameConcept(target, t, ambiguous));
       if (same) {
         real = same;
         const pipe = m[3] ?? (inTableRow(at) ? "\\|" : "|");
@@ -366,7 +537,7 @@ function linkConceptNames(text, conceptNames, knownNames = []) {
       }
     }
     for (const name of names)
-      if (sameConcept(real, name))
+      if (sameConcept(real, name, ambiguous))
         linked.add(name);
   }
   if (names.length === 0)

@@ -216,3 +216,64 @@ console.log("PASS: buildOverviewSection");
   assert.deepEqual(one.map((c) => c.name), ["지연"]);
   console.log("PASS: review fixes: tables without leading pipes, code/comments/headings/brackets skipped, dollar amounts, sentence words, ambiguous Korean-only notes");
 }
+{
+  // Re-review HIGH: one acronym with two different expansions is two concepts; initials only when one side has no expansion.
+  const differ = [
+    ["UMA (Uniform Memory Access)", "Unified Memory Architecture (통합 메모리 구조)"],
+    ["CAS (Compare-And-Swap)", "Column Address Strobe (열 주소 스트로브)"],
+    ["DMA (Direct Memory Access)", "Dynamic Memory Allocation"],
+    ["SMP (Symmetric Multiprocessor)", "Shared Memory Parallelism"],
+    ["ILP (Instruction-Level Parallelism)", "Integer Linear Programming"],
+    ["PCB (Process Control Block)", "Printed Circuit Board"],
+    ["MPP (Massively Parallel Processor)", "Message Passing Protocol"],
+    ["SM (Streaming Multiprocessor)", "SM (Shared Memory)"],
+    ["PC (Program Counter)", "PC (Personal Computer)"],
+    ["CS (Context Switch)", "CS (Critical Section)"],
+    ["PC (프로그램 카운터)", "PC (개인용 컴퓨터)"],
+    ["Ticket", "Ticket Currency (티켓 화폐)"],
+  ];
+  for (const [a, b] of differ) assert.ok(!cn.sameConcept(a, b) && !cn.sameConcept(b, a), `${a} != ${b}`);
+  for (const [a, b] of [
+    ["PTE (Page Table Entry)", "PTE (페이지 테이블 엔트리)"],
+    ["CFS (Completely Fair Scheduler)", "Completely Fair Scheduler (CFS)"],
+    ["TLB (Translation Look-Aside Buffer)", "Translation Lookaside Buffer (TLB)"],
+    ["DRAM (Dynamic RAM)", "DRAM (동적 램)"],
+    ["LR-SC (Load-Reserved Store-Conditional)", "LR/SC (Load-Reserved Store-Conditional)"],
+    ["GPGPU (General-Purpose GPU Computing)", "GPGPU (범용 GPU 컴퓨팅)"],
+    ["MESI Protocol (MESI 프로토콜)", "MESI 프로토콜 (Modified-Exclusive-Shared-Invalid)"],
+    ["NUMA (Non-Uniform Memory Access)", "Non-Uniform Memory Access (불균일 메모리 접근)"],
+    ["CPU", "Central Processing Unit"],
+    ["CPU (중앙 처리 장치)", "Central Processing Unit (중앙 처리 장치)"],
+  ]) assert.ok(cn.sameConcept(a, b) && cn.sameConcept(b, a), `${a} = ${b}`);
+  // M1 retargeting uses the same rule, with the Korean-only safeguard.
+  assert.equal(linkConceptNames("[[PC (Personal Computer)]]", [], ["PC (Program Counter)"]), "[[PC (Personal Computer)]]", "a different expansion is not retargeted");
+  assert.equal(
+    linkConceptNames("[[Latency (지연)]]과 [[Delay (지연)]]", [], ["지연"]),
+    "[[Latency (지연)]]과 [[Delay (지연)]]",
+    "two concepts sharing a Korean name are not both pointed at the Korean-only note"
+  );
+  assert.equal(linkConceptNames("[[Latency (지연)]]은 짧다", [], ["지연"]), "[[지연|Latency (지연)]]은 짧다", "one alone is");
+
+  // Re-review MEDIUM: Korean mentions after a particle or verb ending, before a function word, are linked.
+  const ko = ["Ticket (티켓)", "Red-Black Tree (레드-블랙 트리)", "Cache (캐시)", "Stride Scheduling (스트라이드 스케줄링)"];
+  for (const [t, want] of [
+    ["서버가 티켓을 받습니다.", "서버가 [[Ticket (티켓)|티켓]]을 받습니다."],
+    ["프로세스가 티켓을 받습니다.", "프로세스가 [[Ticket (티켓)|티켓]]을 받습니다."],
+    ["10개가 레드-블랙 트리에 있습니다.", "10개가 [[Red-Black Tree (레드-블랙 트리)|레드-블랙 트리]]에 있습니다."],
+    ["사용자 단위(화폐)로 티켓을 나눕니다.", "사용자 단위(화폐)로 [[Ticket (티켓)|티켓]]을 나눕니다."],
+    ["자기 티켓을 줍니다.", "자기 [[Ticket (티켓)|티켓]]을 줍니다."],
+    ["빠르게 트리를 찾습니다. 레드-블랙 트리를 씁니다.", "빠르게 트리를 찾습니다. [[Red-Black Tree (레드-블랙 트리)|레드-블랙 트리]]를 씁니다."],
+    ["속도를 위해 캐시를 둡니다.", "속도를 위해 [[Cache (캐시)|캐시]]를 둡니다."],
+    ["스트라이드 스케줄링 같은 방식", "[[Stride Scheduling (스트라이드 스케줄링)|스트라이드 스케줄링]] 같은 방식"],
+    ["레드-블랙 트리 같은 균형 트리", "[[Red-Black Tree (레드-블랙 트리)|레드-블랙 트리]] 같은 균형 트리"],
+  ]) assert.equal(linkConceptNames(t, ko), want, t);
+
+  // Re-review LOW: a nested list item indented with four spaces or a tab is not code.
+  assert.equal(
+    linkConceptNames("- 방식\n    - Lottery Scheduling은 무작위입니다.", ["Lottery Scheduling (로터리 스케줄링)"]),
+    "- 방식\n    - [[Lottery Scheduling (로터리 스케줄링)|Lottery Scheduling]]은 무작위입니다."
+  );
+  assert.equal(linkConceptNames("- 방식\n\t- Ticket을 뽑습니다.", ["Ticket (티켓)"]), "- 방식\n\t- [[Ticket (티켓)|Ticket]]을 뽑습니다.");
+  assert.equal(linkConceptNames("문단입니다.\n\n    Ticket()\n\nTicket을 뽑습니다.", ["Ticket (티켓)"]), "문단입니다.\n\n    Ticket()\n\n[[Ticket (티켓)|Ticket]]을 뽑습니다.", "an indented block after a blank line is still code");
+  console.log("PASS: re-review: one acronym with two expansions stays two concepts, Korean mentions after particles and before function words, nested list items");
+}

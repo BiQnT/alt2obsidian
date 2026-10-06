@@ -87,14 +87,25 @@ function acronymOf(acronym: string, expansion: string): boolean {
 }
 
 /**
- * Two English names that are not plainly different: one key starts with the
- * other ("Context Switch", "Context Switching"), or an acronym in one stands
- * for the other ("MESI Protocol", "Modified-Exclusive-Shared-Invalid").
+ * The same English name: equal keys, or one is the other with a short
+ * ending ("Context Switch", "Context Switching"; not "Ticket" and "Ticket
+ * Currency").
  */
-function englishRelated(x: string, y: string): boolean {
+function sameWords(x: string, y: string): boolean {
   const kx = conceptKey(x);
   const ky = conceptKey(y);
-  if (kx.startsWith(ky) || ky.startsWith(kx)) return true;
+  if (kx === ky) return true;
+  const [short, long] = kx.length <= ky.length ? [kx, ky] : [ky, kx];
+  return short.length >= 4 && long.startsWith(short) && long.length - short.length <= 3;
+}
+
+/**
+ * Two English names that are not plainly different, for two names with the
+ * same Korean part: the same words, or an acronym in one stands for the
+ * other ("MESI Protocol", "Modified-Exclusive-Shared-Invalid").
+ */
+function englishRelated(x: string, y: string): boolean {
+  if (sameWords(x, y)) return true;
   const tokens = (s: string) => s.split(/\s+/).filter(isAcronym);
   return tokens(x).some((t) => acronymOf(t, y)) || tokens(y).some((t) => acronymOf(t, x));
 }
@@ -120,31 +131,43 @@ export function ambiguousKorean(names: Iterable<string>): Set<string> {
 }
 
 /**
- * The same concept:
- * - the same whole name, or the same English name (an acronym name and its
- *   expansion are both names: "PTE (Page Table Entry)" is "PTE (페이지
- *   테이블 엔트리)");
- * - an acronym of three or more letters and its expansion ("TLB" and
- *   "Translation Lookaside Buffer");
- * - the same Korean part, unless both names have English names that are
- *   plainly different ("Latency (지연)" and "Delay (지연)" stay two), or one
- *   name is Korean only and its Korean part is in `ambiguous`.
+ * The same concept. A Korean part is strong evidence, a bare acronym weak
+ * (PC is a Program Counter and a Personal Computer):
+ * - the same whole name;
+ * - the same Korean part: unless both have English names that are plainly
+ *   different ("Latency (지연)", "Delay (지연)"); a Korean-only name does
+ *   not match when its Korean part is in `ambiguous`;
+ * - different Korean parts: only the same English name that is not a bare
+ *   acronym ("Ticket (추첨권)" is "티켓 (Ticket)"); never by initials;
+ * - otherwise (at most one Korean part): when both carry an expansion (an
+ *   English name that is not an acronym) the expansions must be the same
+ *   words, whatever the acronyms ("SM (Streaming Multiprocessor)" is not
+ *   "SM (Shared Memory)"); else the same acronym, or an acronym of three or
+ *   more letters for the other's expansion ("CPU", "Central Processing
+ *   Unit").
  */
 export function sameConcept(a: string, b: string, ambiguous?: Set<string>): boolean {
   if (conceptKey(a) === conceptKey(b)) return true;
   const pa = parseConceptName(a);
   const pb = parseConceptName(b);
-  for (const x of pa.aliases) {
-    for (const y of pb.aliases) {
-      if (conceptKey(x) === conceptKey(y)) return true;
-      if ((isAcronym(x) && x.replace(/[^A-Z0-9]/g, "").length >= 3 && acronymOf(x, y)) || (isAcronym(y) && y.replace(/[^A-Z0-9]/g, "").length >= 3 && acronymOf(y, x))) return true;
+  const acr = (p: ConceptNameParts) => p.aliases.filter(isAcronym);
+  const exp = (p: ConceptNameParts) => p.aliases.filter((x) => !isAcronym(x));
+  if (pa.korean && pb.korean) {
+    const k = conceptKey(pa.korean);
+    if (k === conceptKey(pb.korean)) {
+      if (pa.aliases.length === 0 || pb.aliases.length === 0) return !ambiguous?.has(k);
+      return pa.aliases.some((x) => pb.aliases.some((y) => englishRelated(x, y)));
     }
+    return exp(pa).some((x) => exp(pb).some((y) => conceptKey(x) === conceptKey(y)));
   }
-  if (!pa.korean || !pb.korean) return false;
-  const k = conceptKey(pa.korean);
-  if (k !== conceptKey(pb.korean)) return false;
-  if (pa.aliases.length === 0 || pb.aliases.length === 0) return !ambiguous?.has(k);
-  return pa.aliases.some((x) => pb.aliases.some((y) => englishRelated(x, y)));
+  const ea = exp(pa);
+  const eb = exp(pb);
+  if (ea.length > 0 && eb.length > 0) return ea.some((x) => eb.some((y) => sameWords(x, y)));
+  const aa = acr(pa);
+  const ab = acr(pb);
+  if (aa.some((x) => ab.some((y) => conceptKey(x) === conceptKey(y)))) return true;
+  const long = (x: string) => x.replace(/[^A-Z0-9]/g, "").length >= 3;
+  return aa.some((x) => long(x) && eb.some((y) => acronymOf(x, y))) || ab.some((y) => long(y) && ea.some((x) => acronymOf(y, x)));
 }
 
 /** The existing name for the same concept, or null (first match in list order). */
