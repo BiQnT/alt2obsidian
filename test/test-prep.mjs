@@ -402,6 +402,24 @@ async function deck(n, visualPages = []) {
   assert.equal(bad.tasks.concepts.provider, "claude-cli");
   assert.deepEqual(bad.recentModels, { "claude-cli": ["sonnet"] }, "recent models only for the CLI providers");
   assert.ok(m.isSafeModelName("claude-sonnet-4-5[1m]") && m.isSafeModelName("gpt-5.6-luna") && !m.isSafeModelName("-m") && !m.isSafeModelName("a b"));
+  // Model dropdowns: Claude aliases, Codex ids from its models cache (visible ones, by priority), recent and current values, CLI default.
+  const cache = JSON.stringify({ models: [
+    { slug: "gpt-6-sol", visibility: "list", priority: 3 },
+    { slug: "gpt-reserve", visibility: "hide", priority: 1 },
+    { slug: "gpt-6-astra", visibility: "list", priority: 2 },
+    { slug: "-bad", visibility: "list", priority: 0 },
+    { display_name: "no slug" },
+  ] });
+  assert.deepEqual(m.parseCodexModelsCache(cache), ["gpt-6-astra", "gpt-6-sol"]);
+  assert.deepEqual(m.parseCodexModelsCache("not json"), []);
+  assert.deepEqual(m.parseCodexModelsCache("{}"), []);
+  assert.deepEqual(m.modelChoices("claude-cli", "sonnet", [], []).map((c) => c.value), ["sonnet", "opus", "haiku", ""]);
+  assert.deepEqual(m.modelChoices("claude-cli", "claude-sonnet-4-5", ["fable"], []).map((c) => c.value), ["sonnet", "opus", "haiku", "fable", "claude-sonnet-4-5", ""], "recent and current custom ids are listed");
+  assert.deepEqual(m.modelChoices("codex-cli", "", [], ["gpt-6-astra"]).map((c) => c.value), ["gpt-6-astra", ""]);
+  assert.match(m.modelChoices("codex-cli", "", [], []).at(-1).label, /CLI 기본값/);
+  assert.equal(m.describeDefault("claude-cli", "concepts"), "haiku · effort low");
+  assert.equal(m.describeDefault("codex-cli", "commentary"), "CLI 기본 모델 · effort medium");
+  assert.equal(m.describeDefault("none", "alignment"), "");
   console.log("PASS: settings migration (Gemini/Ollama tasks to a CLI, empty model/effort to task defaults once), presets, recent models, unsafe values dropped");
 }
 

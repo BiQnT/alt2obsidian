@@ -1,21 +1,23 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type Alt2ObsidianPlugin from "../main";
-import { CliName, EffortLevel, PresetId, ProviderId, TaskId, TaskLLMSetting } from "../types";
+import { CliName, EffortLevel, PresetId, ProviderId, TaskId } from "../types";
 import {
   applyPreset,
+  defaultTaskSetting,
+  describeDefault,
   EFFORT_LEVELS,
   isCliProvider,
   isSafeModelName,
+  modelChoices,
   PRESET_LABELS,
   PROVIDER_LABELS,
+  rememberModel,
   TASK_IDS,
-  TASK_PROVIDERS,
   TASK_LABELS,
+  TASK_PROVIDERS,
 } from "../settings/llmSettings";
 import { compactTokens } from "../llm/usage";
 
-/** Aliases the Claude CLI resolves to its current models; offered as suggestions only. */
-const CLAUDE_ALIASES = ["sonnet", "opus", "haiku"];
 
 export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   plugin: Alt2ObsidianPlugin;
@@ -133,7 +135,10 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "작업별 모델" });
     new Setting(containerEl)
       .setName("프리셋")
-      .setDesc("절약: 모든 작업에 경량 모델과 low effort. 품질: 해설과 검증에 상위 모델과 high effort. 프로바이더는 바꾸지 않습니다.")
+      .setDesc(
+        "절약: 모든 작업에 경량 모델(Claude는 haiku)과 effort low. 품질: 해설과 검증에 상위 모델(Claude는 opus)과 effort high. " +
+          "프로바이더는 바꾸지 않습니다. 아래에서 직접 바꾸면 '사용자 지정'이 됩니다."
+      )
       .addDropdown((dropdown) => {
         for (const id of Object.keys(PRESET_LABELS) as PresetId[]) dropdown.addOption(id, PRESET_LABELS[id]);
         dropdown.setValue(this.settings.preset).onChange(async (value) => {
@@ -143,11 +148,8 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         });
       });
 
-    const table = containerEl.createEl("table", { cls: "alt2obsidian-task-table" });
-    const head = table.createEl("thead").createEl("tr");
-    for (const h of ["작업", "프로바이더", "모델", "effort"]) head.createEl("th", { text: h });
-    const body = table.createEl("tbody");
-    for (const id of TASK_IDS) this.renderTaskRow(body, id);
+    const codexModels = this.plugin.codexModels();
+    for (const id of TASK_IDS) this.renderTaskRow(containerEl, id, codexModels);
 
     new Setting(containerEl)
       .setName("Notion MCP 조회 도구")
@@ -168,93 +170,88 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       );
   }
 
-  private renderTaskRow(body: HTMLElement, id: TaskId): void {
+  /**
+   * One task: provider, model and effort as dropdowns. The model list holds
+   * the CLI's known models, "CLI 기본값" and "직접 입력" (a text field for
+   * any other id). Changing the provider loads that provider's task defaults.
+   */
+  private renderTaskRow(containerEl: HTMLElement, id: TaskId, codexModels: string[]): void {
     const task = this.settings.tasks[id];
-    const row = body.createEl("tr");
-    const nameCell = row.createEl("td");
-    nameCell.createDiv({ text: TASK_LABELS[id] });
-    if (id === "alignment") nameCell.createDiv({ cls: "alt2obsidian-muted", text: "정렬은 스크립트로 항상 함. 고르면 불확실한 구간만 한 번에 확인 (기본 끔)" });
-    if (id === "verification") nameCell.createDiv({ cls: "alt2obsidian-muted", text: "사이드바 '노트 검증' 탭. 주장 20개씩 판정" });
-
-    const markCustom = () => {
+    const notes: Partial<Record<TaskId, string>> = {
+      alignment: "정렬은 스크립트로 항상 합니다. 프로바이더를 고르면 불확실한 구간만 한 번 더 확인합니다 (기본 끔).",
+      verification: "사이드바 '노트 검증' 탭에서 씁니다. 주장 20개씩 판정합니다.",
+    };
+    const recommended = describeDefault(isCliProvider(task.provider) ? task.provider : "claude-cli", id);
+    const desc = [notes[id], recommended ? `권장: ${recommended}` : ""].filter(Boolean).join(" ");
+    const setting = new Setting(containerEl).setName(TASK_LABELS[id]).setDesc(desc);
+    setting.settingEl.addClass("alt2obsidian-task-setting");
+    const changed = async (rerender: boolean) => {
       this.settings.preset = "custom";
+      await this.save();
+      if (rerender) this.display();
     };
 
-    const providerSelect = row.createEl("td").createEl("select", { cls: "dropdown" });
-    const providers: Array<ProviderId | "none"> = id === "alignment" ? ["none", ...TASK_PROVIDERS] : TASK_PROVIDERS;
-    for (const p of providers) {
-      const opt = providerSelect.createEl("option", { text: PROVIDER_LABELS[p] });
-      opt.value = p;
-    }
-    providerSelect.value = task.provider;
-    providerSelect.addEventListener("change", async () => {
-      task.provider = providerSelect.value as TaskLLMSetting["provider"];
-      if (!isCliProvider(task.provider)) task.effort = "";
-      markCustom();
-      await this.save();
-      this.display();
+    setting.addDropdown((d) => {
+      if (id === "alignment") d.addOption("none", PROVIDER_LABELS.none);
+      for (const p of TASK_PROVIDERS) d.addOption(p, PROVIDER_LABELS[p]);
+      d.setValue(task.provider).onChange(async (value) => {
+        this.settings.tasks[id] = defaultTaskSetting(value as ProviderId | "none", id);
+        await changed(true);
+      });
+      d.selectEl.setAttr("aria-label", `${TASK_LABELS[id]} 프로바이더`);
+    });
+    if (!isCliProvider(task.provider)) return;
+    const provider = task.provider;
+
+    const CUSTOM = "*custom"; // never a model name: those start with a letter or digit
+    const choices = modelChoices(provider, task.model, this.settings.recentModels[provider] ?? [], codexModels);
+    let customInput: HTMLInputElement | null = null;
+    setting.addDropdown((d) => {
+      for (const c of choices) d.addOption(c.value, c.label);
+      d.addOption(CUSTOM, "직접 입력...");
+      d.setValue(task.model).onChange(async (value) => {
+        if (value === CUSTOM) {
+          customInput?.show();
+          customInput?.focus();
+          return;
+        }
+        customInput?.hide();
+        task.model = value;
+        await changed(false);
+      });
+      d.selectEl.setAttr("aria-label", `${TASK_LABELS[id]} 모델`);
+      d.selectEl.addClass("alt2obsidian-model-select");
+    });
+    setting.addText((text) => {
+      customInput = text.inputEl;
+      text.setPlaceholder(provider === "claude-cli" ? "예: claude-sonnet-4-5" : "예: gpt-5.6-luna");
+      text.inputEl.addClass("alt2obsidian-model-input");
+      text.inputEl.hide();
+      text.inputEl.addEventListener("input", () => {
+        // Checked while typing: a model name is passed as one CLI argument (review N8).
+        text.inputEl.toggleClass("is-invalid", !isSafeModelName(text.inputEl.value.trim()));
+      });
+      text.inputEl.addEventListener("change", async () => {
+        const value = text.inputEl.value.trim();
+        if (!value) return;
+        if (!isSafeModelName(value)) {
+          new Notice(`모델 이름을 저장하지 않았습니다 (영문, 숫자와 . _ : / @ [ ] - 만, '-'로 시작 불가): ${value}`);
+          return;
+        }
+        task.model = value;
+        rememberModel(this.settings, provider, value);
+        await changed(true);
+      });
     });
 
-    const modelCell = row.createEl("td");
-    const listId = `alt2obsidian-models-${id}`;
-    const input = modelCell.createEl("input", {
-      type: "text",
-      attr: { list: listId, placeholder: this.modelPlaceholder(task.provider) },
+    setting.addDropdown((d) => {
+      for (const level of EFFORT_LEVELS) d.addOption(level, level ? `effort ${level}` : "effort CLI 기본값");
+      d.setValue(task.effort).onChange(async (value) => {
+        task.effort = value as EffortLevel;
+        await changed(false);
+      });
+      d.selectEl.setAttr("aria-label", `${TASK_LABELS[id]} effort`);
     });
-    input.value = task.model;
-    input.disabled = task.provider === "none";
-    const datalist = modelCell.createEl("datalist", { attr: { id: listId } });
-    for (const m of this.modelSuggestions(task.provider)) datalist.createEl("option", { attr: { value: m } });
-    const modelError = modelCell.createDiv({ cls: "alt2obsidian-field-error" });
-    modelError.hide();
-    input.addEventListener("input", () => {
-      // Checked while typing: a model name is passed as one CLI argument (review N8).
-      const ok = isSafeModelName(input.value.trim());
-      input.toggleClass("is-invalid", !ok);
-      modelError.setText(ok ? "" : "영문, 숫자와 . _ : / @ [ ] - 만 쓸 수 있고 '-'로 시작할 수 없습니다.");
-      if (ok) modelError.hide();
-      else modelError.show();
-    });
-    input.addEventListener("change", async () => {
-      const value = input.value.trim();
-      if (!isSafeModelName(value)) {
-        new Notice(`모델 이름을 저장하지 않았습니다: ${value}`);
-        return;
-      }
-      task.model = value;
-      markCustom();
-      await this.save();
-    });
-
-    const effortSelect = row.createEl("td").createEl("select", { cls: "dropdown" });
-    for (const level of EFFORT_LEVELS) {
-      const opt = effortSelect.createEl("option", { text: level || "기본값" });
-      opt.value = level;
-    }
-    effortSelect.value = task.effort;
-    effortSelect.disabled = !isCliProvider(task.provider);
-    effortSelect.addEventListener("change", async () => {
-      task.effort = effortSelect.value as EffortLevel;
-      markCustom();
-      await this.save();
-    });
-  }
-
-  private modelPlaceholder(provider: ProviderId | "none"): string {
-    switch (provider) {
-      case "claude-cli":
-      case "codex-cli":
-        return "비우면 CLI 기본 모델";
-      default:
-        return "";
-    }
-  }
-
-  private modelSuggestions(provider: ProviderId | "none"): string[] {
-    if (provider === "none") return [];
-    const recent = this.settings.recentModels[provider] ?? [];
-    const extra = provider === "claude-cli" ? CLAUDE_ALIASES : [];
-    return Array.from(new Set([...recent, ...extra]));
   }
 
   // ---- generation options ----

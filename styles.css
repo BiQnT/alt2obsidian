@@ -399,32 +399,21 @@
   word-break: break-all;
 }
 
-.alt2obsidian-task-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-bottom: 12px;
+/* Task rows: provider, model and effort dropdowns (and the custom model field) wrap as needed. */
+.alt2obsidian-task-setting .setting-item-control {
+  justify-content: flex-start;
 }
 
-.alt2obsidian-task-table th,
-.alt2obsidian-task-table td {
-  padding: 4px 6px;
-  text-align: left;
-  border-bottom: 1px solid var(--background-modifier-border);
-  vertical-align: top;
+.alt2obsidian-model-select {
+  max-width: 16em;
 }
 
-.alt2obsidian-task-table input[type="text"] {
-  width: 100%;
-  min-width: 120px;
+.alt2obsidian-model-input {
+  width: 12em;
 }
 
-.alt2obsidian-task-table input.is-invalid {
+.alt2obsidian-model-input.is-invalid {
   border-color: var(--text-error);
-}
-
-.alt2obsidian-field-error {
-  color: var(--text-error);
-  font-size: var(--font-ui-smaller);
 }
 
 /* ---- 2.0.0-beta.2: Alt local notes (mockup "1. 가져오기 사이드바") ---- */

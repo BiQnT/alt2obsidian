@@ -192,6 +192,56 @@ export function rememberModel(settings: Alt2ObsidianSettings, provider: Provider
   settings.recentModels[provider] = [m, ...list].slice(0, 8);
 }
 
+/** Aliases the Claude CLI resolves to its current models (`claude --help`: "an alias for the latest model"). */
+export const CLAUDE_MODEL_ALIASES = ["sonnet", "opus", "haiku"];
+
+/**
+ * Model ids the Codex CLI lists, from its own models cache
+ * ($CODEX_HOME/models_cache.json, written by Codex; reading it costs
+ * nothing): visible models by Codex's priority. [] when the file is
+ * missing or not in the expected shape.
+ */
+export function parseCodexModelsCache(text: string): string[] {
+  try {
+    const data = JSON.parse(text) as { models?: unknown };
+    if (!Array.isArray(data.models)) return [];
+    return data.models
+      .filter((m): m is { slug: string; visibility?: string; priority?: number } => !!m && typeof m.slug === "string")
+      .filter((m) => m.visibility === undefined || m.visibility === "list")
+      .filter((m) => isSafeModelName(m.slug))
+      .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999))
+      .map((m) => m.slug);
+  } catch {
+    return [];
+  }
+}
+
+export interface ModelChoice {
+  value: string;
+  label: string;
+}
+
+/**
+ * Model dropdown entries for a provider: the known models (Claude aliases,
+ * or the Codex models cache), recently typed models, the current value if
+ * it is none of these, then "CLI 기본값" (""). The UI adds "직접 입력".
+ */
+export function modelChoices(provider: ProviderId, current: string, recent: string[], codexModels: string[]): ModelChoice[] {
+  const known = provider === "claude-cli" ? CLAUDE_MODEL_ALIASES : codexModels;
+  const values = Array.from(new Set([...known, ...recent, ...(current ? [current] : [])]));
+  return [
+    ...values.map((value) => ({ value, label: value })),
+    { value: "", label: provider === "claude-cli" ? "CLI 기본값 (계정 기본 모델)" : "CLI 기본값 (Codex 기본 모델)" },
+  ];
+}
+
+/** "sonnet · medium" for a task's recommended setting, "" for "none". */
+export function describeDefault(provider: ProviderId | "none", id: TaskId): string {
+  if (!isCliProvider(provider)) return "";
+  const d = TASK_DEFAULTS[provider][id];
+  return `${d.model || "CLI 기본 모델"} · effort ${d.effort}`;
+}
+
 /**
  * Slides per call for a provider. Codex carries about 12k fixed tokens per
  * call (its instructions and ~/.codex/AGENTS.md), so it gets twice the

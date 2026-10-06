@@ -39,6 +39,7 @@ import {
   chooseCli,
   migrateSettings,
   moveClaudeTasksToCodex,
+  parseCodexModelsCache,
   PROVIDER_LABELS,
   rememberModel,
 } from "./settings/llmSettings";
@@ -61,7 +62,8 @@ import {
   VIEW_TYPE_SYNCED_VIEWER,
 } from "./ui/SyncedViewerView";
 import { TFile } from "obsidian";
-import { promises as fsp } from "node:fs";
+import { promises as fsp, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
 import { pluginCacheDir } from "./sources/altPaths";
@@ -1411,6 +1413,24 @@ export default class Alt2ObsidianPlugin extends Plugin {
       }
       return null;
     }
+  }
+
+  private codexModelsCache: string[] | null = null;
+
+  /**
+   * Model ids for the Codex model dropdown, from Codex's own models cache
+   * ($CODEX_HOME or ~/.codex, models_cache.json). Read once per session; no
+   * process is started and no model is called. [] when Codex never ran.
+   */
+  codexModels(): string[] {
+    if (this.codexModelsCache) return this.codexModelsCache;
+    const home = process.env.CODEX_HOME || joinPath(homedir(), ".codex");
+    try {
+      this.codexModelsCache = parseCodexModelsCache(readFileSync(joinPath(home, "models_cache.json"), "utf8"));
+    } catch {
+      this.codexModelsCache = [];
+    }
+    return this.codexModelsCache;
   }
 
   /** Path of the CLI for a call: the cached lookup when still valid, else a new lookup. */
