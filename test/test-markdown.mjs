@@ -277,3 +277,21 @@ console.log("PASS: buildOverviewSection");
   assert.equal(linkConceptNames("문단입니다.\n\n    Ticket()\n\nTicket을 뽑습니다.", ["Ticket (티켓)"]), "문단입니다.\n\n    Ticket()\n\n[[Ticket (티켓)|Ticket]]을 뽑습니다.", "an indented block after a blank line is still code");
   console.log("PASS: re-review: one acronym with two expansions stays two concepts, Korean mentions after particles and before function words, nested list items");
 }
+{
+  // Re-check: only plural and verb endings (s, es, ing, ed, d) make two English names the same words.
+  const apart = [["Process", "Processor"], ["Point", "Pointer"], ["Schedule", "Scheduler"], ["Read", "Reader"], ["Compute", "Computer"], ["Link", "Linker"], ["Load", "Loader"], ["Page", "Pager"], ["Bank", "Banker"], ["Port", "Portal"], ["Segment", "Segmenter"], ["Spin", "Spinner"]];
+  for (const [a, b] of apart) {
+    assert.ok(!cn.sameConcept(a, b) && !cn.sameConcept(b, a), `${a} != ${b}`);
+    assert.ok(!cn.sameConcept(`${a} (같은말)`, `${b} (같은말)`), `${a} != ${b} with one Korean part`);
+    assert.ok(!cn.sameConcept(a, `${b} (한국어)`), `${a} != ${b} (한국어)`);
+  }
+  assert.equal(linkConceptNames("[[Processor]]가 일합니다.", [], ["Process (프로세스)"]), "[[Processor]]가 일합니다.", "a link to Processor is not pointed at Process");
+  assert.equal(linkConceptNames("[[Pointer]]를 따라갑니다.", ["Point (점)"]), "[[Pointer]]를 따라갑니다.");
+  for (const [a, b] of [["Cache", "Caches"], ["Lock", "Locks"], ["Mutex", "Mutexes"], ["Monitor", "Monitors"], ["Context Switch", "Context Switching"], ["Compute", "Computed"]]) {
+    assert.ok(cn.sameConcept(a, b) && cn.sameConcept(`${b} (한국어)`, a), `${a} = ${b}`);
+  }
+  // A known acronym inside an expansion is compared spelled out.
+  assert.ok(cn.sameConcept("DRAM (Dynamic RAM)", "Dynamic Random Access Memory (동적 램)"));
+  assert.ok(!cn.sameConcept("SRAM (Static RAM)", "Dynamic Random Access Memory (동적 램)"));
+  console.log("PASS: re-check: only s, es, ing, ed, d endings join English names (Process is not Processor); RAM spelled out when comparing");
+}

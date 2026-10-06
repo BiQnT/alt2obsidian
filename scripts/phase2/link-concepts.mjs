@@ -98,13 +98,21 @@ function acronymOf(acronym, expansion) {
   const a = acronym.replace(/[^A-Z0-9]/g, "");
   return a.length >= 2 && (initials(expansion, true) === a || initials(expansion, false) === a);
 }
+var SPELLED_OUT = {
+  RAM: "Random Access Memory",
+  ROM: "Read Only Memory",
+  CPU: "Central Processing Unit",
+  GPU: "Graphics Processing Unit"
+};
+var SAME_WORD_ENDINGS = ["s", "es", "ing", "ed", "d"];
 function sameWords(x, y) {
-  const kx = conceptKey(x);
-  const ky = conceptKey(y);
+  const spell = (s) => s.split(/\s+/).map((w) => SPELLED_OUT[w] ?? w).join(" ");
+  const kx = conceptKey(spell(x));
+  const ky = conceptKey(spell(y));
   if (kx === ky)
     return true;
   const [short, long] = kx.length <= ky.length ? [kx, ky] : [ky, kx];
-  return short.length >= 4 && long.startsWith(short) && long.length - short.length <= 3;
+  return short.length >= 3 && long.startsWith(short) && SAME_WORD_ENDINGS.includes(long.slice(short.length));
 }
 function englishRelated(x, y) {
   if (sameWords(x, y))

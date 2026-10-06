@@ -86,17 +86,30 @@ function acronymOf(acronym: string, expansion: string): boolean {
   return a.length >= 2 && (initials(expansion, true) === a || initials(expansion, false) === a);
 }
 
+/** Acronyms spelled out when two expansions are compared ("Dynamic RAM" is "Dynamic Random Access Memory"). */
+const SPELLED_OUT: Record<string, string> = {
+  RAM: "Random Access Memory",
+  ROM: "Read Only Memory",
+  CPU: "Central Processing Unit",
+  GPU: "Graphics Processing Unit",
+};
+
+/** The endings that keep a word the same word: plural and verb forms. */
+const SAME_WORD_ENDINGS = ["s", "es", "ing", "ed", "d"];
+
 /**
- * The same English name: equal keys, or one is the other with a short
- * ending ("Context Switch", "Context Switching"; not "Ticket" and "Ticket
- * Currency").
+ * The same English name: equal keys (with the acronyms above spelled out),
+ * or one is the other plus a plural or verb ending ("Cache", "Caches";
+ * "Context Switch", "Context Switching"). Other endings make another word:
+ * "Process" is not "Processor", "Point" not "Pointer".
  */
 function sameWords(x: string, y: string): boolean {
-  const kx = conceptKey(x);
-  const ky = conceptKey(y);
+  const spell = (s: string) => s.split(/\s+/).map((w) => SPELLED_OUT[w] ?? w).join(" ");
+  const kx = conceptKey(spell(x));
+  const ky = conceptKey(spell(y));
   if (kx === ky) return true;
   const [short, long] = kx.length <= ky.length ? [kx, ky] : [ky, kx];
-  return short.length >= 4 && long.startsWith(short) && long.length - short.length <= 3;
+  return short.length >= 3 && long.startsWith(short) && SAME_WORD_ENDINGS.includes(long.slice(short.length));
 }
 
 /**
