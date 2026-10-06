@@ -181,3 +181,40 @@ guarded = guarded.update({ selection: EditorSelection.cursor(metaLine.from) }).s
 const visibleDel = guarded.update({ changes: { from: metaLine.from - 1, to: metaLine.from }, userEvent: "delete.backward" }).state;
 assert.notEqual(visibleDel.doc.toString(), note);
 console.log("PASS: Live Preview field hides management lines, reveals the run next to the cursor or selection, reuses decorations, filters edits into hidden lines, nothing in source mode");
+
+// ---- opening a lecture PDF opens the Synced Viewer (src/ui/pdfOpen.ts) ----
+{
+  const po = await importTs("src/ui/pdfOpen.ts");
+  const notes = {
+    "L/6강.md": { fm: { alt_local_id: "id-6" }, text: "" },
+    "L/7강.md": { fm: { title: "7강" }, text: "## 📚 슬라이드 1\n\n<!-- alt2obs:slide:1 hash:0a1b2c3d start -->\n본문\n<!-- alt2obs:slide:1 hash:0a1b2c3d end -->\n" },
+    "L/skill.md": { fm: { source: "alt2obsidian-cc-skill" }, text: "" },
+    "L/plain.md": { fm: { title: "그냥 노트" }, text: "# 그냥 노트\n<!-- alt2obs:slide:1 hash:xyz start --> 아님\n" },
+    "L/empty-id.md": { fm: { alt_id: "  " }, text: "" },
+  };
+  let reads = 0;
+  const lookup = {
+    exists: (p) => p in notes,
+    frontmatter: (p) => notes[p]?.fm ?? null,
+    read: async (p) => (reads++, notes[p]?.text ?? ""),
+  };
+  assert.equal(await po.lectureNoteForPdf("L/6강.pdf", lookup), "L/6강.md", "Alt id in the frontmatter");
+  assert.equal(reads, 0, "frontmatter decides without reading the note");
+  assert.equal(await po.lectureNoteForPdf("L/6강.PDF", lookup), "L/6강.md", ".PDF works too");
+  assert.equal(await po.lectureNoteForPdf("L/7강.Pdf", lookup), "L/7강.md", "slide markers in the text");
+  assert.equal(await po.lectureNoteForPdf("L/skill.pdf", lookup), "L/skill.md", "a Skill import");
+  assert.equal(await po.lectureNoteForPdf("L/plain.pdf", lookup), null, "a note without markers or Alt frontmatter");
+  assert.equal(await po.lectureNoteForPdf("L/empty-id.pdf", lookup), null, "an empty id does not count");
+  assert.equal(await po.lectureNoteForPdf("L/none.pdf", lookup), null, "no sibling note");
+  assert.equal(await po.lectureNoteForPdf("L/6강.md", lookup), null, "not a PDF");
+
+  const base = { enabled: true, viewType: "pdf", pdfPath: "L/6강.pdf", bypass: false, busy: false, notePath: "L/6강.md" };
+  assert.deepEqual(po.decidePdfOpen(base), { action: "viewer", mdPath: "L/6강.md", pdfPath: "L/6강.pdf" });
+  assert.deepEqual(po.decidePdfOpen({ ...base, enabled: false }), { action: "none", reason: "off" }, "setting off");
+  assert.deepEqual(po.decidePdfOpen({ ...base, bypass: true }), { action: "none", reason: "bypass" }, "a 'PDF만 보기' tab stays a PDF");
+  assert.deepEqual(po.decidePdfOpen({ ...base, busy: true }), { action: "none", reason: "busy" }, "no second redirect while one runs");
+  assert.deepEqual(po.decidePdfOpen({ ...base, viewType: "alt2obsidian-synced-viewer" }), { action: "none", reason: "not-pdf-view" }, "the viewer itself is not redirected (no loop)");
+  assert.deepEqual(po.decidePdfOpen({ ...base, viewType: null }), { action: "none", reason: "not-pdf-view" });
+  assert.deepEqual(po.decidePdfOpen({ ...base, notePath: null }), { action: "none", reason: "not-lecture" }, "any other PDF opens as usual");
+  console.log("PASS: lecture PDF detection (.pdf/.PDF, frontmatter or slide markers) and the viewer redirect decision (setting off, PDF-only tabs, no loop)");
+}

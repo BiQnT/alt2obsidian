@@ -20,8 +20,10 @@
 //   window, and were wired only after every page had rendered.
 // - Page nav (◀/▶) scrolls the target canvas to the top of the pane.
 // - Zoom (− / +) re-renders all pages at the new DPI scale.
-// - "Obsidian native PDF" escape hatch button opens the file in Obsidian's
-//   native PDF view in a split pane (which has find/select/annotation).
+// - "PDF만 보기" opens the file in Obsidian's own PDF view in a split pane
+//   (find, select, annotation). Opening a lecture PDF normally turns that
+//   tab into this viewer (setting "강의 PDF를 열면 뷰어로 열기"); a tab
+//   opened with this button is left as a plain PDF.
 
 import {
   ItemView,
@@ -260,7 +262,9 @@ export class SyncedViewerView extends ItemView {
     leaf: WorkspaceLeaf,
     private loadTranscript?: TranscriptLoader,
     /** Setting "관리 주석 숨기기": drop the alt2obs comment lines before rendering. */
-    private hideManagedComments: () => boolean = () => true
+    private hideManagedComments: () => boolean = () => true,
+    /** "PDF만 보기": the plugin opens a plain PDF tab it will not turn back into this viewer. */
+    private openNativePdf?: (pdfPath: string) => Promise<void>
   ) {
     super(leaf);
   }
@@ -324,6 +328,9 @@ export class SyncedViewerView extends ItemView {
 
   async setState(state: any, result: any): Promise<void> {
     const next: SyncedViewerState = state ?? { mdPath: null, pdfPath: null };
+    // Opened in place of a lecture PDF tab: keep that PDF out of the tab's
+    // history, or Back would show it and turn it into this viewer again.
+    if (state?.replacesPdf && result) result.history = false;
     if (next.mdPath !== this.mdPath || next.pdfPath !== this.pdfPath) {
       this.mdPath = next.mdPath;
       this.pdfPath = next.pdfPath;
@@ -370,7 +377,8 @@ export class SyncedViewerView extends ItemView {
     editBtn.onclick = () => this.openMdInEditor();
 
     const nativeBtn = this.toolbarEl.createEl("button", {
-      text: "Obsidian native PDF",
+      text: "PDF만 보기",
+      attr: { title: "Obsidian의 PDF 보기로 엽니다 (찾기, 선택, 주석). 이 탭은 뷰어로 바뀌지 않습니다." },
     });
     nativeBtn.onclick = () => this.openInNativeView();
 
@@ -903,6 +911,10 @@ export class SyncedViewerView extends ItemView {
 
   private async openInNativeView(): Promise<void> {
     if (!this.pdfPath) return;
+    if (this.openNativePdf) {
+      await this.openNativePdf(this.pdfPath);
+      return;
+    }
     const file = this.app.vault.getAbstractFileByPath(this.pdfPath);
     if (!(file instanceof TFile)) return;
     const leaf = this.app.workspace.getLeaf("split", "vertical");

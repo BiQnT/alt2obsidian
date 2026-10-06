@@ -124,6 +124,7 @@ export function migrateSettings(saved: unknown): MigrationOutcome {
     settingsVersion: SETTINGS_VERSION,
     notionFetchTool: typeof raw.notionFetchTool === "string" ? raw.notionFetchTool.trim() : "",
     hideManagedComments: raw.hideManagedComments !== false,
+    openPdfInViewer: raw.openPdfInViewer !== false,
   };
   const savedTasks = raw.tasks && typeof raw.tasks === "object" ? (raw.tasks as unknown as Record<string, unknown>) : null;
   if (!savedTasks) {

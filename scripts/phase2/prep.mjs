@@ -861,7 +861,8 @@ var DEFAULT_SETTINGS = {
   generation: DEFAULT_GENERATION,
   altDataDir: "",
   notionFetchTool: "",
-  hideManagedComments: true
+  hideManagedComments: true,
+  openPdfInViewer: true
 };
 var EMPTY_USAGE = {
   calls: 0,

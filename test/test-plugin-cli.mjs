@@ -17,7 +17,7 @@ import { FAKE_CLAUDE, FAKE_CODEX, fakeSession } from "./helpers/fake-cli.mjs";
 // pdfjs (bundled via PdfProcessor) warns about missing canvas polyfills on load.
 const quiet = { log: console.log, warn: console.warn };
 console.log = console.warn = () => {};
-const { default: Plugin, TFile, insertFrontmatterLine, notices } = await importTs("test/helpers/plugin-entry.ts");
+const { default: Plugin, TFile, TFolder, insertFrontmatterLine, notices, SyncedViewerView, VIEW_TYPE_SYNCED_VIEWER } = await importTs("test/helpers/plugin-entry.ts");
 Object.assign(console, quiet);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -404,6 +404,80 @@ try {
     const vault = plugin.vaultLectureNotes();
     assert.deepEqual(plugin.localNoteStatus({ id: "local-1", title: "Lec7 Caches", lectureDate: "2026-04-21" }, vault), { kind: "imported", path: rec.path, changed: null });
     console.log("PASS: local import: aligned chunks, alt_local_id and alt_alignment frontmatter, no merge into a same-titled URL note, transcript cached");
+
+    // Opening the lecture PDF opens the Synced Viewer for the pair (setting on by default).
+    {
+      const pdfPath = rec.path.replace(/\.md$/, ".pdf");
+      const leaves = [];
+      let revealed = null;
+      const leaf = (viewType, file = null) => {
+        const l = {
+          view: { getViewType: () => viewType, file },
+          detached: false,
+          state: null,
+          async setViewState(st) {
+            l.state = st;
+            l.view = { getViewType: () => st.type };
+          },
+          detach() {
+            l.detached = true;
+          },
+          async openFile(f) {
+            l.view = { getViewType: () => "pdf", file: f };
+            await plugin.onPdfOpened(f);
+          },
+        };
+        leaves.push(l);
+        return l;
+      };
+      let active = null;
+      const ws = plugin.app.workspace;
+      Object.assign(ws, {
+        getMostRecentLeaf: () => active,
+        getLeavesOfType: (t) => leaves.filter((l) => !l.detached && l.view.getViewType() === t),
+        getLeaf: () => (active = leaf("empty")),
+        revealLeaf: (l) => (revealed = l),
+      });
+      const pdf = Object.assign(new TFile(), { path: pdfPath, extension: "pdf" });
+      assert.equal(plugin.data.settings.openPdfInViewer, true, "on by default");
+      // A lecture PDF opened in a tab: that tab becomes the viewer.
+      active = leaf("pdf", pdf);
+      await plugin.onPdfOpened(pdf);
+      assert.deepEqual(active.state, { type: VIEW_TYPE_SYNCED_VIEWER, active: true, state: { mdPath: rec.path, pdfPath, replacesPdf: true } }, "the PDF step is kept out of the tab history");
+      // "PDF만 보기": a plain PDF tab that is not turned back into the viewer.
+      await plugin.openNativePdf(pdfPath);
+      assert.equal(active.view.getViewType(), "pdf", "the PDF-only tab stays a PDF (no loop)");
+      assert.equal(active.state, null);
+      // Another lecture PDF opened in that tab is still redirected.
+      const otherPdf = Object.assign(new TFile(), { path: "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.pdf" });
+      assert.ok(files.has(otherPdf.path) && files.has("Alt2Obsidian/CSED311/Lectures/Lec7 Caches.md"));
+      await active.openFile(otherPdf);
+      assert.deepEqual(active.state?.state, { mdPath: "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.md", pdfPath: otherPdf.path, replacesPdf: true });
+      // A PDF of no lecture note opens as usual.
+      files.set("Alt2Obsidian/misc/paper.pdf", "<binary>");
+      active = leaf("pdf", Object.assign(new TFile(), { path: "Alt2Obsidian/misc/paper.pdf" }));
+      await plugin.onPdfOpened(active.view.file);
+      assert.equal(active.state, null, "any other PDF stays a PDF");
+      // The pair is already open in a viewer: that tab is shown and the new PDF tab closed.
+      const viewerLeaf = leaf("x");
+      const viewer = new SyncedViewerView(viewerLeaf);
+      viewer.mdPath = rec.path;
+      viewer.pdfPath = pdfPath;
+      viewerLeaf.view = viewer;
+      viewer.getViewType = () => VIEW_TYPE_SYNCED_VIEWER;
+      active = leaf("pdf", pdf);
+      await plugin.onPdfOpened(pdf);
+      assert.equal(active.detached, true);
+      assert.equal(revealed, viewerLeaf);
+      // Setting off: nothing changes.
+      plugin.data.settings.openPdfInViewer = false;
+      active = leaf("pdf", pdf);
+      await plugin.onPdfOpened(pdf);
+      assert.deepEqual([active.state, active.detached], [null, false]);
+      plugin.data.settings.openPdfInViewer = true;
+      files.delete("Alt2Obsidian/misc/paper.pdf");
+      console.log("PASS: opening a lecture PDF opens the Synced Viewer (reusing an open one), PDF-only tabs and other PDFs stay PDFs, setting off does nothing");
+    }
 
     // Note verification of a user note against this lecture (spec 4.6).
     {

@@ -95,6 +95,7 @@ import { fetchNotionPage, NotionFetchProvider, NotionFetchResult } from "./verif
 import { parseAlignment } from "./core/prep/TranscriptAligner";
 import { applyLayoutMigration, MigrationPlan, MigrationResult, planLayoutMigration, VaultFileEntry } from "./vault/layoutMigration";
 import { MigrationModal } from "./ui/MigrationModal";
+import { decidePdfOpen, lectureNoteForPdf } from "./ui/pdfOpen";
 import { renderPrompt } from "./prompts/render";
 import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
 import summaryFromTranscriptSystemTemplate from "../prompts/summary-from-transcript.system.md";
@@ -200,7 +201,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
 
     // Register Synced Viewer (Task 1.5 — A2 default)
     this.registerView(VIEW_TYPE_SYNCED_VIEWER, (leaf) => {
-      return new SyncedViewerView(leaf, (id) => this.loadTranscript(id), () => this.data.settings.hideManagedComments);
+      return new SyncedViewerView(
+        leaf,
+        (id) => this.loadTranscript(id),
+        () => this.data.settings.hideManagedComments,
+        (pdfPath) => this.openNativePdf(pdfPath)
+      );
     });
 
     // Live Preview: hide the alt2obs management comment lines (setting "관리 주석 숨기기").
@@ -243,6 +249,18 @@ export default class Alt2ObsidianPlugin extends Plugin {
     // The login-shell lookup can take a moment: run it after startup.
     this.app.workspace.onLayoutReady(() => {
       this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obsidian] CLI default check failed:", e));
+      // Lecture PDFs opened from now on go to the Synced Viewer (setting
+      // "강의 PDF를 열면 뷰어로 열기"). Registered after the layout is
+      // restored, and the PDF tabs it restored are left as plain PDFs.
+      for (const leaf of this.app.workspace.getLeavesOfType?.("pdf") ?? []) {
+        const file = (leaf.getViewState?.().state as { file?: unknown } | undefined)?.file;
+        if (typeof file === "string") this.nativePdfLeaves.set(leaf, file);
+      }
+      this.registerEvent(
+        this.app.workspace.on("file-open", (file) => {
+          if (file instanceof TFile) void this.onPdfOpened(file).catch((e) => console.warn("[Alt2Obsidian] lecture PDF redirect failed:", e));
+        })
+      );
     });
     // Prune the transcript cache once the metadata cache has indexed every
     // note: before that, a note's alt_local_id may be missing and its
@@ -275,7 +293,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
   async openSyncedViewerForActiveNote(): Promise<void> {
     const active = this.app.workspace.getActiveFile();
     // The lecture PDF works too: its note is the .md with the same name.
-    const mdPath = active?.extension === "pdf" ? active.path.replace(/\.pdf$/, ".md") : active?.extension === "md" ? active.path : null;
+    const mdPath = active?.extension.toLowerCase() === "pdf" ? active.path.replace(/\.pdf$/i, ".md") : active?.extension === "md" ? active.path : null;
     if (!mdPath || !(this.app.vault.getAbstractFileByPath(mdPath) instanceof TFile)) {
       new Notice("강의 노트(.md)나 그 PDF를 연 뒤 다시 시도하세요.");
       return;
@@ -286,6 +304,94 @@ export default class Alt2ObsidianPlugin extends Plugin {
       return;
     }
     await this.openSyncedViewer(mdPath, pdfFile.path);
+  }
+
+  /**
+   * Tabs showing a PDF the user opened as a plain PDF on purpose ("PDF만
+   * 보기" in the viewer, or restored at startup), with that PDF's path: that
+   * PDF is never turned into the Synced Viewer in that tab. Another lecture
+   * PDF opened in the same tab still is.
+   */
+  private nativePdfLeaves = new WeakMap<WorkspaceLeaf, string>();
+  /** PDFs being turned into a viewer right now (no second redirect while it runs). */
+  private redirecting = new Set<string>();
+
+  /**
+   * A file was opened. When it is a lecture PDF shown in a normal PDF tab,
+   * that tab becomes the Synced Viewer for the PDF and its note (or the
+   * open viewer of the same pair is shown and the PDF tab closed). See
+   * `decidePdfOpen` for when nothing happens.
+   */
+  async onPdfOpened(file: TFile): Promise<void> {
+    if (!/\.pdf$/i.test(file.path)) return;
+    const leaf = this.pdfLeafFor(file.path);
+    const notePath = this.data.settings.openPdfInViewer
+      ? await lectureNoteForPdf(file.path, {
+          exists: (p) => this.app.vault.getAbstractFileByPath(p) instanceof TFile,
+          frontmatter: (p) => {
+            const f = this.app.vault.getAbstractFileByPath(p);
+            return f instanceof TFile ? this.app.metadataCache.getFileCache(f)?.frontmatter ?? null : null;
+          },
+          read: async (p) => {
+            const f = this.app.vault.getAbstractFileByPath(p);
+            return f instanceof TFile ? this.app.vault.cachedRead(f) : "";
+          },
+        })
+      : null;
+    // The tab may have moved on while the note was read.
+    const stillShown = !!leaf && (leaf.view as { file?: TFile | null })?.file?.path === file.path;
+    const decision = decidePdfOpen({
+      enabled: this.data.settings.openPdfInViewer,
+      viewType: stillShown ? leaf!.view.getViewType() : null,
+      pdfPath: file.path,
+      bypass: !!leaf && this.nativePdfLeaves.get(leaf) === file.path,
+      busy: this.redirecting.has(file.path),
+      notePath,
+    });
+    if (decision.action !== "viewer" || !leaf) return;
+    this.redirecting.add(file.path);
+    try {
+      // A restored tab that was never shown holds a placeholder view: read its saved state.
+      const same = this.app.workspace.getLeavesOfType(VIEW_TYPE_SYNCED_VIEWER).find((l) => {
+        const st = (l.view instanceof SyncedViewerView ? l.view.getState() : l.getViewState?.().state) as { mdPath?: unknown; pdfPath?: unknown } | undefined;
+        return st?.mdPath === decision.mdPath && st?.pdfPath === decision.pdfPath;
+      });
+      if (same && same !== leaf) {
+        // The pair is already open: show that tab, close the plain PDF one.
+        leaf.detach();
+        this.app.workspace.revealLeaf(same);
+        return;
+      }
+      // replacesPdf: the viewer keeps the PDF step out of the tab's history,
+      // so Back goes to what was open before instead of redirecting again.
+      await leaf.setViewState({ type: VIEW_TYPE_SYNCED_VIEWER, active: true, state: { mdPath: decision.mdPath, pdfPath: decision.pdfPath, replacesPdf: true } });
+    } finally {
+      this.redirecting.delete(file.path);
+    }
+  }
+
+  /** The PDF tab showing this file: the active one, else any tab with it. */
+  private pdfLeafFor(path: string): WorkspaceLeaf | null {
+    const shows = (l: WorkspaceLeaf | null | undefined) => {
+      const v = l?.view as { getViewType?: () => string; file?: TFile | null } | undefined;
+      return !!v && v.getViewType?.() === "pdf" && v.file?.path === path;
+    };
+    const recent = this.app.workspace.getMostRecentLeaf?.() ?? null;
+    if (shows(recent)) return recent;
+    return this.app.workspace.getLeavesOfType("pdf").find((l) => shows(l) && this.nativePdfLeaves.get(l) !== path) ?? null;
+  }
+
+  /**
+   * "PDF만 보기" in the Synced Viewer: the lecture PDF in Obsidian's own PDF
+   * view, in a split next to the viewer. That tab is marked so it is not
+   * turned back into the viewer.
+   */
+  async openNativePdf(pdfPath: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(pdfPath);
+    if (!(file instanceof TFile)) return;
+    const leaf = this.app.workspace.getLeaf("split", "vertical");
+    this.nativePdfLeaves.set(leaf, file.path);
+    await leaf.openFile(file);
   }
 
   /** The Synced Viewer for a note and its PDF, reusing an open viewer tab. */

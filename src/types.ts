@@ -74,6 +74,11 @@ export interface Alt2ObsidianSettings {
    * never changed.
    */
   hideManagedComments: boolean;
+  /**
+   * Opening a lecture PDF (a PDF next to a lecture note of the same name)
+   * in a normal tab opens the Synced Viewer for the pair instead.
+   */
+  openPdfInViewer: boolean;
 }
 
 export const DEFAULT_GENERATION: GenerationOptions = {
@@ -127,6 +132,7 @@ export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
   altDataDir: "",
   notionFetchTool: "",
   hideManagedComments: true,
+  openPdfInViewer: true,
 };
 
 /** 1.x exam period tag. Exam summaries are gone (spec G5); old records may still carry it. */

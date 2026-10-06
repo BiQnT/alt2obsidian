@@ -441,6 +441,19 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
           this.plugin.applyCommentHiding();
         })
       );
+    new Setting(containerEl)
+      .setName("강의 PDF를 열면 뷰어로 열기")
+      .setDesc(
+        "파일 탐색기나 링크로 강의 PDF(같은 폴더에 같은 이름의 강의 노트가 있는 PDF)를 열면 그 탭이 PDF와 노트를 나란히 보여주는 Synced Viewer로 바뀝니다. " +
+          "같은 강의의 뷰어가 이미 열려 있으면 그 탭을 보여줍니다. 뷰어의 'PDF만 보기'로 연 탭과 Obsidian을 켤 때 이미 열려 있던 PDF 탭은 그대로 둡니다. " +
+          "강의 노트(.md)를 열 때는 바뀌지 않습니다."
+      )
+      .addToggle((t) =>
+        t.setValue(this.settings.openPdfInViewer).onChange(async (value) => {
+          this.settings.openPdfInViewer = value;
+          await this.save();
+        })
+      );
   }
 
   // ---- storage and help ----
@@ -499,8 +512,8 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     });
     usageEl.createEl("p", {
       text:
-        "강의 노트(.md)를 열고 명령 팔레트에서 'Open Synced Viewer (PDF + lecture .md)'를 실행하면 " +
-        "PDF와 노트가 좌우로 동기 스크롤되는 전용 뷰가 열립니다.",
+        "강의 PDF를 열면 PDF와 노트가 좌우로 동기 스크롤되는 Synced Viewer가 열립니다('보기' 설정에서 끌 수 있음). " +
+        "강의 노트(.md)에서는 명령 팔레트의 'Open Synced Viewer (PDF + lecture .md)'나 사이드바의 '뷰어로 열기'를 쓰세요.",
     });
   }
 }
