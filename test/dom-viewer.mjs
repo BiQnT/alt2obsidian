@@ -151,11 +151,16 @@ const [info, ...steps] = JSON.parse(out);
 const at = (name) => steps.find((s) => s.step === name);
 assert.equal(info.pages, PAGES);
 assert.deepEqual(info.headings, Array.from({ length: PAGES }, (_, i) => i + 1), "only the 📚 h2 headings, the overview subheadings are not slides");
-for (const [name, n] of [["pdf to 12", 12], ["md to 20", 20], ["edit refresh", 20], ["re-import", 20], ["pdf jump 27", 27]]) {
+for (const [name, n] of [["pdf to 12", 12], ["md to 20", 20], ["edit refresh", 20], ["re-import", 20], ["after load", 25], ["pdf jump 27", 27]]) {
   const s = at(name);
   assert.deepEqual([s.current, s.pdf, s.md], [n, n, n], `${name}: both panes on slide ${n} (${JSON.stringify(s)})`);
 }
 assert.ok(Math.abs(at("edit refresh").mdTop - at("md to 20").mdTop) < 5, "an edit refresh keeps the note's position");
 assert.ok(Math.abs(at("re-import").pdfTop - at("edit refresh").pdfTop) < 5 && Math.abs(at("re-import").mdTop - at("edit refresh").mdTop) < 5, `a re-import keeps both positions (${JSON.stringify(steps)})`);
 assert.equal(at("closed").current, 27, "a scroll queued at close is dropped");
+const during = at("during load");
+assert.equal(during.loading, true, "the note was still loading");
+assert.equal(during.pdf, 25, "the PDF moved during the load");
+assert.ok(Math.abs(during.mdTop - at("re-import").mdTop) < 5, `the loading note pane was not scrolled (${JSON.stringify(during)})`);
+assert.deepEqual([at("after load").current, at("after load").pdf, at("after load").md], [25, 25, 25], "after the load the note follows the PDF");
 console.log("PASS: Synced Viewer in Chromium: PDF and note follow each other, an edit refresh and a re-import keep both panes, overview subheadings are not slides, close cancels pending work");

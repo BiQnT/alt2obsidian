@@ -237,6 +237,11 @@ export class SyncedViewerView extends ItemView {
   private guardTimer: Record<Pane, number | null> = { pdf: null, md: null };
   /** Pairs loaded at least once: reloading the same pair keeps both reading positions. */
   private loadedPair: string | null = null;
+  /**
+   * A pane being (re)loaded: its scroll events are ignored and it is not
+   * scrolled to follow the other pane until the load ends.
+   */
+  private loading: Record<Pane, boolean> = { pdf: false, md: false };
   /** Set by onClose: scroll events that still arrive are ignored. */
   private closed = false;
   /** `alt_alignment` of the note (spec 4.9); empty = scroll sync by headings only. */
@@ -408,7 +413,7 @@ export class SyncedViewerView extends ItemView {
       const el = this.paneEl(pane);
       this.registerDomEvent(el, "scroll", () => this.onPaneScroll(pane), { passive: true });
       this.registerDomEvent(el, "scrollend", () => {
-        if (this.guardUntil[pane] > Date.now()) this.guard(pane, 50);
+        if (this.guardUntil[pane] > Date.now()) this.guard(pane, 50, true);
       });
     }
   }
@@ -543,13 +548,17 @@ export class SyncedViewerView extends ItemView {
    */
   private async loadMarkdown(path: string, restoreTop?: number): Promise<void> {
     this.cancelFollow();
-    this.guard("md", 60000);
+    this.loading.md = true;
     this.slideHeadings.clear();
     try {
       await this.renderMarkdown(path);
       if (restoreTop !== undefined) this.mdPaneEl.scrollTop = restoreTop;
     } finally {
-      this.guard("md", 100);
+      this.loading.md = false;
+      this.guard("md", 100, true);
+      // The PDF moved while the note was loading: bring the note to it now.
+      const shown = this.slideInPane("md");
+      if (shown !== null && shown !== this.currentPage) this.scrollMarkdownToSlide(this.currentPage);
     }
   }
 
@@ -642,11 +651,12 @@ export class SyncedViewerView extends ItemView {
 
   private async loadPdf(path: string, restoreTop?: number): Promise<void> {
     this.cancelFollow();
-    this.guard("pdf", 60000);
+    this.loading.pdf = true;
     try {
       await this.renderPdf(path, restoreTop);
     } finally {
-      this.guard("pdf", 100);
+      this.loading.pdf = false;
+      this.guard("pdf", 100, true);
     }
   }
 
@@ -778,7 +788,7 @@ export class SyncedViewerView extends ItemView {
     if (this.closed || this.scrollFrame[pane]) return;
     this.scrollFrame[pane] = window.requestAnimationFrame(() => {
       this.scrollFrame[pane] = 0;
-      if (this.guardUntil[pane] > Date.now()) return;
+      if (this.loading[pane] || this.guardUntil[pane] > Date.now()) return;
       const slide = this.slideInPane(pane);
       if (slide === null || slide === this.currentPage) return;
       this.currentPage = slide;
@@ -793,7 +803,7 @@ export class SyncedViewerView extends ItemView {
     this.cancelFollow();
     this.followTimer = window.setTimeout(() => {
       this.followTimer = null;
-      if (slide !== this.currentPage) return;
+      if (slide !== this.currentPage || this.loading[pane]) return;
       if (pane === "md") this.scrollMarkdownToSlide(slide);
       else this.scrollPdfToPage(slide);
     }, 150);
@@ -803,8 +813,11 @@ export class SyncedViewerView extends ItemView {
    * Ignore the pane's scroll events for `ms`. When the guard runs out the
    * pane is checked once, so a scroll the reader made meanwhile still syncs.
    */
-  private guard(pane: Pane, ms: number): void {
-    this.guardUntil[pane] = Date.now() + ms;
+  private guard(pane: Pane, ms: number, shorten = false): void {
+    // A shorter guard never cuts a longer one short unless asked (scrollend ends a programmatic scroll).
+    const until = Date.now() + ms;
+    if (!shorten && until < this.guardUntil[pane]) return;
+    this.guardUntil[pane] = until;
     if (this.guardTimer[pane] !== null) window.clearTimeout(this.guardTimer[pane]!);
     this.guardTimer[pane] = window.setTimeout(() => {
       this.guardTimer[pane] = null;

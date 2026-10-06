@@ -8,6 +8,7 @@ import { TFile } from "obsidian";
 
 (pdfjsLib as any).GlobalWorkerOptions.workerSrc = "./pdf.worker.min.mjs";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+let readDelay = 0;
 
 async function main() {
   const noteText = await (await fetch("./note.md")).text();
@@ -15,7 +16,10 @@ async function main() {
   const app: any = {
     vault: {
       getAbstractFileByPath: (p: string) => new (TFile as any)(p),
-      read: async () => noteText,
+      read: async () => {
+        if (readDelay) await sleep(readDelay);
+        return noteText;
+      },
       readBinary: async () => pdfBytes.slice(0),
       on: () => ({}),
     },
@@ -58,6 +62,19 @@ async function main() {
   await view.openPair("note.md", "deck.pdf");
   await sleep(1500);
   log.push(state("re-import"));
+
+  // The reader scrolls the PDF while the note is reloading (slow read): the note
+  // is not scrolled during the load and follows the PDF once it is back.
+  readDelay = 600;
+  const reload = view.refreshMarkdownOnly();
+  await sleep(50);
+  pdf.scrollTop = view.pageWrappers[24].offsetTop;
+  await sleep(300);
+  log.push({ ...state("during load"), loading: view.loading.md });
+  await reload;
+  readDelay = 0;
+  await sleep(1500);
+  log.push(state("after load"));
 
   // A big jump with the scrollbar.
   pdf.scrollTop = view.pageWrappers[26].offsetTop; await sleep(1500);
