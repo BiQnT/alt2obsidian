@@ -380,7 +380,13 @@ export class Alt2ObsidianSidebarView extends ItemView {
       return;
     }
     footer.show();
-    footer.createDiv({ cls: "alt2obsidian-footer-title", text: it.note.title });
+    const title = footer.createDiv({ cls: "alt2obsidian-footer-title", text: it.note.title });
+    // The lecture kind here too (spec 4.10): why the buttons below differ.
+    const kindNow = this.kindOf(it);
+    if (kindNow) {
+      title.appendText(" ");
+      title.createSpan({ cls: `alt2obsidian-kind is-${kindNow}`, text: LECTURE_KIND_LABELS[kindNow] }).setAttr("title", `Alt 노트 종류: ${it.note.type || "알 수 없음"}`);
+    }
 
     if (it.status.kind === "link") {
       const box = footer.createDiv({ cls: "alt2obsidian-link-offer" });
