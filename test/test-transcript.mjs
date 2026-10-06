@@ -300,6 +300,9 @@ function mergeBoth(existing, next) {
     const first = s.calls()[0];
     assert.ok(first.stdin.includes("[강의 공통 맥락]") && first.stdin.includes("### 구간 1 [00:00~") && first.stdin.includes("[전사 (음성 인식, 군말과 반복 제거)]"));
     assert.ok(first.argv.includes("--system-prompt") && first.argv[first.argv.indexOf("--system-prompt") + 1].includes("STT"), "the section instructions");
+    // A section of announcements gets one short line on purpose: accepted, not retried.
+    const short = m.checkSectionAnswer({ sections: [{ section: 1, summary: "- 수업 안내뿐임 [00:12]", gist: "수업 안내다" }, { section: 2, summary: "-", gist: "x" }] }, plan.sections.slice(0, 2));
+    assert.deepEqual([Array.from(short.ok.keys()), Array.from(short.failed.keys())], [[1], [2]]);
     // A section missing from the answer is asked for once more, alone.
     process.env.FAKE_CLI_MODE = "dropsection:2";
     rmSync(process.env.FAKE_CLI_STATE, { force: true });

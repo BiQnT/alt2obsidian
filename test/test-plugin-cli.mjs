@@ -794,6 +794,30 @@ try {
     await plugin.runCliImport(vc, { onConfirmUpdate: async () => true });
     assert.ok(!/alt_pdf_source/.test(files.get(copyNote)), "not marked as attached");
     assert.equal(plugin.lectureKindFor({ altType: null, hasSlides: false, hasTranscript: true, notePath: copyNote }), "transcript", "the sidebar does not call it attached either");
+    // A PDF next to the note spelled <note>.PDF is used and written in place, never doubled as <note>.pdf.
+    const upperPv = preview();
+    upperPv.pdfData = null;
+    upperPv.altData = { ...upperPv.altData, title: "Upper Case", metadata: { ...upperPv.altData.metadata, noteId: "note-uc" } };
+    files.set("Alt2Obsidian/CSED311/Lectures/Upper Case.PDF", "<binary>");
+    binaries.set("Alt2Obsidian/CSED311/Lectures/Upper Case.PDF", pdfBytes);
+    const ucRec = await plugin.runCliImport(await plugin.prepareCliImport("uuc", upperPv, "CSED311"));
+    assert.equal(ucRec.pdfPath, "Alt2Obsidian/CSED311/Lectures/Upper Case.PDF");
+    assert.ok(!files.has("Alt2Obsidian/CSED311/Lectures/Upper Case.pdf"), "no second copy (a case-insensitive disk would refuse it)");
+    // Obsidian's metadata cache lags right after a write: the mark is read from the note text.
+    const realCache = plugin.app.metadataCache.getFileCache;
+    const frozen = new Map();
+    plugin.app.metadataCache.getFileCache = (f) => {
+      if (!frozen.has(f.path)) frozen.set(f.path, realCache(f));
+      return frozen.get(f.path);
+    };
+    try {
+      await plugin.attachPdf(copyNote, { kind: "disk", name: "vc.pdf", data: pdfBytes });
+      await plugin.attachPdf(copyNote, { kind: "disk", name: "vc2.pdf", data: pdfBytes });
+      assert.equal((files.get(copyNote).match(/^alt_pdf_source:/gm) ?? []).length, 1, "attached twice before the cache caught up: one line");
+      assert.equal((await plugin.prepareCliImport("uvc", vcPv, "CSED311")).pdfSource, "attached", "the next import sees the mark at once");
+    } finally {
+      plugin.app.metadataCache.getFileCache = realCache;
+    }
     console.log("PASS: URL lecture without a PDF: same choice (untimed summary or attach); a PDF from disk is read into memory, copied, and the import marks the note");
   }
 

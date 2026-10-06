@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { importTs, repo } from "./helpers/bundle-ts.mjs";
 import { optionalRealDeck } from "./helpers/decks.mjs";
 import { FIXTURE_PATH } from "./helpers/synthetic-pdf.mjs";
@@ -290,6 +291,10 @@ try {
     assert.throws(() => execFileSync("node", [join(repo, "scripts/phase2/transcript-note.mjs"), "render", out, "--answers", join(dir, "t-empty.json"), "--overview", join(dir, "t-overview.md"), "--concepts", join(dir, "t-concepts.json"), "--subject", "S", "--id", "x"], { stdio: "pipe" }));
     cli("transcript-note", ["followup", out, "--answers", join(dir, "t-answers.json"), "--language", "en"]);
     assert.ok(readFileSync(join(out, "concepts.md"), "utf8").includes("Write all concept fields in clear English."), "--language en");
+    // Node 18 has no global Web Crypto (section hashes need it): emulated by removing it.
+    writeFileSync(join(dir, "no-webcrypto.mjs"), "delete globalThis.crypto;\n");
+    const node18 = JSON.parse(execFileSync("node", ["--import", pathToFileURL(join(dir, "no-webcrypto.mjs")).href, join(repo, "scripts/phase2/transcript-note.mjs"), "prep", tb, "--title", "L9", "--out", join(dir, "tn18")], { encoding: "utf8" }));
+    assert.deepEqual(node18.sections.map((x) => x.hash), res.sections.map((x) => x.hash), "same hashes without a global Web Crypto");
     // Re-import with --existing: every section reused, nothing to send.
     writeFileSync(join(dir, "t-note.md"), md);
     const again = JSON.parse(cli("transcript-note", ["prep", tb, "--title", "L9", "--out", join(dir, "tn2"), "--existing", join(dir, "t-note.md")]));
