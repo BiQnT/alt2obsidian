@@ -1,6 +1,7 @@
 import esbuild from "esbuild";
 import { copy } from "esbuild-plugin-copy";
 import process from "process";
+import { builtinModules } from "module";
 
 const prod = process.argv[2] === "production";
 
@@ -8,7 +9,9 @@ esbuild
   .build({
     entryPoints: ["src/main.ts"],
     bundle: true,
-    external: ["obsidian", "electron", "@codemirror/*", "@lezer/*"],
+    // Node built-ins (child_process for the CLI providers) come from
+    // Obsidian's desktop runtime.
+    external: ["obsidian", "electron", "@codemirror/*", "@lezer/*", ...builtinModules, ...builtinModules.map((m) => `node:${m}`)],
     format: "cjs",
     target: "es2018",
     logLevel: "info",

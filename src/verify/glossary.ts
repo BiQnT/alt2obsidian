@@ -1,0 +1,162 @@
+// Korean to English term hints for evidence retrieval (spec 4.6 step 2),
+// no tokens. Korean notes on English slides share few words; a Korean
+// technical word in a claim adds the English words a slide would use, so
+// BM25 can still find the slide. Only retrieval uses this: the judge sees
+// the claim as written. Keys match inside a Korean word ("지역성은",
+// "캐시메모리"); values are English words, stemmed like the slide text.
+//
+// Only technical terms of computer science, engineering and math lectures
+// (loanwords and Sino-Korean terms). Everyday words (fast, recent, cost,
+// time, content ...) and names are left out on purpose: a hint word that
+// many slides share finds the wrong slide more often than the right one.
+// Anything else falls back to the section and neighbour evidence in
+// evidence.ts.
+
+export const KO_EN_TERMS: Record<string, string> = {
+  캐시: "cache",
+  디램: "dram",
+  에스램: "sram",
+  나노초: "nsec ns",
+  기가바이트: "gb",
+  미스율: "miss rate",
+  적중률: "hit rate",
+  연관도: "associativity",
+  용량미스: "capacity miss",
+  메모리: "memory",
+  기억장치: "memory",
+  주기억: "main memory",
+  계층: "hierarchy level",
+  지역성: "locality",
+  시간적: "temporal",
+  공간적: "spatial",
+  공간: "spatial space",
+  프로세서: "processor",
+  레지스터: "register",
+  파이프라인: "pipeline",
+  명령어: "instruction",
+  데이터: "data",
+  주소: "address",
+  블록: "block",
+  용량: "capacity",
+  지연: "latency delay",
+  대역폭: "bandwidth",
+  적중: "hit",
+  미스: "miss",
+  교체: "replacement evict",
+  축출: "evict eviction",
+  정책: "policy",
+  연관: "associative associativity",
+  집합: "set",
+  태그: "tag",
+  인덱스: "index",
+  오프셋: "offset",
+  가상: "virtual",
+  페이지: "page",
+  프로세스: "process",
+  스레드: "thread",
+  운영체제: "operating system os",
+  커널: "kernel",
+  스케줄링: "scheduling scheduler",
+  동기화: "synchronization",
+  교착: "deadlock",
+  인터럽트: "interrupt",
+  컴파일러: "compiler",
+  알고리즘: "algorithm",
+  복잡도: "complexity",
+  정렬: "sort sorting",
+  탐색: "search",
+  그래프: "graph",
+  트리: "tree",
+  해시: "hash",
+  배열: "array",
+  리스트: "list",
+  스택: "stack",
+  큐: "queue",
+  재귀: "recursion recursive",
+  함수: "function",
+  변수: "variable",
+  포인터: "pointer",
+  객체: "object",
+  클래스: "class",
+  상속: "inheritance",
+  네트워크: "network",
+  프로토콜: "protocol",
+  패킷: "packet",
+  라우팅: "routing",
+  암호: "encryption cipher",
+  보안: "security",
+  데이터베이스: "database",
+  쿼리: "query",
+  트랜잭션: "transaction",
+  평균: "average",
+  확률: "probability",
+  행렬: "matrix",
+  벡터: "vector",
+  미분: "derivative",
+  적분: "integral",
+  신호: "signal",
+  회로: "circuit",
+  전압: "voltage",
+  전류: "current",
+  저항: "resistance",
+  트랜지스터: "transistor",
+  클럭: "clock",
+  사이클: "cycle",
+  병렬: "parallel",
+  분기: "branch",
+  예측: "prediction predict",
+  해저드: "hazard",
+  포워딩: "forwarding",
+  성능: "performance",
+  처리량: "throughput",
+  참조: "reference referenced",
+  접근: "access",
+  저장: "storage store",
+  하드웨어: "hardware",
+  소프트웨어: "software",
+  프로그램: "program",
+  루프: "loop",
+  충돌: "conflict collision",
+  쓰기: "write",
+  읽기: "read",
+  작업집합: "working set",
+  워킹셋: "working set",
+  프리페치: "prefetch prefetching",
+  선인출: "prefetch prefetching",
+  사상: "mapped mapping",
+  매핑: "mapped mapping",
+  비교기: "comparator",
+  멀티플렉서: "multiplexer",
+  유효: "valid",
+  오버헤드: "overhead",
+  정확도: "accuracy",
+  손실: "loss",
+  학습: "learning training",
+  모델: "model",
+  신경망: "neural network",
+  가중치: "weight",
+  기울기: "gradient",
+  경사: "gradient",
+  분류: "classification",
+  회귀: "regression",
+};
+
+const KEYS = Object.keys(KO_EN_TERMS).sort((a, b) => b.length - a.length);
+
+/** English hint words for the Korean words of a text (each Korean word adds at most its two longest keys). */
+export function englishHints(text: string): string[] {
+  const out: string[] = [];
+  for (const word of text.match(/[가-힣]+/g) ?? []) {
+    let n = 0;
+    let rest = word;
+    for (const key of KEYS) {
+      if (n >= 2) break;
+      if (!rest.includes(key)) continue;
+      out.push(KO_EN_TERMS[key]);
+      // A longer key covers its shorter parts ("작업집합" before "집합").
+      rest = rest.replace(key, " ");
+      n++;
+    }
+  }
+  return out;
+}

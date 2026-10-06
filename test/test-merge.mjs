@@ -233,7 +233,7 @@ async function reimport(oldTexts, newTexts) {
   files.set(PATH, old);
   const single = "---\ntitle: x\n---\n<!-- alt2obsidian:start -->\n# lec\n본문\n<!-- alt2obsidian:end -->\n";
   const before = notices.length;
-  await assert.rejects(vm.buildManagedNoteUpdateSummary(PATH, single, []), /덮어쓰지 않고.*멀티모달/);
+  await assert.rejects(vm.buildManagedNoteUpdateSummary(PATH, single, []), /덮어쓰지 않고.*PDF 접근을 확인/);
   await assert.rejects(vm.saveManagedNote(single, PATH), /덮어쓰지 않고/);
   assert.equal(files.get(PATH), old, "existing note untouched");
   assert.equal(notices.length, before, "no separate Notice; the caller shows the error once");

@@ -10,6 +10,46 @@ import {
 } from "../types";
 import { sanitizeFilename, formatDate } from "../utils/helpers";
 import { buildOverviewSection, linkConceptNames } from "../core/markdown";
+import { formatDiagramEmbed } from "../core/slideMeta";
+
+/**
+ * Note identity: `alt_id` (public share id, 1.x and URL imports) or
+ * `alt_local_id` (Alt local UUID) with `alt_source`, so the sidebar can find
+ * the note again; the two id spaces never mix (spec 2.3).
+ */
+function identityLines(altData: AltNoteData): string[] {
+  const id = JSON.stringify(altData.metadata.noteId);
+  if (altData.metadata.sourceKind === "alt-local") return [`alt_local_id: ${id}`, `alt_source: "alt-local"`];
+  return [`alt_id: ${id}`];
+}
+
+/**
+ * Sets one `key: value` line in a note's frontmatter as text, leaving every
+ * other byte alone: an existing empty `key:` line is filled in, otherwise
+ * the line is added at the end of the block (a block is created when there
+ * is none). A UTF-8 BOM is kept in front, and the file's own line ending
+ * (LF or CRLF) is used.
+ */
+export function insertFrontmatterLine(content: string, line: string): string {
+  const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const body = content.slice(bom.length);
+  const eol = /\r\n/.test(body) ? "\r\n" : "\n";
+  const key = line.slice(0, line.indexOf(":") + 1);
+  const m = body.match(/^---\r?\n(?:([\s\S]*?)\r?\n)?---(\r?\n|$)/);
+  if (!m) return `${bom}---${eol}${line}${eol}---${eol}${body}`;
+  const inner = m[1];
+  if (inner !== undefined && key) {
+    // An empty value: nothing, "", '', null or ~ (YAML nulls); a CRLF line keeps its \r.
+    const empty = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*(?:""|''|null|~)?[ \\t]*(\\r?)$`, "m");
+    if (empty.test(inner)) {
+      const start = body.indexOf(inner);
+      return bom + body.slice(0, start) + inner.replace(empty, (_m, cr: string) => `${line}${cr}`) + body.slice(start + inner.length);
+    }
+  }
+  // Insert just before the closing "---".
+  const close = m[0].length - m[2].length - 3;
+  return `${bom}${body.slice(0, close)}${line}${eol}${body.slice(close)}`;
+}
 
 export class NoteGenerator {
   constructor(private llm: LLMProvider) {}
@@ -17,7 +57,7 @@ export class NoteGenerator {
   /**
    * Page-anchored assembly path (plan Task 1.2). Used when per-slide
    * commentary is available (full-quality + PDF available + per-slide
-   * Gemini calls succeeded). Output structure:
+   * LLM calls succeeded). Output structure:
    *
    *   ---
    *   frontmatter
@@ -27,7 +67,7 @@ export class NoteGenerator {
    *
    *   ## 📚 슬라이드 N
    *   <!-- alt2obs:slide:N hash:HHHHHHHH start -->
-   *   [Gemini commentary, with [[Concept]] wikilinks injected]
+   *   [LLM commentary, with [[Concept]] wikilinks injected]
    *   <!-- alt2obs:slide:N hash:HHHHHHHH end -->
    *
    *   > [!note] 내 메모
@@ -44,11 +84,13 @@ export class NoteGenerator {
     altData: AltNoteData,
     slidesResult: PerSlideGenerationResult,
     llmResult: LLMResult,
-    subject: string
+    subject: string,
+    /** Extra frontmatter lines (2.0 CLI path: `alt2obs_usage`). */
+    extraFrontmatter: string[] = []
   ): Promise<{ lectureMarkdown: string; conceptNotes: ConceptNote[] }> {
     if (slidesResult.slides.length === 0) {
-      // No usable slide commentary — fall back to lecture-level path.
-      return this.generate(altData, llmResult, subject);
+      // No usable slide commentary: fall back to the lecture-level path.
+      return this.generate(altData, llmResult, subject, extraFrontmatter);
     }
 
     const title = sanitizeFilename(altData.title);
@@ -65,7 +107,8 @@ export class NoteGenerator {
       altData.metadata.createdAt
         ? `alt_created: "${altData.metadata.createdAt}"`
         : null,
-      `alt_id: "${altData.metadata.noteId}"`,
+      ...identityLines(altData),
+      ...extraFrontmatter,
       "---",
       "",
     ]
@@ -78,16 +121,18 @@ export class NoteGenerator {
     // running the regex pass once per section over all concepts[]". This
     // matches: every section is rewritten with all known concept names.
     const conceptNames = llmResult.concepts.map((c) => c.name);
+    const known = llmResult.knownConceptNames ?? [];
     // Overview body: summary headings demoted one level, concept names
     // linked (src/core/markdown.ts, shared with the Skill). The overview
     // block is replaced on re-import; text outside it is kept
     // (VaultManager.mergeOverviewPreamble).
     const overviewSection = buildOverviewSection(
       llmResult.processedSummary || altData.summary,
-      conceptNames
+      conceptNames,
+      known
     );
     const sections = slidesResult.slides
-      .map((slide) => this.buildSlideSection(slide, conceptNames))
+      .map((slide) => this.buildSlideSection(slide, conceptNames, known))
       .join("\n\n");
 
     const orphanFooter =
@@ -126,8 +171,10 @@ export class NoteGenerator {
    * the end marker is the user's free-space anchor — preserved on regen by
    * the multi-managed merge algorithm (Task 1.3).
    */
-  private buildSlideSection(slide: SlideSection, conceptNames: string[]): string {
-    const body = linkConceptNames(slide.commentary, conceptNames);
+  private buildSlideSection(slide: SlideSection, conceptNames: string[], knownNames: string[]): string {
+    const linked = linkConceptNames(slide.commentary, conceptNames, knownNames);
+    const withDiagram = slide.diagram ? `${linked}\n\n${formatDiagramEmbed(slide.diagram)}` : linked;
+    const body = slide.meta ? `${withDiagram}\n\n${slide.meta}` : withDiagram;
     const startMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} start -->`;
     const endMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} end -->`;
     return [
@@ -145,11 +192,12 @@ export class NoteGenerator {
   async generate(
     altData: AltNoteData,
     llmResult: LLMResult,
-    subject: string
+    subject: string,
+    extraFrontmatter: string[] = []
   ): Promise<{ lectureMarkdown: string; conceptNotes: ConceptNote[] }> {
     // Handle partial parse quality
     if (altData.parseQuality === "partial") {
-      return this.generatePartialNote(altData, subject);
+      return this.generatePartialNote(altData, subject, extraFrontmatter);
     }
 
     const title = sanitizeFilename(altData.title);
@@ -166,7 +214,8 @@ export class NoteGenerator {
       altData.metadata.createdAt
         ? `alt_created: "${altData.metadata.createdAt}"`
         : null,
-      `alt_id: "${altData.metadata.noteId}"`,
+      ...identityLines(altData),
+      ...extraFrontmatter,
       "---",
       "",
     ]
@@ -179,7 +228,8 @@ export class NoteGenerator {
     // Insert concept wikilinks
     content = linkConceptNames(
       content,
-      llmResult.concepts.map((c) => c.name)
+      llmResult.concepts.map((c) => c.name),
+      llmResult.knownConceptNames ?? []
     );
 
     const lectureMarkdown =
@@ -206,7 +256,8 @@ export class NoteGenerator {
 
   private generatePartialNote(
     altData: AltNoteData,
-    subject: string
+    subject: string,
+    extraFrontmatter: string[] = []
   ): { lectureMarkdown: string; conceptNotes: ConceptNote[] } {
     const frontmatter = [
       "---",
@@ -216,6 +267,8 @@ export class NoteGenerator {
       `date: "${formatDate()}"`,
       `source: "alt2obsidian"`,
       `parse_quality: "partial"`,
+      ...(altData.metadata.sourceKind === "alt-local" ? identityLines(altData) : []),
+      ...extraFrontmatter,
       "---",
       "",
     ].join("\n");

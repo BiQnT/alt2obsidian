@@ -1,0 +1,160 @@
+{
+  "lecture": "lec13",
+  "note": "The lec13 statements of lec13.json written in Korean without English technical terms (a Korean student's notes on English slides), for the retrieval check of spec 4.6 with the fake judge. Written for this eval; no slide or transcript text is stored here.",
+  "inputs": {
+    "pdf": "lec13.pdf",
+    "transcript": "019dade6-b418-7000-8000-baed70b60efc.json"
+  },
+  "statements": [
+    {
+      "id": 1,
+      "label": "true",
+      "slide": 2,
+      "text": "이상적인 메모리는 어느 주소든 프로세서 한 사이클 만에 접근할 수 있다."
+    },
+    {
+      "id": 2,
+      "label": "true",
+      "slide": 2,
+      "text": "현실에서는 크면서도 빠른 메모리 기술을 찾을 수 없다."
+    },
+    {
+      "id": 3,
+      "label": "true",
+      "slide": 3,
+      "text": "메모리는 클수록 느리고 대역폭도 낮다."
+    },
+    {
+      "id": 4,
+      "label": "true",
+      "slide": 3,
+      "text": "디램은 기가바이트 단위 용량에 지연이 약 50 나노초다."
+    },
+    {
+      "id": 5,
+      "label": "false",
+      "slide": 3,
+      "text": "디램은 에스램보다 기가바이트당 가격이 비싸다."
+    },
+    {
+      "id": 6,
+      "label": "true",
+      "slide": 3,
+      "text": "에스램은 기가바이트당 약 1만 달러로 디램보다 훨씬 비싸다."
+    },
+    {
+      "id": 7,
+      "label": "true",
+      "slide": 7,
+      "text": "시간 지역성은 최근 참조한 항목이 가까운 미래에 다시 참조될 가능성이 높다는 성질이다."
+    },
+    {
+      "id": 8,
+      "label": "true",
+      "slide": 7,
+      "text": "공간 지역성은 주소가 가까운 항목들이 시간적으로 가깝게 함께 참조되는 성질이다."
+    },
+    {
+      "id": 9,
+      "label": "true",
+      "slide": 8,
+      "text": "디램 지연 100 사이클, 캐시 지연 1 사이클에서 한 워드를 네 번 접근하면 평균 지연은 26 사이클이다."
+    },
+    {
+      "id": 10,
+      "label": "false",
+      "slide": 7,
+      "text": "공간 지역성은 최근 참조한 항목을 곧 다시 참조하는 성질을 말한다."
+    },
+    {
+      "id": 11,
+      "label": "true",
+      "slide": 11,
+      "text": "캐시는 자주 또는 최근에 쓰인 명령어나 데이터를 저장하는 접근 시간이 짧은 메모리다."
+    },
+    {
+      "id": 12,
+      "label": "true",
+      "slide": 12,
+      "text": "하드웨어가 메모리 계층을 자동으로 관리하는 방식은 1962년 아틀라스까지 거슬러 올라간다."
+    },
+    {
+      "id": 13,
+      "label": "true",
+      "slide": 14,
+      "text": "5단계 파이프라인에서 1차 캐시는 명령어 캐시와 데이터 캐시로 나뉘고 2차부터는 통합 캐시를 쓴다."
+    },
+    {
+      "id": 14,
+      "label": "true",
+      "slide": 15,
+      "text": "계층 i의 체감 접근 시간은 Ti = ti + mi · Ti+1 로 계산한다."
+    },
+    {
+      "id": 15,
+      "label": "false",
+      "slide": 19,
+      "text": "인텔 P4 예시에서 1차 데이터 캐시 용량은 1024KB다."
+    },
+    {
+      "id": 16,
+      "label": "true",
+      "slide": 17,
+      "text": "용량을 늘리면 미스율은 낮아지지만 접근 시간은 늘어난다."
+    },
+    {
+      "id": 17,
+      "label": "true",
+      "slide": 18,
+      "text": "작업 집합은 프로세스가 활발하게 사용하고 있는 데이터의 모음이다."
+    },
+    {
+      "id": 18,
+      "label": "true",
+      "slide": 18,
+      "text": "에스램은 캐시와 레지스터 파일에 쓰인다."
+    },
+    {
+      "id": 19,
+      "label": "true",
+      "slide": 29,
+      "text": "블록 크기를 키우면 선인출 효과가 있어 공간 지역성을 더 잘 활용한다."
+    },
+    {
+      "id": 20,
+      "label": "false",
+      "slide": 42,
+      "text": "용량 미스는 캐시의 연관도가 부족해서 생기는 미스다."
+    },
+    {
+      "id": 21,
+      "label": "true",
+      "slide": 30,
+      "text": "강제 미스는 어떤 블록을 처음 참조할 때 항상 발생한다."
+    },
+    {
+      "id": 22,
+      "label": "true",
+      "slide": 34,
+      "text": "직접 사상 캐시에서 같은 블록 인덱스를 가진 주소들은 같은 캐시 블록에 매핑된다."
+    },
+    {
+      "id": 23,
+      "label": "true",
+      "slide": 37,
+      "text": "집합 연관 캐시는 연관도가 높을수록 충돌이 줄어든다."
+    },
+    {
+      "id": 24,
+      "label": "false",
+      "slide": 39,
+      "text": "교체 정책은 캐시 성능에 1차적인 영향을 주는 가장 중요한 설계 요소다."
+    },
+    {
+      "id": 25,
+      "label": "true",
+      "slide": 41,
+      "text": "완전 연관 캐시는 내용 주소 메모리처럼 모든 항목의 태그를 동시에 검색한다."
+    }
+  ]
+}

@@ -1,0 +1,186 @@
+{
+  "lecture": "02-What-is-OS",
+  "heldOut": true,
+  "note": "HELD-OUT set: synthetic Korean notes (Korean technical terms, no English glosses, under section headings like a student's note) on an operating systems lecture, 20 true and 5 wrong. Written after the glossary was fixed and never used to tune it or the retrieval. Only statements, sections and labels are stored; the deck is the user's own data. The deck has no transcript here.",
+  "inputs": {
+    "pdf": "02-What-is-OS.pdf",
+    "transcript": null
+  },
+  "statements": [
+    {
+      "id": 1,
+      "label": "true",
+      "slide": 2,
+      "section": "프로그램 실행",
+      "text": "실행 중인 프로그램은 명령어를 가져오고 해독한 뒤 실행하는 과정을 반복한다."
+    },
+    {
+      "id": 2,
+      "label": "true",
+      "slide": 2,
+      "section": "프로그램 실행",
+      "text": "프로세서는 한 명령어를 마치면 다음 명령어로 넘어간다."
+    },
+    {
+      "id": 3,
+      "label": "true",
+      "slide": 3,
+      "section": "운영체제의 역할",
+      "text": "운영체제는 프로그램들이 메모리를 공유할 수 있게 해 준다."
+    },
+    {
+      "id": 4,
+      "label": "true",
+      "slide": 3,
+      "section": "운영체제의 역할",
+      "text": "운영체제는 프로그램이 디스크나 네트워크 카드 같은 장치와 상호작용하게 한다."
+    },
+    {
+      "id": 5,
+      "label": "true",
+      "slide": 4,
+      "section": "운영체제의 역할",
+      "text": "시스템 콜은 사용자가 운영체제에게 할 일을 알려주는 인터페이스다."
+    },
+    {
+      "id": 6,
+      "label": "false",
+      "slide": 4,
+      "section": "운영체제의 역할",
+      "text": "일반적인 운영체제는 시스템 콜을 몇 개만 제공한다."
+    },
+    {
+      "id": 7,
+      "label": "true",
+      "slide": 5,
+      "section": "운영체제의 역할",
+      "text": "운영체제는 CPU, 메모리, 디스크 같은 자원을 관리하는 자원 관리자다."
+    },
+    {
+      "id": 8,
+      "label": "true",
+      "slide": 7,
+      "section": "가상화",
+      "text": "운영체제는 물리 자원을 더 쓰기 쉬운 가상 형태로 바꾼다."
+    },
+    {
+      "id": 9,
+      "label": "true",
+      "slide": 8,
+      "section": "가상화",
+      "text": "CPU 가상화는 적은 수의 CPU를 무한히 많은 것처럼 보이게 한다."
+    },
+    {
+      "id": 10,
+      "label": "true",
+      "slide": 11,
+      "section": "가상화",
+      "text": "프로세서가 하나뿐이어도 네 프로그램이 동시에 실행되는 것처럼 보인다."
+    },
+    {
+      "id": 11,
+      "label": "true",
+      "slide": 12,
+      "section": "가상화",
+      "text": "물리 메모리는 바이트의 배열이다."
+    },
+    {
+      "id": 12,
+      "label": "true",
+      "slide": 13,
+      "section": "가상화",
+      "text": "각 프로세스는 자신만의 가상 주소 공간을 가진다."
+    },
+    {
+      "id": 13,
+      "label": "false",
+      "slide": 13,
+      "section": "가상화",
+      "text": "한 프로그램의 메모리 참조는 다른 프로세스의 주소 공간에 영향을 준다."
+    },
+    {
+      "id": 14,
+      "label": "true",
+      "slide": 16,
+      "section": "가상화",
+      "text": "mem.c를 여러 번 실행하면 각 프로그램이 같은 주소에 메모리를 할당한다."
+    },
+    {
+      "id": 15,
+      "label": "true",
+      "slide": 17,
+      "section": "가상화",
+      "text": "저장 장치는 보통 4KB 블록의 배열로 추상화된다."
+    },
+    {
+      "id": 16,
+      "label": "true",
+      "slide": 22,
+      "section": "동시성",
+      "text": "스레드는 같은 메모리 공간 안에서 실행되는 함수다."
+    },
+    {
+      "id": 17,
+      "label": "true",
+      "slide": 24,
+      "section": "동시성",
+      "text": "공유 카운터를 증가시키는 연산은 세 개의 명령어로 이루어진다."
+    },
+    {
+      "id": 18,
+      "label": "false",
+      "slide": 24,
+      "section": "동시성",
+      "text": "이 세 명령어는 원자적으로 실행되기 때문에 동시성 문제가 생기지 않는다."
+    },
+    {
+      "id": 19,
+      "label": "true",
+      "slide": 23,
+      "section": "동시성",
+      "text": "반복 횟수가 1000이면 최종 값은 2000이 나온다."
+    },
+    {
+      "id": 20,
+      "label": "true",
+      "slide": 26,
+      "section": "영속성",
+      "text": "디램은 값을 휘발성으로 저장한다."
+    },
+    {
+      "id": 21,
+      "label": "true",
+      "slide": 26,
+      "section": "영속성",
+      "text": "파일 시스템은 디스크를 관리하고 사용자가 만든 파일을 저장한다."
+    },
+    {
+      "id": 22,
+      "label": "false",
+      "slide": 28,
+      "section": "영속성",
+      "text": "파일 시스템은 쓰기 도중의 시스템 크래시를 처리하지 못한다."
+    },
+    {
+      "id": 23,
+      "label": "true",
+      "slide": 28,
+      "section": "영속성",
+      "text": "저널링이나 copy-on-write로 크래시에 대비한다."
+    },
+    {
+      "id": 24,
+      "label": "true",
+      "slide": 29,
+      "section": "설계 목표",
+      "text": "운영체제는 과도한 오버헤드 없이 가상화를 제공해야 한다."
+    },
+    {
+      "id": 25,
+      "label": "false",
+      "slide": 30,
+      "section": "설계 목표",
+      "text": "운영체제는 신뢰성보다 이동성을 가장 중요한 목표로 삼는다."
+    }
+  ]
+}

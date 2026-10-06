@@ -143,36 +143,6 @@
   color: var(--text-warning);
 }
 
-/* Exam Summary Section */
-.alt2obsidian-exam-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.alt2obsidian-exam-subject {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px;
-  border-radius: 4px;
-  background: var(--background-secondary);
-}
-
-.alt2obsidian-exam-subject-name {
-  font-weight: 500;
-}
-
-.alt2obsidian-exam-subject-count {
-  font-size: 0.8em;
-  color: var(--text-muted);
-}
-
-.alt2obsidian-exam-btn {
-  font-size: 0.85em;
-  cursor: pointer;
-}
-
 /* Error Messages */
 .alt2obsidian-error {
   padding: 8px;
@@ -241,36 +211,6 @@
 }
 
 
-/* Exam period select */
-.alt2obsidian-period-select {
-  width: 100%;
-  margin-top: 4px;
-  padding: 4px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--background-modifier-border);
-  background: var(--background-primary);
-  color: var(--text-normal);
-  font-size: 13px;
-}
-
-/* Exam section layout */
-.alt2obsidian-exam-subject-info {
-  margin-bottom: 4px;
-}
-
-.alt2obsidian-exam-btn-row {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.alt2obsidian-exam-btn-row .alt2obsidian-exam-btn {
-  flex: 1;
-  min-width: 50px;
-  font-size: 12px;
-  padding: 4px 8px;
-}
-
 .alt2obsidian-update-modal h2 {
   margin-top: 0;
 }
@@ -299,4 +239,549 @@
   justify-content: flex-end;
   gap: 8px;
   margin-top: 18px;
+}
+
+/* ---- 2.0: CLI estimate and run panels (sidebar) ---- */
+.alt2obsidian-cli-panel {
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+
+.alt2obsidian-estimate-main {
+  font-weight: 600;
+  margin: 4px 0 6px;
+}
+
+.alt2obsidian-estimate-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: var(--font-ui-small);
+}
+
+.alt2obsidian-estimate-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.alt2obsidian-steps {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.alt2obsidian-steps li.is-active {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.alt2obsidian-steps li.is-done {
+  color: var(--text-faint);
+}
+
+.alt2obsidian-steps li.is-done::after {
+  content: " ✓";
+}
+
+.alt2obsidian-usage-line {
+  margin: 6px 0;
+  font-size: var(--font-ui-smaller);
+  font-family: var(--font-monospace);
+}
+
+.alt2obsidian-cancel-btn {
+  margin-top: 4px;
+}
+
+.alt2obsidian-muted {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+/* ---- 2.0: settings ---- */
+.alt2obsidian-disclosure {
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-left: 3px solid var(--interactive-accent);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+}
+
+.alt2obsidian-disclosure p {
+  margin: 4px 0 0;
+}
+
+.alt2obsidian-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.alt2obsidian-card {
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+}
+
+.alt2obsidian-card h4 {
+  margin: 4px 0;
+}
+
+/*
+ * Setting rows of this tab wrap: the description keeps at least ~16em (or
+ * the whole row when narrower) and the control moves to its own line when
+ * both do not fit, so a description never collapses to a one-character
+ * column next to a control that cannot shrink.
+ * The doubled class outranks Obsidian 1.14's container query for narrow
+ * settings panes (the settings window at its 600px minimum): it turns rows
+ * into columns, where the 16em basis would have become a 16em-tall gap.
+ */
+.alt2obsidian-settings.alt2obsidian-settings .setting-item {
+  flex-direction: row;
+  flex-wrap: wrap;
+  column-gap: 12px;
+  row-gap: 6px;
+}
+
+.alt2obsidian-settings.alt2obsidian-settings .setting-item-info {
+  flex: 1 1 16em;
+  min-width: min(16em, 100%);
+  margin-inline-end: 0;
+}
+
+.alt2obsidian-settings.alt2obsidian-settings .setting-item-control {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/*
+ * CLI cards: plain blocks, not Setting rows (src/ui/SettingsTab.ts), so the
+ * description is always as wide as the card.
+ */
+.alt2obsidian-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.alt2obsidian-card-label {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium, 500);
+}
+
+.alt2obsidian-card-desc {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}
+
+.alt2obsidian-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.alt2obsidian-card-row input[type="text"] {
+  flex: 1 1 10em;
+  min-width: 0;
+}
+
+.alt2obsidian-card-status {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.alt2obsidian-card-status.is-ok {
+  color: var(--text-success);
+}
+
+.alt2obsidian-card-status.is-missing {
+  color: var(--text-warning);
+}
+
+.alt2obsidian-mono {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  word-break: break-all;
+}
+
+/* Task rows: provider, model and effort dropdowns (and the custom model field) wrap as needed. */
+.alt2obsidian-task-setting .setting-item-control {
+  justify-content: flex-start;
+}
+
+.alt2obsidian-settings-note {
+  margin: 4px 0 12px;
+}
+
+.alt2obsidian-model-select {
+  max-width: 16em;
+}
+
+.alt2obsidian-model-input {
+  width: 12em;
+}
+
+.alt2obsidian-model-input.is-invalid {
+  border-color: var(--text-error);
+}
+
+/* ---- 2.0.0-beta.2: Alt local notes (mockup "1. 가져오기 사이드바") ---- */
+.alt2obsidian-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 10px;
+}
+.alt2obsidian-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.alt2obsidian-head-title {
+  font-weight: 700;
+  font-size: var(--font-ui-medium);
+}
+.alt2obsidian-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  height: auto;
+  border-radius: 999px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 500;
+  box-shadow: none;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.alt2obsidian-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.alt2obsidian-status-chip.is-api {
+  background: rgba(var(--color-green-rgb), 0.15);
+  color: var(--color-green);
+}
+.alt2obsidian-status-chip.is-api .alt2obsidian-status-dot {
+  background: var(--color-green);
+}
+.alt2obsidian-status-chip.is-db {
+  background: rgba(var(--color-yellow-rgb), 0.15);
+  color: var(--color-yellow);
+}
+.alt2obsidian-status-chip.is-db .alt2obsidian-status-dot {
+  background: var(--color-yellow);
+}
+.alt2obsidian-status-detail {
+  font-size: var(--font-ui-smaller);
+}
+.alt2obsidian-tabs {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 7px;
+  background: var(--background-primary);
+}
+.alt2obsidian-tab {
+  flex: 1;
+  height: 28px;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+}
+.alt2obsidian-tab.is-active {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  font-weight: 600;
+}
+.alt2obsidian-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  margin-bottom: 8px;
+}
+.alt2obsidian-search input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+.alt2obsidian-search-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+.alt2obsidian-note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.alt2obsidian-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.alt2obsidian-folder:hover {
+  background: var(--background-modifier-hover);
+}
+.alt2obsidian-folder-caret {
+  display: inline-flex;
+}
+.alt2obsidian-folder-caret svg {
+  width: 12px;
+  height: 12px;
+}
+.alt2obsidian-folder-count {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+.alt2obsidian-note-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-left: 14px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.alt2obsidian-note-item:hover {
+  background: var(--background-modifier-hover);
+}
+.alt2obsidian-note-item.is-selected {
+  background: var(--background-modifier-active-hover);
+}
+.alt2obsidian-note-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.alt2obsidian-note-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.alt2obsidian-note-item.is-selected .alt2obsidian-note-title {
+  font-weight: 600;
+}
+.alt2obsidian-note-meta {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.alt2obsidian-chip {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+.alt2obsidian-chip.is-new {
+  background: rgba(var(--color-blue-rgb), 0.18);
+  color: var(--color-blue);
+}
+.alt2obsidian-chip.is-changed {
+  background: rgba(var(--color-yellow-rgb), 0.18);
+  color: var(--color-yellow);
+}
+.alt2obsidian-chip.is-link {
+  background: rgba(var(--color-purple-rgb), 0.18);
+  color: var(--color-purple);
+}
+.alt2obsidian-note-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+.alt2obsidian-footer-title {
+  font-weight: 600;
+}
+.alt2obsidian-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.alt2obsidian-footer-row label {
+  width: 36px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.alt2obsidian-footer-row input {
+  flex: 1;
+  min-width: 0;
+}
+.alt2obsidian-footer-row .alt2obsidian-muted {
+  font-size: 11px;
+}
+.alt2obsidian-align-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.alt2obsidian-align-ok,
+.alt2obsidian-align-off {
+  display: inline-flex;
+}
+.alt2obsidian-align-ok {
+  color: var(--color-green);
+}
+.alt2obsidian-align-ok svg,
+.alt2obsidian-align-off svg {
+  width: 14px;
+  height: 14px;
+}
+.alt2obsidian-footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.alt2obsidian-footer-import {
+  flex: 2;
+}
+.alt2obsidian-link-offer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: var(--font-ui-smaller);
+  background: rgba(var(--color-purple-rgb), 0.1);
+}
+.alt2obsidian-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Note verification tab (spec 4.6) */
+.alt2obsidian-verify-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.alt2obsidian-field-label {
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.alt2obsidian-verify-input input,
+.alt2obsidian-verify-input textarea,
+.alt2obsidian-verify-target {
+  width: 100%;
+}
+.alt2obsidian-verify-input textarea {
+  resize: vertical;
+  font-size: var(--font-ui-smaller);
+}
+.alt2obsidian-verify-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.alt2obsidian-chip.is-ok {
+  background: rgba(var(--color-green-rgb), 0.18);
+  color: var(--color-green);
+}
+.alt2obsidian-chip.is-bad {
+  background: rgba(var(--color-red-rgb), 0.18);
+  color: var(--color-red);
+}
+.alt2obsidian-chip.is-unsure {
+  background: rgba(var(--color-yellow-rgb), 0.18);
+  color: var(--color-yellow);
+}
+.alt2obsidian-chip.is-missing {
+  background: rgba(var(--color-purple-rgb), 0.18);
+  color: var(--color-purple);
+}
+
+/* Model choice for one run (sidebar import estimate, note verification) */
+.alt2obsidian-pickers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 8px;
+}
+.alt2obsidian-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.alt2obsidian-picker-label {
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.alt2obsidian-picker-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.alt2obsidian-picker-select {
+  flex: 1 1 8em;
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--font-ui-smaller);
+}
+.alt2obsidian-picker-select.is-model {
+  order: -1;
+  flex-basis: 100%;
+}
+.alt2obsidian-picker-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.alt2obsidian-picker-save {
+  font-size: var(--font-ui-smaller);
+  height: auto;
+  padding: 2px 8px;
+}
+.alt2obsidian-model-line {
+  font-family: inherit;
+  word-break: break-word;
 }

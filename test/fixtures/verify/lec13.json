@@ -1,0 +1,32 @@
+{
+  "lecture": "lec13",
+  "note": "Synthetic student notes on lec13 (Memory Hierarchy & Cache) for the spec 4.6 acceptance check: 20 statements true to the slides and 5 made wrong on purpose. Written for this eval; no slide or transcript text is stored here. The deck and transcript are the user's own lecture data, not committed.",
+  "inputs": { "pdf": "lec13.pdf", "transcript": "019dade6-b418-7000-8000-baed70b60efc.json" },
+  "statements": [
+    { "id": 1, "label": "true", "slide": 2, "text": "이상적인 메모리는 어느 주소든 1 processor cycle 만에 접근할 수 있는 메모리다." },
+    { "id": 2, "label": "true", "slide": 2, "text": "현실에서는 large하면서 fast한 memory technology를 찾을 수 없다." },
+    { "id": 3, "label": "true", "slide": 3, "text": "Bigger is slower: 메모리는 클수록 느리고 bandwidth도 낮다." },
+    { "id": 4, "label": "true", "slide": 3, "text": "DRAM은 GB 단위 용량에 latency가 약 50 nsec 정도다." },
+    { "id": 5, "label": "false", "slide": 3, "text": "DRAM은 SRAM보다 GB당 가격이 비싸다." },
+    { "id": 6, "label": "true", "slide": 3, "text": "SRAM은 GB당 약 $10K로 DRAM보다 훨씬 비싸다." },
+    { "id": 7, "label": "true", "slide": 7, "text": "Temporal locality는 최근 참조한 item이 가까운 미래에 다시 참조될 가능성이 높다는 성질이다." },
+    { "id": 8, "label": "true", "slide": 7, "text": "Spatial locality는 주소가 가까운 item들이 시간적으로 가깝게 함께 참조되는 성질이다." },
+    { "id": 9, "label": "true", "slide": 8, "text": "100-cycle DRAM latency와 1-cycle cache latency에서 한 word를 네 번 접근하면 평균 latency는 26 cycles다." },
+    { "id": 10, "label": "false", "slide": 7, "text": "Spatial locality는 최근에 참조한 item을 곧 다시 참조하는 성질을 말한다." },
+    { "id": 11, "label": "true", "slide": 11, "text": "Cache는 자주 또는 최근에 쓰인 instruction이나 data를 저장하는 access time이 짧은 메모리다." },
+    { "id": 12, "label": "true", "slide": 12, "text": "HW가 memory hierarchy를 자동으로 관리하는 방식은 ATLAS(1962)까지 거슬러 올라간다." },
+    { "id": 13, "label": "true", "slide": 14, "text": "5-stage pipeline에서 L1은 I-cache와 D-cache가 분리되어 있고 L2부터는 unified cache를 쓴다." },
+    { "id": 14, "label": "true", "slide": 15, "text": "계층 i에서 체감 access time은 Ti = ti + mi · Ti+1 로 계산한다." },
+    { "id": 15, "label": "false", "slide": 19, "text": "Intel P4 예시에서 L1 D-cache의 용량 C1은 1024KB다." },
+    { "id": 16, "label": "true", "slide": 17, "text": "Capacity를 늘리면 miss rate는 낮아지지만 access time ti는 늘어난다." },
+    { "id": 17, "label": "true", "slide": 18, "text": "Working set은 process가 활발하게 사용하고 있는 데이터의 모음이다." },
+    { "id": 18, "label": "true", "slide": 18, "text": "SRAM은 cache와 register file에 쓰인다." },
+    { "id": 19, "label": "true", "slide": 29, "text": "Block size를 키우면 prefetching 효과가 있어 spatial locality를 더 잘 활용한다." },
+    { "id": 20, "label": "false", "slide": 42, "text": "Capacity miss는 cache의 associativity가 부족해서 생기는 miss다." },
+    { "id": 21, "label": "true", "slide": 30, "text": "Cold miss(compulsory miss)는 어떤 block을 처음 참조할 때 항상 발생한다." },
+    { "id": 22, "label": "true", "slide": 34, "text": "Direct-mapped cache에서 같은 block index를 가진 주소들은 같은 cache block에 매핑된다." },
+    { "id": 23, "label": "true", "slide": 37, "text": "Set-associative cache는 associativity가 높을수록 conflict가 줄어든다." },
+    { "id": 24, "label": "false", "slide": 39, "text": "Replacement policy는 캐시 성능에 first-order effect를 주는 가장 중요한 설계 요소다." },
+    { "id": 25, "label": "true", "slide": 41, "text": "Fully associative cache는 CAM처럼 모든 entry의 tag를 동시에 검색한다." }
+  ]
+}

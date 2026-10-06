@@ -1,11 +1,12 @@
-import { App, TFolder, normalizePath } from "obsidian";
+import { App, TFile, TFolder, normalizePath } from "obsidian";
 import {
   ConceptNote,
-  ExamPeriod,
   ImportUpdateSummary,
 } from "../types";
 import { sanitizeFilename } from "../utils/helpers";
 import { ConceptRegistry } from "./ConceptRegistry";
+import { ambiguousKorean, findSameConcept, sameConcept } from "../core/conceptNames";
+import { CONCEPTS_DIR, conceptsFolder as conceptsFolderOf, EXAM_DIR, subjectFolder } from "./layout";
 import {
   assertNoPageAnchoredDowngrade,
   findOverviewBlock,
@@ -122,8 +123,9 @@ export class VaultManager {
         this.extractHeadings(currentBody),
         this.extractHeadings(nextBody)
       ),
-      addedConcepts: this.diffSet(new Set(nextConceptNames), this.extractWikilinks(currentBody)),
-      removedConcepts: this.diffSet(this.extractWikilinks(currentBody), new Set(nextConceptNames)),
+      // Concept links compared as concepts: a link in the other name order is the same one.
+      addedConcepts: this.diffConcepts(nextConceptNames, Array.from(this.extractWikilinks(currentBody))),
+      removedConcepts: this.diffConcepts(Array.from(this.extractWikilinks(currentBody)), nextConceptNames),
       changedLineCount: this.countChangedLines(currentBody, nextBody),
     };
 
@@ -151,16 +153,22 @@ export class VaultManager {
   ): Promise<string[]> {
     // Organize concepts inside subject folder: Alt2Obsidian/{subject}/Concepts/
     const conceptsFolder = subject
-      ? normalizePath(`${this.basePath}/${sanitizeFilename(subject)}/Concepts`)
-      : normalizePath(`${this.basePath}/Concepts`);
+      ? normalizePath(conceptsFolderOf(this.basePath, subject))
+      : normalizePath(`${this.basePath}/${CONCEPTS_DIR}`);
     await this.ensureFolder(conceptsFolder);
 
     const acquiredNames: string[] = [];
     const savedPaths: string[] = [];
+    // Notes already in the folder, by name: a concept matches one in either
+    // name order ("English (한국어)" or "한국어 (English)") and that note is
+    // updated under its own name, never renamed or duplicated.
+    const folder = this.app.vault.getAbstractFileByPath(conceptsFolder);
+    const existingNames = folder instanceof TFolder ? folder.children.filter((c) => c.name.endsWith(".md")).map((c) => c.name.replace(/\.md$/, "")) : [];
+    const ambiguous = ambiguousKorean(concepts.map((c) => c.name));
 
     try {
       for (const concept of concepts) {
-        const filename = sanitizeFilename(concept.name);
+        const filename = findSameConcept(sanitizeFilename(concept.name), existingNames, ambiguous) ?? sanitizeFilename(concept.name);
         const path = normalizePath(`${conceptsFolder}/${filename}.md`);
         const existing = this.app.vault.getAbstractFileByPath(path);
 
@@ -177,6 +185,7 @@ export class VaultManager {
           acquiredNames.push(concept.name);
           const content = this.buildConceptNoteContent(concept);
           await this.app.vault.create(path, content);
+          existingNames.push(filename);
           savedPaths.push(path);
         }
       }
@@ -188,14 +197,44 @@ export class VaultManager {
     return savedPaths;
   }
 
+  /**
+   * Tags already used by this subject's notes, most used first, from
+   * Obsidian's metadataCache (spec 4.8 TagIndex). Put in the prompts so the
+   * model reuses tags instead of inventing new spellings.
+   */
+  getSubjectTags(subject: string, limit = 60): string[] {
+    const prefix = normalizePath(subjectFolder(this.basePath, subject)) + "/";
+    const counts = new Map<string, number>();
+    const skip = new Set(["concept", "midterm", "final", subject.toLowerCase()]);
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!file.path.startsWith(prefix)) continue;
+      const raw = this.app.metadataCache.getFileCache(file)?.frontmatter?.tags;
+      const tags: unknown[] = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(/[,\s]+/) : [];
+      for (const t of tags) {
+        const tag = String(t).replace(/^#/, "").trim();
+        if (!tag || skip.has(tag.toLowerCase())) continue;
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, limit)
+      .map(([t]) => t);
+  }
+
+  /** Current content of a note, or null when it does not exist. */
+  async readNoteIfExists(path: string): Promise<string | null> {
+    const existing = this.app.vault.getAbstractFileByPath(normalizePath(path));
+    if (!existing || existing instanceof TFolder) return null;
+    return this.app.vault.read(existing as TFile);
+  }
+
   async getExistingConceptNames(subject: string): Promise<Set<string>> {
     const cacheKey = this.normalizeSubjectKey(subject);
     const cached = this.conceptNameCache.get(cacheKey);
     if (cached) return new Set(cached);
 
-    const conceptsFolder = normalizePath(
-      `${this.basePath}/${sanitizeFilename(subject)}/Concepts`
-    );
+    const conceptsFolder = normalizePath(conceptsFolderOf(this.basePath, subject));
     const folder = this.app.vault.getAbstractFileByPath(conceptsFolder);
     const names = new Set<string>();
 
@@ -209,34 +248,6 @@ export class VaultManager {
 
     this.conceptNameCache.set(cacheKey, new Set(names));
     return names;
-  }
-
-  async readNotesForSubject(
-    subject: string,
-    period?: ExamPeriod
-  ): Promise<{ title: string; content: string }[]> {
-    const subjectFolder = normalizePath(`${this.basePath}/${sanitizeFilename(subject)}`);
-    const folder = this.app.vault.getAbstractFileByPath(subjectFolder);
-
-    if (!(folder instanceof TFolder)) return [];
-
-    const notes: { title: string; content: string }[] = [];
-    for (const child of folder.children) {
-      if (!child.name.endsWith(".md")) continue;
-      const content = await this.app.vault.read(child as any);
-
-      if (period) {
-        const tagsMatch = content.match(/^tags:\s*\[([^\]]+)\]/m);
-        const tags = tagsMatch
-          ? tagsMatch[1].split(",").map((t) => t.trim())
-          : [];
-        if (!tags.includes(period)) continue;
-      }
-
-      notes.push({ title: child.name.replace(/\.md$/, ""), content });
-    }
-
-    return notes;
   }
 
   async saveRawFile(data: ArrayBuffer, path: string): Promise<string> {
@@ -263,8 +274,8 @@ export class VaultManager {
       .filter(
         (child) =>
           child instanceof TFolder &&
-          child.name !== "Concepts" &&
-          child.name !== "Exam"
+          child.name !== CONCEPTS_DIR &&
+          child.name !== EXAM_DIR
       )
       .map((child) => child.name);
   }
@@ -390,9 +401,14 @@ export class VaultManager {
     const regex = /\[\[([^\]|#\n]+?)(?:\|[^\]]+)?\]\]/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(content)) !== null) {
-      links.add(match[1].trim());
+      // Inside a table the alias pipe is written `\|`: drop the backslash from the name.
+      links.add(match[1].trim().replace(/\\$/, "").trim());
     }
     return links;
+  }
+
+  private diffConcepts(left: string[], right: string[]): string[] {
+    return left.filter((item) => !right.some((r) => sameConcept(item, r))).slice(0, 8);
   }
 
   private diffSet(left: Set<string>, right: Set<string>): string[] {

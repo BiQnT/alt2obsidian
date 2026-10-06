@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+// Stands in for `$SHELL -ilc "command -v <name>"`: prints some startup noise,
+// then FAKE_SHELL_RESULT (empty = not found, exit 1).
+const args = process.argv.slice(2);
+if (args[0] !== "-ilc" || !/^command -v [a-z]+$/.test(args[1] || "")) {
+  process.stderr.write(`unexpected shell args ${JSON.stringify(args)}\n`);
+  process.exit(2);
+}
+process.stdout.write("Welcome back!\nnvm: using node v22\n");
+if (process.env.FAKE_SHELL_RESULT) process.stdout.write(process.env.FAKE_SHELL_RESULT + "\n");
+else process.exit(1);

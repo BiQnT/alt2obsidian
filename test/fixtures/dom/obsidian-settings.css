@@ -1,0 +1,32 @@
+/*
+ * The settings layout rules of Obsidian 1.14.4 that decide how a plugin's
+ * setting rows are laid out, written out for test/dom-settings.mjs (the
+ * app's own app.css is not part of this repository). Checked against the
+ * app.css in obsidian-1.14.4.asar on 2026-10-06:
+ * - a row is one flex line (no wrapping); the description box may shrink
+ *   below its content (min-width: 0) and the control grows too;
+ * - the settings pane is an inline-size container; at 400px or less a row
+ *   becomes a column and the control takes the full width (the settings
+ *   window opens at 900px and can be made as narrow as 600px, which leaves
+ *   about 400px for the pane).
+ */
+body { margin: 0; font: 13px/1.4 -apple-system, "Apple SD Gothic Neo", sans-serif; }
+.vertical-tab-content { container-type: inline-size; padding: 0 32px; box-sizing: border-box; }
+.setting-item { position: relative; display: flex; align-items: flex-start; row-gap: 12px; padding: 16px; margin-bottom: 8px; border: 1px solid #ccc; }
+.setting-item > *:first-child { margin-inline-end: 16px; }
+.setting-item > *:last-child { margin-inline-end: 0; }
+.setting-item-info { flex: 1 1 auto; min-width: 0; }
+.setting-item-name { font-size: 14px; line-height: 1.3; overflow: hidden; }
+.setting-item-description { font-size: 12px; line-height: 1.3; padding-top: 4px; overflow: hidden; }
+.setting-item-description:empty { display: none; }
+.setting-item-control { flex: 1 1 auto; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+.setting-item-control select { max-width: 400px; }
+input[type="text"] { width: 200px; padding: 4px 8px; box-sizing: border-box; }
+button { white-space: nowrap; padding: 4px 12px; }
+.dropdown.is-measuring { position: absolute; visibility: hidden; pointer-events: none; width: max-content !important; max-width: none !important; }
+@container (max-width: 400px) {
+  .setting-item:not(:is(.mod-toggle, .setting-item-heading)) { flex-direction: column; }
+  .setting-item:not(:is(.mod-toggle, .setting-item-heading)) .setting-item-info { margin-inline-end: 0; align-self: flex-start; }
+  .setting-item:not(:is(.mod-toggle, .setting-item-heading)) .setting-item-control { width: 100%; justify-content: flex-start; }
+  .setting-item:not(:is(.mod-toggle, .setting-item-heading)) .setting-item-control :is(button, input, select) { width: 100%; max-width: 100%; }
+}
