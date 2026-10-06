@@ -4,6 +4,7 @@ import conceptExtractionTemplate from "../../prompts/concept-extraction.md";
 import conceptExtractionSystemKoTemplate from "../../prompts/concept-extraction.system.ko.md";
 import conceptExtractionSystemEnTemplate from "../../prompts/concept-extraction.system.en.md";
 import conceptExtractionGistsTemplate from "../../prompts/concept-extraction-gists.md";
+import conceptExtractionSectionsTemplate from "../../prompts/concept-extraction-sections.md";
 
 /** Schema for the CLI providers. Every field is required (Codex strict mode); "" means none. */
 export const CONCEPT_SCHEMA: Record<string, unknown> = {
@@ -42,6 +43,17 @@ export interface GistConceptInput {
 }
 
 export type ConceptResult = { concepts: ConceptData[]; tags: string[] };
+
+/** Concepts of a lecture without slides (spec 4.10): from the section gists. */
+export interface SectionConceptInput {
+  subject: string;
+  /** "구간 N [mm:ss]: gist" lines (sectionGistLines). */
+  gistLines: string;
+  linkCandidates: string[];
+  existingConceptNames: string[];
+  subjectTags: string[];
+  signal?: AbortSignal;
+}
 
 function existingHint(existingConceptNames: string[]): string {
   return existingConceptNames.length > 0
@@ -97,6 +109,32 @@ export class ConceptExtractor {
       gists: input.gists.map((g) => `p.${g.page}: ${g.gist}`).join("\n"),
     });
     return this.llm.generateJSON(prompt, validateConcepts, {
+      systemPrompt: this.systemPrompt(),
+      schema: CONCEPT_SCHEMA,
+      signal: input.signal,
+    });
+  }
+
+  /** Prompt of `extractFromSectionGists` (the Skill renders the same one). */
+  sectionPrompt(input: Omit<SectionConceptInput, "signal">): string {
+    return renderPrompt(conceptExtractionSectionsTemplate, {
+      subject: input.subject,
+      langInstruction: this.langInstruction(),
+      existingConceptHint: existingHint(input.existingConceptNames),
+      subjectTags: input.subjectTags.length > 0 ? input.subjectTags.join(", ") : "(none)",
+      linkCandidates: input.linkCandidates.length > 0 ? input.linkCandidates.join(", ") : "(none)",
+      gists: input.gistLines,
+    });
+  }
+
+  /** System prompt of the concept calls (by language). */
+  conceptSystemPrompt(): string {
+    return this.systemPrompt();
+  }
+
+  /** Transcript summary note (spec 4.10): concepts from the section gists, like `extractFromGists`. */
+  async extractFromSectionGists(input: SectionConceptInput): Promise<ConceptResult> {
+    return this.llm.generateJSON(this.sectionPrompt(input), validateConcepts, {
       systemPrompt: this.systemPrompt(),
       schema: CONCEPT_SCHEMA,
       signal: input.signal,

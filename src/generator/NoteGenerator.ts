@@ -11,6 +11,8 @@ import {
 import { sanitizeFilename, formatDate } from "../utils/helpers";
 import { buildOverviewSection, linkConceptNames } from "../core/markdown";
 import { formatDiagramEmbed } from "../core/slideMeta";
+import { sectionHeadingText, sectionMarker } from "../core/sections";
+import type { SectionResult } from "./SectionSummaryGenerator";
 
 /**
  * Note identity: `alt_id` (public share id, 1.x and URL imports) or
@@ -187,6 +189,79 @@ export class NoteGenerator {
       "> [!note] 내 메모",
       "> ",
     ].join("\n");
+  }
+
+  /**
+   * Summary note of a lecture without slides (spec 4.10): the overview block,
+   * then one `## ⏱ 구간 N [mm:ss~mm:ss]` section per transcript section with
+   * its summary inside the section markers (src/core/sections.ts) and a
+   * `> [!note] 내 메모` callout below, outside the markers, so a re-import
+   * keeps it (src/core/merge.ts). `alt_kind: "transcript"` marks the note;
+   * it has no `alt_alignment` and no PDF.
+   */
+  generateTranscriptNote(
+    altData: AltNoteData,
+    sectionsResult: { sections: SectionResult[]; errors: Array<{ section: number; reason: string }> },
+    llmResult: LLMResult,
+    subject: string,
+    extraFrontmatter: string[] = [],
+    /** `source` value: "alt2obsidian" (plugin) or "alt2obsidian-cc-skill" (Skill). */
+    source = "alt2obsidian",
+    /** The note's date, YYYY-MM-DD (default today). */
+    date = formatDate()
+  ): { lectureMarkdown: string; conceptNotes: ConceptNote[] } {
+    const title = sanitizeFilename(altData.title);
+    const tags = [subject.toLowerCase(), ...llmResult.tags];
+    const frontmatter = [
+      "---",
+      `title: "${altData.title}"`,
+      `subject: "${subject}"`,
+      `tags: [${tags.join(", ")}]`,
+      `date: "${date}"`,
+      `source: "${source}"`,
+      `alt_kind: "transcript"`,
+      `section_count: ${sectionsResult.sections.length}`,
+      altData.metadata.createdAt ? `alt_created: "${altData.metadata.createdAt}"` : null,
+      ...identityLines(altData),
+      ...extraFrontmatter,
+      "---",
+      "",
+    ]
+      .filter((line) => line !== null)
+      .join("\n");
+    const conceptNames = llmResult.concepts.map((c) => c.name);
+    const known = llmResult.knownConceptNames ?? [];
+    const overviewSection = buildOverviewSection(llmResult.processedSummary || altData.summary, conceptNames, known);
+    const sections = sectionsResult.sections
+      .map((sec) => {
+        const linked = linkConceptNames(sec.summary, conceptNames, known);
+        return [
+          `## ${sectionHeadingText(sec.num, sec.startMs, sec.endMs)}`,
+          "",
+          sectionMarker(sec.num, sec.hash, "start"),
+          sec.meta ? `${linked}\n\n${sec.meta}` : linked,
+          sectionMarker(sec.num, sec.hash, "end"),
+          "",
+          "> [!note] 내 메모",
+          "> ",
+        ].join("\n");
+      })
+      .join("\n\n");
+    const failures =
+      sectionsResult.errors.length > 0
+        ? `\n\n## ⚠️ 처리 실패 구간\n\n${sectionsResult.errors.map((e) => `- 구간 ${e.section}: ${e.reason}`).join("\n")}\n`
+        : "";
+    const lectureMarkdown = frontmatter + `# ${altData.title}\n\n` + overviewSection + sections + failures + "\n";
+    const conceptNotes: ConceptNote[] = llmResult.concepts.map((c) => ({
+      name: c.name,
+      definition: c.definition,
+      relatedLectures: [title],
+      relatedConcepts: c.relatedConcepts,
+      example: c.example,
+      caution: c.caution,
+      lectureContext: c.lectureContext,
+    }));
+    return { lectureMarkdown, conceptNotes };
   }
 
   async generate(
