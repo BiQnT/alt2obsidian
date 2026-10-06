@@ -881,6 +881,7 @@ var DEFAULT_PLUGIN_DATA = {
 
 // src/core/sections.ts
 var SECTION_HEADING_PATTERN = "## \u23F1 \uAD6C\uAC04 (\\d+)";
+var SECTION_MARKER_PATTERN = "<!-- alt2obs:section:(\\d+) hash:([0-9a-f]{8}) (start|end) -->";
 var HEADING_RE = new RegExp(`^${SECTION_HEADING_PATTERN}(?: \\[([0-9:]+)~([0-9:]+)\\])?(.*)$`);
 
 // src/core/merge.ts
@@ -955,6 +956,7 @@ function splitMultiManagedNote(content) {
   }
   return { frontmatter, preamble, sections };
 }
+var LEFTOVER_LINE = new RegExp(`^(?:${SECTION_MARKER_PATTERN}|<!-- alt2obs:meta [^\\n]* -->)\\s*$`);
 
 // src/core/slideMeta.ts
 var META_RE = /\n*<!-- alt2obs:meta img:([0-9a-f]{128}|[0-9a-f]{64}|none) gist:("(?:[^"\\]|\\.)*") -->\s*$/;

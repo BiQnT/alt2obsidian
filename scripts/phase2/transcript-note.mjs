@@ -1221,6 +1221,7 @@ function splitSectionNote(content) {
   });
   return { frontmatter, preamble, sections };
 }
+var LEFTOVER_LINE = new RegExp(`^(?:${SECTION_MARKER_PATTERN}|<!-- alt2obs:meta [^\\n]* -->)\\s*$`);
 
 // src/generator/NoteGenerator.ts
 function identityLines(altData) {

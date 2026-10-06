@@ -267,10 +267,21 @@ function mergeBoth(existing, next) {
   const twice = mergeBoth(failing.md, failing.md).merged;
   assert.equal((twice.match(/처리 실패 구간/g) ?? []).length, 1, "one list, the new one");
   assert.equal(twice, failing.md);
-  // A note saved with CRLF merges like any other.
+  // A note saved with CRLF merges like any other, and is written back with CRLF.
   const crlf = mergeBoth(withMemos.replace(/\n/g, "\r\n"), md).merged;
-  assert.deepEqual(memos(crlf), memos(withMemos));
-  assert.ok(!crlf.includes("\r"));
+  assert.deepEqual(memos(crlf.replace(/\r\n/g, "\n")), memos(withMemos));
+  assert.ok(crlf.includes("\r\n") && !crlf.replace(/\r\n/g, "").includes("\n"), "every line ends in CRLF");
+  // Two old sections became one new section: the second memo goes under it, labelled, not under 사라진 구간.
+  const handMade = (sections) =>
+    new m.NoteGenerator(null).generateTranscriptNote(altData(), { sections: sections.map(([num, hash, a, b]) => ({ num, hash, startMs: a * MIN, endMs: b * MIN, summary: `- 요약 ${num}` })), errors: [] }, { processedSummary: "", concepts: [], tags: [], subjectSuggestion: "S" }, "S", [], "alt2obsidian", "2026-10-06").lectureMarkdown;
+  const three = addMemos(handMade([[1, "aaaaaaaa", 0, 10], [2, "bbbbbbbb", 10, 20], [3, "cccccccc", 20, 30]]));
+  const two = handMade([[1, "aaaaaaaa", 0, 10], [2, "dddddddd", 10, 30]]);
+  const joinedNote = mergeBoth(three, two);
+  assert.ok(joinedNote.merged.includes("> memo 2\n\n<!-- alt2obs:merged section:3 hash:cccccccc -->\n**이전 구간 3 [20:00~30:00]의 메모**\n\n> [!note] 내 메모\n> memo 3"), "memo 3 under the merged section, labelled");
+  assert.ok(!joinedNote.merged.includes("사라진 구간"));
+  assert.deepEqual(joinedNote.deletions, []);
+  assert.ok(joinedNote.notes.some((n) => n.includes("구간 3의 메모를 구간 2 아래로")));
+  assert.equal(mergeBoth(joinedNote.merged, two).merged, joinedNote.merged, "stable on the next re-import");
   // Section boundaries moved (a stretch of the recording dropped): memos follow the shared time, not the number.
   const dropped = plan.sections[3];
   const shifted = segs2h

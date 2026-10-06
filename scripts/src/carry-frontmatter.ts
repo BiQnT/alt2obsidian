@@ -26,12 +26,13 @@ function main(): void {
   const i = args.indexOf("--alignment");
   const alignment = i >= 0 ? args[i + 1] ?? null : null;
   const fm = readFrontmatter(target);
-  const lines = preservedFrontmatterLines(fm, local ? "alt-local" : "alt-url", alignment);
   const stem = target.replace(/\.md$/i, "");
   const pdf = [".pdf", ".PDF", ".Pdf"].map((ext) => stem + ext).find((p) => existsSync(p)) ?? null;
   // Like the plugin: marked, or no note yet (a PDF put there before the first import).
-  const attached = fm?.alt_pdf_source === "attached" || !existsSync(target);
-  process.stdout.write(JSON.stringify({ lines, attachedPdf: attached ? pdf : null }) + "\n");
+  const attachedPdf = fm?.alt_pdf_source === "attached" || !existsSync(target) ? pdf : null;
+  // The mark follows the PDF the import uses: without the attached file it is not carried.
+  const lines = preservedFrontmatterLines(fm, local ? "alt-local" : "alt-url", alignment).filter((l) => attachedPdf || !l.startsWith("alt_pdf_source:"));
+  process.stdout.write(JSON.stringify({ lines, attachedPdf }) + "\n");
 }
 
 try {

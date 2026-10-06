@@ -8,7 +8,7 @@ import {
   OVERVIEW_BLOCK_START,
   OVERVIEW_BLOCK_END,
 } from "../types";
-import { hasSectionMarkers, parseSectionHeading, SectionHeading, sectionHeadingLineRegex, sectionMarker, sectionMarkerRegex } from "./sections";
+import { hasSectionMarkers, parseSectionHeading, SECTION_MARKER_PATTERN, SectionHeading, sectionHeadingLineRegex, sectionMarker, sectionMarkerRegex, sectionRange } from "./sections";
 
 /**
  * A page-anchored note must never be overwritten by a single-block note
@@ -54,9 +54,16 @@ export function toLf(text: string): string {
   return text.replace(/\r\n?/g, "\n");
 }
 
+/** The merged note written back with the old note's line ending (CRLF stays CRLF). */
+function inEolOf(original: string, merged: string): string {
+  return /\r\n/.test(original) ? merged.replace(/\n/g, "\r\n") : merged;
+}
+
 export function mergeManagedNote(current: string, next: string): string {
-  const currentContent = toLf(current);
-  const nextContent = toLf(next);
+  return inEolOf(current, mergeManagedLf(toLf(current), toLf(next)));
+}
+
+function mergeManagedLf(currentContent: string, nextContent: string): string {
   const nextParts = splitManagedNote(nextContent);
   const currentParts = splitManagedNote(currentContent);
 
@@ -429,6 +436,14 @@ function assemble(head: string, sections: string[], failures: string, orphans: s
 export function mergeMultiManagedNote(
   existingContent: string,
   nextContent: string
+): ReturnType<typeof mergeMultiManagedLf> {
+  const result = mergeMultiManagedLf(toLf(existingContent), toLf(nextContent));
+  return { ...result, merged: inEolOf(existingContent, result.merged) };
+}
+
+function mergeMultiManagedLf(
+  existingContent: string,
+  nextContent: string
 ): {
   merged: string;
   reorders: Array<{ from: number; to: number; hash: string }>;
@@ -438,8 +453,6 @@ export function mergeMultiManagedNote(
   confirmDeckReplacement: boolean;
   notes: string[];
 } {
-  existingContent = toLf(existingContent);
-  nextContent = toLf(nextContent);
   const existing = splitMultiManagedNote(existingContent);
   const next = splitMultiManagedNote(nextContent);
 
@@ -591,11 +604,14 @@ export function splitSectionNote(content: string): { frontmatter: string; preamb
  * section markers, meta lines, the old failure list, and a heading in the
  * exact generated form of a section that is written again anyway.
  */
+/** A stray section marker or a meta line: the plugin's own lines, never the user's. */
+const LEFTOVER_LINE = new RegExp(`^(?:${SECTION_MARKER_PATTERN}|<!-- alt2obs:meta [^\\n]* -->)\\s*$`);
+
 function keptText(text: string, emitted: Set<number>): string {
   return withoutFailures(text)
     .split("\n")
     .filter((line) => {
-      if (/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(line)) return false;
+      if (LEFTOVER_LINE.test(line)) return false;
       const h = parseSectionHeading(line);
       return !(h && h.plain && emitted.has(h.num));
     })
@@ -620,12 +636,18 @@ function timeOverlap(a: SectionHeading | null, b: SectionHeading | null): number
  * (the 2.0.0-beta.5 lecture-level note of the same lecture) is kept whole
  * as a backup.
  */
-export function mergeTranscriptNote(
-  existingContent: string,
-  nextContent: string
-): Omit<NoteMergeResult, "mode"> {
-  existingContent = toLf(existingContent);
-  nextContent = toLf(nextContent);
+export function mergeTranscriptNote(existingContent: string, nextContent: string): Omit<NoteMergeResult, "mode"> {
+  const result = mergeTranscriptLf(toLf(existingContent), toLf(nextContent));
+  return { ...result, merged: inEolOf(existingContent, result.merged) };
+}
+
+/** Share of `a`'s own time that `b` covers (0 without times). */
+function coveredShare(a: SectionHeading | null, b: SectionHeading | null): number {
+  if (!a || !b || a.startMs === null || a.endMs === null || b.startMs === null || b.endMs === null || a.endMs <= a.startMs) return 0;
+  return Math.max(0, Math.min(a.endMs, b.endMs) - Math.max(a.startMs, b.startMs)) / (a.endMs - a.startMs);
+}
+
+function mergeTranscriptLf(existingContent: string, nextContent: string): Omit<NoteMergeResult, "mode"> {
   const existing = splitSectionNote(existingContent);
   const next = splitSectionNote(nextContent);
   if (existing.sections.length === 0) {
@@ -639,11 +661,37 @@ export function mergeTranscriptNote(
       notes: existingContent.trim() ? [TRANSCRIPT_MIGRATION_NOTE] : [],
     };
   }
-  const { matched, used, reorders, insertions, deletions, drifts } = pairSections(existing.sections, next.sections, (e, n) =>
-    timeOverlap(existing.sections[e].parsed, next.sections[n].parsed)
-  );
-  const confirmDeckReplacement = deletions.length > 0.5 * existing.sections.length;
+  const paired = pairSections(existing.sections, next.sections, (e, n) => timeOverlap(existing.sections[e].parsed, next.sections[n].parsed));
+  const { matched, used, reorders, insertions, drifts } = paired;
   const emitted = new Set(next.sections.map((s) => s.num));
+  // Two old sections became one new section: the unpaired one's memo goes
+  // under the new section that covers most of its time (at least half),
+  // labelled with where it came from, instead of "사라진 구간".
+  const absorbed = new Map<number, string[]>();
+  const absorbedIdx = new Set<number>();
+  const notes: string[] = [];
+  existing.sections.forEach((old, idx) => {
+    if (used.has(idx)) return;
+    let best = -1;
+    let bestShare = 0.5;
+    next.sections.forEach((ns, i) => {
+      const share = coveredShare(old.parsed, ns.parsed);
+      if (share >= bestShare && (best < 0 || share > bestShare)) {
+        best = i;
+        bestShare = share;
+      }
+    });
+    if (best < 0) return;
+    absorbedIdx.add(idx);
+    const text = [keptText(old.lead, emitted).trim(), keptText(old.after, emitted).trim()].filter((t) => t && t !== DEFAULT_MEMO.trim()).join("\n\n");
+    if (!text) return; // an empty memo carries nothing
+    const range = old.parsed ? sectionRange(old.parsed.startMs, old.parsed.endMs) : "";
+    const block = [`<!-- alt2obs:merged section:${old.num} hash:${old.hash} -->`, `**이전 구간 ${old.num}${range ? ` ${range}` : ""}의 메모**`, "", text].join("\n");
+    absorbed.set(best, [...(absorbed.get(best) ?? []), block]);
+    notes.push(`구간 ${old.num}의 메모를 구간 ${next.sections[best].num} 아래로 옮겼습니다 (두 구간이 새 구간 하나로 합쳐짐).`);
+  });
+  const deletions = paired.deletions.filter((d) => !Array.from(absorbedIdx).some((idx) => existing.sections[idx].num === d.slideNum && existing.sections[idx].hash === d.hash));
+  const confirmDeckReplacement = deletions.length > 0.5 * existing.sections.length;
   const sectionMarkdown = next.sections.map((ns, i) => {
     const idx = matched.get(i);
     const old = idx === undefined ? undefined : existing.sections[idx];
@@ -657,26 +705,26 @@ export function mergeTranscriptNote(
       ns.managed.trim(),
       sectionMarker(ns.num, ns.hash, "end"),
       "",
-      memoOf(old ? keptText(old.after, emitted) : undefined),
+      [memoOf(old ? keptText(old.after, emitted) : undefined), ...(absorbed.get(i) ?? [])].join("\n\n"),
     ].join("\n");
   });
   let orphanFooter = "";
   if (deletions.length > 0) {
     const blocks = existing.sections
-      .filter((_, i) => !used.has(i))
+      .filter((_, i) => !used.has(i) && !absorbedIdx.has(i))
       .map((s) => `<!-- alt2obs:orphan section:${s.num} hash:${s.hash} -->\n${[keptText(s.lead, emitted).trim(), keptText(s.after, emitted).trim()].filter(Boolean).join("\n\n")}`)
       .join("\n\n");
     orphanFooter = `## 🗑️ 사라진 구간 (orphan)\n\n${blocks}`;
   }
-  const { preamble, notes } = mergeOverviewPreamble(existing.preamble, next.preamble);
+  const overview = mergeOverviewPreamble(existing.preamble, next.preamble);
   return {
-    merged: assemble(next.frontmatter + preamble, sectionMarkdown, failuresOf(nextContent), orphanFooter),
+    merged: assemble(next.frontmatter + overview.preamble, sectionMarkdown, failuresOf(nextContent), orphanFooter),
     reorders,
     insertions,
     deletions,
     drifts,
     confirmDeckReplacement,
-    notes,
+    notes: [...overview.notes, ...notes],
   };
 }
 
@@ -785,8 +833,11 @@ export interface NoteMergeResult {
  * notes).
  */
 export function mergeNote(current: string, next: string): NoteMergeResult {
-  const currentContent = toLf(current);
-  const nextContent = toLf(next);
+  const result = mergeNoteLf(toLf(current), toLf(next));
+  return { ...result, merged: inEolOf(current, result.merged) };
+}
+
+function mergeNoteLf(currentContent: string, nextContent: string): NoteMergeResult {
   assertNoPageAnchoredDowngrade(currentContent, nextContent);
   if (hasMultiManagedMarkers(nextContent) || hasMultiManagedMarkers(currentContent)) {
     return { mode: "multi", ...mergeMultiManagedNote(currentContent, nextContent) };

@@ -283,9 +283,9 @@ async function reimport(oldTexts, newTexts) {
   assert.deepEqual(sections(healed).out.map((x) => x.memo), ["memo alpha", "memo beta"]);
   // A note saved with CRLF keeps its memos.
   const crlf = (await pluginMerge(addMemos(fresh).replace(/\n/g, "\r\n"), fresh)).md;
-  assert.deepEqual(sections(crlf).out.map((x) => x.memo), ["memo alpha", "memo beta", "memo gamma"]);
-  assert.ok(!crlf.includes("\r"));
-  console.log("PASS: unchanged first re-import is byte-identical; the failure list is replaced; CRLF notes keep their memos; the backed-up frontmatter is fenced");
+  assert.deepEqual(sections(crlf.replace(/\r\n/g, "\n")).out.map((x) => x.memo), ["memo alpha", "memo beta", "memo gamma"]);
+  assert.ok(crlf.includes("\r\n") && !crlf.replace(/\r\n/g, "").includes("\n"), "written back with CRLF");
+  console.log("PASS: unchanged first re-import is byte-identical; the failure list is replaced; CRLF notes keep their memos and their CRLF; the backed-up frontmatter is fenced");
 }
 
 console.log(`PASS: merge-note.mjs matched the plugin merge in all ${cliRuns} merge scenarios`);

@@ -305,6 +305,9 @@ try {
       attachedPdf: join(dir, "carry", "L9.pdf"),
     });
     assert.ok(carried.lines.includes('alt_pdf_source: "attached"'), "the attached mark goes through the merge");
+    rmSync(join(dir, "carry", "L9.pdf"));
+    assert.deepEqual(JSON.parse(cli("carry-frontmatter", [target, "--local"])), { lines: ['alt_id: "pub-9"'], attachedPdf: null }, "a mark without its PDF is not carried (like the plugin)");
+    writeFileSync(join(dir, "carry", "L9.pdf"), "%PDF-1.7");
     writeFileSync(target, '---\ntitle: "L9"\nalt_id: "pub-9"\n---\n# L9\n');
     assert.equal(JSON.parse(cli("carry-frontmatter", [target, "--local"])).attachedPdf, null, "an unmarked PDF next to a note is the import's own copy");
     assert.equal(JSON.parse(cli("carry-frontmatter", [join(dir, "carry", "New.md"), "--url"])).attachedPdf, null, "no PDF, nothing");

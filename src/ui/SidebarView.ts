@@ -479,9 +479,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
       if (kind === "attached") {
         const notePath = this.notePathOf(it);
         if (d?.hasSlides && d.pdfPath) {
-          button("Alt 슬라이드로 바꾸기", () => void this.switchToAlt(it, notePath), { work: true, title: "다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 씁니다" });
+          button("Alt 슬라이드로 바꾸기", () => this.switchToAlt(it, notePath), { work: true, title: "다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 씁니다" });
         }
-        button("첨부 해제", () => this.confirmDetach(it, notePath), { work: true, title: "첨부한 PDF를 휴지통으로 옮기고 표시를 지웁니다" });
+        button("첨부 해제", () => this.confirmDetach(it, notePath), { work: true, title: "첨부한 PDF 사본을 휴지통으로 옮기고 표시를 지웁니다 (보관함의 원래 파일은 그대로)" });
       }
     } else if (kind === "transcript") {
       button("PDF 첨부", () => void this.attachForLocal(it), { work: true, title: "강의 PDF를 골라 슬라이드 강의로 가져옵니다" });
@@ -491,29 +491,55 @@ export class Alt2ObsidianSidebarView extends ItemView {
     }
   }
 
-  /** "Alt 슬라이드로 바꾸기": the attached mark goes; the next import uses Alt's PDF. */
-  private async switchToAlt(it: LocalItem, notePath: string): Promise<void> {
-    try {
-      await this.plugin.useAltSlides(notePath);
-      this.showSuccess("다음 가져오기부터 Alt의 슬라이드를 씁니다. 다시 가져오기를 누르세요.");
-      this.refreshStatuses();
-    } catch (e) {
-      this.showError(e instanceof Error ? e.message : String(e));
+  /** What happens to the attached PDF, for the confirmation text. */
+  private attachedFate(notePath: string, rename: boolean): string {
+    const pdf = this.plugin.siblingPdf(notePath);
+    const path = pdf?.path ?? attachedPdfPath(notePath);
+    if (pdf && this.plugin.isAttachedInPlace(pdf.path)) {
+      return rename
+        ? `첨부한 PDF(${path})는 보관함에 원래 있던 파일이라 지우지 않고, Alt PDF가 그 자리에 저장되지 않도록 "${path.replace(/\.pdf$/i, "")} (첨부한 PDF).pdf"로 이름을 바꿔 둡니다.`
+        : `첨부한 PDF(${path})는 보관함에 원래 있던 파일이라 지우지 않고 그대로 둡니다.`;
     }
+    return `첨부할 때 만든 사본(${path})은 시스템 휴지통으로 옮깁니다(안 되면 보관함의 .trash 폴더). 영구 삭제하지 않으며 원본 파일은 그대로입니다.`;
   }
 
-  /** "첨부 해제" after a confirmation: the attached PDF to the trash, the mark removed. */
+  /** Message after the attached PDF left. */
+  private releasedText(r: { pdfPath: string | null; trashed: boolean; keptAt: string | null }): string {
+    if (!r.pdfPath) return "";
+    if (r.trashed) return ` 첨부한 사본(${r.pdfPath})은 휴지통으로 옮겼습니다.`;
+    return r.keptAt && r.keptAt !== r.pdfPath ? ` 원래 파일은 ${r.keptAt}로 이름을 바꿔 두었습니다.` : ` 원래 파일(${r.pdfPath})은 그대로 두었습니다.`;
+  }
+
+  /** "Alt 슬라이드로 바꾸기" after a confirmation: the attached PDF leaves, the mark goes; the next import uses Alt's PDF. */
+  private switchToAlt(it: LocalItem, notePath: string): void {
+    new ConfirmModal(
+      this.app,
+      "Alt 슬라이드로 바꾸기",
+      `다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 쓰고, Alt PDF를 노트 옆에 저장합니다. ${this.attachedFate(notePath, true)} 노트에서는 alt_pdf_source 줄만 지웁니다.`,
+      "바꾸기",
+      async () => {
+        try {
+          const r = await this.plugin.useAltSlides(notePath);
+          this.showSuccess(`다음 가져오기부터 Alt의 슬라이드를 씁니다. 다시 가져오기를 누르세요.${this.releasedText(r)}`);
+          this.refreshStatuses();
+        } catch (e) {
+          this.showError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    ).open();
+  }
+
+  /** "첨부 해제" after a confirmation: the attached PDF leaves, the mark goes. */
   private confirmDetach(it: LocalItem, notePath: string): void {
-    const pdf = this.plugin.siblingPdf(notePath);
     new ConfirmModal(
       this.app,
       "첨부 해제",
-      `첨부한 PDF(${pdf?.path ?? attachedPdfPath(notePath)})를 휴지통으로 옮기고 노트의 alt_pdf_source 표시를 지웁니다. 노트 내용은 바뀌지 않습니다. 이미 슬라이드 노트로 가져왔다면 다음 가져오기에는 PDF를 다시 첨부해야 합니다.`,
+      `${this.attachedFate(notePath, false)} 노트에서는 alt_pdf_source 줄만 지우고 내용은 바꾸지 않습니다. 이미 슬라이드 노트로 가져왔다면 다음 가져오기에는 PDF를 다시 첨부해야 합니다.`,
       "첨부 해제",
       async () => {
         try {
-          await this.plugin.detachPdf(notePath);
-          this.showSuccess("첨부를 해제했습니다.");
+          const r = await this.plugin.detachPdf(notePath);
+          this.showSuccess(`첨부를 해제했습니다.${this.releasedText(r)}`);
           this.refreshStatuses();
         } catch (e) {
           this.showError(e instanceof Error ? e.message : String(e));

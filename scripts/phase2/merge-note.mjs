@@ -82,11 +82,23 @@ function hasSectionMarkers(content) {
 function sectionMarker(num, hash, kind) {
   return `<!-- alt2obs:section:${num} hash:${hash} ${kind} -->`;
 }
+function formatClock(ms) {
+  const total = Math.max(0, Math.floor(ms / 1e3));
+  const h = Math.floor(total / 3600);
+  const pad = (n) => String(n).padStart(2, "0");
+  const mmss = `${pad(Math.floor(total % 3600 / 60))}:${pad(total % 60)}`;
+  return h > 0 ? `${h}:${mmss}` : mmss;
+}
 function parseClock(text) {
   const m = text.trim().match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
   if (!m)
     return null;
   return ((m[1] ? Number(m[1]) * 3600 : 0) + Number(m[2]) * 60 + Number(m[3])) * 1e3;
+}
+function sectionRange(startMs, endMs) {
+  if (startMs === null || endMs === null)
+    return "";
+  return `[${formatClock(startMs)}~${formatClock(endMs)}]`;
 }
 var HEADING_RE = new RegExp(`^${SECTION_HEADING_PATTERN}(?: \\[([0-9:]+)~([0-9:]+)\\])?(.*)$`);
 function parseSectionHeading(line) {
@@ -120,9 +132,13 @@ function assertNoPageAnchoredDowngrade(currentContent, nextContent) {
 function toLf(text) {
   return text.replace(/\r\n?/g, "\n");
 }
+function inEolOf(original, merged) {
+  return /\r\n/.test(original) ? merged.replace(/\n/g, "\r\n") : merged;
+}
 function mergeManagedNote(current, next) {
-  const currentContent = toLf(current);
-  const nextContent = toLf(next);
+  return inEolOf(current, mergeManagedLf(toLf(current), toLf(next)));
+}
+function mergeManagedLf(currentContent, nextContent) {
   const nextParts = splitManagedNote(nextContent);
   const currentParts = splitManagedNote(currentContent);
   if (currentParts.managed) {
@@ -345,8 +361,10 @@ function assemble(head, sections, failures, orphans) {
   return head + [sections.join("\n\n"), failures, orphans].filter((x) => x.length > 0).join("\n\n") + "\n";
 }
 function mergeMultiManagedNote(existingContent, nextContent) {
-  existingContent = toLf(existingContent);
-  nextContent = toLf(nextContent);
+  const result = mergeMultiManagedLf(toLf(existingContent), toLf(nextContent));
+  return { ...result, merged: inEolOf(existingContent, result.merged) };
+}
+function mergeMultiManagedLf(existingContent, nextContent) {
   const existing = splitMultiManagedNote(existingContent);
   const next = splitMultiManagedNote(nextContent);
   if (existing.sections.length === 0) {
@@ -445,9 +463,10 @@ function splitSectionNote(content) {
   });
   return { frontmatter, preamble, sections };
 }
+var LEFTOVER_LINE = new RegExp(`^(?:${SECTION_MARKER_PATTERN}|<!-- alt2obs:meta [^\\n]* -->)\\s*$`);
 function keptText(text, emitted) {
   return withoutFailures(text).split("\n").filter((line) => {
-    if (/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(line))
+    if (LEFTOVER_LINE.test(line))
       return false;
     const h = parseSectionHeading(line);
     return !(h && h.plain && emitted.has(h.num));
@@ -461,8 +480,15 @@ function timeOverlap(a, b) {
   return shared > 0 && shorter > 0 ? shared / shorter : 0;
 }
 function mergeTranscriptNote(existingContent, nextContent) {
-  existingContent = toLf(existingContent);
-  nextContent = toLf(nextContent);
+  const result = mergeTranscriptLf(toLf(existingContent), toLf(nextContent));
+  return { ...result, merged: inEolOf(existingContent, result.merged) };
+}
+function coveredShare(a, b) {
+  if (!a || !b || a.startMs === null || a.endMs === null || b.startMs === null || b.endMs === null || a.endMs <= a.startMs)
+    return 0;
+  return Math.max(0, Math.min(a.endMs, b.endMs) - Math.max(a.startMs, b.startMs)) / (a.endMs - a.startMs);
+}
+function mergeTranscriptLf(existingContent, nextContent) {
   const existing = splitSectionNote(existingContent);
   const next = splitSectionNote(nextContent);
   if (existing.sections.length === 0) {
@@ -476,13 +502,37 @@ function mergeTranscriptNote(existingContent, nextContent) {
       notes: existingContent.trim() ? [TRANSCRIPT_MIGRATION_NOTE] : []
     };
   }
-  const { matched, used, reorders, insertions, deletions, drifts } = pairSections(
-    existing.sections,
-    next.sections,
-    (e, n) => timeOverlap(existing.sections[e].parsed, next.sections[n].parsed)
-  );
-  const confirmDeckReplacement = deletions.length > 0.5 * existing.sections.length;
+  const paired = pairSections(existing.sections, next.sections, (e, n) => timeOverlap(existing.sections[e].parsed, next.sections[n].parsed));
+  const { matched, used, reorders, insertions, drifts } = paired;
   const emitted = new Set(next.sections.map((s) => s.num));
+  const absorbed = /* @__PURE__ */ new Map();
+  const absorbedIdx = /* @__PURE__ */ new Set();
+  const notes = [];
+  existing.sections.forEach((old, idx) => {
+    if (used.has(idx))
+      return;
+    let best = -1;
+    let bestShare = 0.5;
+    next.sections.forEach((ns, i) => {
+      const share = coveredShare(old.parsed, ns.parsed);
+      if (share >= bestShare && (best < 0 || share > bestShare)) {
+        best = i;
+        bestShare = share;
+      }
+    });
+    if (best < 0)
+      return;
+    absorbedIdx.add(idx);
+    const text = [keptText(old.lead, emitted).trim(), keptText(old.after, emitted).trim()].filter((t) => t && t !== DEFAULT_MEMO.trim()).join("\n\n");
+    if (!text)
+      return;
+    const range = old.parsed ? sectionRange(old.parsed.startMs, old.parsed.endMs) : "";
+    const block = [`<!-- alt2obs:merged section:${old.num} hash:${old.hash} -->`, `**\uC774\uC804 \uAD6C\uAC04 ${old.num}${range ? ` ${range}` : ""}\uC758 \uBA54\uBAA8**`, "", text].join("\n");
+    absorbed.set(best, [...absorbed.get(best) ?? [], block]);
+    notes.push(`\uAD6C\uAC04 ${old.num}\uC758 \uBA54\uBAA8\uB97C \uAD6C\uAC04 ${next.sections[best].num} \uC544\uB798\uB85C \uC62E\uACBC\uC2B5\uB2C8\uB2E4 (\uB450 \uAD6C\uAC04\uC774 \uC0C8 \uAD6C\uAC04 \uD558\uB098\uB85C \uD569\uCCD0\uC9D0).`);
+  });
+  const deletions = paired.deletions.filter((d) => !Array.from(absorbedIdx).some((idx) => existing.sections[idx].num === d.slideNum && existing.sections[idx].hash === d.hash));
+  const confirmDeckReplacement = deletions.length > 0.5 * existing.sections.length;
   const sectionMarkdown = next.sections.map((ns, i) => {
     const idx = matched.get(i);
     const old = idx === void 0 ? void 0 : existing.sections[idx];
@@ -496,26 +546,26 @@ function mergeTranscriptNote(existingContent, nextContent) {
       ns.managed.trim(),
       sectionMarker(ns.num, ns.hash, "end"),
       "",
-      memoOf(old ? keptText(old.after, emitted) : void 0)
+      [memoOf(old ? keptText(old.after, emitted) : void 0), ...absorbed.get(i) ?? []].join("\n\n")
     ].join("\n");
   });
   let orphanFooter = "";
   if (deletions.length > 0) {
-    const blocks = existing.sections.filter((_, i) => !used.has(i)).map((s) => `<!-- alt2obs:orphan section:${s.num} hash:${s.hash} -->
+    const blocks = existing.sections.filter((_, i) => !used.has(i) && !absorbedIdx.has(i)).map((s) => `<!-- alt2obs:orphan section:${s.num} hash:${s.hash} -->
 ${[keptText(s.lead, emitted).trim(), keptText(s.after, emitted).trim()].filter(Boolean).join("\n\n")}`).join("\n\n");
     orphanFooter = `## \u{1F5D1}\uFE0F \uC0AC\uB77C\uC9C4 \uAD6C\uAC04 (orphan)
 
 ${blocks}`;
   }
-  const { preamble, notes } = mergeOverviewPreamble(existing.preamble, next.preamble);
+  const overview = mergeOverviewPreamble(existing.preamble, next.preamble);
   return {
-    merged: assemble(next.frontmatter + preamble, sectionMarkdown, failuresOf(nextContent), orphanFooter),
+    merged: assemble(next.frontmatter + overview.preamble, sectionMarkdown, failuresOf(nextContent), orphanFooter),
     reorders,
     insertions,
     deletions,
     drifts,
     confirmDeckReplacement,
-    notes
+    notes: [...overview.notes, ...notes]
   };
 }
 function mergeOverviewPreamble(existingPreamble, nextPreamble) {
@@ -575,8 +625,10 @@ function findOverviewBlock(text) {
   return { bodyStart, bodyEnd };
 }
 function mergeNote(current, next) {
-  const currentContent = toLf(current);
-  const nextContent = toLf(next);
+  const result = mergeNoteLf(toLf(current), toLf(next));
+  return { ...result, merged: inEolOf(current, result.merged) };
+}
+function mergeNoteLf(currentContent, nextContent) {
   assertNoPageAnchoredDowngrade(currentContent, nextContent);
   if (hasMultiManagedMarkers(nextContent) || hasMultiManagedMarkers(currentContent)) {
     return { mode: "multi", ...mergeMultiManagedNote(currentContent, nextContent) };

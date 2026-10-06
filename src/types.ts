@@ -354,6 +354,12 @@ export interface PluginData {
    * next to aliases and as "마지막 실행" in the settings.
    */
   resolvedModels?: Record<string, { id: string; at: string }>;
+  /**
+   * Attached PDFs that are the user's own vault file at `<note>.pdf` (they
+   * picked the file already there, so no copy was made): never trashed or
+   * overwritten by "첨부 해제" or "Alt 슬라이드로 바꾸기" (spec 4.10).
+   */
+  attachedInPlace?: string[];
 }
 
 export const DEFAULT_PLUGIN_DATA: PluginData = {

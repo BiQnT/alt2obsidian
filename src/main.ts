@@ -1604,35 +1604,72 @@ export default class Alt2ObsidianPlugin extends Plugin {
     return lectureKind({ altType: input.altType, hasSlides: input.hasSlides, hasTranscript: input.hasTranscript, attachedPdf: attached, vaultCopy });
   }
 
-  /**
-   * "Alt 슬라이드로 바꾸기": the next import uses Alt's PDF instead of the
-   * attached one. The note loses only its `alt_pdf_source` line; without a
-   * note yet, the attached PDF goes to the trash (it would win otherwise).
-   */
-  async useAltSlides(notePath: string): Promise<void> {
-    const note = this.app.vault.getAbstractFileByPath(notePath);
-    if (note instanceof TFile) {
-      const content = await this.app.vault.read(note);
-      if (markedAttached(content)) await this.app.vault.modify(note, removeFrontmatterLine(content, "alt_pdf_source"));
-      return;
-    }
-    const pdf = this.siblingPdf(notePath);
-    if (pdf) await this.app.fileManager.trashFile(pdf);
+  /** The attached PDF at this path is the user's own vault file (no copy was made when it was attached). */
+  isAttachedInPlace(pdfPath: string): boolean {
+    return (this.data.attachedInPlace ?? []).includes(pdfPath);
+  }
+
+  private async rememberInPlace(pdfPath: string, inPlace: boolean): Promise<void> {
+    const list = (this.data.attachedInPlace ?? []).filter((p) => p !== pdfPath);
+    if (inPlace) list.push(pdfPath);
+    this.data.attachedInPlace = list;
+    await this.savePluginData();
   }
 
   /**
-   * "첨부 해제": the attached PDF goes to the trash (Obsidian's trash
-   * setting decides where) and the note loses its `alt_pdf_source` line.
-   * Nothing else in the note changes.
+   * The attached PDF next to a note leaves its place: a copy the plugin made
+   * goes to the trash with the vault's documented recoverable path (the
+   * system trash, else the vault's .trash folder), never deleted for good;
+   * the user's own vault file is never trashed: it is kept, renamed to a
+   * free "<note> (첨부한 PDF).pdf" when `rename` (so an import cannot
+   * overwrite it), else left where it is.
    */
-  async detachPdf(notePath: string): Promise<void> {
-    const note = this.app.vault.getAbstractFileByPath(notePath);
-    if (note instanceof TFile) {
-      const content = await this.app.vault.read(note);
-      if (markedAttached(content)) await this.app.vault.modify(note, removeFrontmatterLine(content, "alt_pdf_source"));
-    }
+  private async releaseAttachedPdf(notePath: string, rename: boolean): Promise<{ pdfPath: string | null; trashed: boolean; keptAt: string | null }> {
     const pdf = this.siblingPdf(notePath);
-    if (pdf) await this.app.fileManager.trashFile(pdf);
+    if (!pdf) return { pdfPath: null, trashed: false, keptAt: null };
+    const path = pdf.path;
+    if (this.isAttachedInPlace(path)) {
+      await this.rememberInPlace(path, false);
+      if (!rename) return { pdfPath: path, trashed: false, keptAt: path };
+      const stem = notePath.replace(/\.md$/i, "");
+      let target = `${stem} (첨부한 PDF).pdf`;
+      for (let n = 2; this.app.vault.getAbstractFileByPath(target); n++) target = `${stem} (첨부한 PDF ${n}).pdf`;
+      await this.app.fileManager.renameFile(pdf, target);
+      return { pdfPath: path, trashed: false, keptAt: target };
+    }
+    await this.app.vault.trash(pdf, true);
+    return { pdfPath: path, trashed: true, keptAt: null };
+  }
+
+  /** The note loses its `alt_pdf_source` line (as text; nothing else changes). */
+  private async unmarkAttached(notePath: string): Promise<void> {
+    const note = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(note instanceof TFile)) return;
+    const content = await this.app.vault.read(note);
+    if (markedAttached(content)) await this.app.vault.modify(note, removeFrontmatterLine(content, "alt_pdf_source"));
+  }
+
+  /**
+   * "Alt 슬라이드로 바꾸기": the next import uses Alt's PDF instead of the
+   * attached one, and writes Alt's PDF as `<note>.pdf`. So the attached PDF
+   * leaves first (see `releaseAttachedPdf`: a copy to the trash, the user's
+   * own file renamed, never overwritten), then the mark goes.
+   */
+  async useAltSlides(notePath: string): Promise<{ pdfPath: string | null; trashed: boolean; keptAt: string | null }> {
+    const released = await this.releaseAttachedPdf(notePath, true);
+    await this.unmarkAttached(notePath);
+    return released;
+  }
+
+  /**
+   * "첨부 해제": the attached PDF leaves (a copy to the trash, the user's own
+   * vault file stays where it is) and the note loses its `alt_pdf_source`
+   * line. Nothing else in the note changes.
+   */
+  async detachPdf(notePath: string): Promise<{ pdfPath: string | null; trashed: boolean; keptAt: string | null }> {
+    const released = await this.releaseAttachedPdf(notePath, false);
+    await this.unmarkAttached(notePath);
+    return released;
   }
 
   /**
@@ -1658,7 +1695,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
     if (!looksLikePdf(data)) throw new Error(`PDF 파일이 아닙니다: ${name}`);
     const existing = this.siblingPdf(notePath);
     const target = existing?.path ?? attachedPdfPath(notePath);
-    if (!(picked.kind === "vault" && picked.path === target)) await this.vaultManager!.saveRawFile(data, target);
+    // The user's own file already at <note>.pdf is used where it is (no copy): remembered, so it is never trashed later.
+    const inPlace = picked.kind === "vault" && picked.path === target;
+    if (!inPlace) await this.vaultManager!.saveRawFile(data, target);
+    await this.rememberInPlace(target, inPlace);
     let marked = false;
     const note = this.app.vault.getAbstractFileByPath(notePath);
     if (note instanceof TFile) {

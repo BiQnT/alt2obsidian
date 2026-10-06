@@ -41,6 +41,8 @@ function makeApp() {
   const config = new Map();
   // Binary contents by path (PDFs); a path without one reads as 8 zero bytes.
   const binaries = new Map();
+  // Paths moved to the trash.
+  const trashed = [];
   const tfile = (path) => Object.assign(new TFile(), { path, basename: path.split("/").pop().replace(/\.md$/, "") });
   // A folder holds the files under it (VaultManager lists concept notes this way).
   const tfolder = (path) =>
@@ -62,6 +64,8 @@ function makeApp() {
       getMarkdownFiles: () => [...files.keys()].filter((p) => p.endsWith(".md")).map(tfile),
       createBinary: async (p, d) => void (files.set(p, "<binary>"), binaries.set(p, d)),
       modifyBinary: async (f, d) => void (files.set(f.path, "<binary>"), binaries.set(f.path, d)),
+      // Obsidian's vault.trash(file, true): the system trash (else .trash), recoverable.
+      trash: async (f, system) => void (assert.equal(system, true, "the system trash"), trashed.push(f.path), files.delete(f.path), binaries.delete(f.path)),
       adapter: {
         getResourcePath: (p) => p,
         exists: async (p) => config.has(p) || [...config.keys()].some((k) => k.startsWith(p + "/")),
@@ -79,7 +83,15 @@ function makeApp() {
     },
     fileManager: {
       // Obsidian's trash (the user's trash setting): gone from the vault.
-      trashFile: async (f) => void (files.delete(f.path), binaries.delete(f.path)),
+      trashFile: async () => {
+        throw new Error("use vault.trash(file, true): the recoverable trash");
+      },
+      renameFile: async (f, to) => {
+        files.set(to, files.get(f.path));
+        if (binaries.has(f.path)) binaries.set(to, binaries.get(f.path));
+        files.delete(f.path);
+        binaries.delete(f.path);
+      },
       // Obsidian's processFrontMatter, enough for adding one key.
       processFrontMatter: async (f, fn) => {
         const content = files.get(f.path);
@@ -92,11 +104,11 @@ function makeApp() {
     },
     workspace: { onLayoutReady: () => {} },
   };
-  return { app, files, config, binaries };
+  return { app, files, config, binaries, trashed };
 }
 
 async function makePlugin(saved) {
-  const { app, files, config, binaries } = makeApp();
+  const { app, files, config, binaries, trashed } = makeApp();
   const plugin = new Plugin();
   let stored = saved;
   Object.assign(plugin, {
@@ -112,7 +124,7 @@ async function makePlugin(saved) {
     registerEditorExtension: () => {},
   });
   await plugin.onload();
-  return { plugin, files, config, binaries, stored: () => stored };
+  return { plugin, files, config, binaries, trashed, stored: () => stored };
 }
 
 // Deck: cover, 6 content slides (one visual), closing slide.
@@ -232,7 +244,7 @@ try {
   }
 
   // 1.x data (Gemini key): the Gemini/Ollama tasks move to the Claude CLI and the user is told once.
-  const { plugin, files, config, binaries, stored } = await makePlugin({
+  const { plugin, files, config, binaries, trashed, stored } = await makePlugin({
     settings: { apiKey: "old-key", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Alt2Obsidian", language: "ko", rateDelayMs: 5000 },
     // 1.x record of a lecture imported with an exam period (exam summaries are gone in 2.0).
     recentImports: [{ url: "u", title: "old", subject: "CSED311", path: "Alt2Obsidian/CSED311/old.md", date: "2026-03-01", parseQuality: "full", examPeriod: "midterm" }],
@@ -762,8 +774,10 @@ try {
     assert.deepEqual([still.pdfSource, still.altPdfIgnored], ["attached", true]);
     assert.equal(plugin.lectureKindFor({ altType: "slide", hasSlides: true, hasTranscript: true, notePath }), "attached");
     const beforeSwitch = files.get(notePath);
-    await plugin.useAltSlides(notePath);
+    const sw = await plugin.useAltSlides(notePath);
     assert.equal(files.get(notePath), beforeSwitch.replace('alt_pdf_source: "attached"\n', ""), "only the mark is removed");
+    assert.deepEqual(sw, { pdfPath: "Alt2Obsidian/CSED423/Lectures/L9.pdf", trashed: true, keptAt: null }, "the attached copy goes to the trash before Alt's PDF is written there");
+    assert.ok(trashed.includes("Alt2Obsidian/CSED423/Lectures/L9.pdf") && files.has("자료/compiler-L9.pdf"), "the user's original stays");
     const switched = await plugin.prepareCliImport("", withAlt, "CSED423");
     assert.deepEqual([switched.pdfSource, switched.altPdfIgnored], ["alt", false], "the next import uses Alt's slides");
     assert.equal(plugin.lectureKindFor({ altType: "slide", hasSlides: true, hasTranscript: true, notePath }), "slides");
@@ -771,11 +785,26 @@ try {
     await plugin.attachPdf(notePath, { kind: "disk", name: "again.pdf", data: pdfBytes });
     assert.match(files.get(notePath).slice(0, files.get(notePath).indexOf("\n---\n", 4)), /\nalt_pdf_source: "attached"(\n|$)/);
     await plugin.detachPdf(notePath);
-    assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf"), "the attached PDF is in the trash");
+    assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf") && trashed.filter((p) => p.endsWith("/L9.pdf")).length === 2, "the attached copy is in the (system) trash");
     const fmText = (t) => t.slice(0, t.indexOf("\n---\n", 4));
     assert.ok(!/alt_pdf_source/.test(fmText(files.get(notePath))), "the mark is gone from the frontmatter (the backed-up old note may still mention it)");
     assert.equal(plugin.lectureKindFor({ altType: "note", hasSlides: false, hasTranscript: true, notePath }), "transcript");
     await assert.rejects(plugin.prepareCliImport("", pv, "CSED423"), (e) => e.name === "MissingPdfError");
+    // The user's own vault file already at <note>.pdf, attached in place (no copy): never trashed.
+    const own = "Alt2Obsidian/CSED423/Lectures/L9.pdf";
+    files.set(own, "<binary>");
+    binaries.set(own, enc("%PDF-1.7 my own scan"));
+    await plugin.attachPdf(notePath, { kind: "vault", path: own });
+    assert.equal(plugin.isAttachedInPlace(own), true);
+    const before = trashed.length;
+    assert.deepEqual(await plugin.detachPdf(notePath), { pdfPath: own, trashed: false, keptAt: own }, "only the mark goes");
+    assert.ok(files.has(own) && trashed.length === before, "the user's file stays where it is");
+    // "Alt 슬라이드로 바꾸기" with the user's own file: renamed out of the way, never overwritten or trashed.
+    await plugin.attachPdf(notePath, { kind: "vault", path: own });
+    const kept = await plugin.useAltSlides(notePath);
+    assert.deepEqual(kept, { pdfPath: own, trashed: false, keptAt: "Alt2Obsidian/CSED423/Lectures/L9 (첨부한 PDF).pdf" });
+    assert.ok(!files.has(own) && bytes(binaries.get(kept.keptAt)).length === enc("%PDF-1.7 my own scan").byteLength && trashed.length === before);
+    assert.equal(plugin.isAttachedInPlace(own), false);
     // Before the first import, a PDF attached next to the future note wins over Alt's and the estimate says so.
     const fresh = plugin.previewFromBundle({ ...noSlides("local-10"), title: "L10", pdf: new ArrayBuffer(8), pdfPath: "/alt/L10.pdf" });
     await plugin.attachPdf("Alt2Obsidian/CSED423/Lectures/L10.md", { kind: "disk", name: "l10.pdf", data: pdfBytes });

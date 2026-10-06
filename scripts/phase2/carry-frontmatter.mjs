@@ -84,7 +84,11 @@ var PROTECTED = new RegExp(
 
 // src/core/sections.ts
 var SECTION_HEADING_PATTERN = "## \u23F1 \uAD6C\uAC04 (\\d+)";
+var SECTION_MARKER_PATTERN = "<!-- alt2obs:section:(\\d+) hash:([0-9a-f]{8}) (start|end) -->";
 var HEADING_RE = new RegExp(`^${SECTION_HEADING_PATTERN}(?: \\[([0-9:]+)~([0-9:]+)\\])?(.*)$`);
+
+// src/core/merge.ts
+var LEFTOVER_LINE = new RegExp(`^(?:${SECTION_MARKER_PATTERN}|<!-- alt2obs:meta [^\\n]* -->)\\s*$`);
 
 // src/generator/NoteGenerator.ts
 function preservedFrontmatterLines(fm, sourceKind, alignmentValue) {
@@ -158,11 +162,11 @@ function main() {
   const i = args.indexOf("--alignment");
   const alignment = i >= 0 ? args[i + 1] ?? null : null;
   const fm = readFrontmatter(target);
-  const lines = preservedFrontmatterLines(fm, local ? "alt-local" : "alt-url", alignment);
   const stem = target.replace(/\.md$/i, "");
   const pdf = [".pdf", ".PDF", ".Pdf"].map((ext) => stem + ext).find((p) => existsSync(p)) ?? null;
-  const attached = fm?.alt_pdf_source === "attached" || !existsSync(target);
-  process.stdout.write(JSON.stringify({ lines, attachedPdf: attached ? pdf : null }) + "\n");
+  const attachedPdf = fm?.alt_pdf_source === "attached" || !existsSync(target) ? pdf : null;
+  const lines = preservedFrontmatterLines(fm, local ? "alt-local" : "alt-url", alignment).filter((l) => attachedPdf || !l.startsWith("alt_pdf_source:"));
+  process.stdout.write(JSON.stringify({ lines, attachedPdf }) + "\n");
 }
 try {
   main();

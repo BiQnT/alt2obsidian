@@ -873,6 +873,7 @@ function splitSectionNote(content) {
   });
   return { frontmatter, preamble, sections };
 }
+var LEFTOVER_LINE = new RegExp(`^(?:${SECTION_MARKER_PATTERN}|<!-- alt2obs:meta [^\\n]* -->)\\s*$`);
 
 // src/core/slideMeta.ts
 var META_RE = /\n*<!-- alt2obs:meta img:([0-9a-f]{128}|[0-9a-f]{64}|none) gist:("(?:[^"\\]|\\.)*") -->\s*$/;
