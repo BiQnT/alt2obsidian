@@ -164,6 +164,14 @@ const del = guarded.update({ changes: { from: metaLine.from - 1, to: metaLine.fr
 assert.equal(del.doc.toString(), note, "deleting the newline next to a hidden marker is blocked");
 const typed = guarded.update({ changes: { from: metaLine.from + 4, insert: "x" }, userEvent: "input.type" }).state;
 assert.equal(typed.doc.toString(), note, "typing into a hidden marker is blocked");
+// A multi-line replace spanning a hidden line is refused whole, not half applied.
+const spanFrom = note.indexOf("[[Proportional");
+const spanTo = note.indexOf("> [!note] 내 메모");
+const span = guarded.update({ changes: { from: spanFrom, to: spanTo, insert: "새 본문\n" }, userEvent: "input.paste" }).state;
+assert.equal(span.doc.toString(), note, "a paste over hidden lines changes nothing");
+// The same with one change outside and one touching a hidden line: nothing applies.
+const two = guarded.update({ changes: [{ from: 0, insert: "y" }, { from: metaLine.from + 4, insert: "x" }], userEvent: "input.type" }).state;
+assert.equal(two.doc.toString(), note, "no partial edit");
 const elsewhere = guarded.update({ changes: { from: 0, insert: "x" }, userEvent: "input.type" }).state;
 assert.equal(elsewhere.doc.toString(), "x" + note, "edits elsewhere go through");
 const program = guarded.update({ changes: { from: metaLine.from - 1, to: metaLine.from } }).state;

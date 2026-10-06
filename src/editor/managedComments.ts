@@ -109,9 +109,10 @@ function decorate(state: EditorState, live: boolean, lines: LineRange[], previou
  *   per cursor move.
  * - A cursor move recomputes only the reveal set over the cached marker
  *   lines, and keeps the old decorations when nothing changed.
- * - Typing or deleting is never applied inside a hidden line or to the
- *   newline on either side of it (a change filter), so a marker cannot be
- *   damaged or merged with text the user does not see.
+ * - A typing or deleting change that would touch a hidden line or the
+ *   newline on either side of it is refused as a whole (a change filter),
+ *   so a marker cannot be damaged or merged with text the user does not
+ *   see, and no edit is half applied.
  */
 export function managedCommentHider(isLivePreview: (state: EditorState) => boolean): Extension {
   const field = StateField.define<HiderValue>({
@@ -131,10 +132,13 @@ export function managedCommentHider(isLivePreview: (state: EditorState) => boole
     if (!tr.isUserEvent("input") && !tr.isUserEvent("delete")) return true;
     const value = tr.startState.field(field, false);
     if (!value || value.hidden.length === 0) return true;
-    const len = tr.startState.doc.length;
-    const ranges: number[] = [];
-    for (const r of value.hidden) ranges.push(Math.max(0, r.from - 1), Math.min(len, r.to + 1));
-    return ranges;
+    // A change touching a hidden line or its newlines is refused as a whole:
+    // applying only the part outside would leave a half-done edit.
+    let touches = false;
+    tr.changes.iterChangedRanges((fromA, toA) => {
+      if (value.hidden.some((r) => fromA <= r.to + 1 && toA >= r.from - 1)) touches = true;
+    });
+    return !touches;
   });
   return [field, protect];
 }
