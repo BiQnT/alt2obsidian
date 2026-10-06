@@ -95,13 +95,14 @@ assert.ok(!mc.isManagedCommentLine("<!-- alt2obs:slide:4 hash:abcdef12 start -->
 const rendered = mc.stripManagedComments(note);
 assert.ok(!rendered.includes("alt2obs:slide:2") && !rendered.includes("alt2obs:meta") && !rendered.includes("alt2obs:overview"));
 assert.ok(rendered.includes("## 📚 슬라이드 2") && rendered.includes("[[Proportional Share Scheduler]]") && rendered.includes("> <!-- 내 주석은 그대로 -->"));
-assert.equal(rendered.split("\n").length, note.split("\n").length - 7, "only the comment lines are dropped");
+assert.equal(rendered.split("\n").length, note.split("\n").length, "comment lines become blank lines, nothing else moves");
+assert.equal(mc.stripManagedComments("문단 1\n<!-- alt2obs:overview end -->\n문단 2"), "문단 1\n\n문단 2", "two text lines a marker sat between stay separate paragraphs");
 assert.equal(mc.stripManagedComments("no markers\n"), "no markers\n");
-assert.equal(mc.stripManagedComments("a\r\n<!-- alt2obs:overview end -->\r\nb"), "a\r\nb", "CRLF notes");
+assert.equal(mc.stripManagedComments("a\r\n<!-- alt2obs:overview end -->\r\nb"), "a\r\n\r\nb", "CRLF notes");
 // The parser still sees every marker: the note text itself is never changed.
 const merge = await importTs("src/core/merge.ts");
 assert.ok(merge.hasMultiManagedMarkers(note));
-console.log("PASS: management comment lines matched exactly (user comments and mixed lines kept), viewer text drops only them");
+console.log("PASS: management comment lines matched exactly (user comments and mixed lines kept), the viewer text blanks only them");
 
 // ---- Live Preview field ----
 const { EditorState, EditorSelection } = mc;
@@ -117,10 +118,24 @@ const hiddenTexts = (state) => {
 };
 let state = EditorState.create({ doc: note, extensions: [ext] });
 assert.deepEqual(hiddenTexts(state), managedLines, "every management line hidden while the cursor is elsewhere");
-// Cursor on the meta line: that line shows, the others stay hidden.
+// Cursor on the meta line: it and the end marker right after it (one run) show; the start marker 3 lines up stays hidden.
 const metaFrom = note.indexOf("<!-- alt2obs:meta");
 state = state.update({ selection: EditorSelection.cursor(metaFrom + 5) }).state;
-assert.deepEqual(hiddenTexts(state), managedLines.filter((l) => !l.startsWith("<!-- alt2obs:meta")));
+assert.deepEqual(hiddenTexts(state), managedLines.filter((l) => !l.startsWith("<!-- alt2obs:meta") && !l.includes("slide:2 hash:0743ab51 end")));
+// Cursor on the line right after a marker (the commentary line): the start marker above shows.
+const textFrom = note.indexOf("[[Proportional");
+state = state.update({ selection: EditorSelection.cursor(textFrom + 3) }).state;
+assert.ok(!hiddenTexts(state).some((l) => l.includes("slide:2 hash:0743ab51 start")), "the marker on the line before the cursor shows");
+assert.ok(hiddenTexts(state).some((l) => l.startsWith("<!-- alt2obs:meta")), "the meta line two lines down stays hidden");
+// Cursor on the blank line before the overview: overview start shows, the end marker (3 lines down) stays hidden.
+const ovFrom = note.indexOf("<!-- alt2obs:overview start");
+state = state.update({ selection: EditorSelection.cursor(ovFrom - 1) }).state;
+assert.ok(!hiddenTexts(state).includes("<!-- alt2obs:overview start -->") && hiddenTexts(state).includes("<!-- alt2obs:overview end -->"));
+// The cursor moving within one line keeps the very same decoration set (no redraw).
+const decoA = state.facet(mc.EditorView.decorations)[0];
+const moved = state.update({ selection: EditorSelection.cursor(ovFrom - 1) }).state;
+assert.equal(moved.facet(mc.EditorView.decorations)[0], decoA, "same reveal set: decorations reused");
+
 // A selection across slide 2 reveals all its lines.
 const s2 = note.indexOf("<!-- alt2obs:slide:2");
 const e2 = note.indexOf("end -->", s2 + 40) + 7;
@@ -133,4 +148,28 @@ assert.deepEqual(hiddenTexts(state), managedLines);
 live = false;
 state = state.update({ selection: EditorSelection.cursor(1) }).state;
 assert.deepEqual(hiddenTexts(state), []);
-console.log("PASS: Live Preview field hides management lines, shows the line under the cursor or selection, nothing in source mode");
+// A document without markers: nothing to hide, cursor moves cost nothing.
+let plain = EditorState.create({ doc: "# 내 노트\n\n본문", extensions: [mc.managedCommentHider(() => true)] });
+const plainDeco = plain.facet(mc.EditorView.decorations)[0];
+plain = plain.update({ selection: EditorSelection.cursor(3) }).state;
+assert.equal(plain.facet(mc.EditorView.decorations)[0], plainDeco);
+assert.deepEqual(hiddenTexts(plain), []);
+
+// Change filter: typing or deleting never lands inside a hidden marker or its newlines.
+live = true;
+let guarded = EditorState.create({ doc: note, extensions: [mc.managedCommentHider(() => live)], selection: EditorSelection.cursor(0) });
+const metaLine = guarded.doc.lineAt(note.indexOf("<!-- alt2obs:meta"));
+// A multi-cursor style deletion of the newline before the hidden meta line (the cursor itself is far away).
+const del = guarded.update({ changes: { from: metaLine.from - 1, to: metaLine.from }, userEvent: "delete.backward" }).state;
+assert.equal(del.doc.toString(), note, "deleting the newline next to a hidden marker is blocked");
+const typed = guarded.update({ changes: { from: metaLine.from + 4, insert: "x" }, userEvent: "input.type" }).state;
+assert.equal(typed.doc.toString(), note, "typing into a hidden marker is blocked");
+const elsewhere = guarded.update({ changes: { from: 0, insert: "x" }, userEvent: "input.type" }).state;
+assert.equal(elsewhere.doc.toString(), "x" + note, "edits elsewhere go through");
+const program = guarded.update({ changes: { from: metaLine.from - 1, to: metaLine.from } }).state;
+assert.notEqual(program.doc.toString(), note, "changes that are not user input (plugins, merges) are not filtered");
+// A visible marker (cursor next to it) can be edited and deleted.
+guarded = guarded.update({ selection: EditorSelection.cursor(metaLine.from) }).state;
+const visibleDel = guarded.update({ changes: { from: metaLine.from - 1, to: metaLine.from }, userEvent: "delete.backward" }).state;
+assert.notEqual(visibleDel.doc.toString(), note);
+console.log("PASS: Live Preview field hides management lines, reveals the run next to the cursor or selection, reuses decorations, filters edits into hidden lines, nothing in source mode");

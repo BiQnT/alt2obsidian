@@ -13,7 +13,7 @@
 //   still see and edit it. Source mode shows everything.
 // - Synced Viewer: the lines are dropped from the text before rendering.
 
-import { EditorState, Extension, RangeSetBuilder, StateField } from "@codemirror/state";
+import { EditorState, Extension, RangeSetBuilder, StateField, Text } from "@codemirror/state";
 import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 
 /** A whole line that is one alt2obs / alt2obsidian management comment. */
@@ -23,58 +23,118 @@ export function isManagedCommentLine(line: string): boolean {
   return MANAGED_LINE.test(line);
 }
 
-/** The note without its management comment lines (for rendering only). */
+/**
+ * The note with its management comment lines emptied (for rendering only).
+ * Each line becomes blank instead of disappearing, so two text lines a
+ * marker sat between stay separate paragraphs.
+ */
 export function stripManagedComments(markdown: string): string {
   if (!markdown.includes("<!-- alt2obs")) return markdown;
   return markdown
     .split("\n")
-    .filter((line) => !isManagedCommentLine(line.replace(/\r$/, "")))
+    .map((line) => (isManagedCommentLine(line.replace(/\r$/, "")) ? (line.endsWith("\r") ? "\r" : "") : line))
     .join("\n");
 }
 
-/** Line ranges [from, to] to hide in a document, skipping lines a selection touches. */
-export function hiddenLineRanges(state: EditorState): Array<{ from: number; to: number }> {
-  const out: Array<{ from: number; to: number }> = [];
-  const doc = state.doc;
-  const sel = state.selection.ranges;
+export interface LineRange {
+  from: number;
+  to: number;
+}
+
+/** Every management comment line of a document (positions of the line text, without its newline). */
+export function managedLines(doc: Text): LineRange[] {
+  const out: LineRange[] = [];
   let pos = 0;
   for (const iter = doc.iterLines(); !iter.next().done; ) {
     const text = iter.value;
     const from = pos;
-    const to = pos + text.length;
-    pos = to + 1;
-    if (text.length < 14 || !isManagedCommentLine(text)) continue;
-    if (sel.some((r) => r.from <= to && r.to >= from)) continue;
-    out.push({ from, to });
+    pos += text.length + 1;
+    if (text.length >= 14 && text.includes("<!-- alt2obs") && isManagedCommentLine(text)) out.push({ from, to: from + text.length });
   }
   return out;
 }
 
+/**
+ * The lines to hide: all management lines except the ones near a cursor or
+ * selection. "Near" is the line itself, the line just before or after it
+ * (so the user sees a marker before deleting or typing into the newline
+ * next to it), and the whole run of consecutive management lines touching
+ * those, so arrowing past a block (meta line plus end marker) reveals it in
+ * one step instead of one line at a time.
+ */
+export function hiddenLineRanges(state: EditorState, lines: LineRange[] = managedLines(state.doc)): LineRange[] {
+  if (lines.length === 0) return [];
+  const doc = state.doc;
+  const revealedLines = new Set<number>();
+  for (const r of state.selection.ranges) {
+    const first = Math.max(1, doc.lineAt(r.from).number - 1);
+    const last = Math.min(doc.lines, doc.lineAt(r.to).number + 1);
+    for (let n = first; n <= last; n++) revealedLines.add(n);
+  }
+  const numbers = lines.map((l) => doc.lineAt(l.from).number);
+  const reveal = numbers.map((n) => revealedLines.has(n));
+  // Spread the reveal along runs of consecutive management lines.
+  for (let i = 1; i < numbers.length; i++) if (reveal[i - 1] && numbers[i] === numbers[i - 1] + 1) reveal[i] = true;
+  for (let i = numbers.length - 2; i >= 0; i--) if (reveal[i + 1] && numbers[i] === numbers[i + 1] - 1) reveal[i] = true;
+  return lines.filter((_, i) => !reveal[i]);
+}
+
 const hideLine = Decoration.replace({ block: true });
 
-function buildDecorations(state: EditorState, active: boolean): DecorationSet {
-  if (!active) return Decoration.none;
+interface HiderValue {
+  live: boolean;
+  /** All management lines; recomputed only when the document changes. */
+  lines: LineRange[];
+  hidden: LineRange[];
+  decorations: DecorationSet;
+}
+
+function sameRanges(a: LineRange[], b: LineRange[]): boolean {
+  return a.length === b.length && a.every((r, i) => r.from === b[i].from && r.to === b[i].to);
+}
+
+function decorate(state: EditorState, live: boolean, lines: LineRange[], previous?: HiderValue): HiderValue {
+  const hidden = live ? hiddenLineRanges(state, lines) : [];
+  if (previous && previous.live === live && sameRanges(previous.hidden, hidden) && previous.lines === lines) return previous;
   const builder = new RangeSetBuilder<Decoration>();
-  for (const r of hiddenLineRanges(state)) builder.add(r.from, r.to, hideLine);
-  return builder.finish();
+  for (const r of hidden) builder.add(r.from, r.to, hideLine);
+  return { live, lines, hidden, decorations: builder.finish() };
 }
 
 /**
  * The editor extension. `isLivePreview` reads Obsidian's live preview flag
  * from the state (passed in so this module has no obsidian import and runs
  * in Node tests).
+ * - A document without "<!-- alt2obs" costs one scan per edit and nothing
+ *   per cursor move.
+ * - A cursor move recomputes only the reveal set over the cached marker
+ *   lines, and keeps the old decorations when nothing changed.
+ * - Typing or deleting is never applied inside a hidden line or to the
+ *   newline on either side of it (a change filter), so a marker cannot be
+ *   damaged or merged with text the user does not see.
  */
 export function managedCommentHider(isLivePreview: (state: EditorState) => boolean): Extension {
-  return StateField.define<{ live: boolean; decorations: DecorationSet }>({
+  const field = StateField.define<HiderValue>({
     create(state) {
-      const live = isLivePreview(state);
-      return { live, decorations: buildDecorations(state, live) };
+      return decorate(state, isLivePreview(state), managedLines(state.doc));
     },
     update(value, tr) {
       const live = isLivePreview(tr.state);
       if (!tr.docChanged && !tr.selection && live === value.live) return value;
-      return { live, decorations: buildDecorations(tr.state, live) };
+      const lines = tr.docChanged ? managedLines(tr.state.doc) : value.lines;
+      if (lines.length === 0 && value.lines.length === 0 && live === value.live) return value;
+      return decorate(tr.state, live, lines, tr.docChanged ? undefined : value);
     },
-    provide: (field) => EditorView.decorations.from(field, (v) => v.decorations),
+    provide: (f) => EditorView.decorations.from(f, (v) => v.decorations),
   });
+  const protect = EditorState.changeFilter.of((tr) => {
+    if (!tr.isUserEvent("input") && !tr.isUserEvent("delete")) return true;
+    const value = tr.startState.field(field, false);
+    if (!value || value.hidden.length === 0) return true;
+    const len = tr.startState.doc.length;
+    const ranges: number[] = [];
+    for (const r of value.hidden) ranges.push(Math.max(0, r.from - 1), Math.min(len, r.to + 1));
+    return ranges;
+  });
+  return [field, protect];
 }

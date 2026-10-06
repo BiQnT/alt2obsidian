@@ -356,7 +356,8 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       .setName("관리 주석 숨기기")
       .setDesc(
         "강의 노트의 <!-- alt2obs:... --> 줄(슬라이드 표시, 해시, 메타데이터, 요약 구간 표시)을 Live Preview와 Synced Viewer에서 감춥니다. " +
-          "커서를 그 줄에 두면 보이고, 소스 모드에서는 항상 보입니다. 노트 내용은 바뀌지 않으며 이 줄들은 다시 가져올 때 메모를 지키는 데 쓰이니 지우지 마세요."
+          "커서가 그 줄이나 바로 위아래 줄에 있으면 보이고, 소스 모드에서는 항상 보입니다. 감춘 줄은 실수로 지워지지 않게 편집을 막습니다. " +
+          "직접 쓴 줄이라도 한 줄 전체가 <!-- alt2obs 로 시작하는 주석이면 함께 감춰집니다. 노트 내용은 바뀌지 않으며 이 줄들은 다시 가져올 때 메모를 지키는 데 쓰이니 지우지 마세요."
       )
       .addToggle((t) =>
         t.setValue(this.settings.hideManagedComments).onChange(async (value) => {
