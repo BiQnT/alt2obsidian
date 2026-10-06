@@ -2,7 +2,8 @@
 // a cap check, not billing. Counts come from the actual prompt strings the
 // generator will send, so only the per-token rates are approximations.
 
-import type { ProviderId } from "../../types";
+import type { EffortLevel, ProviderId } from "../../types";
+import { EFFORT_OUTPUT_FACTOR } from "../../settings/llmSettings";
 
 /**
  * Tokens for a text: about 2 ASCII characters per token and about 0.9
@@ -72,18 +73,26 @@ export interface BudgetEstimate {
   slidesReused: number;
 }
 
+/**
+ * Input from the prompt text, the provider's fixed cost and the images;
+ * output from the call shapes, scaled by the effort level
+ * (EFFORT_OUTPUT_FACTOR: the shapes are medium-effort figures; reasoning
+ * tokens count as output). The model itself does not change the count.
+ */
 export function estimateCalls(
   calls: CallShape[],
-  provider: ProviderId
+  provider: ProviderId,
+  effort: EffortLevel = ""
 ): Pick<BudgetEstimate, "calls" | "inputTokens" | "outputTokens" | "imagesSent"> {
   const cost = PROVIDER_COSTS[provider];
+  const factor = EFFORT_OUTPUT_FACTOR[effort] ?? 1;
   let input = 0;
   let output = 0;
   let images = 0;
   for (const c of calls) {
     const turns = 1 + (c.schema ? cost.schemaTurns : 0) + (c.images > 0 ? cost.imageTurns : 0);
     input += turns * (cost.fixedPerTurn + estimateTextTokens(c.promptText)) + c.images * cost.perImage;
-    output += c.outputTokens;
+    output += Math.round(c.outputTokens * factor);
     images += c.images;
   }
   return { calls: calls.length, inputTokens: input, outputTokens: output, imagesSent: images };

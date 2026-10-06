@@ -27,6 +27,7 @@
 import { LLMUsage } from "../../types";
 import { CliCall, CliCallResult, CliProviderBase } from "./CliProviderBase";
 import { CliRunError, runCli, unknownOptionMessage } from "./CliRunner";
+import { isSafeModelName } from "../../settings/llmSettings";
 
 export interface ClaudeArgsInput {
   model: string;
@@ -145,6 +146,30 @@ export function claudeUsage(res: ClaudeJsonResult): LLMUsage {
   };
 }
 
+/**
+ * The model the CLI used: the modelUsage entry with the most output (the
+ * CLI can add small calls of another model), else the init event's model.
+ * An alias such as "sonnet" comes back as the full id it resolved to.
+ */
+export function claudeResolvedModel(stdout: string, res: ClaudeJsonResult | null): string {
+  const entries = Object.entries(res?.modelUsage ?? {}).filter(([id]) => isSafeModelName(id));
+  if (entries.length > 0) {
+    entries.sort((a, b) => (b[1].outputTokens ?? 0) - (a[1].outputTokens ?? 0));
+    return entries[0][0];
+  }
+  for (const line of stdout.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("{") || !t.includes('"init"')) continue;
+    try {
+      const ev = JSON.parse(t);
+      if (ev?.type === "system" && ev.subtype === "init" && typeof ev.model === "string" && isSafeModelName(ev.model)) return ev.model;
+    } catch {
+      // not a JSON line
+    }
+  }
+  return "";
+}
+
 /** Parse `claude -p --output-format stream-json` stdout. Throws on an error result. */
 export function parseClaudeOutput(stdout: string): CliCallResult {
   const res = findClaudeResult(stdout);
@@ -160,7 +185,8 @@ export function parseClaudeOutput(stdout: string): CliCallResult {
     err.cliError = String(res.result ?? res.subtype ?? "");
     throw err;
   }
-  return { text: typeof res.result === "string" ? res.result : "", usage: claudeUsage(res) };
+  const model = claudeResolvedModel(stdout, res);
+  return { text: typeof res.result === "string" ? res.result : "", usage: claudeUsage(res), ...(model ? { model } : {}) };
 }
 
 export class ClaudeCliProvider extends CliProviderBase {

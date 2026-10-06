@@ -48,6 +48,8 @@ export interface CliCallResult {
   /** Parsed structured output when the CLI returns it separately (Claude). */
   structured?: unknown;
   usage: LLMUsage;
+  /** The model id the CLI reports it used (Claude: modelUsage), when known. */
+  model?: string;
 }
 
 const USAGE_LIMIT = /usage limit|rate.?limit|\b429\b|quota|limit reached|resets? at|too many requests|overloaded/i;
@@ -211,6 +213,8 @@ export abstract class CliProviderBase implements LLMProvider {
         ...res.usage,
         provider: this.providerId,
         model: this.config.model,
+        resolvedModel: res.model ?? "",
+        effort: this.config.effort,
         task: this.config.task ?? "",
       });
       return res;

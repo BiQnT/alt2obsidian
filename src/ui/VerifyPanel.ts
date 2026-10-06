@@ -8,7 +8,8 @@ import { App, setIcon } from "obsidian";
 import type Alt2ObsidianPlugin from "../main";
 import type { PreparedVerification } from "../main";
 import { compactTokens } from "../llm/usage";
-import { PROVIDER_LABELS } from "../settings/llmSettings";
+import { describeModel } from "../settings/llmSettings";
+import { renderModelPicker } from "./modelPicker";
 import { NotionMcpMissingError } from "../verify/notionFetch";
 import { normalizeTitle } from "../core/noteStatus";
 
@@ -199,21 +200,35 @@ export class VerifyPanel {
     }
   }
 
+  /**
+   * Estimate with the verification model of this run: it can be changed
+   * here for this run only (the estimate follows); "기본값으로 저장" makes
+   * it the saved setting.
+   */
   private showEstimate(prepared: PreparedVerification): void {
     const panel = this.estimateEl!;
     panel.empty();
     const e = prepared.estimate;
-    const task = this.plugin.data.settings.tasks.verification;
+    const settings = this.plugin.data.settings;
     panel.createEl("h6", { text: "검증 전 예상 사용량", cls: "alt2obsidian-section-header" });
-    panel.createDiv({ cls: "alt2obsidian-estimate-main", text: `주장 ${e.claims}개 → 판정 ${e.judged}개` });
+    panel.createDiv({ cls: "alt2obsidian-estimate-main", text: `주장 ${e.claims}개 → 판정 ${e.judged}개 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰` });
+    renderModelPicker(panel.createDiv({ cls: "alt2obsidian-pickers" }), {
+      task: "verification",
+      label: "판정 모델",
+      value: prepared.task,
+      saved: settings.tasks.verification,
+      catalog: this.plugin.modelCatalog(),
+      recent: settings.recentModels,
+      onChange: (next) => this.showEstimate(this.plugin.withVerifyChoice(prepared, next)),
+      onSaveDefault: (next) => this.plugin.saveTaskDefault("verification", next),
+    });
     const rows = panel.createEl("ul", { cls: "alt2obsidian-estimate-list" });
     rows.createEl("li", { text: `근거 검색 (스크립트): 토큰 0 · 슬라이드 상위 2개${prepared.plan.hasTranscript ? ", 전사 상위 2개" : " (전사 없음)"}` });
     if (e.contextEvidence > 0) rows.createEl("li", { text: `슬라이드와 겹치는 용어가 없는 ${e.contextEvidence}개는 같은 절의 문맥(주변 주장, 제목)으로 근거 후보를 찾아 판정` });
     if (e.unmatched > 0) rows.createEl("li", { text: `근거 후보를 전혀 찾지 못한 ${e.unmatched}개는 판정하지 않고 결과 노트에 따로 적음` });
     if (e.likelyTrue > 0) rows.createEl("li", { text: `맞음 후보 ${e.likelyTrue}개는 묶음 뒤쪽에서 판정` });
     rows.createEl("li", { text: `누락 확인: 주장과 이어지지 않은 슬라이드 ${e.uncoveredSlides}장${e.uncoveredSlides > 0 ? " (제목과 핵심 문장만, 1회)" : ""}` });
-    rows.createEl("li", { text: `예상: 호출 ${e.calls}회 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰` });
-    rows.createEl("li", { text: `판정: ${PROVIDER_LABELS[task.provider]} (${task.model || "기본 모델"}${task.effort ? ", " + task.effort : ""})` });
+    rows.createEl("li", { text: `예상: 호출 ${e.calls}회 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰 (출력은 effort에 따라 늘려 잡음)` });
     rows.createEl("li", { text: `결과: ${prepared.outPath}` });
     if (e.unmatchedWarning) {
       panel.createDiv({
@@ -250,6 +265,9 @@ export class VerifyPanel {
     const barOuter = panel.createDiv({ cls: "alt2obsidian-progress-bar" });
     const bar = barOuter.createDiv({ cls: "alt2obsidian-progress-bar-fill" });
     const detail = panel.createDiv({ cls: "alt2obsidian-progress-text", text: "판정 시작" });
+    const t = prepared.task;
+    const effort = t.effort ? ` · effort ${t.effort}` : "";
+    const modelLine = panel.createDiv({ cls: "alt2obsidian-usage-line alt2obsidian-model-line", text: `모델: ${describeModel(t.provider, t.model, this.plugin.modelCatalog())}${effort}` });
     const usage = panel.createDiv({ cls: "alt2obsidian-usage-line", text: "사용량: 아직 호출 없음" });
     const cancel = panel.createEl("button", { text: "취소", cls: "alt2obsidian-cancel-btn" });
     cancel.addEventListener("click", () => {
@@ -264,6 +282,9 @@ export class VerifyPanel {
           detail.setText(p.step === "missing" ? "누락 후보 확인 중" : p.retry ? `묶음 ${p.batch}/${p.batches}: 빠진 주장만 다시 요청 중` : `묶음 ${p.batch}/${p.batches} 판정 중`);
         },
         onUsage: (u) => usage.setText(`호출 ${u.calls}회 · 입력 ${compactTokens(u.inputTokens)} (캐시 ${compactTokens(u.cachedInputTokens)}) · 출력 ${compactTokens(u.outputTokens)}`),
+        onModel: (model) => {
+          if (model) modelLine.setText(`모델: ${model}${effort} (실제 실행)`);
+        },
       });
       panel.empty();
       const c = res.counts;

@@ -334,6 +334,13 @@ export interface PluginData {
   removedProviderNotice?: Array<"gemini" | "ollama"> | boolean;
   /** Lines of the once-only Notice about empty model/effort filled with the task defaults. */
   pendingFilledNotice?: string[];
+  /**
+   * The model id each requested model resolved to on its last real run
+   * (Claude: the modelUsage key of the CLI result), keyed by
+   * "<provider>:<requested>" ("" = the CLI default). Shown as "현재 ..."
+   * next to aliases and as "마지막 실행" in the settings.
+   */
+  resolvedModels?: Record<string, { id: string; at: string }>;
 }
 
 export const DEFAULT_PLUGIN_DATA: PluginData = {

@@ -4,15 +4,17 @@ import { CliName, EffortLevel, PresetId, ProviderId, TaskId } from "../types";
 import {
   applyPreset,
   defaultTaskSetting,
-  CodexModels,
   describeDefault,
   effortChoices,
   isCliProvider,
   isSafeModelName,
+  ModelCatalog,
   modelChoices,
+  modelName,
   PRESET_LABELS,
   PROVIDER_LABELS,
   rememberModel,
+  resolvedKey,
   TASK_IDS,
   TASK_LABELS,
   TASK_PROVIDERS,
@@ -193,13 +195,15 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         });
       });
 
-    const codexModels = this.plugin.codexModels();
-    for (const id of TASK_IDS) this.renderTaskRow(containerEl, id, codexModels);
+    const catalog = this.plugin.modelCatalog();
+    for (const id of TASK_IDS) this.renderTaskRow(containerEl, id, catalog);
     containerEl.createDiv({
       cls: "alt2obsidian-muted alt2obsidian-settings-note",
       text:
-        "effort 목록: Codex는 고른 모델이 지원하는 단계만 보여줍니다(Codex 모델 캐시 기준). Claude와 'CLI 기본값' 모델은 알 수 없어 모든 단계를 보여주며, " +
-        "모델이 지원하지 않는 단계를 고르면 그 처리는 CLI에 맡겨집니다(오류가 나면 effort를 낮추세요).",
+        "모델 목록: 버전이 붙은 항목(예: Opus 5.5)은 그 모델 이름을 그대로 CLI에 넘겨 늘 같은 모델로 실행합니다. sonnet, opus 같은 별칭은 CLI가 그때의 최신 모델로 바꿔 실행하며, " +
+        "괄호 안의 '현재'는 마지막 실행에서 CLI가 알려 준 모델입니다. 목록은 Claude Code와 Codex가 저장해 둔 모델 목록에서 읽습니다(모델 호출 없음). " +
+        "effort 목록은 고른 모델이 지원하는 단계만 보여줍니다. 모르는 모델은 모든 단계를 보여주며, 지원하지 않는 단계는 CLI가 처리합니다(오류가 나면 effort를 낮추세요). " +
+        "사이드바의 가져오기와 노트 검증에서도 실행 직전에 이번 실행의 모델을 바꿀 수 있습니다. 여기 값은 그 기본값입니다.",
     });
 
     new Setting(containerEl)
@@ -226,14 +230,21 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
    * the CLI's known models, "CLI 기본값" and "직접 입력" (a text field for
    * any other id). Changing the provider loads that provider's task defaults.
    */
-  private renderTaskRow(containerEl: HTMLElement, id: TaskId, codex: CodexModels): void {
+  private renderTaskRow(containerEl: HTMLElement, id: TaskId, catalog: ModelCatalog): void {
     const task = this.settings.tasks[id];
     const notes: Partial<Record<TaskId, string>> = {
       alignment: "정렬은 스크립트로 항상 합니다. 프로바이더를 고르면 불확실한 구간만 한 번 더 확인합니다 (기본 끔).",
       verification: "사이드바 '노트 검증' 탭에서 씁니다. 주장 20개씩 판정합니다.",
     };
     const recommended = describeDefault(isCliProvider(task.provider) ? task.provider : "claude-cli", id);
-    const desc = [notes[id], recommended ? `권장: ${recommended}` : ""].filter(Boolean).join(" ");
+    let lastText = "";
+    if (isCliProvider(task.provider)) {
+      // The id the CLI reported on the last run with this model (an alias resolves to a full id).
+      const last = catalog.resolved[resolvedKey(task.provider, task.model)];
+      const name = last ? modelName(task.provider, last.id, catalog) : "";
+      if (last) lastText = `마지막 실행: ${last.id}${name !== last.id ? ` (${name})` : ""}, ${last.at}.`;
+    }
+    const desc = [notes[id], recommended ? `권장: ${recommended}.` : "", lastText].filter(Boolean).join(" ");
     const setting = new Setting(containerEl).setName(TASK_LABELS[id]).setDesc(desc);
     setting.settingEl.addClass("alt2obsidian-task-setting");
     const changed = async (rerender: boolean) => {
@@ -255,12 +266,14 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     const provider = task.provider;
 
     const CUSTOM = "*custom"; // never a model name: those start with a letter or digit
-    const choices = modelChoices(provider, task.model, this.settings.recentModels[provider] ?? [], codex.models);
+    const choices = modelChoices(provider, task.model, this.settings.recentModels[provider] ?? [], catalog);
     let customInput: HTMLInputElement | null = null;
     let modelSelect: HTMLSelectElement | null = null;
     setting.addDropdown((d) => {
       modelSelect = d.selectEl;
       for (const c of choices) d.addOption(c.value, c.label);
+      // The model's description as the option tooltip.
+      for (const c of choices) if (c.title) d.selectEl.querySelector(`option[value="${CSS.escape(c.value)}"]`)?.setAttr("title", c.title);
       d.addOption(CUSTOM, "직접 입력...");
       d.setValue(task.model).onChange(async (value) => {
         if (value === CUSTOM) {
@@ -270,15 +283,15 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         }
         customInput?.hide();
         task.model = value;
-        // Codex: the effort list depends on the model.
-        await changed(provider === "codex-cli");
+        // The effort list depends on the model.
+        await changed(true);
       });
       d.selectEl.setAttr("aria-label", `${TASK_LABELS[id]} 모델`);
       d.selectEl.addClass("alt2obsidian-model-select");
     });
     setting.addText((text) => {
       customInput = text.inputEl;
-      text.setPlaceholder(provider === "claude-cli" ? "예: claude-sonnet-4-5" : "예: gpt-5.6-luna");
+      text.setPlaceholder(provider === "claude-cli" ? "예: claude-opus-5-5" : "예: gpt-6-luna");
       text.inputEl.addClass("alt2obsidian-model-input");
       text.inputEl.hide();
       text.inputEl.addEventListener("input", () => {
@@ -306,7 +319,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     });
 
     setting.addDropdown((d) => {
-      for (const level of effortChoices(provider, task.model, task.effort, codex)) d.addOption(level, level ? `effort ${level}` : "effort CLI 기본값");
+      for (const level of effortChoices(provider, task.model, task.effort, catalog)) d.addOption(level, level ? `effort ${level}` : "effort CLI 기본값");
       d.setValue(task.effort).onChange(async (value) => {
         task.effort = value as EffortLevel;
         await changed(false);

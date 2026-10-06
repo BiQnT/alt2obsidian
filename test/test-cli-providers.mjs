@@ -262,6 +262,24 @@ for (const [label, Provider, bin] of [
     })
   );
   assert.deepEqual([mu.usage.inputTokens, mu.usage.cachedInputTokens, mu.usage.outputTokens], [1070, 900, 45]);
+  // The model that ran: the modelUsage entry with the most output (an alias comes back as its full id).
+  assert.equal(mu.model, "claude-sonnet");
+  assert.equal(c.model, undefined, "no modelUsage and no model in the init event: unknown");
+  const fromInit = m.parseClaudeOutput(
+    [JSON.stringify({ type: "system", subtype: "init", model: "claude-opus-5-5" }), JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok", usage: { input_tokens: 1, output_tokens: 1 } })].join("\n")
+  );
+  assert.equal(fromInit.model, "claude-opus-5-5", "else the init event's model");
+  assert.equal(m.formatUsageFrontmatter({ calls: 2, inputTokens: 10, cachedInputTokens: 5, outputTokens: 3, imagesSent: 0, costUsd: 0 }, "Claude CLI sonnet", { model: "claude-sonnet-5-5", effort: "medium", conceptModel: "claude-sonnet-5-5" }),
+    'alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", calls: 2, input: 10, cached: 5, output: 3, images: 0}', "the concept model only when it differs");
+  const tracker = new m.UsageTracker();
+  const seenRecords = [];
+  tracker.onRecord((e) => seenRecords.push(e.task));
+  tracker.record({ calls: 1, inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, imagesSent: 0, costUsd: 0, provider: "claude-cli", model: "sonnet", resolvedModel: "claude-sonnet-5-5", effort: "medium", task: "commentary" });
+  tracker.record({ calls: 1, inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, imagesSent: 0, costUsd: 0, provider: "codex-cli", model: "", resolvedModel: "", effort: "low", task: "concepts" });
+  assert.deepEqual(tracker.modelFor("commentary"), { requested: "sonnet", used: "claude-sonnet-5-5", provider: "claude-cli", effort: "medium" });
+  assert.deepEqual(tracker.modelFor("concepts"), { requested: "", used: "", provider: "codex-cli", effort: "low" });
+  assert.equal(tracker.modelFor("verification"), null);
+  assert.deepEqual(seenRecords, ["commentary", "concepts"]);
   // Robust JSON extraction (review N2).
   assert.deepEqual(m.parseJsonText('{"a":1}'), { a: 1 });
   assert.deepEqual(m.parseJsonText('```json\n{"a":1}\n```'), { a: 1 });

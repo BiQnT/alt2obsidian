@@ -242,14 +242,118 @@ export function rememberModel(settings: Alt2ObsidianSettings, provider: Provider
   settings.recentModels[provider] = [m, ...list].slice(0, 8);
 }
 
-/** Aliases the Claude CLI resolves to its current models (`claude --help`: "an alias for the latest model"). */
-export const CLAUDE_MODEL_ALIASES = ["sonnet", "opus", "haiku"];
+// ---- model catalog (names and versions for the dropdowns) ----
+
+/** A model the dropdowns can offer, with its display name. */
+export interface ModelInfo {
+  /** The value passed to the CLI (`--model` / `-m`). */
+  id: string;
+  /** Display name with the version, e.g. "Sonnet 5.5" or "GPT-6-Astra". */
+  name: string;
+  description?: string;
+  /** Effort levels the model lists; undefined = unknown (every level), [] = none. */
+  efforts?: EffortLevel[];
+  /** Listed after the current models (Claude's "overflow" section). */
+  older?: boolean;
+}
+
+/**
+ * Claude models when Claude Code's own model catalog cache is missing
+ * (it appears once Claude Code has been used interactively). Ids and names
+ * as listed by Claude Code 2.1.291 on 2026-10-06 (its catalog and the
+ * model table in the CLI); each id is passed to `claude --model` as it is
+ * (claude-sonnet-5 and, through its alias, claude-fable-5-1 and
+ * claude-sonnet-5-5 were checked with a real call).
+ */
+export const CLAUDE_FALLBACK_MODELS: ModelInfo[] = [
+  { id: "claude-fable-5-1", name: "Fable 5.1" },
+  { id: "claude-opus-5-5", name: "Opus 5.5" },
+  { id: "claude-sonnet-5-5", name: "Sonnet 5.5" },
+  { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", efforts: [] },
+  { id: "claude-sonnet-5", name: "Sonnet 5", older: true },
+];
+
+/**
+ * Aliases the Claude CLI resolves to the latest model of a family
+ * (`claude --help`: "an alias for the latest model"). `knownId` is what the
+ * alias resolved to when checked with Claude Code 2.1.291 on 2026-10-06:
+ * fable and sonnet by a real call each (the result's modelUsage key), opus
+ * from Claude Code's catalog for an account set to "opus", haiku from an
+ * earlier plugin run's modelUsage. After every real call the plugin records
+ * the id the CLI actually used, which wins over this table.
+ */
+export const CLAUDE_ALIASES: Array<{ alias: string; family: string; knownId: string }> = [
+  { alias: "fable", family: "Fable", knownId: "claude-fable-5-1" },
+  { alias: "opus", family: "Opus", knownId: "claude-opus-5-5" },
+  { alias: "sonnet", family: "Sonnet", knownId: "claude-sonnet-5-5" },
+  { alias: "haiku", family: "Haiku", knownId: "claude-haiku-4-5-20251001" },
+];
+
+/** The alias names, for code that only needs to know a value is an alias. */
+export const CLAUDE_MODEL_ALIASES = CLAUDE_ALIASES.map((a) => a.alias);
+
+/** The id a run resolved a requested model to (plugin data `resolvedModels`). */
+export interface ResolvedModel {
+  id: string;
+  /** Day of the run, YYYY-MM-DD. */
+  at: string;
+}
+
+/** Key of `resolvedModels`: provider and the requested value ("" = CLI default). */
+export function resolvedKey(provider: ProviderId, requested: string): string {
+  return `${provider}:${requested}`;
+}
+
+/** Everything the model dropdowns need. */
+export interface ModelCatalog {
+  claude: ModelInfo[];
+  codex: CodexModels;
+  resolved: Record<string, ResolvedModel>;
+}
+
+function effortList(raw: unknown): EffortLevel[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((l) => (l && typeof l === "object" ? (l as { effort?: unknown; id?: unknown }).effort ?? (l as { id?: unknown }).id : l))
+    .filter((e): e is EffortLevel => typeof e === "string" && e !== "" && EFFORT_LEVELS.includes(e as EffortLevel));
+}
+
+/**
+ * Claude models from Claude Code's own catalog cache
+ * (~/.claude/cache/model-catalog/<account>-cc.json, written by Claude Code;
+ * reading it costs nothing). Current models first, older ("overflow") ones
+ * after. Empty when the file is missing or not in the expected shape.
+ */
+export function parseClaudeModelCatalog(text: string): ModelInfo[] {
+  try {
+    const data = JSON.parse(text) as { catalog?: { config?: { models?: unknown } } };
+    const models = data.catalog?.config?.models;
+    if (!Array.isArray(models)) return [];
+    const out: ModelInfo[] = [];
+    for (const m of models) {
+      if (!m || typeof m !== "object") continue;
+      const r = m as { id?: unknown; name?: unknown; description?: unknown; section?: unknown; thinking?: { type?: unknown; effort_options?: unknown } };
+      if (typeof r.id !== "string" || !isSafeModelName(r.id) || !r.id) continue;
+      const info: ModelInfo = { id: r.id, name: typeof r.name === "string" && r.name.trim() ? r.name.trim() : r.id };
+      if (typeof r.description === "string" && r.description) info.description = r.description;
+      if (r.thinking?.type === "none") info.efforts = [];
+      else if (Array.isArray(r.thinking?.effort_options)) info.efforts = effortList(r.thinking!.effort_options);
+      if (r.section !== undefined && r.section !== "main") info.older = true;
+      out.push(info);
+    }
+    return [...out.filter((m) => !m.older), ...out.filter((m) => m.older)];
+  } catch {
+    return [];
+  }
+}
 
 export interface CodexModels {
   /** Visible model ids by Codex's priority. */
   models: string[];
   /** Effort levels each model lists (supported_reasoning_levels), limited to the plugin's levels. */
   efforts: Record<string, EffortLevel[]>;
+  /** Display names and descriptions from the cache (display_name, description). */
+  info?: Record<string, { name: string; description?: string }>;
 }
 
 /**
@@ -258,26 +362,24 @@ export interface CodexModels {
  * missing or not in the expected shape.
  */
 export function parseCodexModels(text: string): CodexModels {
-  const out: CodexModels = { models: [], efforts: {} };
+  const out: CodexModels = { models: [], efforts: {}, info: {} };
   try {
     const data = JSON.parse(text) as { models?: unknown };
     if (!Array.isArray(data.models)) return out;
     const visible = data.models
-      .filter((m): m is { slug: string; visibility?: string; priority?: number; supported_reasoning_levels?: unknown } => !!m && typeof m.slug === "string")
+      .filter((m): m is { slug: string; display_name?: unknown; description?: unknown; visibility?: string; priority?: number; supported_reasoning_levels?: unknown } => !!m && typeof m.slug === "string")
       .filter((m) => m.visibility === undefined || m.visibility === "list")
       .filter((m) => isSafeModelName(m.slug))
       .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
     for (const m of visible) {
       out.models.push(m.slug);
-      if (Array.isArray(m.supported_reasoning_levels)) {
-        const levels = m.supported_reasoning_levels
-          .map((l) => (l && typeof l === "object" ? (l as { effort?: unknown }).effort : l))
-          .filter((e): e is EffortLevel => typeof e === "string" && e !== "" && EFFORT_LEVELS.includes(e as EffortLevel));
-        if (levels.length > 0) out.efforts[m.slug] = levels;
-      }
+      const levels = effortList(m.supported_reasoning_levels);
+      if (levels.length > 0) out.efforts[m.slug] = levels;
+      const name = typeof m.display_name === "string" && m.display_name.trim() ? m.display_name.trim() : m.slug;
+      out.info![m.slug] = typeof m.description === "string" && m.description ? { name, description: m.description } : { name };
     }
   } catch {
-    return { models: [], efforts: {} };
+    return { models: [], efforts: {}, info: {} };
   }
   return out;
 }
@@ -287,34 +389,101 @@ export function parseCodexModelsCache(text: string): string[] {
   return parseCodexModels(text).models;
 }
 
+/** The id an alias stands for now: the last run's resolved id, else the checked mapping. */
+export function aliasTarget(alias: string, catalog: Pick<ModelCatalog, "resolved">): string | null {
+  const seen = catalog.resolved[resolvedKey("claude-cli", alias)]?.id;
+  return seen || CLAUDE_ALIASES.find((a) => a.alias === alias)?.knownId || null;
+}
+
+/** Catalog entry for a Claude id or alias (aliases through their current target). */
+function claudeInfo(model: string, catalog: ModelCatalog): ModelInfo | undefined {
+  const list = catalog.claude.length > 0 ? catalog.claude : CLAUDE_FALLBACK_MODELS;
+  const id = CLAUDE_MODEL_ALIASES.includes(model) ? aliasTarget(model, catalog) : model;
+  return id ? list.find((m) => m.id === id) ?? CLAUDE_FALLBACK_MODELS.find((m) => m.id === id) : undefined;
+}
+
+/** "Opus 5.5" for a known id, the id itself otherwise. */
+export function modelName(provider: ProviderId, id: string, catalog: ModelCatalog): string {
+  if (provider === "codex-cli") return catalog.codex.info?.[id]?.name ?? id;
+  return claudeInfo(id, catalog)?.name ?? id;
+}
+
 /**
  * Effort dropdown entries: "" (CLI 기본값) plus the levels the chosen model
- * lists when that is known (Codex models cache), else every level. The
- * saved value is always kept so the dropdown can show it.
+ * lists when that is known (Claude Code's or Codex's model cache), else
+ * every level. The saved value is always kept so the dropdown can show it.
  */
-export function effortChoices(provider: ProviderId, model: string, current: EffortLevel, codex: CodexModels): EffortLevel[] {
-  const known = provider === "codex-cli" && model ? codex.efforts[model] : undefined;
+export function effortChoices(provider: ProviderId, model: string, current: EffortLevel, catalog: ModelCatalog | CodexModels): EffortLevel[] {
+  const full: ModelCatalog = "codex" in catalog ? catalog : { claude: [], codex: catalog, resolved: {} };
+  let known: EffortLevel[] | undefined;
+  if (provider === "codex-cli") known = model ? full.codex.efforts[model] : undefined;
+  else if (model) known = claudeInfo(model, full)?.efforts;
   if (!known) return EFFORT_LEVELS;
-  return EFFORT_LEVELS.filter((l) => l === "" || l === current || known.includes(l));
+  return EFFORT_LEVELS.filter((l) => l === "" || l === current || known!.includes(l));
 }
 
 export interface ModelChoice {
   value: string;
   label: string;
+  /** Tooltip (the model's description). */
+  title?: string;
 }
 
 /**
- * Model dropdown entries for a provider: the known models (Claude aliases,
- * or the Codex models cache), recently typed models, the current value if
- * it is none of these, then "CLI 기본값" (""). The UI adds "직접 입력".
+ * How a model value reads in the dropdowns and the run panels:
+ * - a versioned id: "Opus 5.5 (claude-opus-5-5)", or the bare id when unknown;
+ * - an alias: "opus (최신 Opus, 현재 Opus 5.5)" (the current target as the
+ *   last run resolved it, else as checked), "opus (최신 Opus)" when unknown;
+ * - "": the CLI's own default.
  */
-export function modelChoices(provider: ProviderId, current: string, recent: string[], codexModels: string[]): ModelChoice[] {
-  const known = provider === "claude-cli" ? CLAUDE_MODEL_ALIASES : codexModels;
+export function modelLabel(provider: ProviderId, model: string, catalog: ModelCatalog): string {
+  if (!model) return provider === "claude-cli" ? "CLI 기본값 (계정 기본 모델)" : "CLI 기본값 (Codex 기본 모델)";
+  if (provider === "claude-cli") {
+    const alias = CLAUDE_ALIASES.find((a) => a.alias === model);
+    if (alias) {
+      const target = aliasTarget(model, catalog);
+      return target ? `${model} (최신 ${alias.family}, 현재 ${modelName(provider, target, catalog)})` : `${model} (최신 ${alias.family})`;
+    }
+  }
+  const name = modelName(provider, model, catalog);
+  return name !== model ? `${name} (${model})` : model;
+}
+
+/**
+ * Model dropdown entries for a provider: the known models with their
+ * versions (Claude: Claude Code's catalog or the built-in list, then the
+ * aliases; Codex: its models cache), recently typed models, the current
+ * value if it is none of these, then "CLI 기본값" (""). The settings tab
+ * adds "직접 입력".
+ */
+export function modelChoices(provider: ProviderId, current: string, recent: string[], catalog: ModelCatalog | string[]): ModelChoice[] {
+  const full: ModelCatalog = Array.isArray(catalog) ? { claude: [], codex: { models: catalog, efforts: {} }, resolved: {} } : catalog;
+  let known: string[];
+  const titles = new Map<string, string>();
+  if (provider === "claude-cli") {
+    const list = full.claude.length > 0 ? full.claude : CLAUDE_FALLBACK_MODELS;
+    for (const m of list) if (m.description) titles.set(m.id, m.description);
+    known = [...list.filter((m) => !m.older).map((m) => m.id), ...CLAUDE_MODEL_ALIASES, ...list.filter((m) => m.older).map((m) => m.id)];
+  } else {
+    known = full.codex.models;
+    for (const [slug, info] of Object.entries(full.codex.info ?? {})) if (info.description) titles.set(slug, info.description);
+  }
   const values = Array.from(new Set([...known, ...recent, ...(current ? [current] : [])]));
   return [
-    ...values.map((value) => ({ value, label: value })),
-    { value: "", label: provider === "claude-cli" ? "CLI 기본값 (계정 기본 모델)" : "CLI 기본값 (Codex 기본 모델)" },
+    ...values.map((value) => {
+      const c: ModelChoice = { value, label: modelLabel(provider, value, full) };
+      const title = titles.get(value);
+      if (title) c.title = title;
+      return c;
+    }),
+    { value: "", label: modelLabel(provider, "", full) },
   ];
+}
+
+/** "Sonnet 5.5 (claude-sonnet-5-5)" or "sonnet (최신 Sonnet, 현재 Sonnet 5.5)" for a run line; "CLI 기본 모델" for "". */
+export function describeModel(provider: ProviderId | "none", model: string, catalog: ModelCatalog): string {
+  if (!isCliProvider(provider)) return "";
+  return model ? modelLabel(provider, model, catalog) : "CLI 기본 모델";
 }
 
 /** "sonnet · medium" for a task's recommended setting, "" for "none". */
@@ -323,6 +492,22 @@ export function describeDefault(provider: ProviderId | "none", id: TaskId): stri
   const d = TASK_DEFAULTS[provider][id];
   return `${d.model || "CLI 기본 모델"} · effort ${d.effort}`;
 }
+
+/**
+ * Output-token multiplier of an effort level, relative to medium (the
+ * level the per-slide output estimates were fitted at). From the relative
+ * effort cost index Claude Code 2.1.291 ships (low 0.6, medium 0.77, high 1,
+ * xhigh 1.74, max 1.91); Codex is assumed to scale the same way. "" (the
+ * CLI default) counts as medium.
+ */
+export const EFFORT_OUTPUT_FACTOR: Record<EffortLevel, number> = {
+  "": 1,
+  low: 0.78,
+  medium: 1,
+  high: 1.3,
+  xhigh: 2.26,
+  max: 2.48,
+};
 
 /**
  * Slides per call for a provider. Codex carries about 12k fixed tokens per

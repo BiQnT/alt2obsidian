@@ -1,5 +1,5 @@
-import { editorLivePreviewField, Plugin, Notice } from "obsidian";
-import type { CodexModels } from "./settings/llmSettings";
+import { editorLivePreviewField, Plugin, Notice, WorkspaceLeaf } from "obsidian";
+import type { CodexModels, ModelCatalog, ModelInfo } from "./settings/llmSettings";
 import type { Extension } from "@codemirror/state";
 import { managedCommentHider } from "./editor/managedComments";
 import {
@@ -16,6 +16,7 @@ import {
   LLMUsage,
   ProviderId,
   TaskId,
+  TaskLLMSetting,
 } from "./types";
 import { AltPublicUrlSource, bundleFromAltData } from "./sources/AltPublicUrlSource";
 import { AltLocalSource, altUserDataDir, connectAltLocal, ConnectResult, inferSubject, LectureBundle } from "./sources";
@@ -42,14 +43,18 @@ import {
   chooseCli,
   migrateSettings,
   describeFilled,
+  isCliProvider,
   moveClaudeTasksToCodex,
+  parseClaudeModelCatalog,
   parseCodexModels,
   removedProviderMessage,
   PROVIDER_LABELS,
   rememberModel,
+  resolvedKey,
+  sanitizeTask,
 } from "./settings/llmSettings";
 import { analyzeSlides, selectKeyDiagrams } from "./core/prep/SlideAnalyzer";
-import { DeckPlan, parseExistingSlides, planDeck, withFewerImages, withTranscriptChunks } from "./pipeline/batchPlan";
+import { DeckPlan, makeBatches, parseExistingSlides, planDeck, withFewerImages, withTranscriptChunks } from "./pipeline/batchPlan";
 import { estimateLecture, PipelineStep, runBatchedLecture } from "./pipeline/lecturePipeline";
 import type { BatchProgress, LectureContext } from "./generator/BatchCommentaryGenerator";
 import { BudgetEstimate, CallShape, estimateCalls, exceedsCap } from "./core/budget/estimate";
@@ -67,7 +72,7 @@ import {
   VIEW_TYPE_SYNCED_VIEWER,
 } from "./ui/SyncedViewerView";
 import { TFile } from "obsidian";
-import { promises as fsp, readFileSync } from "node:fs";
+import { promises as fsp, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
@@ -120,6 +125,11 @@ export interface PreparedImport {
   slideTexts: string[];
   /** Pages saved to Attachments/ and embedded (spec 4.8); empty when the setting is off. */
   diagramPages: number[];
+  /**
+   * Model choices for this run only (the sidebar's picker), by task. Tasks
+   * not listed use the saved settings; the settings are never changed here.
+   */
+  overrides: Partial<Record<TaskId, TaskLLMSetting>>;
 }
 
 /** A verification after claims, evidence and estimate, before any LLM call. */
@@ -132,6 +142,8 @@ export interface PreparedVerification {
   plan: VerifyPlan;
   estimate: VerifyEstimate;
   overCap: boolean;
+  /** The verification model for this run (the panel's picker); the saved setting otherwise. */
+  task: TaskLLMSetting;
 }
 
 export interface VerifyRunResult {
@@ -145,6 +157,8 @@ export interface CliImportHooks {
   onStep?: (step: PipelineStep | "save") => void;
   onBatch?: (p: BatchProgress) => void;
   onUsage?: (total: LLMUsage) => void;
+  /** A task's call reported the model it used (an alias comes back as the full id). */
+  onModel?: (task: string, model: string) => void;
   onProgress?: (stage: string, percent: number) => void;
   onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
 }
@@ -732,9 +746,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
     task: TaskId,
     workDir: string,
     usage: UsageTracker,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    setting: TaskLLMSetting = this.data.settings.tasks[task]
   ): Promise<ILLMProvider> {
-    return createTaskProvider(this.data.settings.tasks[task], {
+    return createTaskProvider(setting, {
       settings: this.data.settings,
       resolveBin: (name) => this.resolveBin(name),
       workDir,
@@ -1029,7 +1044,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
     onProgress?.("예산 산정 완료", 100);
     const diagramPages = plan && settings.generation.saveKeyDiagrams ? selectKeyDiagrams(plan.slides, plan.scanned) : [];
-    return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, context, fewerImages: false, alignment, slideTexts, diagramPages });
+    return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, context, fewerImages: false, alignment, slideTexts, diagramPages, overrides: {} });
+  }
+
+  /** The setting a task of this run uses: the run's choice, else the saved setting. */
+  runTask(prepared: Pick<PreparedImport, "overrides">, id: TaskId): TaskLLMSetting {
+    return prepared.overrides[id] ?? this.data.settings.tasks[id];
   }
 
   /** Same plan with visual slides sent as text only (spec 5.5 "fewer images"). */
@@ -1039,22 +1059,42 @@ export default class Alt2ObsidianPlugin extends Plugin {
       ...prepared,
       plan: withFewerImages(
         prepared.plan,
-        batchSizeFor(this.data.settings.tasks.commentary.provider, this.data.settings.generation.batchSize)
+        batchSizeFor(this.runTask(prepared, "commentary").provider, this.data.settings.generation.batchSize)
       ),
       fewerImages: true,
     });
   }
 
+  /**
+   * The same import with another model for one task, for this run only (the
+   * sidebar's picker). The saved settings do not change. A different
+   * provider regroups the batches (Codex takes twice as many slides per
+   * call), and the estimate is computed again.
+   */
+  withRunChoice(prepared: PreparedImport, task: TaskId, choice: TaskLLMSetting): PreparedImport {
+    const setting = sanitizeTask(choice, this.data.settings.tasks[task]);
+    const overrides = { ...prepared.overrides, [task]: setting };
+    let plan = prepared.plan;
+    // Batches always follow the run's commentary provider (cheap to rebuild).
+    if (plan && task === "commentary") plan = { ...plan, batches: makeBatches(plan.slides, batchSizeFor(setting.provider, this.data.settings.generation.batchSize)) };
+    return this.withEstimate({ ...prepared, plan, overrides });
+  }
+
   private withEstimate(p: Omit<PreparedImport, "estimate" | "overCap">): PreparedImport {
-    const tasks = this.data.settings.tasks;
+    const commentary = this.runTask(p, "commentary");
+    const concepts = this.runTask(p, "concepts");
+    const alignmentTask = this.runTask(p, "alignment");
     const asProvider = (id: ProviderId | "none"): ProviderId => (id === "none" ? "claude-cli" : id);
     let estimate: BudgetEstimate = p.plan
-      ? estimateLecture(p.plan, p.context, p.preview.altData.summary, asProvider(tasks.commentary.provider), asProvider(tasks.concepts.provider))
-      : this.estimateLectureLevel(p.preview, asProvider(tasks.commentary.provider), asProvider(tasks.concepts.provider));
+      ? estimateLecture(p.plan, p.context, p.preview.altData.summary, asProvider(commentary.provider), asProvider(concepts.provider), {
+          commentaryEffort: commentary.effort,
+          conceptEffort: concepts.effort,
+        })
+      : this.estimateLectureLevel(p.preview, asProvider(commentary.provider), asProvider(concepts.provider), commentary, concepts);
     // Optional alignment check (spec 4.3 step 3): one small text call.
-    const checkPrompt = p.alignment && tasks.alignment.provider !== "none" ? buildAlignmentCheckPrompt(p.preview.altData.title, p.alignment, p.slideTexts) : null;
-    if (checkPrompt && tasks.alignment.provider !== "none") {
-      const check = estimateCalls([{ promptText: checkPrompt, images: 0, schema: true, outputTokens: 200 }], tasks.alignment.provider);
+    const checkPrompt = p.alignment && alignmentTask.provider !== "none" ? buildAlignmentCheckPrompt(p.preview.altData.title, p.alignment, p.slideTexts) : null;
+    if (checkPrompt && alignmentTask.provider !== "none") {
+      const check = estimateCalls([{ promptText: checkPrompt, images: 0, schema: true, outputTokens: 200 }], alignmentTask.provider, alignmentTask.effort);
       estimate = { ...estimate, calls: estimate.calls + check.calls, inputTokens: estimate.inputTokens + check.inputTokens, outputTokens: estimate.outputTokens + check.outputTokens };
     }
     return { ...p, estimate, overCap: exceedsCap(estimate, this.data.settings.generation.tokenCapPerLecture) };
@@ -1064,7 +1104,13 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * No PDF: the 1.x lecture-level flow (one transcript pass when there is a
    * transcript, then concepts), estimated from the same prompt templates.
    */
-  private estimateLectureLevel(preview: ImportPreview, commentary: ProviderId, concepts: ProviderId): BudgetEstimate {
+  private estimateLectureLevel(
+    preview: ImportPreview,
+    commentary: ProviderId,
+    concepts: ProviderId,
+    commentaryTask?: TaskLLMSetting,
+    conceptTask?: TaskLLMSetting
+  ): BudgetEstimate {
     const alt = preview.altData;
     const transcript = (alt.transcript ?? "").slice(0, 15000);
     const calls: CallShape[] = [];
@@ -1076,11 +1122,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
         schema: false,
       });
     }
-    const main = estimateCalls(calls, commentary);
+    const main = estimateCalls(calls, commentary, commentaryTask?.effort);
     // Concepts read the (enhanced) summary: assume about 6000 characters.
     const concept = estimateCalls(
       [{ promptText: conceptExtractionTemplateText + "가".repeat(Math.max(alt.summary.length, 6000)), images: 0, outputTokens: 3800, schema: false }],
-      concepts
+      concepts,
+      conceptTask?.effort
     );
     return {
       calls: main.calls + concept.calls,
@@ -1108,15 +1155,18 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const job = createJobDir();
     const usage = new UsageTracker();
     usage.onChange((total) => hooks.onUsage?.(total));
+    usage.onRecord((entry) => hooks.onModel?.(entry.task, entry.resolvedModel || entry.model));
     const controller = new AbortController();
     const forward = () => controller.abort();
     if (hooks.signal?.aborted) controller.abort();
     hooks.signal?.addEventListener("abort", forward, { once: true });
     this.activeJobs.add(controller);
     const signal = controller.signal;
+    const commentaryTask = this.runTask(prepared, "commentary");
+    const conceptTask = this.runTask(prepared, "concepts");
     try {
-      const commentaryLlm = await this.providerFor("commentary", job, usage, signal);
-      const conceptLlm = await this.providerFor("concepts", job, usage, signal);
+      const commentaryLlm = await this.providerFor("commentary", job, usage, signal, commentaryTask);
+      const conceptLlm = await this.providerFor("concepts", job, usage, signal, conceptTask);
       const { preview, subject, url, pdfData } = prepared;
       let { plan, alignment } = prepared;
       const altData = preview.altData;
@@ -1128,9 +1178,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
       }
 
       // Optional LLM check of the uncertain alignment spans (spec 4.3 step 3).
-      if (alignment && alignment.lowSpans.length > 0 && settings.tasks.alignment.provider !== "none") {
+      const alignmentTask = this.runTask(prepared, "alignment");
+      if (alignment && alignment.lowSpans.length > 0 && alignmentTask.provider !== "none") {
         hooks.onProgress?.("전사 정렬 확인 중...", 0);
-        alignment = await this.checkAlignment(alignment, prepared.slideTexts, altData.title, job, usage, signal);
+        alignment = await this.checkAlignment(alignment, prepared.slideTexts, altData.title, job, usage, signal, alignmentTask);
         if (alignment.llmChanged > 0) plan = withTranscriptChunks(plan, alignment.chunks, settings.generation.transcriptCapChars);
       }
 
@@ -1164,7 +1215,6 @@ export default class Alt2ObsidianPlugin extends Plugin {
       const existingConceptNames = new Set(prepared.context.knownConcepts);
       const concepts = this.normalizeConcepts(run.concepts, existingConceptNames);
       const tags = run.tags;
-      const commentaryTask = settings.tasks.commentary;
       const providerLabel = `${PROVIDER_LABELS[commentaryTask.provider]}${commentaryTask.model ? " " + commentaryTask.model : ""}`;
       const errors = [
         ...run.slidesResult.errors,
@@ -1176,7 +1226,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
         { processedSummary: run.overview, concepts, tags, subjectSuggestion: subject },
         subject,
         [
-          formatUsageFrontmatter(usage.total(), providerLabel),
+          formatUsageFrontmatter(usage.total(), providerLabel, {
+            model: usage.modelFor("commentary")?.used || commentaryTask.model,
+            effort: commentaryTask.effort,
+            conceptModel: usage.modelFor("concepts")?.used,
+          }),
           ...this.preservedFrontmatter(prepared.notePath, altData.metadata.sourceKind, alignment),
         ]
       );
@@ -1204,6 +1258,43 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
   }
 
+  /** "기본값으로 저장" of a run's model choice: the task's saved setting (the preset becomes 사용자 지정). */
+  async saveTaskDefault(task: TaskId, setting: TaskLLMSetting): Promise<void> {
+    this.data.settings.tasks[task] = sanitizeTask(setting, this.data.settings.tasks[task]);
+    this.data.settings.preset = "custom";
+    await this.savePluginData();
+  }
+
+  /** Models for the dropdowns: Claude Code's and Codex's own caches, and what each requested model last resolved to. */
+  modelCatalog(): ModelCatalog {
+    return { claude: this.claudeModels(), codex: this.codexModels(), resolved: this.data.resolvedModels ?? {} };
+  }
+
+  private claudeModelsCache: ModelInfo[] | null = null;
+
+  /**
+   * Claude models from Claude Code's model catalog cache
+   * ($CLAUDE_CONFIG_DIR or ~/.claude, cache/model-catalog/*-cc.json, the
+   * newest file). No process is started and no model is called. Empty (the
+   * built-in list is used) when Claude Code has not written one.
+   */
+  claudeModels(): ModelInfo[] {
+    if (this.claudeModelsCache) return this.claudeModelsCache;
+    const dir = joinPath(process.env.CLAUDE_CONFIG_DIR || joinPath(homedir(), ".claude"), "cache", "model-catalog");
+    let found: ModelInfo[] = [];
+    try {
+      const files = readdirSync(dir)
+        .filter((f) => f.endsWith("-cc.json"))
+        .map((f) => ({ f, t: statSync(joinPath(dir, f)).mtimeMs }))
+        .sort((a, b) => b.t - a.t);
+      if (files.length > 0) found = parseClaudeModelCatalog(readFileSync(joinPath(dir, files[0].f), "utf8"));
+    } catch {
+      // No catalog yet.
+    }
+    if (found.length > 0) this.claudeModelsCache = found;
+    return found;
+  }
+
   /**
    * PNG renders (long edge 1600) of the key diagram pages, at
    * <subject folder>/Attachments/<lecture>-<page>.png. A page that fails to
@@ -1229,10 +1320,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
     title: string,
     job: string,
     usage: UsageTracker,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    setting?: TaskLLMSetting
   ): Promise<LectureAlignment> {
     try {
-      const llm = await this.providerFor("alignment", job, usage, signal);
+      const llm = await this.providerFor("alignment", job, usage, signal, setting);
       return await checkAlignmentWithLlm(llm, title, alignment, slideTexts, signal);
     } catch (e) {
       if (signal?.aborted) throw e;
@@ -1246,13 +1338,22 @@ export default class Alt2ObsidianPlugin extends Plugin {
     for (const c of this.activeJobs) c.abort();
   }
 
-  /** Cumulative usage and recently used models (spec 5.5, 4.2). */
-  private async recordUsage(usage: UsageTracker, tasks: TaskId[] = ["commentary", "concepts"], countLecture = true): Promise<void> {
+  /**
+   * Cumulative usage, recently used models (spec 5.5, 4.2), and the id each
+   * requested model resolved to (an alias such as "opus" is recorded with
+   * the full id the CLI reported), so the dropdowns show "현재 ..." and the
+   * settings "마지막 실행". The model of every call counts, including a
+   * one-run choice from the sidebar.
+   */
+  private async recordUsage(usage: UsageTracker, countLecture = true): Promise<void> {
     this.data.usageTotals = accumulateTotals(this.data.usageTotals, usage, formatDate(), countLecture);
-    for (const task of tasks) {
-      const t = this.data.settings.tasks[task];
-      if (t.provider !== "none") rememberModel(this.data.settings, t.provider, t.model);
+    const resolved = { ...(this.data.resolvedModels ?? {}) };
+    for (const e of usage.entries()) {
+      if (e.task === "notion-fetch") continue;
+      rememberModel(this.data.settings, e.provider, e.model);
+      if (e.resolvedModel) resolved[resolvedKey(e.provider, e.model)] = { id: e.resolvedModel, at: formatDate() };
     }
+    this.data.resolvedModels = resolved;
     await this.savePluginData();
   }
 
@@ -1326,7 +1427,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       signal?.removeEventListener("abort", forward);
       this.activeJobs.delete(controller);
       removeJobDir(job);
-      if (usage.total().calls > 0) await this.recordUsage(usage, [], false).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
+      if (usage.total().calls > 0) await this.recordUsage(usage, false).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
     }
   }
 
@@ -1357,15 +1458,24 @@ export default class Alt2ObsidianPlugin extends Plugin {
       }
     }
     const plan = planVerification({ lecture: target.basename, notePath: target.path, noteMarkdown: input.markdown, slideTexts, transcript });
-    const task = this.data.settings.tasks.verification;
-    const estimate = estimateVerification(plan, task.provider === "none" ? "claude-cli" : task.provider);
+    return this.withVerifyChoice({ targetPath: input.targetPath, outPath, source: input.source, plan }, this.data.settings.tasks.verification);
+  }
+
+  /**
+   * The verification with a model for this run only (the panel's picker;
+   * the saved setting is not changed), and its estimate for that choice.
+   */
+  withVerifyChoice(p: Pick<PreparedVerification, "targetPath" | "outPath" | "source" | "plan">, choice: TaskLLMSetting): PreparedVerification {
+    const task = sanitizeTask(choice, this.data.settings.tasks.verification);
+    const estimate = estimateVerification(p.plan, isCliProvider(task.provider) ? task.provider : "claude-cli", task.effort);
     return {
-      targetPath: input.targetPath,
-      outPath,
-      source: input.source,
-      plan,
+      targetPath: p.targetPath,
+      outPath: p.outPath,
+      source: p.source,
+      plan: p.plan,
       estimate,
       overCap: exceedsCap(estimate, this.data.settings.generation.tokenCapPerLecture),
+      task,
     };
   }
 
@@ -1374,20 +1484,23 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * that note is written (its section after the managed block is kept); the
    * checked note is never modified. Usage is recorded even on failure.
    */
-  async runVerification(prepared: PreparedVerification, hooks: { signal?: AbortSignal; onProgress?: (p: VerifyProgress) => void; onUsage?: (u: LLMUsage) => void } = {}): Promise<VerifyRunResult> {
-    const settings = this.data.settings;
-    const task = settings.tasks.verification;
+  async runVerification(
+    prepared: PreparedVerification,
+    hooks: { signal?: AbortSignal; onProgress?: (p: VerifyProgress) => void; onUsage?: (u: LLMUsage) => void; onModel?: (model: string) => void } = {}
+  ): Promise<VerifyRunResult> {
+    const task = prepared.task ?? this.data.settings.tasks.verification;
     if (task.provider === "none") throw new Error("노트 검증에 쓸 LLM이 설정되어 있지 않습니다.");
     const job = createJobDir();
     const usage = new UsageTracker();
     usage.onChange((total) => hooks.onUsage?.(total));
+    usage.onRecord((entry) => hooks.onModel?.(entry.resolvedModel || entry.model));
     const controller = new AbortController();
     const forward = () => controller.abort();
     if (hooks.signal?.aborted) controller.abort();
     hooks.signal?.addEventListener("abort", forward, { once: true });
     this.activeJobs.add(controller);
     try {
-      const llm = await this.providerFor("verification", job, usage, controller.signal);
+      const llm = await this.providerFor("verification", job, usage, controller.signal, task);
       const result = await runNoteVerification(prepared.plan, llm, { signal: controller.signal, onProgress: hooks.onProgress });
       if (controller.signal.aborted) throw new CliRunError("aborted", "취소되었습니다");
       // Nothing judged at all (usage limit, CLI failure): keep the previous result note.
@@ -1395,12 +1508,13 @@ export default class Alt2ObsidianPlugin extends Plugin {
       if (judged.length > 0 && judged.every((i) => i.verdict === null)) {
         throw new Error(`주장을 하나도 판정하지 못해 결과 노트를 쓰지 않았습니다: ${judged[0].reason}`);
       }
+      const used = usage.modelFor("verification")?.used || task.model;
       const label = `${PROVIDER_LABELS[task.provider]}${task.model ? " " + task.model : ""}`;
       const next = renderVerificationNote(result, {
         source: prepared.source,
         date: formatDate(),
-        usageLine: usage.total().calls > 0 ? formatUsageFrontmatter(usage.total(), label) : null,
-        model: label,
+        usageLine: usage.total().calls > 0 ? formatUsageFrontmatter(usage.total(), label, { model: used, effort: task.effort }) : null,
+        model: used && used !== task.model ? `${label} (${used})` : label,
       });
       const existing = await this.vaultManager!.readNoteIfExists(prepared.outPath);
       const path = await this.vaultManager!.saveNote(mergeVerificationNote(existing, next), prepared.outPath);
@@ -1410,7 +1524,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.activeJobs.delete(controller);
       removeJobDir(job);
       if (usage.total().calls > 0) {
-        await this.recordUsage(usage, ["verification"], false).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
+        await this.recordUsage(usage, false).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
       }
     }
   }

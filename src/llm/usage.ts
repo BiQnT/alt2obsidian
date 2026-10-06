@@ -17,22 +17,46 @@ export function addUsage(a: LLMUsage, b: LLMUsage): LLMUsage {
 
 export interface UsageRecord extends LLMUsage {
   provider: ProviderId;
+  /** The model as requested ("" = the CLI default, or an alias). */
   model: string;
+  /** The id the CLI reported it used ("" when it does not say, e.g. Codex). */
+  resolvedModel?: string;
+  effort?: string;
   task: string;
 }
 
 export class UsageTracker {
   private records: UsageRecord[] = [];
   private listeners: Array<(total: LLMUsage) => void> = [];
+  private recordListeners: Array<(entry: UsageRecord) => void> = [];
 
   record(entry: UsageRecord): void {
     this.records.push(entry);
     const total = this.total();
     for (const l of this.listeners) l(total);
+    for (const l of this.recordListeners) l(entry);
   }
 
   onChange(listener: (total: LLMUsage) => void): void {
     this.listeners.push(listener);
+  }
+
+  /** Called with every call's record (the run panels show the model actually used). */
+  onRecord(listener: (entry: UsageRecord) => void): void {
+    this.recordListeners.push(listener);
+  }
+
+  /**
+   * The model a task's calls actually used: the resolved id of its last
+   * call, else what was requested. Null when the task made no call.
+   */
+  modelFor(task: string): { requested: string; used: string; provider: ProviderId; effort: string } | null {
+    for (let i = this.records.length - 1; i >= 0; i--) {
+      const r = this.records[i];
+      if (r.task !== task) continue;
+      return { requested: r.model, used: r.resolvedModel || r.model, provider: r.provider, effort: r.effort ?? "" };
+    }
+    return null;
   }
 
   total(): LLMUsage {
@@ -64,10 +88,26 @@ export function accumulateTotals(totals: UsageTotals, tracker: UsageTracker, tod
   };
 }
 
+/** The models a run used, for the `alt2obs_usage` frontmatter (values as the CLI reported them). */
+export interface UsageModels {
+  /** The main task's model actually used ("" = unknown, e.g. the Codex default). */
+  model?: string;
+  effort?: string;
+  /** The concept task's model, when it differs from `model`. */
+  conceptModel?: string;
+}
+
+const yamlString = (v: string) => `"${v.replace(/["\\]/g, "'")}"`;
+
 /** One-line YAML flow mapping for the `alt2obs_usage` frontmatter key. */
-export function formatUsageFrontmatter(usage: LLMUsage, providerLabel: string): string {
+export function formatUsageFrontmatter(usage: LLMUsage, providerLabel: string, models: UsageModels = {}): string {
+  const extra = [
+    models.model ? `model: ${yamlString(models.model)}, ` : "",
+    models.effort ? `effort: ${yamlString(models.effort)}, ` : "",
+    models.conceptModel && models.conceptModel !== models.model ? `concept_model: ${yamlString(models.conceptModel)}, ` : "",
+  ].join("");
   return (
-    `alt2obs_usage: {provider: "${providerLabel.replace(/"/g, "'")}", calls: ${usage.calls}, ` +
+    `alt2obs_usage: {provider: ${yamlString(providerLabel)}, ${extra}calls: ${usage.calls}, ` +
     `input: ${usage.inputTokens}, cached: ${usage.cachedInputTokens}, output: ${usage.outputTokens}, ` +
     `images: ${usage.imagesSent}}`
   );

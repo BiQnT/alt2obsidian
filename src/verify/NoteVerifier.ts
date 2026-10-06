@@ -14,7 +14,7 @@
 //   5. output       Verification/<lecture> verification.md; the user's
 //                   note is never modified
 
-import { LLMProvider, ProviderId } from "../types";
+import { EffortLevel, LLMProvider, ProviderId } from "../types";
 import { renderPrompt } from "../prompts/render";
 import { runJsonBatches } from "../llm/jsonBatches";
 import { isAbortError } from "../llm/cli/CliRunner";
@@ -186,7 +186,7 @@ export interface VerifyEstimate {
 }
 
 /** Pre-run estimate from the exact prompts (spec 5.5). Evidence retrieval itself costs no tokens. */
-export function estimateVerification(plan: VerifyPlan, provider: ProviderId): VerifyEstimate {
+export function estimateVerification(plan: VerifyPlan, provider: ProviderId, effort: EffortLevel = ""): VerifyEstimate {
   const system = buildJudgeSystemPrompt();
   const shapes = plan.batches.map((b) => ({
     promptText: system + buildJudgePrompt(plan.lecture, b) + JSON.stringify(JUDGE_SCHEMA),
@@ -196,7 +196,7 @@ export function estimateVerification(plan: VerifyPlan, provider: ProviderId): Ve
   }));
   const missing = buildMissingPrompt(plan);
   if (missing) shapes.push({ promptText: missing + JSON.stringify(MISSING_SCHEMA), images: 0, schema: true, outputTokens: MISSING_OUTPUT_TOKENS });
-  const e = estimateCalls(shapes, provider);
+  const e = estimateCalls(shapes, provider, effort);
   return {
     claims: plan.claims.length,
     judged: plan.judged.length,

@@ -4,7 +4,7 @@
 // No obsidian import: the plugin and the headless benchmark
 // (scripts/bench) run this same code.
 
-import { ConceptData, ImageInput, LLMProvider, ProviderId } from "../types";
+import { ConceptData, EffortLevel, ImageInput, LLMProvider, ProviderId } from "../types";
 import { renderPrompt } from "../prompts/render";
 import {
   BatchCommentaryGenerator,
@@ -155,7 +155,8 @@ export function estimateLecture(
   context: LectureContext,
   altSummary: string,
   commentaryProvider: ProviderId,
-  conceptProvider: ProviderId
+  conceptProvider: ProviderId,
+  efforts: { commentaryEffort?: EffortLevel; conceptEffort?: EffortLevel } = {}
 ): BudgetEstimate {
   const system = buildBatchSystemPrompt();
   const contextBlock = buildLectureContextBlock(context, plan);
@@ -186,7 +187,7 @@ export function estimateLecture(
       outputTokens: OVERVIEW_OUTPUT_TOKENS,
     });
   }
-  const main = estimateCalls([...batchCalls, ...followUps], commentaryProvider);
+  const main = estimateCalls([...batchCalls, ...followUps], commentaryProvider, efforts.commentaryEffort);
   const conceptCalls: CallShape[] =
     fakeGists.size > 0
       ? [
@@ -202,7 +203,7 @@ export function estimateLecture(
           },
         ]
       : [];
-  const concept = estimateCalls(conceptCalls, conceptProvider);
+  const concept = estimateCalls(conceptCalls, conceptProvider, efforts.conceptEffort);
   return {
     calls: main.calls + concept.calls,
     inputTokens: main.inputTokens + concept.inputTokens,

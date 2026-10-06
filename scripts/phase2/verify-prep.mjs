@@ -580,6 +580,23 @@ var DEFAULT_PLUGIN_DATA = {
   usageTotals: { ...EMPTY_USAGE, lectures: 0, byProvider: {}, since: "" }
 };
 
+// src/settings/llmSettings.ts
+var CLAUDE_ALIASES = [
+  { alias: "fable", family: "Fable", knownId: "claude-fable-5-1" },
+  { alias: "opus", family: "Opus", knownId: "claude-opus-5-5" },
+  { alias: "sonnet", family: "Sonnet", knownId: "claude-sonnet-5-5" },
+  { alias: "haiku", family: "Haiku", knownId: "claude-haiku-4-5-20251001" }
+];
+var CLAUDE_MODEL_ALIASES = CLAUDE_ALIASES.map((a) => a.alias);
+var EFFORT_OUTPUT_FACTOR = {
+  "": 1,
+  low: 0.78,
+  medium: 1,
+  high: 1.3,
+  xhigh: 2.26,
+  max: 2.48
+};
+
 // src/core/budget/estimate.ts
 function estimateTextTokens(text) {
   let ascii = 0;
@@ -596,15 +613,16 @@ var PROVIDER_COSTS = {
   "claude-cli": { fixedPerTurn: 300, schemaTurns: 0, imageTurns: 0, perImage: 1060 },
   "codex-cli": { fixedPerTurn: 11900, schemaTurns: 0, imageTurns: 0, perImage: 1750 }
 };
-function estimateCalls(calls, provider) {
+function estimateCalls(calls, provider, effort = "") {
   const cost = PROVIDER_COSTS[provider];
+  const factor = EFFORT_OUTPUT_FACTOR[effort] ?? 1;
   let input = 0;
   let output = 0;
   let images = 0;
   for (const c of calls) {
     const turns = 1 + (c.schema ? cost.schemaTurns : 0) + (c.images > 0 ? cost.imageTurns : 0);
     input += turns * (cost.fixedPerTurn + estimateTextTokens(c.promptText)) + c.images * cost.perImage;
-    output += c.outputTokens;
+    output += Math.round(c.outputTokens * factor);
     images += c.images;
   }
   return { calls: calls.length, inputTokens: input, outputTokens: output, imagesSent: images };
@@ -1313,7 +1331,7 @@ var MISSING_SCHEMA = {
   }
 };
 var UNMATCHED_WARN_SHARE = 0.3;
-function estimateVerification(plan, provider) {
+function estimateVerification(plan, provider, effort = "") {
   const system = buildJudgeSystemPrompt();
   const shapes = plan.batches.map((b) => ({
     promptText: system + buildJudgePrompt(plan.lecture, b) + JSON.stringify(JUDGE_SCHEMA),
@@ -1324,7 +1342,7 @@ function estimateVerification(plan, provider) {
   const missing = buildMissingPrompt(plan);
   if (missing)
     shapes.push({ promptText: missing + JSON.stringify(MISSING_SCHEMA), images: 0, schema: true, outputTokens: MISSING_OUTPUT_TOKENS });
-  const e = estimateCalls(shapes, provider);
+  const e = estimateCalls(shapes, provider, effort);
   return {
     claims: plan.claims.length,
     judged: plan.judged.length,

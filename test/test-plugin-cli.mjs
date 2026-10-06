@@ -272,7 +272,10 @@ try {
   const note = files.get(record.path);
   assert.equal(record.path, "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.md", "2.0 layout: Lectures/ (spec 4.5)");
   assert.ok(note.startsWith("---\n"));
-  assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
+  // The model the CLI actually ran: the alias "sonnet" comes back as its full id.
+  assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-4-5-20251001", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
+  assert.deepEqual(plugin.data.resolvedModels["claude-cli:sonnet"].id, "claude-sonnet-5-5", "the resolved id is recorded for the dropdowns");
+  assert.deepEqual(plugin.data.resolvedModels["claude-cli:haiku"].id, "claude-haiku-4-5-20251001");
   assert.match(note, /tags: \[csed311, cache, memory\]/, "no exam period tag (spec G5)");
   assert.equal((note.match(/<!-- alt2obs:meta img:/g) ?? []).length, 6);
   assert.ok(files.has("Alt2Obsidian/CSED311/Concepts/캐시.md"));
@@ -441,6 +444,20 @@ try {
       files.set(pv.outPath, out.replace("## 내 메모\n", "## 내 메모\n다시 볼 것\n"));
       await plugin.runVerification(await plugin.prepareVerification({ targetPath: rec.path, markdown: mine, source: `[[노션/7강 정리]]`, sourcePath: src }));
       assert.ok(files.get(pv.outPath).includes("다시 볼 것"));
+      // Another model for this verification only (the panel's picker).
+      const saved = JSON.stringify(plugin.data.settings.tasks.verification);
+      const base = await plugin.prepareVerification({ targetPath: rec.path, markdown: mine, source: `[[노션/7강 정리]]`, sourcePath: src });
+      assert.deepEqual(base.task, plugin.data.settings.tasks.verification, "the saved model by default");
+      const pvOpus = plugin.withVerifyChoice(base, { provider: "claude-cli", model: "claude-opus-5-5", effort: "low" });
+      assert.ok(pvOpus.estimate.outputTokens < base.estimate.outputTokens, "low effort: less output expected");
+      const n1 = s.calls().length;
+      let ran = "";
+      await plugin.runVerification(pvOpus, { onModel: (m) => (ran = m) });
+      const vcalls = s.calls().slice(n1);
+      assert.ok(vcalls.length > 0 && vcalls.every((c) => c.argv[c.argv.indexOf("--model") + 1] === "claude-opus-5-5"), "the chosen model judges");
+      assert.equal(ran, "claude-opus-5-5");
+      assert.match(files.get(pv.outPath), /alt2obs_usage: \{provider: "Claude CLI claude-opus-5-5", model: "claude-opus-5-5", effort: "low", /);
+      assert.equal(JSON.stringify(plugin.data.settings.tasks.verification), saved, "the setting is unchanged");
       // Nothing judged (usage limit): the previous result note stays as it is.
       const kept = files.get(pv.outPath);
       process.env.FAKE_CLI_MODE = "limit";
@@ -509,6 +526,40 @@ try {
     console.log("PASS: URL re-import keeps alt_local_id and alt_alignment; transcript cache lives outside the vault (0600) and is pruned");
 
     console.log(`PASS: link offer and confirmed link keep the note and its public id; the optional alignment check (${low} uncertain spans) is estimated and run once`);
+  }
+
+  // Model choice for one run (the sidebar's picker): the estimate follows, the settings never change, the note says what ran.
+  {
+    process.env.FAKE_CLI_MODE = "ok";
+    plugin.data.settings.generation.onlyChangedSlides = false;
+    const saved = JSON.stringify(plugin.data.settings.tasks);
+    const prep = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");
+    const opus = plugin.withRunChoice(prep, "commentary", { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" });
+    assert.equal(opus.estimate.inputTokens, prep.estimate.inputTokens, "the same prompts");
+    assert.ok(opus.estimate.outputTokens > prep.estimate.outputTokens, "high effort: more output expected");
+    assert.equal(JSON.stringify(plugin.data.settings.tasks), saved, "a run choice never changes the settings");
+    const codex = plugin.withRunChoice(prep, "commentary", { provider: "codex-cli", model: "", effort: "medium" });
+    assert.ok(codex.plan.batches.length < prep.plan.batches.length, "Codex groups twice the slides per call");
+    assert.ok(codex.estimate.inputTokens > prep.estimate.inputTokens, "Codex's fixed cost per call");
+    assert.deepEqual(plugin.runTask(codex, "concepts"), plugin.data.settings.tasks.concepts, "other tasks keep the settings");
+    const n0 = s.calls().length;
+    const reported = [];
+    const rec = await plugin.runCliImport(opus, { onConfirmUpdate: async () => true, onModel: (t, m) => reported.push(`${t}=${m}`) });
+    const calls = s.calls().slice(n0);
+    const modelOf = (c) => c.argv[c.argv.indexOf("--model") + 1];
+    assert.ok(calls.filter((c) => !c.stdin.includes("concept")).every((c) => modelOf(c) === "claude-opus-5-5"), "commentary and overview on the chosen model");
+    assert.ok(calls.some((c) => modelOf(c) === "haiku"), "concepts on the saved model");
+    assert.ok(reported.includes("commentary=claude-opus-5-5") && reported.includes("concepts=claude-haiku-4-5-20251001"), reported.join(", "));
+    assert.match(files.get(rec.path), /alt2obs_usage: \{provider: "Claude CLI claude-opus-5-5", model: "claude-opus-5-5", effort: "high", concept_model: "claude-haiku-4-5-20251001", /);
+    assert.equal(JSON.stringify(plugin.data.settings.tasks), saved, "still unchanged after the run");
+    assert.equal(plugin.data.resolvedModels["claude-cli:claude-opus-5-5"].id, "claude-opus-5-5");
+    // "기본값으로 저장" makes it the saved setting.
+    await plugin.saveTaskDefault("commentary", { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" });
+    assert.deepEqual(stored().settings.tasks.commentary, { provider: "claude-cli", model: "claude-opus-5-5", effort: "high" });
+    assert.equal(plugin.data.settings.preset, "custom");
+    plugin.data.settings.tasks = JSON.parse(saved);
+    plugin.data.settings.generation.onlyChangedSlides = true;
+    console.log("PASS: a run's model choice: estimate follows (effort, Codex batches), settings untouched, the CLI gets the id, the note and the panel show the model that ran, 기본값으로 저장 saves it");
   }
 
   // Unload aborts running jobs (review M2).

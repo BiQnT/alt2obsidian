@@ -1,9 +1,10 @@
 import { ItemView, WorkspaceLeaf, TFile, Modal, setIcon } from "obsidian";
 import type Alt2ObsidianPlugin from "../main";
 import type { PreparedImport } from "../main";
-import { ImportPreview, ImportUpdateSummary, LLMUsage } from "../types";
+import { ImportPreview, ImportUpdateSummary, LLMUsage, TaskId } from "../types";
 import { compactTokens } from "../llm/usage";
-import { PROVIDER_LABELS } from "../settings/llmSettings";
+import { describeModel, PROVIDER_LABELS } from "../settings/llmSettings";
+import { renderModelPicker } from "./modelPicker";
 import { AltNoteDetails, AltNoteSummary, inferSubject } from "../sources";
 import { AltApiError } from "../sources/AltLocalApiSource";
 import { LocalNoteStatus, statusChip, VaultNoteInfo } from "../core/noteStatus";
@@ -634,7 +635,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
     this.hideProgress();
 
     for (;;) {
-      const choice = await this.showEstimate(prepared);
+      const shown = await this.showEstimate(prepared);
+      const choice = shown.choice;
+      prepared = shown.prepared;
       if (choice === "cancel") {
         this.hideCliPanel();
         this.showSuccess("가져오기를 취소했습니다. 토큰은 쓰지 않았습니다.");
@@ -656,6 +659,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
         onStep: (step) => view.step(step),
         onBatch: (p) => view.batch(p.batch, p.batches, p.retry),
         onUsage: (u) => view.usage(u),
+        onModel: (task, model) => view.model(task, model),
         onProgress: (stage) => view.detail(stage),
         onConfirmUpdate: (summary) => this.confirmUpdate(summary),
       });
@@ -678,70 +682,99 @@ export class Alt2ObsidianSidebarView extends ItemView {
     this.cliPanel?.hide();
   }
 
-  /** Pre-run estimate (spec 5.5). Resolves with the user's choice. */
-  private showEstimate(prepared: PreparedImport): Promise<"start" | "fewer-images" | "cancel"> {
+  /**
+   * Pre-run estimate (spec 5.5) with the models of this run: the commentary
+   * (also the overview) and concept models can be changed here for this run
+   * only; the estimate is computed again for the choice. Resolves with the
+   * user's choice and the import as last estimated.
+   */
+  private showEstimate(initial: PreparedImport): Promise<{ choice: "start" | "fewer-images" | "cancel"; prepared: PreparedImport }> {
     const panel = this.cliPanel!;
-    panel.empty();
     panel.show();
-    const e = prepared.estimate;
-    const tasks = this.plugin.data.settings.tasks;
-    const model = tasks.commentary.model || "기본 모델";
-    panel.createEl("h6", { text: "가져오기 전 예상 사용량", cls: "alt2obsidian-section-header" });
-    panel.createDiv({
-      cls: "alt2obsidian-estimate-main",
-      text: `호출 ${e.calls}회 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰 · 이미지 ${e.imagesSent}장`,
-    });
-    const rows = panel.createEl("ul", { cls: "alt2obsidian-estimate-list" });
-    rows.createEl("li", { text: `해설: ${PROVIDER_LABELS[tasks.commentary.provider]} (${model}${tasks.commentary.effort ? ", " + tasks.commentary.effort : ""})` });
-    if (prepared.plan) {
-      const skipped = e.slidesTemplated + e.slidesDeduped + e.slidesReused;
-      rows.createEl("li", {
-        text: `슬라이드 ${e.slidesTotal}장 중 ${e.slidesGenerated}장 생성, ${skipped}장 생략 (표지·목차·마무리 ${e.slidesTemplated}, 중복 ${e.slidesDeduped}, 변경 없음 ${e.slidesReused})`,
-      });
-      const t = prepared.plan.transcriptChars;
-      if (t.before > 0) rows.createEl("li", { text: `전사 ${t.before.toLocaleString()}자를 ${t.after.toLocaleString()}자로 압축` });
-      if (prepared.alignment) {
-        const low = prepared.alignment.lowSpans.length;
-        const check = tasks.alignment.provider !== "none" && low > 0 ? `, 불확실한 ${low}개는 ${PROVIDER_LABELS[tasks.alignment.provider]}로 확인` : low > 0 ? `, 불확실 ${low}개` : "";
-        rows.createEl("li", { text: `전사 정렬: 슬라이드별 구간 ${prepared.alignment.result.spans.length}개${check}` });
-      } else if (prepared.preview.altData.transcript) {
-        rows.createEl("li", { text: "전사 타임스탬프가 없어 슬라이드마다 균등 분할합니다." });
-      }
-      if (prepared.plan.scanned) rows.createEl("li", { text: "텍스트 레이어가 없는 PDF라 모든 슬라이드를 이미지로 보냅니다." });
-      if (prepared.diagramPages.length > 0) rows.createEl("li", { text: `핵심 다이어그램 ${prepared.diagramPages.length}장 (슬라이드 ${prepared.diagramPages.join(", ")})을 Attachments/에 저장하고 노트에 넣습니다 (토큰 0)` });
-      if (prepared.fewerImages) rows.createEl("li", { text: "이미지 줄이기 적용됨: 텍스트가 있는 도표 슬라이드는 텍스트만 보냅니다." });
-    } else {
-      rows.createEl("li", { text: "PDF가 없어 슬라이드별 해설 없이 강의 요약 노트를 만듭니다." });
-    }
-    rows.createEl("li", { cls: "alt2obsidian-muted", text: "추정치입니다. 모델의 추론 토큰과 재시도는 포함하지 않습니다." });
-
+    let prepared = initial;
     return new Promise((resolve) => {
-      const cap = this.plugin.data.settings.generation.tokenCapPerLecture;
-      if (prepared.overCap) {
+      const render = () => {
+        panel.empty();
+        const e = prepared.estimate;
+        const settings = this.plugin.data.settings;
+        const catalog = this.plugin.modelCatalog();
+        panel.createEl("h6", { text: "가져오기 전 예상 사용량", cls: "alt2obsidian-section-header" });
         panel.createDiv({
-          cls: "alt2obsidian-error",
-          text: `강의당 토큰 상한(${compactTokens(cap)})을 넘을 것 같아 시작하지 않았습니다. 이미지를 줄이거나 설정에서 상한을 올리세요.`,
+          cls: "alt2obsidian-estimate-main",
+          text: `호출 ${e.calls}회 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰 · 이미지 ${e.imagesSent}장`,
         });
-      }
-      const actions = panel.createDiv({ cls: "alt2obsidian-estimate-actions" });
-      const start = actions.createEl("button", { text: prepared.overCap ? "상한 무시하고 시작" : "시작", cls: prepared.overCap ? "" : "mod-cta" });
-      let armed = false;
-      start.addEventListener("click", () => {
-        // Over the cap: a second, explicit click is required (review L1).
-        if (prepared.overCap && !armed) {
-          armed = true;
-          start.textContent = `상한 ${compactTokens(cap)}을 넘겨도 시작하려면 한 번 더 누르세요`;
-          start.addClass("mod-warning");
-          return;
+        const models = panel.createDiv({ cls: "alt2obsidian-pickers" });
+        const pickers: Array<[TaskId, string]> = prepared.plan ? [["commentary", "해설·요약 모델"], ["concepts", "개념 추출 모델"]] : [["commentary", "요약 모델"], ["concepts", "개념 추출 모델"]];
+        for (const [task, label] of pickers) {
+          renderModelPicker(models, {
+            task,
+            label,
+            value: this.plugin.runTask(prepared, task),
+            saved: settings.tasks[task],
+            catalog,
+            recent: settings.recentModels,
+            onChange: (next) => {
+              prepared = this.plugin.withRunChoice(prepared, task, next);
+              render();
+            },
+            onSaveDefault: (next) => this.plugin.saveTaskDefault(task, next),
+          });
         }
-        resolve("start");
-      });
-      if (prepared.plan && e.imagesSent > 0 && !prepared.fewerImages) {
-        const fewer = actions.createEl("button", { text: "이미지 줄이기", cls: prepared.overCap ? "mod-cta" : "" });
-        fewer.addEventListener("click", () => resolve("fewer-images"));
-      }
-      const cancel = actions.createEl("button", { text: "취소" });
-      cancel.addEventListener("click", () => resolve("cancel"));
+        const rows = panel.createEl("ul", { cls: "alt2obsidian-estimate-list" });
+        if (prepared.plan) {
+          const skipped = e.slidesTemplated + e.slidesDeduped + e.slidesReused;
+          rows.createEl("li", {
+            text: `슬라이드 ${e.slidesTotal}장 중 ${e.slidesGenerated}장 생성, ${skipped}장 생략 (표지·목차·마무리 ${e.slidesTemplated}, 중복 ${e.slidesDeduped}, 변경 없음 ${e.slidesReused})`,
+          });
+          const t = prepared.plan.transcriptChars;
+          if (t.before > 0) rows.createEl("li", { text: `전사 ${t.before.toLocaleString()}자를 ${t.after.toLocaleString()}자로 압축` });
+          if (prepared.alignment) {
+            const low = prepared.alignment.lowSpans.length;
+            const align = this.plugin.runTask(prepared, "alignment");
+            const check = align.provider !== "none" && low > 0 ? `, 불확실한 ${low}개는 ${PROVIDER_LABELS[align.provider]}로 확인` : low > 0 ? `, 불확실 ${low}개` : "";
+            rows.createEl("li", { text: `전사 정렬: 슬라이드별 구간 ${prepared.alignment.result.spans.length}개${check}` });
+          } else if (prepared.preview.altData.transcript) {
+            rows.createEl("li", { text: "전사 타임스탬프가 없어 슬라이드마다 균등 분할합니다." });
+          }
+          if (prepared.plan.scanned) rows.createEl("li", { text: "텍스트 레이어가 없는 PDF라 모든 슬라이드를 이미지로 보냅니다." });
+          if (prepared.diagramPages.length > 0) rows.createEl("li", { text: `핵심 다이어그램 ${prepared.diagramPages.length}장 (슬라이드 ${prepared.diagramPages.join(", ")})을 Attachments/에 저장하고 노트에 넣습니다 (토큰 0)` });
+          if (prepared.fewerImages) rows.createEl("li", { text: "이미지 줄이기 적용됨: 텍스트가 있는 도표 슬라이드는 텍스트만 보냅니다." });
+        } else {
+          rows.createEl("li", { text: "PDF가 없어 슬라이드별 해설 없이 강의 요약 노트를 만듭니다." });
+        }
+        rows.createEl("li", {
+          cls: "alt2obsidian-muted",
+          text: "추정치입니다. 출력 토큰은 effort에 따라 늘려 잡고(medium 기준), 모델에 따라서는 바꾸지 않습니다. 재시도는 포함하지 않습니다.",
+        });
+
+        const cap = settings.generation.tokenCapPerLecture;
+        if (prepared.overCap) {
+          panel.createDiv({
+            cls: "alt2obsidian-error",
+            text: `강의당 토큰 상한(${compactTokens(cap)})을 넘을 것 같아 시작하지 않았습니다. 이미지를 줄이거나 effort를 낮추거나 설정에서 상한을 올리세요.`,
+          });
+        }
+        const actions = panel.createDiv({ cls: "alt2obsidian-estimate-actions" });
+        const start = actions.createEl("button", { text: prepared.overCap ? "상한 무시하고 시작" : "시작", cls: prepared.overCap ? "" : "mod-cta" });
+        let armed = false;
+        start.addEventListener("click", () => {
+          // Over the cap: a second, explicit click is required (review L1).
+          if (prepared.overCap && !armed) {
+            armed = true;
+            start.textContent = `상한 ${compactTokens(cap)}을 넘겨도 시작하려면 한 번 더 누르세요`;
+            start.addClass("mod-warning");
+            return;
+          }
+          resolve({ choice: "start", prepared });
+        });
+        if (prepared.plan && e.imagesSent > 0 && !prepared.fewerImages) {
+          const fewer = actions.createEl("button", { text: "이미지 줄이기", cls: prepared.overCap ? "mod-cta" : "" });
+          fewer.addEventListener("click", () => resolve({ choice: "fewer-images", prepared }));
+        }
+        const cancel = actions.createEl("button", { text: "취소" });
+        cancel.addEventListener("click", () => resolve({ choice: "cancel", prepared }));
+      };
+      render();
     });
   }
 
@@ -766,6 +799,17 @@ export class Alt2ObsidianSidebarView extends ItemView {
     const barOuter = panel.createDiv({ cls: "alt2obsidian-progress-bar" });
     const bar = barOuter.createDiv({ cls: "alt2obsidian-progress-bar-fill" });
     const detail = panel.createDiv({ cls: "alt2obsidian-progress-text" });
+    // The models of this run: as chosen, then as the CLI reports them (an alias becomes its full id).
+    const catalog = this.plugin.modelCatalog();
+    const labels: Partial<Record<string, string>> = { commentary: "해설", concepts: "개념", alignment: "정렬 확인" };
+    const used = new Map<string, string>();
+    for (const task of ["commentary", "concepts"] as TaskId[]) {
+      const t = this.plugin.runTask(prepared, task);
+      used.set(task, `${describeModel(t.provider, t.model, catalog)}${t.effort ? ` · effort ${t.effort}` : ""}`);
+    }
+    const modelLine = panel.createDiv({ cls: "alt2obsidian-usage-line alt2obsidian-model-line" });
+    const showModels = () => modelLine.setText(`모델: ${Array.from(used.entries()).map(([t, m]) => `${labels[t] ?? t} ${m}`).join(" / ")}`);
+    showModels();
     const usage = panel.createDiv({ cls: "alt2obsidian-usage-line", text: "사용량: 아직 호출 없음" });
     const cancel = panel.createEl("button", { text: "취소", cls: "alt2obsidian-cancel-btn" });
     cancel.addEventListener("click", () => {
@@ -799,6 +843,12 @@ export class Alt2ObsidianSidebarView extends ItemView {
       },
       detail: (text: string) => {
         detail.textContent = text;
+      },
+      model: (task: string, model: string) => {
+        if (!labels[task] || !model) return;
+        const t = this.plugin.runTask(prepared, task as TaskId);
+        used.set(task, `${model}${t.effort ? ` · effort ${t.effort}` : ""} (실제 실행)`);
+        showModels();
       },
     };
   }

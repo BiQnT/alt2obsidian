@@ -300,6 +300,10 @@ async function deck(n, visualPages = []) {
   });
   assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "codex-cli").inputTokens, 11900 + 200);
   assert.equal(m.estimateCalls([{ promptText: "a".repeat(400), images: 0, outputTokens: 50, schema: true }], "claude-cli").inputTokens, 300 + 200);
+  // Effort scales the output (medium = the fitted figures), never the input; the model does not count.
+  const shape = [{ promptText: "a".repeat(400), images: 0, outputTokens: 1000, schema: true }];
+  assert.deepEqual(["", "low", "medium", "high", "xhigh", "max"].map((e) => m.estimateCalls(shape, "claude-cli", e).outputTokens), [1000, 780, 1000, 1300, 2260, 2480]);
+  assert.equal(m.estimateCalls(shape, "claude-cli", "max").inputTokens, m.estimateCalls(shape, "claude-cli", "low").inputTokens);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 1000), true);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 0), false);
 
@@ -308,6 +312,9 @@ async function deck(n, visualPages = []) {
   const ctx = { title: "T", subjectTags: ["cache"], knownConcepts: ["캐시"] };
   const est = m.estimateLecture(plan, ctx, "요약", "claude-cli", "claude-cli");
   assert.equal(est.calls, plan.batches.length + 2, "batches + overview + concepts");
+  const high = m.estimateLecture(plan, ctx, "요약", "claude-cli", "claude-cli", { commentaryEffort: "high", conceptEffort: "low" });
+  assert.equal(high.inputTokens, est.inputTokens, "effort does not change the input");
+  assert.ok(high.outputTokens > est.outputTokens, "high effort: more output expected");
   assert.equal(est.imagesSent, 3);
   assert.deepEqual([est.slidesTotal, est.slidesGenerated, est.slidesTemplated, est.slidesDeduped, est.slidesReused], [20, 19, 1, 0, 0]);
   const fewer = m.estimateLecture(m.withFewerImages(plan, 8), ctx, "요약", "claude-cli", "claude-cli");
@@ -436,10 +443,47 @@ async function deck(n, visualPages = []) {
   assert.deepEqual(m.effortChoices("codex-cli", "", "", withLevels), m.EFFORT_LEVELS, "CLI default model: every level");
   assert.deepEqual(m.effortChoices("claude-cli", "sonnet", "", withLevels), m.EFFORT_LEVELS);
   assert.deepEqual(m.parseCodexModelsCache("{}"), []);
-  assert.deepEqual(m.modelChoices("claude-cli", "sonnet", [], []).map((c) => c.value), ["sonnet", "opus", "haiku", ""]);
-  assert.deepEqual(m.modelChoices("claude-cli", "claude-sonnet-4-5", ["fable"], []).map((c) => c.value), ["sonnet", "opus", "haiku", "fable", "claude-sonnet-4-5", ""], "recent and current custom ids are listed");
-  assert.deepEqual(m.modelChoices("codex-cli", "", [], ["gpt-6-astra"]).map((c) => c.value), ["gpt-6-astra", ""]);
-  assert.match(m.modelChoices("codex-cli", "", [], []).at(-1).label, /CLI 기본값/);
+  // Claude model dropdown: versioned models with names and ids, then the aliases with what they stand for now, then older models.
+  const noCatalog = { claude: [], codex: { models: [], efforts: {} }, resolved: {} };
+  const claudeValues = m.modelChoices("claude-cli", "sonnet", [], noCatalog).map((c) => c.value);
+  assert.deepEqual(claudeValues, ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001", "fable", "opus", "sonnet", "haiku", "claude-sonnet-5", ""], "built-in list without Claude Code's catalog");
+  const labels = Object.fromEntries(m.modelChoices("claude-cli", "", [], noCatalog).map((c) => [c.value, c.label]));
+  assert.equal(labels["claude-opus-5-5"], "Opus 5.5 (claude-opus-5-5)");
+  assert.equal(labels["claude-haiku-4-5-20251001"], "Haiku 4.5 (claude-haiku-4-5-20251001)");
+  assert.equal(labels.opus, "opus (최신 Opus, 현재 Opus 5.5)", "an alias with its checked target");
+  assert.equal(labels.fable, "fable (최신 Fable, 현재 Fable 5.1)");
+  assert.match(labels[""], /CLI 기본값/);
+  // A run recorded what an alias resolved to: that wins over the checked mapping.
+  const seen = { ...noCatalog, resolved: { "claude-cli:opus": { id: "claude-opus-6", at: "2026-11-01" } } };
+  assert.equal(m.modelLabel("claude-cli", "opus", seen), "opus (최신 Opus, 현재 claude-opus-6)");
+  assert.equal(m.aliasTarget("opus", seen), "claude-opus-6");
+  assert.deepEqual(m.modelChoices("claude-cli", "claude-sonnet-4-5", ["my-model"], noCatalog).map((c) => c.value).slice(-3), ["my-model", "claude-sonnet-4-5", ""], "recent and current custom ids are listed");
+  // Claude Code's own catalog cache (~/.claude/cache/model-catalog): names, sections, effort options.
+  const catalogJson = JSON.stringify({ version: 2, catalog: { surface: "cc", config: { models: [
+    { id: "claude-sonnet-5", name: "Sonnet 5", section: "overflow", thinking: { type: "effort", effort_options: [{ id: "low" }, { id: "high" }] } },
+    { id: "claude-opus-5-5", name: "Opus 5.5", description: "For complex work", section: "main", thinking: { type: "effort", effort_options: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }, { id: "ultra" }] } },
+    { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", section: "main", thinking: { type: "none" } },
+    { id: "-bad", name: "x", section: "main" },
+  ] } } });
+  const claude = m.parseClaudeModelCatalog(catalogJson);
+  assert.deepEqual(claude.map((x) => [x.id, x.name, !!x.older]), [["claude-opus-5-5", "Opus 5.5", false], ["claude-haiku-4-5-20251001", "Haiku 4.5", false], ["claude-sonnet-5", "Sonnet 5", true]], "current first, unsafe ids dropped");
+  assert.deepEqual(claude[0].efforts, ["low", "medium", "high", "xhigh", "max"], "levels outside the plugin's list are dropped");
+  assert.deepEqual(claude[1].efforts, [], "a model without effort");
+  assert.deepEqual(m.parseClaudeModelCatalog("nope"), []);
+  const cat = { claude, codex: { models: [], efforts: {} }, resolved: {} };
+  assert.deepEqual(m.modelChoices("claude-cli", "", [], cat).map((c) => c.value), ["claude-opus-5-5", "claude-haiku-4-5-20251001", "fable", "opus", "sonnet", "haiku", "claude-sonnet-5", ""]);
+  assert.equal(m.modelChoices("claude-cli", "", [], cat)[0].title, "For complex work", "the description is the tooltip");
+  assert.deepEqual(m.effortChoices("claude-cli", "claude-haiku-4-5-20251001", "low", cat), ["", "low"], "Haiku lists no effort: only the CLI default and the saved value");
+  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "", cat), [""], "an alias uses its target's levels");
+  assert.deepEqual(m.effortChoices("claude-cli", "claude-sonnet-5", "", cat), ["", "low", "high"]);
+  assert.deepEqual(m.effortChoices("claude-cli", "", "", cat), m.EFFORT_LEVELS, "CLI default model: every level");
+  // Codex names and descriptions from its cache.
+  const codexCat = { ...noCatalog, codex: m.parseCodexModels(JSON.stringify({ models: [{ slug: "gpt-6-astra", display_name: "GPT-6-Astra", description: "Frontier intelligence.", visibility: "list", priority: 2 }, { slug: "gpt-6-luna", visibility: "list", priority: 4 }] })) };
+  const codexChoices = m.modelChoices("codex-cli", "", [], codexCat);
+  assert.deepEqual(codexChoices.map((c) => [c.value, c.label, c.title]), [["gpt-6-astra", "GPT-6-Astra (gpt-6-astra)", "Frontier intelligence."], ["gpt-6-luna", "gpt-6-luna", undefined], ["", "CLI 기본값 (Codex 기본 모델)", undefined]]);
+  assert.deepEqual(m.modelChoices("codex-cli", "", [], ["gpt-6-astra"]).map((c) => c.value), ["gpt-6-astra", ""], "a plain id list still works");
+  assert.equal(m.describeModel("claude-cli", "", noCatalog), "CLI 기본 모델");
+  assert.equal(m.describeModel("claude-cli", "claude-sonnet-5-5", noCatalog), "Sonnet 5.5 (claude-sonnet-5-5)");
   assert.equal(m.describeDefault("claude-cli", "concepts"), "haiku · effort low");
   assert.equal(m.describeDefault("codex-cli", "commentary"), "CLI 기본 모델 · effort medium");
   assert.equal(m.describeDefault("none", "alignment"), "");

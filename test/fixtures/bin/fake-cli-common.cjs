@@ -286,7 +286,10 @@ function runClaude() {
   const ms = modes();
   if (ms.includes("hang") || hangsForBatch(stdin)) return hang();
   const emit = (ev) => process.stdout.write(JSON.stringify(ev) + "\n");
-  emit({ type: "system", subtype: "init", model: flags["--model"] ?? "default" });
+  // Like the real CLI, an alias runs as the full id it stands for and the result says which.
+  const ALIASES = { fable: "claude-fable-5-1", opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5-20251001" };
+  const modelName = ALIASES[flags["--model"]] ?? flags["--model"] ?? "claude-default";
+  emit({ type: "system", subtype: "init", model: modelName });
   if (ms.includes("limit")) {
     emit({ type: "result", subtype: "success", is_error: true, result: "Claude usage limit reached. Your limit resets at 5pm." });
     process.exit(1);
@@ -311,7 +314,6 @@ function runClaude() {
       ? a.result
       : "```json\n" + JSON.stringify(a.result) + "\n```";
   emit({ type: "assistant", message: { content: [{ type: "text", text }] } });
-  const modelName = flags["--model"] ?? "claude-default";
   emit({
     type: "result",
     subtype: "success",

@@ -721,3 +721,51 @@
   background: rgba(var(--color-purple-rgb), 0.18);
   color: var(--color-purple);
 }
+
+/* Model choice for one run (sidebar import estimate, note verification) */
+.alt2obsidian-pickers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 8px;
+}
+.alt2obsidian-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.alt2obsidian-picker-label {
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.alt2obsidian-picker-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.alt2obsidian-picker-select {
+  flex: 1 1 8em;
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--font-ui-smaller);
+}
+.alt2obsidian-picker-select.is-model {
+  order: -1;
+  flex-basis: 100%;
+}
+.alt2obsidian-picker-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.alt2obsidian-picker-save {
+  font-size: var(--font-ui-smaller);
+  height: auto;
+  padding: 2px 8px;
+}
+.alt2obsidian-model-line {
+  font-family: inherit;
+  word-break: break-word;
+}
