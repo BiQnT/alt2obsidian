@@ -781,6 +781,9 @@ try {
     await plugin.attachPdf("Alt2Obsidian/CSED423/Lectures/L10.md", { kind: "disk", name: "l10.pdf", data: pdfBytes });
     const pre = await plugin.prepareCliImport("", fresh, "CSED423");
     assert.deepEqual([pre.pdfSource, pre.altPdfIgnored], ["attached", true], "the user's file, not silently overwritten by Alt's");
+    // "요약 노트 만들기" is the user's explicit choice: no PDF, attached or Alt's.
+    const chosen = await plugin.prepareCliImport("", fresh, "CSED423", undefined, { withoutPdf: "summary" });
+    assert.deepEqual([chosen.plan, chosen.pdfSource, !!chosen.transcriptPlan], [null, null, true]);
     console.log("PASS: PDF attached from the vault: copied as <lecture>.pdf, alt_pdf_source marked; the next import is a slide import and keeps the summary note under 이전 노트 백업");
 
     // A URL lecture without a PDF: the same choice; a PDF from disk (read into memory) makes it a slide lecture.
