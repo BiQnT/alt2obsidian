@@ -5,7 +5,7 @@ import {
 } from "../types";
 import { sanitizeFilename } from "../utils/helpers";
 import { ConceptRegistry } from "./ConceptRegistry";
-import { findSameConcept } from "../core/conceptNames";
+import { ambiguousKorean, findSameConcept, sameConcept } from "../core/conceptNames";
 import { CONCEPTS_DIR, conceptsFolder as conceptsFolderOf, EXAM_DIR, subjectFolder } from "./layout";
 import {
   assertNoPageAnchoredDowngrade,
@@ -123,8 +123,9 @@ export class VaultManager {
         this.extractHeadings(currentBody),
         this.extractHeadings(nextBody)
       ),
-      addedConcepts: this.diffSet(new Set(nextConceptNames), this.extractWikilinks(currentBody)),
-      removedConcepts: this.diffSet(this.extractWikilinks(currentBody), new Set(nextConceptNames)),
+      // Concept links compared as concepts: a link in the other name order is the same one.
+      addedConcepts: this.diffConcepts(nextConceptNames, Array.from(this.extractWikilinks(currentBody))),
+      removedConcepts: this.diffConcepts(Array.from(this.extractWikilinks(currentBody)), nextConceptNames),
       changedLineCount: this.countChangedLines(currentBody, nextBody),
     };
 
@@ -163,10 +164,11 @@ export class VaultManager {
     // updated under its own name, never renamed or duplicated.
     const folder = this.app.vault.getAbstractFileByPath(conceptsFolder);
     const existingNames = folder instanceof TFolder ? folder.children.filter((c) => c.name.endsWith(".md")).map((c) => c.name.replace(/\.md$/, "")) : [];
+    const ambiguous = ambiguousKorean(concepts.map((c) => c.name));
 
     try {
       for (const concept of concepts) {
-        const filename = findSameConcept(sanitizeFilename(concept.name), existingNames) ?? sanitizeFilename(concept.name);
+        const filename = findSameConcept(sanitizeFilename(concept.name), existingNames, ambiguous) ?? sanitizeFilename(concept.name);
         const path = normalizePath(`${conceptsFolder}/${filename}.md`);
         const existing = this.app.vault.getAbstractFileByPath(path);
 
@@ -403,6 +405,10 @@ export class VaultManager {
       links.add(match[1].trim().replace(/\\$/, "").trim());
     }
     return links;
+  }
+
+  private diffConcepts(left: string[], right: string[]): string[] {
+    return left.filter((item) => !right.some((r) => sameConcept(item, r))).slice(0, 8);
   }
 
   private diffSet(left: Set<string>, right: Set<string>): string[] {

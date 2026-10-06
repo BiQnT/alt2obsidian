@@ -51,7 +51,19 @@ try {
     "[[캐시 일관성 (Cache Coherence)]]은 [[캐시]]와 캐시 사이 문제. 비용 [[$&]].",
     "the first mention of each concept per slide file"
   );
-  console.log("PASS: link-concepts.mjs matches linkConceptNames");
+  // --known: a link written to an existing note under another name is pointed at that note.
+  writeFileSync(join(dir, "known.json"), JSON.stringify(["로터리 스케줄링 (Lottery Scheduling)"]));
+  const linkBody = "[[Lottery Scheduling (로터리 스케줄링)|Lottery Scheduling]]은 무작위입니다.";
+  const linkFile = join(dir, "slide-k.md");
+  writeFileSync(linkFile, linkBody);
+  cli("link-concepts", [join(dir, "names.json"), "--known", join(dir, "known.json"), linkFile]);
+  assert.equal(readFileSync(linkFile, "utf8"), "[[로터리 스케줄링 (Lottery Scheduling)|Lottery Scheduling]]은 무작위입니다.");
+  writeFileSync(join(dir, "summary-k.md"), linkBody);
+  assert.equal(
+    cli("overview-block", [join(dir, "summary-k.md"), join(dir, "names.json"), "--known", join(dir, "known.json")]),
+    buildOverviewSection(linkBody, names, ["로터리 스케줄링 (Lottery Scheduling)"])
+  );
+  console.log("PASS: link-concepts.mjs matches linkConceptNames (also with --known)");
 
   // lecture-material
   const { extractLectureMaterialContext } = await importTs("src/core/lectureMaterial.ts");

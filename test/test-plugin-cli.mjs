@@ -696,7 +696,13 @@ try {
     assert.match(files.get(oldNote), /\*\*관련 강의:\*\* \[\[6강\]\], \[\[9강\]\]/, "the existing note gets the lecture, keeps its name");
     assert.ok(files.has(`${folder}/Stride Scheduling (스트라이드 스케줄링).md`), "a new concept uses the new order");
     assert.equal([...files.keys()].filter((k) => k.startsWith(folder)).length, before + 1);
-    console.log("PASS: concept notes match in either name order (English or Korean part): existing notes reused and kept, new ones named English (한국어)");
+    // The update dialog compares concept links as concepts: a link in the other order is not "removed".
+    const lect = "Alt2Obsidian/CSED311/Lectures/Order Lec.md";
+    files.set(lect, "---\ntitle: x\n---\n<!-- alt2obsidian:start -->\n# x\n[[로터리 스케줄링 (Lottery Scheduling)|Lottery Scheduling]]\n<!-- alt2obsidian:end -->\n");
+    const summary = await plugin.vaultManager.buildManagedNoteUpdateSummary(lect, "---\ntitle: x\n---\n<!-- alt2obsidian:start -->\n# x\n본문\n<!-- alt2obsidian:end -->\n", ["Lottery Scheduling (로터리 스케줄링)"]);
+    assert.deepEqual([summary.addedConcepts, summary.removedConcepts], [[], []]);
+    files.delete(lect);
+    console.log("PASS: concept notes match in either name order (English or Korean part): existing notes reused and kept, new ones named English (한국어); the update dialog compares them as concepts");
   }
 
   // Claude Code's model catalog: the newest *-cc.json under CLAUDE_CONFIG_DIR, kept once found.

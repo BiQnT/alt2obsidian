@@ -161,6 +161,11 @@ export interface LLMResult {
   concepts: ConceptData[];
   tags: string[];
   subjectSuggestion: string;
+  /**
+   * Concept notes already in the subject folder: a link the model wrote to
+   * one of them under another name is pointed at the note's real name.
+   */
+  knownConceptNames?: string[];
 }
 
 export interface ConceptData {

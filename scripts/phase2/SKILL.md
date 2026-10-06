@@ -187,17 +187,17 @@ It prints `{"pages":[{"page","hash","kind","dupOf","mode","template","transcript
 Save each commentary to `/tmp/alt2obs-<noteId>/slide-<N>.md`, then link the extracted concept names (step 4) in all of them with the plugin's own code (`linkConceptNames` in `$REPO/src/core/markdown.ts`). The files are rewritten in place:
 
 ```bash
-node "$REPO/scripts/phase2/link-concepts.mjs" "/tmp/alt2obs-<noteId>/concepts.json" /tmp/alt2obs-<noteId>/slide-*.md
+node "$REPO/scripts/phase2/link-concepts.mjs" "/tmp/alt2obs-<noteId>/concepts.json" --known "/tmp/alt2obs-<noteId>/known-concepts.json" /tmp/alt2obs-<noteId>/slide-*.md
 ```
 
-It links the first mention of each concept per file, by its whole name or by its English or Korean part (`[[Lottery Scheduling (로터리 스케줄링)|Lottery Scheduling]]`), and leaves a concept the file already links alone. Use the linked files verbatim as the slide bodies in step 7. Do not add or remove wikilinks by hand.
+It links the first mention of each concept per file, by its whole name or by its English or Korean part (`[[Lottery Scheduling (로터리 스케줄링)|Lottery Scheduling]]`), not inside a longer word or compound noun, and leaves a concept the file already links alone. A link written to an existing note under another name (the other name order, or the English part alone) is pointed at that note's real name (`--known`, the existing names saved in step 6). Use the linked files verbatim as the slide bodies in step 7. Do not add or remove wikilinks by hand.
 
 ### 7. Assemble the markdown
 
 Build the overview section with the plugin's own code (headings in the summary are demoted one level and concept names are linked):
 
 ```bash
-node "$REPO/scripts/phase2/overview-block.mjs" "/tmp/alt2obs-<noteId>/summary.md" "/tmp/alt2obs-<noteId>/concepts.json" > "/tmp/alt2obs-<noteId>/overview.md"
+node "$REPO/scripts/phase2/overview-block.mjs" "/tmp/alt2obs-<noteId>/summary.md" "/tmp/alt2obs-<noteId>/concepts.json" --known "/tmp/alt2obs-<noteId>/known-concepts.json" > "/tmp/alt2obs-<noteId>/overview.md"
 ```
 
 Insert `overview.md` verbatim between `# <title>` and the first slide section (it is empty when the summary is empty). Do not edit it.

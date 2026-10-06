@@ -64,7 +64,10 @@ var DEFAULT_PLUGIN_DATA = {
 };
 
 // src/core/conceptNames.ts
-var HANGUL = /[가-힣ㄱ-ㆎ]/;
+var HANGUL = /[\uAC00-\uD7A3\u3131-\u318E]/;
+function isAcronym(text) {
+  return /^[A-Z0-9][A-Z0-9/&-]*[A-Z0-9]$/.test(text) && /[A-Z]/.test(text);
+}
 function parseConceptName(name) {
   const full = name.trim();
   const m = full.match(/^(.+?)\s*\(([^()]+)\)$/);
@@ -72,26 +75,58 @@ function parseConceptName(name) {
     const [a, b] = [m[1].trim(), m[2].trim()];
     const aKo = HANGUL.test(a);
     const bKo = HANGUL.test(b);
-    if (aKo !== bKo)
-      return { full, english: aKo ? b : a, korean: aKo ? a : b };
+    if (aKo !== bKo) {
+      const english = aKo ? b : a;
+      return { full, english, korean: aKo ? a : b, aliases: [english] };
+    }
+    if (!aKo && (isAcronym(a) || isAcronym(b)))
+      return { full, english: a, korean: null, aliases: [a, b] };
   }
-  return HANGUL.test(full) ? { full, english: null, korean: full } : { full, english: full, korean: null };
+  return HANGUL.test(full) ? { full, english: null, korean: full, aliases: [] } : { full, english: full, korean: null, aliases: [full] };
 }
 function conceptKey(text) {
-  return text.normalize("NFC").toLowerCase().replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/[\s_-]+/g, "");
+  return text.normalize("NFC").toLowerCase().replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").replace(/[\s_-]+/g, "");
 }
-function sameConcept(a, b) {
+var MINOR_WORDS = /* @__PURE__ */ new Set(["a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "vs", "with"]);
+function initials(expansion, splitHyphens) {
+  const words = expansion.split(splitHyphens ? /[\s/-]+/ : /[\s/]+/).filter((w) => w && !MINOR_WORDS.has(w));
+  if (words.length < 2)
+    return "";
+  return words.map((w) => isAcronym(w) ? w.replace(/[^A-Z0-9]/g, "") : /^\d+$/.test(w) ? w : w[0].toUpperCase()).join("");
+}
+function acronymOf(acronym, expansion) {
+  const a = acronym.replace(/[^A-Z0-9]/g, "");
+  return a.length >= 2 && (initials(expansion, true) === a || initials(expansion, false) === a);
+}
+function englishRelated(x, y) {
+  const kx = conceptKey(x);
+  const ky = conceptKey(y);
+  if (kx.startsWith(ky) || ky.startsWith(kx))
+    return true;
+  const tokens = (s) => s.split(/\s+/).filter(isAcronym);
+  return tokens(x).some((t) => acronymOf(t, y)) || tokens(y).some((t) => acronymOf(t, x));
+}
+function sameConcept(a, b, ambiguous) {
   if (conceptKey(a) === conceptKey(b))
     return true;
   const pa = parseConceptName(a);
   const pb = parseConceptName(b);
-  const ea = pa.english ? conceptKey(pa.english) : "";
-  const eb = pb.english ? conceptKey(pb.english) : "";
-  if (ea && eb && ea === eb)
-    return true;
-  if (!pa.korean || !pb.korean || conceptKey(pa.korean) !== conceptKey(pb.korean))
+  for (const x of pa.aliases) {
+    for (const y of pb.aliases) {
+      if (conceptKey(x) === conceptKey(y))
+        return true;
+      if (isAcronym(x) && x.replace(/[^A-Z0-9]/g, "").length >= 3 && acronymOf(x, y) || isAcronym(y) && y.replace(/[^A-Z0-9]/g, "").length >= 3 && acronymOf(y, x))
+        return true;
+    }
+  }
+  if (!pa.korean || !pb.korean)
     return false;
-  return !ea || !eb || ea.startsWith(eb) || eb.startsWith(ea);
+  const k = conceptKey(pa.korean);
+  if (k !== conceptKey(pb.korean))
+    return false;
+  if (pa.aliases.length === 0 || pb.aliases.length === 0)
+    return !ambiguous?.has(k);
+  return pa.aliases.some((x) => pb.aliases.some((y) => englishRelated(x, y)));
 }
 
 // src/core/markdown.ts
@@ -99,26 +134,241 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 var ASCII_WORD = /[A-Za-z0-9]/;
-var HANGUL_SYLLABLE = /[\uAC00-\uD7A3]/;
+var HANGUL_SYLLABLE = /[가-힣]/;
 var PROTECTED = new RegExp(
   "(" + [
     "```[\\s\\S]*?(?:```|$)",
     "~~~[\\s\\S]*?(?:~~~|$)",
+    "<!--[\\s\\S]*?(?:-->|$)",
     "``[^\\n]*?``",
     "`[^`\\n]+`",
     "\\[\\[[^\\]\\n]*\\]\\]",
     "!?\\[[^\\]\\n]*\\]\\([^)\\n]*\\)",
+    "\\[[^\\]\\n]*\\]",
     "https?:\\/\\/[^\\s)\\]]+",
     "\\$\\$[\\s\\S]*?\\$\\$",
-    "\\$[^$\\n]+\\$",
+    "\\$[^\\s$](?:[^$\\n]*[^\\s$])?\\$",
     "<[^<>\\n]+>",
-    "\\[\\^[^\\]\\n]*\\]"
+    "(?<=^|\\n)[ ]{0,3}#{1,6}[ \\t][^\\n]*",
+    "(?<=^|\\n)(?: {4}|\\t)[^\\n]*"
   ].join("|") + ")"
 );
-function linkConceptNames(text, conceptNames) {
+var SENTENCE_WORDS = /* @__PURE__ */ new Set(["The", "A", "An", "In", "On", "Of", "For", "To", "And", "Or", "With", "By", "At", "As", "Is", "It", "This", "That"]);
+var PARTICLES = [
+  "\uC73C\uB85C\uC368",
+  "\uC73C\uB85C\uC11C",
+  "\uC5D0\uC11C\uB294",
+  "\uC5D0\uC11C\uB3C4",
+  "\uC5D0\uAC8C\uC11C",
+  "\uC73C\uB85C\uB294",
+  "\uC774\uB77C\uB294",
+  "\uC774\uB77C\uACE0",
+  "\uC785\uB2C8\uB2E4",
+  "\uC774\uC5C8\uB2E4",
+  "\uC774\uC5D0\uC694",
+  "\uC5D0\uC11C",
+  "\uC5D0\uAC8C",
+  "\uD55C\uD14C",
+  "\uAE4C\uC9C0",
+  "\uBD80\uD130",
+  "\uCC98\uB7FC",
+  "\uBCF4\uB2E4",
+  "\uB9C8\uB2E4",
+  "\uC870\uCC28",
+  "\uB9C8\uC800",
+  "\uBC16\uC5D0",
+  "\uC774\uB098",
+  "\uC774\uB791",
+  "\uC774\uBA70",
+  "\uC774\uACE0",
+  "\uC774\uB2E4",
+  "\uC774\uB77C",
+  "\uC774\uBA74",
+  "\uC774\uC5C8",
+  "\uC600\uB2E4",
+  "\uC73C\uB85C",
+  "\uB77C\uB294",
+  "\uB77C\uACE0",
+  "\uC640",
+  "\uACFC",
+  "\uC740",
+  "\uB294",
+  "\uC774",
+  "\uAC00",
+  "\uC744",
+  "\uB97C",
+  "\uC758",
+  "\uC5D0",
+  "\uB85C",
+  "\uB3C4",
+  "\uB9CC",
+  "\uB098",
+  "\uB791",
+  "\uBA70",
+  "\uACE0",
+  "\uB2E4",
+  "\uB77C",
+  "\uC778",
+  "\uC77C",
+  "\uC784",
+  "\uBFD0",
+  "\uC529",
+  "\uCBE4",
+  "\uC694",
+  "\uC57C",
+  "\uBA74",
+  "\uC5D4",
+  "\uB860",
+  "\uB4E0"
+];
+var DETERMINERS = /* @__PURE__ */ new Set([
+  "\uADF8",
+  "\uC774",
+  "\uC800",
+  "\uC774\uB7F0",
+  "\uADF8\uB7F0",
+  "\uC800\uB7F0",
+  "\uAC01",
+  "\uC0C8",
+  "\uBAA8\uB4E0",
+  "\uC5EC\uB7EC",
+  "\uB450",
+  "\uC138",
+  "\uB124",
+  "\uD55C",
+  "\uCCAB",
+  "\uB2E4\uB978",
+  "\uC5B4\uB5A4",
+  "\uB9E4",
+  "\uC57D",
+  "\uCD1D",
+  "\uBA87",
+  "\uC628",
+  "\uC774\uBC88",
+  "\uB2E4\uC74C",
+  "\uD574\uB2F9",
+  "\uAC19\uC740",
+  "\uB610",
+  "\uC989",
+  "\uACE7",
+  "\uBC14\uB85C",
+  "\uB2E4\uC2DC",
+  "\uBA3C\uC800",
+  "\uB610\uB294",
+  "\uADF8\uB9AC\uACE0",
+  "\uADF8\uB7EC\uB098",
+  "\uD558\uC9C0\uB9CC",
+  "\uB610\uD55C",
+  "\uB530\uB77C\uC11C",
+  "\uADF8\uB798\uC11C",
+  "\uBC18\uBA74",
+  "\uB300\uC2E0",
+  "\uD2B9\uD788",
+  "\uB2E4\uB9CC",
+  "\uC774\uB54C",
+  "\uC774\uC81C",
+  "\uACB0\uAD6D",
+  "\uBCF4\uD1B5",
+  "\uD56D\uC0C1"
+]);
+var PARTICLE_ENDINGS = ["\uC758", "\uC640", "\uACFC", "\uC744", "\uB97C", "\uC740", "\uB294", "\uC5D0", "\uC5D0\uC11C", "\uC73C\uB85C", "\uB85C\uC11C", "\uC5D0\uAC8C", "\uAE4C\uC9C0", "\uBD80\uD130", "\uCC98\uB7FC", "\uBCF4\uB2E4", "\uD558\uACE0", "\uC774\uACE0", "\uC774\uBA70", "\uD558\uBA70", "\uD558\uBA74", "\uB418\uBA74"];
+function onlyParticles(run, depth = 0) {
+  if (run === "")
+    return true;
+  if (depth >= 3)
+    return false;
+  return PARTICLES.some((p) => run.startsWith(p) && onlyParticles(run.slice(p.length), depth + 1));
+}
+function modifiesAsNoun(word) {
+  if (DETERMINERS.has(word) || PARTICLE_ENDINGS.some((e) => word.endsWith(e)))
+    return false;
+  const last = word.charCodeAt(word.length - 1) - 44032;
+  const final = last % 28;
+  return final !== 4 && final !== 8;
+}
+function koreanStandsAlone(text, start, end) {
+  const after = text.slice(end);
+  const run = after.match(/^[가-힣]+/);
+  if (run) {
+    if (!onlyParticles(run[0]))
+      return false;
+  } else if (/^[ \t][가-힣]/.test(after)) {
+    return false;
+  }
+  const prev = text.slice(0, start).match(/([가-힣]+)[ \t]$/);
+  return !(prev && modifiesAsNoun(prev[1]));
+}
+function englishInLongerTerm(text, start, end) {
+  const next = text.slice(end).match(/^[ \t]+([A-Z][A-Za-z]*)/);
+  if (next && !SENTENCE_WORDS.has(next[1]))
+    return true;
+  const prev = text.slice(0, start).match(/(?:^|[^A-Za-z])([A-Z][A-Za-z]*)[ \t]+$/);
+  return !!prev && !SENTENCE_WORDS.has(prev[1]);
+}
+function tableLines(text) {
+  const lines = text.split("\n");
+  const starts = [];
+  let pos = 0;
+  for (const l of lines) {
+    starts.push(pos);
+    pos += l.length + 1;
+  }
+  const body = (l) => l.replace(/^[ \t>]*/, "");
+  const isDelimiter = (l) => /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(body(l)) || /^\|\s*:?-+:?\s*\|\s*$/.test(body(l));
+  const flags = lines.map(() => false);
+  for (let i = 0; i < lines.length; ) {
+    if (body(lines[i]).trim() === "") {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < lines.length && body(lines[j]).trim() !== "")
+      j++;
+    if (lines.slice(i, j).some(isDelimiter))
+      for (let k = i; k < j; k++)
+        flags[k] = body(lines[k]).includes("|");
+    i = j;
+  }
+  return (at) => {
+    let lo = 0;
+    for (let i = 0; i < starts.length && starts[i] <= at; i++)
+      lo = i;
+    return flags[lo] || /^\|/.test(body(lines[lo]));
+  };
+}
+function linkConceptNames(text, conceptNames, knownNames = []) {
   const names = Array.from(new Set(conceptNames.map((n) => n.trim()).filter((n) => n.length > 0)));
-  if (names.length === 0)
+  const targets = Array.from(/* @__PURE__ */ new Set([...names, ...knownNames.map((n) => n.trim()).filter((n) => n.length > 0)]));
+  if (targets.length === 0)
     return text;
+  const inTableRow = tableLines(text);
+  const parts = text.split(PROTECTED);
+  const linked = /* @__PURE__ */ new Set();
+  let base = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const at = base;
+    base += parts[i].length;
+    if (i % 2 === 0)
+      continue;
+    const m = parts[i].match(/^\[\[([^\]|#\n]+?)(#[^\]|\\]*)?(?:(\\?\|)([^\]]*))?\]\]$/);
+    if (!m)
+      continue;
+    const target = m[1].trim();
+    let real = target;
+    if (!targets.some((t) => t.toLowerCase() === target.toLowerCase())) {
+      const same = targets.find((t) => sameConcept(target, t));
+      if (same) {
+        real = same;
+        const pipe = m[3] ?? (inTableRow(at) ? "\\|" : "|");
+        parts[i] = `[[${same}${m[2] ?? ""}${pipe}${m[3] ? m[4] : target}]]`;
+      }
+    }
+    for (const name of names)
+      if (sameConcept(real, name))
+        linked.add(name);
+  }
+  if (names.length === 0)
+    return parts.join("");
   const terms = /* @__PURE__ */ new Map();
   for (const name of names) {
     const p = parseConceptName(name);
@@ -129,10 +379,14 @@ function linkConceptNames(text, conceptNames) {
       terms.set(key, { term, concept: name, whole });
     };
     add(name, true);
-    if (p.english && p.korean) {
-      add(p.english, false);
+    if (p.korean)
+      for (const e of p.aliases)
+        add(e, false);
+    if (p.korean && p.aliases.length > 0)
       add(p.korean, false);
-    }
+    if (!p.korean && p.aliases.length > 1)
+      for (const e of p.aliases)
+        add(e, false);
   }
   const sorted = Array.from(terms.values()).sort((a, b) => b.term.length - a.term.length);
   const pattern = new RegExp(
@@ -143,19 +397,7 @@ function linkConceptNames(text, conceptNames) {
     }).join("|"),
     "gi"
   );
-  const parts = text.split(PROTECTED);
-  const linked = /* @__PURE__ */ new Set();
-  for (let i = 1; i < parts.length; i += 2) {
-    const m = parts[i].match(/^\[\[([^\]|#\n]+?)(?:#[^\]|]*)?(?:\\?\|[^\]]*)?\]\]$/);
-    if (!m)
-      continue;
-    const target = m[1].trim();
-    for (const name of names)
-      if (sameConcept(target, name))
-        linked.add(name);
-  }
-  const inTableRow = (at) => /^[ \t>]*\|/.test(text.slice(text.lastIndexOf("\n", at - 1) + 1));
-  let base = 0;
+  base = 0;
   return parts.map((part, i) => {
     const start = base;
     base += part.length;
@@ -165,14 +407,17 @@ function linkConceptNames(text, conceptNames) {
       const t = terms.get(match.toLowerCase());
       if (!t || linked.has(t.concept))
         return match;
-      if (!t.whole && ASCII_WORD.test(match[match.length - 1]) && /^[ \t]+[A-Z][A-Za-z]/.test(part.slice(offset + match.length)))
+      const from = start + offset;
+      const to = from + match.length;
+      const single = !/\(/.test(t.term);
+      if (single && ASCII_WORD.test(match) && !HANGUL_SYLLABLE.test(match) && !t.whole && englishInLongerTerm(text, from, to))
         return match;
-      if (!t.whole && ASCII_WORD.test(match[0]) && /[A-Z][A-Za-z]*[ \t]+$/.test(part.slice(0, offset)))
+      if (single && HANGUL_SYLLABLE.test(match) && !koreanStandsAlone(text, from, to))
         return match;
       linked.add(t.concept);
       if (conceptKey(match) === conceptKey(t.concept))
         return `[[${t.concept}]]`;
-      return `[[${t.concept}${inTableRow(start + offset) ? "\\|" : "|"}${match}]]`;
+      return `[[${t.concept}${inTableRow(from) ? "\\|" : "|"}${match}]]`;
     });
   }).join("");
 }
@@ -185,18 +430,28 @@ function fail(e, name) {
 }
 
 // scripts/src/link-concepts.ts
-async function main() {
-  const [namesFile, ...files] = process.argv.slice(2);
-  if (!namesFile || files.length === 0) {
-    process.stderr.write("Usage: node scripts/phase2/link-concepts.mjs <conceptNamesJsonFile> <file>...\n");
-    process.exit(2);
-  }
-  const names = JSON.parse(await readFile(namesFile, "utf8"));
+async function readNames(file) {
+  const names = JSON.parse(await readFile(file, "utf8"));
   if (!Array.isArray(names) || !names.every((n) => typeof n === "string")) {
     throw new Error("concept names file must be a JSON array of strings");
   }
+  return names;
+}
+async function main() {
+  const args = process.argv.slice(2);
+  const k = args.indexOf("--known");
+  const knownFile = k >= 0 ? args[k + 1] : void 0;
+  if (k >= 0)
+    args.splice(k, 2);
+  const [namesFile, ...files] = args;
+  if (!namesFile || files.length === 0 || k >= 0 && !knownFile) {
+    process.stderr.write("Usage: node scripts/phase2/link-concepts.mjs <conceptNamesJsonFile> [--known <knownNamesJsonFile>] <file>...\n");
+    process.exit(2);
+  }
+  const names = await readNames(namesFile);
+  const known = knownFile ? await readNames(knownFile) : [];
   for (const file of files) {
-    await writeFile(file, linkConceptNames(await readFile(file, "utf8"), names));
+    await writeFile(file, linkConceptNames(await readFile(file, "utf8"), names, known));
   }
 }
 main().catch((e) => fail(e, "link-concepts"));

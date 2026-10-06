@@ -121,16 +121,18 @@ export class NoteGenerator {
     // running the regex pass once per section over all concepts[]". This
     // matches: every section is rewritten with all known concept names.
     const conceptNames = llmResult.concepts.map((c) => c.name);
+    const known = llmResult.knownConceptNames ?? [];
     // Overview body: summary headings demoted one level, concept names
     // linked (src/core/markdown.ts, shared with the Skill). The overview
     // block is replaced on re-import; text outside it is kept
     // (VaultManager.mergeOverviewPreamble).
     const overviewSection = buildOverviewSection(
       llmResult.processedSummary || altData.summary,
-      conceptNames
+      conceptNames,
+      known
     );
     const sections = slidesResult.slides
-      .map((slide) => this.buildSlideSection(slide, conceptNames))
+      .map((slide) => this.buildSlideSection(slide, conceptNames, known))
       .join("\n\n");
 
     const orphanFooter =
@@ -169,8 +171,8 @@ export class NoteGenerator {
    * the end marker is the user's free-space anchor — preserved on regen by
    * the multi-managed merge algorithm (Task 1.3).
    */
-  private buildSlideSection(slide: SlideSection, conceptNames: string[]): string {
-    const linked = linkConceptNames(slide.commentary, conceptNames);
+  private buildSlideSection(slide: SlideSection, conceptNames: string[], knownNames: string[]): string {
+    const linked = linkConceptNames(slide.commentary, conceptNames, knownNames);
     const withDiagram = slide.diagram ? `${linked}\n\n${formatDiagramEmbed(slide.diagram)}` : linked;
     const body = slide.meta ? `${withDiagram}\n\n${slide.meta}` : withDiagram;
     const startMarker = `<!-- alt2obs:slide:${slide.slideNum} hash:${slide.hash} start -->`;
@@ -226,7 +228,8 @@ export class NoteGenerator {
     // Insert concept wikilinks
     content = linkConceptNames(
       content,
-      llmResult.concepts.map((c) => c.name)
+      llmResult.concepts.map((c) => c.name),
+      llmResult.knownConceptNames ?? []
     );
 
     const lectureMarkdown =

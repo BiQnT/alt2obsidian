@@ -1004,6 +1004,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       concepts: conceptResult.concepts,
       tags: conceptResult.tags,
       subjectSuggestion: subject,
+      knownConceptNames: Array.from(existingConceptNames),
     };
 
     const { lectureMarkdown, conceptNotes } = await new NoteGenerator(llm).generate(
@@ -1346,7 +1347,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       const { lectureMarkdown, conceptNotes } = await new NoteGenerator(commentaryLlm).generatePageAnchored(
         altData,
         { ...run.slidesResult, slides, errors },
-        { processedSummary: run.overview, concepts, tags, subjectSuggestion: subject },
+        { processedSummary: run.overview, concepts, tags, subjectSuggestion: subject, knownConceptNames: prepared.context.knownConcepts },
         subject,
         [
           formatUsageFrontmatter(usage.total(), providerLabel, {

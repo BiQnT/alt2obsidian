@@ -1,14 +1,13 @@
 // Concept note names (spec 5.4 concepts). Since 2.0.0-beta.5 a new concept
 // is named "English (한국어)", e.g. "Lottery Scheduling (로터리 스케줄링)";
 // notes made before are named "한국어 (English)". Both orders name the same
-// concept: names match on the English part or the Korean part, ignoring
-// case, spaces, "_", "-" and file-name characters. Existing files are never
-// renamed; a concept that already has a note keeps that note's name. No
-// obsidian import.
+// concept (see `sameConcept`), ignoring case, spaces, "_", "-" and
+// file-name characters. Existing files are never renamed; a concept that
+// already has a note keeps that note's name. No obsidian import.
 
 import type { ConceptData } from "../types";
 
-const HANGUL = /[가-힣ㄱ-ㆎ]/;
+const HANGUL = /[\uAC00-\uD7A3\u3131-\u318E]/;
 
 export interface ConceptNameParts {
   full: string;
@@ -16,11 +15,25 @@ export interface ConceptNameParts {
   english: string | null;
   /** The part with Hangul ("로터리 스케줄링"), null when there is none. */
   korean: string | null;
+  /**
+   * Every English name of the concept: `english`, and for a name without
+   * Hangul that pairs an acronym with its expansion ("PTE (Page Table
+   * Entry)", "Completely Fair Scheduler (CFS)") both of them.
+   */
+  aliases: string[];
+}
+
+/** An acronym: capitals and digits (also "LR-SC", "LR/SC"), at least two characters with a letter. */
+export function isAcronym(text: string): boolean {
+  return /^[A-Z0-9][A-Z0-9/&-]*[A-Z0-9]$/.test(text) && /[A-Z]/.test(text);
 }
 
 /**
- * The parts of "A (B)": the side with Hangul is the Korean part. A name
- * without a trailing "(...)" is one part, Korean or English by its letters.
+ * The parts of "A (B)": the side with Hangul is the Korean part. Two parts
+ * without Hangul are one English name with a qualifier ("Mutator
+ * (Operation)"), unless one of them is an acronym: then both are names of
+ * the concept. A name without a trailing "(...)" is one part, Korean or
+ * English by its letters.
  */
 export function parseConceptName(name: string): ConceptNameParts {
   const full = name.trim();
@@ -29,44 +42,114 @@ export function parseConceptName(name: string): ConceptNameParts {
     const [a, b] = [m[1].trim(), m[2].trim()];
     const aKo = HANGUL.test(a);
     const bKo = HANGUL.test(b);
-    if (aKo !== bKo) return { full, english: aKo ? b : a, korean: aKo ? a : b };
+    if (aKo !== bKo) {
+      const english = aKo ? b : a;
+      return { full, english, korean: aKo ? a : b, aliases: [english] };
+    }
+    if (!aKo && (isAcronym(a) || isAcronym(b))) return { full, english: a, korean: null, aliases: [a, b] };
   }
-  return HANGUL.test(full) ? { full, english: null, korean: full } : { full, english: full, korean: null };
+  return HANGUL.test(full) ? { full, english: null, korean: full, aliases: [] } : { full, english: full, korean: null, aliases: [full] };
 }
 
 /**
- * Comparison key: lower case, without spaces, "_" and "-", and without the
- * characters a file name cannot hold (a note named after "I/O" is "IO").
+ * Comparison key: lower case, without spaces, "_" and "-", without the
+ * characters a file name cannot hold (a note named after "I/O" is "IO")
+ * and without trailing dots, like the file name itself (sanitizeFilename).
  */
 export function conceptKey(text: string): string {
   return text
     .normalize("NFC")
     .toLowerCase()
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+    .replace(/\.+$/, "")
     .replace(/[\s_-]+/g, "");
 }
 
+/** Lower-case words that do not count in an acronym ("Translation Look-Aside Buffer"). */
+const MINOR_WORDS = new Set(["a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "vs", "with"]);
+
 /**
- * The same concept: the same whole name or English part, or the same Korean
- * part unless both names have English parts that are plainly different
- * ("Latency (지연)" and "Delay (지연)" stay two concepts; "Context Switch"
- * and "Context Switching" with one Korean name are one, since one English
- * key starts with the other).
+ * Initials of an expansion, an acronym word kept whole ("Dynamic RAM" is
+ * DRAM). With `splitHyphens` each hyphenated piece counts ("Non-Uniform
+ * Memory Access" is NUMA), without it a hyphenated word counts once
+ * ("Translation Look-Aside Buffer" is TLB).
  */
-export function sameConcept(a: string, b: string): boolean {
+function initials(expansion: string, splitHyphens: boolean): string {
+  const words = expansion.split(splitHyphens ? /[\s/-]+/ : /[\s/]+/).filter((w) => w && !MINOR_WORDS.has(w));
+  if (words.length < 2) return "";
+  return words.map((w) => (isAcronym(w) ? w.replace(/[^A-Z0-9]/g, "") : /^\d+$/.test(w) ? w : w[0].toUpperCase())).join("");
+}
+
+/** The acronym stands for the expansion (its initials, hyphens split or not). */
+function acronymOf(acronym: string, expansion: string): boolean {
+  const a = acronym.replace(/[^A-Z0-9]/g, "");
+  return a.length >= 2 && (initials(expansion, true) === a || initials(expansion, false) === a);
+}
+
+/**
+ * Two English names that are not plainly different: one key starts with the
+ * other ("Context Switch", "Context Switching"), or an acronym in one stands
+ * for the other ("MESI Protocol", "Modified-Exclusive-Shared-Invalid").
+ */
+function englishRelated(x: string, y: string): boolean {
+  const kx = conceptKey(x);
+  const ky = conceptKey(y);
+  if (kx.startsWith(ky) || ky.startsWith(kx)) return true;
+  const tokens = (s: string) => s.split(/\s+/).filter(isAcronym);
+  return tokens(x).some((t) => acronymOf(t, y)) || tokens(y).some((t) => acronymOf(t, x));
+}
+
+/**
+ * Korean parts shared by names that are different concepts ("Latency
+ * (지연)" and "Delay (지연)"): a Korean-only name ("지연") cannot tell which
+ * one it is, so it matches neither.
+ */
+export function ambiguousKorean(names: Iterable<string>): Set<string> {
+  const byKorean = new Map<string, string[]>();
+  for (const n of names) {
+    const p = parseConceptName(n);
+    if (!p.korean || p.aliases.length === 0) continue;
+    const k = conceptKey(p.korean);
+    byKorean.set(k, [...(byKorean.get(k) ?? []), n]);
+  }
+  const out = new Set<string>();
+  for (const [k, list] of byKorean) {
+    if (list.some((a, i) => list.slice(i + 1).some((b) => !sameConcept(a, b)))) out.add(k);
+  }
+  return out;
+}
+
+/**
+ * The same concept:
+ * - the same whole name, or the same English name (an acronym name and its
+ *   expansion are both names: "PTE (Page Table Entry)" is "PTE (페이지
+ *   테이블 엔트리)");
+ * - an acronym of three or more letters and its expansion ("TLB" and
+ *   "Translation Lookaside Buffer");
+ * - the same Korean part, unless both names have English names that are
+ *   plainly different ("Latency (지연)" and "Delay (지연)" stay two), or one
+ *   name is Korean only and its Korean part is in `ambiguous`.
+ */
+export function sameConcept(a: string, b: string, ambiguous?: Set<string>): boolean {
   if (conceptKey(a) === conceptKey(b)) return true;
   const pa = parseConceptName(a);
   const pb = parseConceptName(b);
-  const ea = pa.english ? conceptKey(pa.english) : "";
-  const eb = pb.english ? conceptKey(pb.english) : "";
-  if (ea && eb && ea === eb) return true;
-  if (!pa.korean || !pb.korean || conceptKey(pa.korean) !== conceptKey(pb.korean)) return false;
-  return !ea || !eb || ea.startsWith(eb) || eb.startsWith(ea);
+  for (const x of pa.aliases) {
+    for (const y of pb.aliases) {
+      if (conceptKey(x) === conceptKey(y)) return true;
+      if ((isAcronym(x) && x.replace(/[^A-Z0-9]/g, "").length >= 3 && acronymOf(x, y)) || (isAcronym(y) && y.replace(/[^A-Z0-9]/g, "").length >= 3 && acronymOf(y, x))) return true;
+    }
+  }
+  if (!pa.korean || !pb.korean) return false;
+  const k = conceptKey(pa.korean);
+  if (k !== conceptKey(pb.korean)) return false;
+  if (pa.aliases.length === 0 || pb.aliases.length === 0) return !ambiguous?.has(k);
+  return pa.aliases.some((x) => pb.aliases.some((y) => englishRelated(x, y)));
 }
 
 /** The existing name for the same concept, or null (first match in list order). */
-export function findSameConcept(name: string, existing: Iterable<string>): string | null {
-  for (const e of existing) if (sameConcept(name, e)) return e;
+export function findSameConcept(name: string, existing: Iterable<string>, ambiguous?: Set<string>): string | null {
+  for (const e of existing) if (sameConcept(name, e, ambiguous)) return e;
   return null;
 }
 
@@ -80,11 +163,13 @@ export function findSameConcept(name: string, existing: Iterable<string>): strin
  */
 export function normalizeConcepts(concepts: ConceptData[], existingConceptNames: Iterable<string>): ConceptData[] {
   const existing = Array.from(existingConceptNames);
+  // A Korean-only note ("지연") takes a concept only when no other concept of this answer shares its Korean part.
+  const ambiguous = ambiguousKorean(concepts.map((c) => c.name.trim()));
   const merged = new Map<string, ConceptData>();
   for (const concept of concepts) {
     const rawName = concept.name.trim();
     if (!rawName) continue;
-    const canonicalName = findSameConcept(rawName, existing) ?? findSameConcept(rawName, merged.keys()) ?? rawName;
+    const canonicalName = findSameConcept(rawName, existing, ambiguous) ?? findSameConcept(rawName, merged.keys(), ambiguous) ?? rawName;
     const current = merged.get(canonicalName);
     const next = { ...concept, name: canonicalName, relatedConcepts: [...concept.relatedConcepts] };
     if (current) {
@@ -103,7 +188,7 @@ export function normalizeConcepts(concepts: ConceptData[], existingConceptNames:
     relatedConcepts: Array.from(
       new Set(
         concept.relatedConcepts
-          .map((name) => findSameConcept(name.trim(), known))
+          .map((name) => findSameConcept(name.trim(), known, ambiguous))
           .filter((name): name is string => !!name && !sameConcept(name, concept.name))
       )
     ),
