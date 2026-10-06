@@ -40,7 +40,7 @@ import { normalizeConcepts } from "../../src/core/conceptNames";
 import { sectionRange } from "../../src/core/sections";
 import type { LectureContext } from "../../src/generator/BatchCommentaryGenerator";
 import type { TranscriptSegment } from "../../src/sources/types";
-import { ensureWebCrypto, fail } from "./cli-common";
+import { ensureWebCrypto, fail, readFrontmatter } from "./cli-common";
 
 function option(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -122,54 +122,34 @@ async function prep(args: string[]): Promise<void> {
   );
 }
 
-/** `key: value` lines of a note's frontmatter (JSON string values decoded); null without a file or block. */
-function existingFrontmatter(file: string | undefined): Record<string, unknown> | null {
-  if (!file) return null;
-  let text: string;
-  try {
-    text = readFileSync(file, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw e;
-  }
-  const block = text.replace(/^\uFEFF/, "").match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!block) return null;
-  const fm: Record<string, unknown> = {};
-  for (const line of block[1].split(/\r?\n/)) {
-    const m = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
-    if (!m) continue;
-    let v: unknown = m[2].trim();
-    if (typeof v === "string" && v.startsWith('"')) {
-      try {
-        v = JSON.parse(v);
-      } catch {
-        // keep the raw text
-      }
-    }
-    fm[m[1]] = v;
-  }
-  return fm;
-}
-
 function load(dir: string): Saved {
   return JSON.parse(readFileSync(join(dir, "plan.json"), "utf8")) as Saved;
 }
 
-/** Accepted answers of every batch, and a reason per section without one. */
+/**
+ * Accepted answers, and a reason per section without one. Each answer is
+ * checked only for the sections it holds (a retry answer holds a few), so a
+ * specific reason ("요약이 너무 짧음") is not replaced by "missing" from
+ * another batch's answer; the first accepted summary wins.
+ */
 function checked(saved: Saved, answersFile: string): { done: Map<number, { summary: string; gist: string }>; failures: Map<number, string> } {
   const raw: unknown = JSON.parse(readFileSync(answersFile, "utf8"));
   const answers = Array.isArray(raw) ? raw : [raw];
   const done = new Map<number, { summary: string; gist: string }>();
-  const failures = new Map<number, string>();
+  const reasons = new Map<number, string>();
   const byNum = new Map(saved.plan.sections.map((s) => [s.num, s]));
+  for (const answer of answers) {
+    const items = (answer as { sections?: unknown })?.sections;
+    const held = new Set(Array.isArray(items) ? items.map((it) => Number((it as { section?: unknown })?.section)) : []);
+    const requested = saved.plan.sections.filter((s) => s.mode === "llm" && held.has(s.num));
+    if (requested.length === 0) continue;
+    const { ok, failed } = checkSectionAnswer(answer, requested);
+    for (const [n, item] of ok) if (!done.has(n)) done.set(n, item);
+    for (const [n, reason] of failed) if (!reasons.has(n)) reasons.set(n, reason);
+  }
+  const failures = new Map<number, string>();
   for (const batch of saved.plan.batches) {
-    const sections = batch.map((n) => byNum.get(n)!);
-    for (const answer of answers) {
-      const { ok, failed } = checkSectionAnswer(answer, sections);
-      for (const [n, item] of ok) if (!done.has(n)) done.set(n, item);
-      for (const [n, reason] of failed) if (!done.has(n)) failures.set(n, reason);
-    }
-    for (const n of batch) if (done.has(n)) failures.delete(n);
+    for (const n of batch) if (!done.has(n) && byNum.has(n)) failures.set(n, reasons.get(n) ?? "답에 이 구간이 없음");
   }
   return { done, failures };
 }
@@ -234,7 +214,7 @@ function render(args: string[]): void {
     { sections: result.sections, errors: result.errors },
     { processedSummary: readFileSync(overviewFile, "utf8"), concepts: names, tags: concepts.tags, subjectSuggestion: subject, knownConceptNames: known },
     subject,
-    preservedFrontmatterLines(existingFrontmatter(option(args, "--existing")), local ? "alt-local" : "alt-url", null),
+    preservedFrontmatterLines(readFrontmatter(option(args, "--existing")), local ? "alt-local" : "alt-url", null),
     "alt2obsidian-cc-skill"
   );
   process.stdout.write(lectureMarkdown);

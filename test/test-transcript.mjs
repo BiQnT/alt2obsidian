@@ -39,7 +39,8 @@ process.on("exit", () => rmSync(tmp, { recursive: true, force: true }));
     ["slides", "attached", "slides-missing", "transcript", "empty"].map((x) => m.LECTURE_KIND_LABELS[x]),
     ["슬라이드", "슬라이드(PDF 첨부)", "슬라이드(미첨부)", "노트(전사만)", "노트(전사 없음)"]
   );
-  assert.deepEqual(["slides", "attached", "slides-missing", "transcript", "empty"].map(m.lacksPdf), [false, false, true, true, true]);
+  assert.equal(k({ altType: "note", vaultCopy: true }), "vault-copy", "a slide note with its saved PDF stays a slide lecture");
+  assert.equal(m.LECTURE_KIND_LABELS["vault-copy"], "슬라이드(저장된 PDF)");
   console.log("PASS: lecture kind: 노트(전사만) / 슬라이드 / 슬라이드(미첨부) / 슬라이드(PDF 첨부) from Alt's type, its slides and an attached PDF");
 }
 
@@ -143,8 +144,10 @@ const segs2h = lecture();
 const altData = (id = "note-9", kind = "alt-local") => ({ title: "L9", summary: "", pdfUrl: null, transcript: null, parseQuality: "full", metadata: { noteId: id, createdAt: "2026-09-30", visibility: null, sourceKind: kind } });
 async function summaryNote(segments, opts = {}) {
   const plan = await m.planTranscript({ segments, sourceId: "note-9", existing: opts.existing, reuse: opts.reuse });
-  const done = new Map(plan.sections.filter((s) => s.mode === "llm").map((s) => [s.num, { summary: `- 요약 ${s.num} (${s.hash}) [${m.formatClock(s.startMs ?? 0)}]`, gist: `구간 ${s.num} 요지다` }]));
-  const result = m.assembleSections(plan, done, new Map());
+  const fail = new Set(opts.fail ?? []);
+  const done = new Map(plan.sections.filter((s) => s.mode === "llm" && !fail.has(s.num)).map((s) => [s.num, { summary: `- 요약 ${s.num} (${s.hash}) [${m.formatClock(s.startMs ?? 0)}]`, gist: `구간 ${s.num} 요지다` }]));
+  const result = m.assembleSections(plan, done, new Map([...fail].map((n) => [n, "응답에 이 구간이 없음"])));
+  if (opts.warn) result.errors.push({ section: 0, reason: opts.warn });
   const { lectureMarkdown } = new m.NoteGenerator(null).generateTranscriptNote(
     altData(),
     { sections: result.sections, errors: result.errors },
@@ -196,10 +199,17 @@ function mergeBoth(existing, next) {
   assert.ok(!/[\u2013\u2014]/.test(md), "no en or em dash in the note");
   assert.equal(m.hasMultiManagedMarkers(md), false, "not a slide note");
   assert.equal(m.hasSectionMarkers(md), true);
-  assert.deepEqual(m.parseSectionHeading(h2), { num: 2, startMs: Math.floor(s2.startMs / 1000) * 1000, endMs: Math.floor(s2.endMs / 1000) * 1000, text: h2.slice(3) });
+  assert.deepEqual(m.parseSectionHeading(h2), { num: 2, startMs: Math.floor(s2.startMs / 1000) * 1000, endMs: Math.floor(s2.endMs / 1000) * 1000, text: h2.slice(3), suffix: "", plain: true });
+  assert.deepEqual(
+    [m.parseSectionHeading("## ⏱ 구간 3 [24:10~36:02] 중요!").suffix, m.parseSectionHeading("## ⏱ 구간 3 [24:10~36:02] 중요!").plain, m.parseSectionHeading("## ⏱ 구간 12").num, m.parseSectionHeading("## 다른 제목")],
+    ["중요!", false, 12, null]
+  );
   assert.equal(m.headingLinkTarget("⏱ 구간 3 [1:02:03~1:14:00]"), "⏱ 구간 3 1 02 03 1 14 00");
   assert.equal(m.parseClock("1:02:03"), 3723000);
   assert.deepEqual(m.parseExistingSections(md).map((s) => [s.num, s.gist]), plan.sections.map((s) => [s.num, `구간 ${s.num} 요지다`]));
+  // An overview or concept warning is about the whole lecture: "전체", not "구간 0".
+  const warned = await summaryNote(segs2h, { warn: "개념 추출 실패" });
+  assert.ok(warned.md.includes("- 전체: 개념 추출 실패") && !warned.md.includes("구간 0"));
   console.log(`PASS: summary note: alt_kind transcript, overview block, "## ⏱ 구간 N [mm:ss~mm:ss]" sections in section markers with the gist meta, memo callouts outside`);
 
   // Re-import, nothing changed: memos stay, and a second re-import changes nothing.
@@ -237,6 +247,44 @@ function mergeBoth(existing, next) {
   // User text above and below the overview block is kept.
   const userText = withMemos.replace("# L9\n\n", "# L9\n\n내가 쓴 머리말\n\n");
   assert.ok(mergeBoth(userText, md).merged.includes("내가 쓴 머리말\n\n## 📋 전체 요약"));
+  // A freshly written note re-imported unchanged is byte for byte the same file.
+  assert.equal(mergeBoth(md, md).merged, md, "first re-import of an unchanged note changes nothing");
+  // Text the user added after a heading's time range is kept.
+  const hh = md.match(/## ⏱ 구간 3 [^\n]*/)[0];
+  const tagged = withMemos.replace(hh, `${hh} 시험 범위`);
+  const keptTag = mergeBoth(tagged, md).merged;
+  assert.ok(keptTag.includes(`${hh} 시험 범위\n`), "the user's text after the range stays on the heading");
+  assert.equal(mergeBoth(keptTag, md).merged, keptTag);
+  // A memo line that looks like a heading stays in its memo, in place.
+  const lookalike = withMemos.replace("> memo 2\n", "> memo 2\n\n## ⏱ 구간 3 다시 볼 것\n");
+  const keptLook = mergeBoth(lookalike, md).merged;
+  assert.ok(/> memo 2\n\n## ⏱ 구간 3 다시 볼 것\n\n## ⏱ 구간 3 \[/.test(keptLook), "the user's line stays under memo 2, before section 3");
+  // The failure list is replaced on re-import, not kept in the last section's memo.
+  const failing = await summaryNote(segs2h, { fail: [2] });
+  assert.ok(failing.md.includes("<!-- alt2obs:failures start -->\n## ⚠️ 처리 실패 구간\n\n- 구간 2:"));
+  const healed = mergeBoth(failing.md, md).merged;
+  assert.ok(!healed.includes("처리 실패 구간") && !healed.includes("alt2obs:failures"), "a clean re-import drops the old list");
+  const twice = mergeBoth(failing.md, failing.md).merged;
+  assert.equal((twice.match(/처리 실패 구간/g) ?? []).length, 1, "one list, the new one");
+  assert.equal(twice, failing.md);
+  // A note saved with CRLF merges like any other.
+  const crlf = mergeBoth(withMemos.replace(/\n/g, "\r\n"), md).merged;
+  assert.deepEqual(memos(crlf), memos(withMemos));
+  assert.ok(!crlf.includes("\r"));
+  // Section boundaries moved (a stretch of the recording dropped): memos follow the shared time, not the number.
+  const dropped = plan.sections[3];
+  const shifted = segs2h
+    .filter((x) => x.startMs < dropped.startMs || x.startMs > dropped.endMs)
+    .map((x) => (x.startMs > dropped.endMs && x.startMs < plan.sections[4].endMs ? { ...x, text: `${x.text} 덧붙임` } : x));
+  const moved = await summaryNote(shifted);
+  const next4 = moved.plan.sections.find((x) => x.startMs === plan.sections[4].startMs);
+  assert.ok(next4 && next4.num === 4 && next4.hash !== plan.sections[4].hash, "old section 5 is now section 4 with new text");
+  const byTime = mergeBoth(withMemos, moved.md);
+  assert.equal(memos(byTime.merged)["4"], "memo 5", "section 4 gets the memo of the section it overlaps");
+  assert.ok(byTime.merged.includes("## 🗑️ 사라진 구간 (orphan)") && byTime.merged.includes("memo 4"), "the dropped section's memo is kept");
+  // A summary that cites times is reused only for a section that starts at the same second.
+  const shiftedStart = await m.planTranscript({ segments: segs2h, sourceId: "note-9", existing: m.parseExistingSections(withMemos).map((x) => ({ ...x, startMs: x.num === 2 ? 0 : x.startMs })), reuse: true });
+  assert.deepEqual(shiftedStart.sections.map((x) => x.mode), plan.sections.map((_, i) => (i === 1 ? "llm" : "reuse")));
   // Text written under a section heading, and a section whose end marker was deleted, stay where they were.
   const h3 = md.match(/## ⏱ 구간 3 [^\n]*/)[0];
   const underHeading = withMemos.replace(`${h3}\n\n`, `${h3}\n\n제목 아래 내가 쓴 글\n\n`);
@@ -255,6 +303,8 @@ function mergeBoth(existing, next) {
   const legacy = '---\ntitle: "L9"\nalt_local_id: "note-9"\n---\n<!-- alt2obsidian:start -->\n# L9\n옛 요약\n<!-- alt2obsidian:end -->\n\n## 내 메모\n내가 쓴 메모\n';
   const fromLegacy = mergeBoth(legacy, md);
   assert.ok(fromLegacy.merged.startsWith(md.trimEnd()) && fromLegacy.merged.includes("## 이전 노트 백업") && fromLegacy.merged.includes("내가 쓴 메모"));
+  assert.ok(fromLegacy.merged.includes('```yaml\n---\ntitle: "L9"\nalt_local_id: "note-9"\n---\n```'), "the old frontmatter is fenced in the backup");
+  assert.ok(fromLegacy.merged.includes("전사 구간 요약 노트로 바뀌기 전의 강의 노트입니다"));
   assert.deepEqual(fromLegacy.notes, [m.TRANSCRIPT_MIGRATION_NOTE]);
 
   // A summary note never becomes a single block (refused like a slide note).
@@ -387,6 +437,10 @@ function mergeBoth(existing, next) {
   assert.equal(m.looksLikePdf(enc("\n\n%PDF-1.4")), true, "a little junk before the header");
   assert.equal(m.looksLikePdf(enc("hello, not a pdf")), false);
   assert.equal(m.attachedPdfPath("A/S/Lectures/L9.md"), "A/S/Lectures/L9.pdf");
+  let read = false;
+  await assert.rejects(m.readPickedFile({ name: "huge.pdf", size: m.MAX_ATTACH_BYTES + 1, arrayBuffer: async () => ((read = true), new ArrayBuffer(1)) }), /너무 큽니다/);
+  assert.equal(read, false, "an oversized file is refused before it is read");
+  assert.deepEqual(m.preservedFrontmatterLines({ alt_local_id: "l", alt_pdf_source: "attached" }, "alt-url", null), ['alt_local_id: "l"', 'alt_pdf_source: "attached"'], "the attached mark is carried over");
   assert.equal(m.markedAttached('---\ntitle: "L9"\nalt_pdf_source: "attached"\n---\nbody'), true, "read from the note text, not a lagging cache");
   assert.equal(m.markedAttached('\uFEFF---\r\nalt_pdf_source: attached\r\n---\r\n'), true);
   assert.equal(m.markedAttached("---\ntitle: x\n---\nalt_pdf_source: \"attached\"\n"), false, "only in the frontmatter");

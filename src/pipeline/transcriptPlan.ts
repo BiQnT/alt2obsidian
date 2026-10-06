@@ -20,6 +20,8 @@ export interface ExistingSection {
   body: string;
   /** "" for a section without meta. */
   gist: string;
+  /** Start time from its heading (whole seconds), null when the heading has none. */
+  startMs?: number | null;
 }
 
 export interface PlannedSection {
@@ -61,7 +63,7 @@ export const SECTION_CHARS_PER_CALL = 36_000;
 export function parseExistingSections(noteContent: string): ExistingSection[] {
   return splitSectionNote(noteContent).sections.map((s) => {
     const meta = parseSlideMeta(s.managed);
-    return { num: s.num, hash: s.hash, body: stripSlideMeta(s.managed).trim(), gist: meta?.gist ?? "" };
+    return { num: s.num, hash: s.hash, body: stripSlideMeta(s.managed).trim(), gist: meta?.gist ?? "", startMs: s.parsed?.startMs ?? null };
   });
 }
 
@@ -109,7 +111,9 @@ export async function planTranscript(input: TranscriptPlanInput): Promise<Transc
     const base = { num: t.num, hash: t.hash, startMs: t.startMs, endMs: t.endMs, text: t.text, rawChars: t.raw.length };
     const prev = pool.get(t.hash)?.shift();
     if (prev) used.add(prev);
-    if (prev && prev.gist && input.reuse !== false) {
+    // Reused only when the section also starts at the same second: its summary cites times.
+    const sameStart = prev?.startMs == null || t.startMs === null || Math.floor(t.startMs / 1000) * 1000 === prev.startMs;
+    if (prev && prev.gist && sameStart && input.reuse !== false) {
       return { ...base, text: "", mode: "reuse", reused: { body: prev.body, gist: prev.gist } };
     }
     before += t.raw.length;

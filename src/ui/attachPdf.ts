@@ -3,12 +3,16 @@
 // deprecated `File.path`). The plugin copies it next to the lecture note
 // (src/main.ts `attachPdf`).
 
-import { App, FuzzySuggestModal, Modal, TFile } from "obsidian";
+import { App, FuzzySuggestModal, Modal, Notice, TFile } from "obsidian";
+import { MAX_ATTACH_BYTES } from "../core/pdfAttach";
 
 export type PickedPdf = { kind: "vault"; path: string } | { kind: "disk"; name: string; data: ArrayBuffer };
 
-/** A file picked on disk (a browser `File`), read into memory. */
-export async function readPickedFile(file: { name: string; arrayBuffer(): Promise<ArrayBuffer> }): Promise<PickedPdf> {
+/** A file picked on disk (a browser `File`), read into memory; a file over the size cap is refused before it is read. */
+export async function readPickedFile(file: { name: string; size?: number; arrayBuffer(): Promise<ArrayBuffer> }): Promise<PickedPdf> {
+  if ((file.size ?? 0) > MAX_ATTACH_BYTES) {
+    throw new Error(`PDF가 너무 큽니다 (${Math.round((file.size ?? 0) / 1048576)} MB, 최대 ${MAX_ATTACH_BYTES / 1048576} MB): ${file.name}`);
+  }
   return { kind: "disk", name: file.name, data: await file.arrayBuffer() };
 }
 
@@ -88,7 +92,11 @@ class PdfSourceModal extends Modal {
       if (!file) return;
       void readPickedFile(file).then(
         (picked) => this.finish(picked),
-        () => this.finish(null)
+        (e) => {
+          // Too large or unreadable: say so and keep the dialog open for another pick.
+          new Notice(`PDF를 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+          input.value = "";
+        }
       );
     });
   }

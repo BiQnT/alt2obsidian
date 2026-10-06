@@ -286,6 +286,30 @@ try {
     writeFileSync(join(dir, "t-linked.md"), '---\ntitle: "L9"\nalt_id: "pub-9"\nalt_local_id: "local-t"\n---\n# L9\n');
     const linked = cli("transcript-note", ["render", out, "--answers", join(dir, "t-answers.json"), "--overview", join(dir, "t-overview.md"), "--concepts", join(dir, "t-concepts.json"), "--subject", "CSED423", "--id", "local-t", "--local", "--existing", join(dir, "t-linked.md")]);
     assert.match(linked, /\nalt_local_id: "local-t"\nalt_source: "alt-local"\nalt_id: "pub-9"\n---/);
+    // A short summary's reason survives a later answer that does not hold it.
+    const split = [
+      { sections: [{ section: 1, summary: "짧음", gist: "g" }, ...answers[0].sections.slice(1, 2)] },
+      { sections: answers[0].sections.slice(2) },
+    ];
+    writeFileSync(join(dir, "t-split.json"), JSON.stringify(split));
+    const fu2 = JSON.parse(cli("transcript-note", ["followup", out, "--answers", join(dir, "t-split.json")]));
+    assert.deepEqual(fu2.failed, [{ section: 1, reason: "요약이 너무 짧음 (2자)" }], "the specific reason, not 'missing' from another answer");
+    // carry-frontmatter: the plugin's preservedFrontmatterLines, and the attached PDF to use as the deck.
+    const target = join(dir, "carry", "L9.md");
+    mkdirSync(join(dir, "carry"), { recursive: true });
+    writeFileSync(target, '---\ntitle: "L9"\nalt_id: "pub-9"\nalt_local_id: "local-t"\nalt_pdf_source: "attached"\n---\n# L9\n');
+    writeFileSync(join(dir, "carry", "L9.pdf"), "%PDF-1.7");
+    const carried = JSON.parse(cli("carry-frontmatter", [target, "--local", "--alignment", "1:0-30"]));
+    assert.deepEqual(carried, {
+      lines: t.preservedFrontmatterLines({ alt_id: "pub-9", alt_local_id: "local-t", alt_pdf_source: "attached" }, "alt-local", "1:0-30"),
+      attachedPdf: join(dir, "carry", "L9.pdf"),
+    });
+    assert.ok(carried.lines.includes('alt_pdf_source: "attached"'), "the attached mark goes through the merge");
+    writeFileSync(target, '---\ntitle: "L9"\nalt_id: "pub-9"\n---\n# L9\n');
+    assert.equal(JSON.parse(cli("carry-frontmatter", [target, "--local"])).attachedPdf, null, "an unmarked PDF next to a note is the import's own copy");
+    assert.equal(JSON.parse(cli("carry-frontmatter", [join(dir, "carry", "New.md"), "--url"])).attachedPdf, null, "no PDF, nothing");
+    writeFileSync(join(dir, "carry", "New.pdf"), "%PDF-1.7");
+    assert.deepEqual(JSON.parse(cli("carry-frontmatter", [join(dir, "carry", "New.md"), "--url"])), { lines: [], attachedPdf: join(dir, "carry", "New.pdf") }, "before the first import a PDF there is the user's");
     // Nothing answered: nothing to write.
     writeFileSync(join(dir, "t-empty.json"), "[]");
     assert.throws(() => execFileSync("node", [join(repo, "scripts/phase2/transcript-note.mjs"), "render", out, "--answers", join(dir, "t-empty.json"), "--overview", join(dir, "t-overview.md"), "--concepts", join(dir, "t-concepts.json"), "--subject", "S", "--id", "x"], { stdio: "pipe" }));

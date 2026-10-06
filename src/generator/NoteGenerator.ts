@@ -12,6 +12,7 @@ import { sanitizeFilename, formatDate } from "../utils/helpers";
 import { buildOverviewSection, linkConceptNames } from "../core/markdown";
 import { formatDiagramEmbed } from "../core/slideMeta";
 import { sectionHeadingText, sectionMarker } from "../core/sections";
+import { failuresBlock } from "../core/merge";
 import type { SectionResult } from "./SectionSummaryGenerator";
 
 /**
@@ -37,7 +38,8 @@ function identityLines(altData: AltNoteData): string[] {
  * identities survive a re-import from either source (the merge replaces the
  * frontmatter): a local import keeps a linked note's public `alt_id` and
  * writes the new alignment; a URL import keeps `alt_local_id`, `alt_source`
- * and `alt_alignment`. Shared by the plugin and the Skill CLI.
+ * and `alt_alignment`; both keep `alt_pdf_source: "attached"`. Shared by the
+ * plugin and the Skill CLIs.
  */
 export function preservedFrontmatterLines(
   fm: Record<string, unknown> | null | undefined,
@@ -54,7 +56,24 @@ export function preservedFrontmatterLines(
     if (str(fm?.alt_source)) lines.push(`alt_source: ${JSON.stringify(fm!.alt_source)}`);
     if (str(fm?.alt_alignment)) lines.push(`alt_alignment: ${JSON.stringify(fm!.alt_alignment)}`);
   }
+  // A PDF the user attached stays the lecture's slides (spec 4.10).
+  if (fm?.alt_pdf_source === "attached") lines.push('alt_pdf_source: "attached"');
   return lines;
+}
+
+/**
+ * Removes every `key: ...` line from a note's frontmatter as text, leaving
+ * every other byte alone (the counterpart of `insertFrontmatterLine`).
+ */
+export function removeFrontmatterLine(content: string, key: string): string {
+  const bom = content.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const body = content.slice(bom.length);
+  const m = body.match(/^---\r?\n(?:([\s\S]*?)\r?\n)?---(\r?\n|$)/);
+  if (!m || !m[1]) return content;
+  const start = body.indexOf(m[1]);
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const inner = m[1].replace(new RegExp(`^${escaped}:[^\\n]*(?:\\n|$)`, "gm"), "").replace(/\r?\n$/, "");
+  return bom + body.slice(0, start) + inner + body.slice(start + m[1].length);
 }
 
 export function insertFrontmatterLine(content: string, line: string): string {
@@ -162,13 +181,10 @@ export class NoteGenerator {
       .map((slide) => this.buildSlideSection(slide, conceptNames, known))
       .join("\n\n");
 
+    // Failure list in markers: a re-import replaces it (src/core/merge.ts).
     const orphanFooter =
       slidesResult.errors.length > 0
-        ? `\n\n## ⚠️ 처리 실패 슬라이드\n\n` +
-          slidesResult.errors
-            .map((e) => `- 슬라이드 ${e.slideNum}: ${e.reason}`)
-            .join("\n") +
-          "\n"
+        ? "\n\n" + failuresBlock("## ⚠️ 처리 실패 슬라이드", slidesResult.errors.map((e) => `- ${e.slideNum > 0 ? `슬라이드 ${e.slideNum}` : "전체"}: ${e.reason}`))
         : "";
 
     const lectureMarkdown =
@@ -274,7 +290,7 @@ export class NoteGenerator {
       .join("\n\n");
     const failures =
       sectionsResult.errors.length > 0
-        ? `\n\n## ⚠️ 처리 실패 구간\n\n${sectionsResult.errors.map((e) => `- 구간 ${e.section}: ${e.reason}`).join("\n")}\n`
+        ? "\n\n" + failuresBlock("## ⚠️ 처리 실패 구간", sectionsResult.errors.map((e) => `- ${e.section > 0 ? `구간 ${e.section}` : "전체"}: ${e.reason}`))
         : "";
     const lectureMarkdown = frontmatter + `# ${altData.title}\n\n` + overviewSection + sections + failures + "\n";
     const conceptNotes: ConceptNote[] = llmResult.concepts.map((c) => ({

@@ -94,13 +94,15 @@ export function statusChip(status: LocalNoteStatus): { text: string; cls: string
 // lecture is, so the user knows why it has no slide commentary:
 //   slides          a slides PDF exists (Alt's)                 -> slide path
 //   attached        the user attached a PDF in the plugin       -> slide path
+//   vault-copy      no slides in Alt now, but a slide note with -> slide path with that copy
+//                   the PDF saved next to it by an earlier import
 //   slides-missing  type "slide" but no slides attached in Alt  -> attach in Alt and refresh;
 //                   "PDF 첨부" or "요약 노트 만들기" in the plugin
 //   transcript      type "note" (or "legacy", or a URL note) without slides,
 //                   with a transcript                           -> "요약 노트 만들기" or "PDF 첨부"
 //   empty           no slides and no transcript                 -> a lecture-level note from Alt's summary and memo
 
-export type LectureKind = "slides" | "attached" | "slides-missing" | "transcript" | "empty";
+export type LectureKind = "slides" | "attached" | "vault-copy" | "slides-missing" | "transcript" | "empty";
 
 export interface LectureKindFacts {
   /** lecture_notes.type ("note" | "slide" | "legacy"); null or "" when unknown (URL source). */
@@ -115,11 +117,14 @@ export interface LectureKindFacts {
    * no PDF for it.
    */
   attachedPdf: boolean;
+  /** A slide note exists and the PDF an earlier import saved is next to it (not attached). */
+  vaultCopy?: boolean;
 }
 
 export function lectureKind(f: LectureKindFacts): LectureKind {
   if (f.attachedPdf) return "attached";
   if (f.hasSlides) return "slides";
+  if (f.vaultCopy) return "vault-copy";
   if (f.altType === "slide") return "slides-missing";
   return f.hasTranscript ? "transcript" : "empty";
 }
@@ -127,15 +132,11 @@ export function lectureKind(f: LectureKindFacts): LectureKind {
 export const LECTURE_KIND_LABELS: Record<LectureKind, string> = {
   slides: "슬라이드",
   attached: "슬라이드(PDF 첨부)",
+  "vault-copy": "슬라이드(저장된 PDF)",
   "slides-missing": "슬라이드(미첨부)",
   transcript: "노트(전사만)",
   empty: "노트(전사 없음)",
 };
-
-/** Kinds that are imported without a PDF unless the user attaches one. */
-export function lacksPdf(kind: LectureKind): boolean {
-  return kind === "slides-missing" || kind === "transcript" || kind === "empty";
-}
 
 /**
  * An import found no slides PDF (none in Alt, none attached) and the user
@@ -147,7 +148,9 @@ export class MissingPdfError extends Error {
   constructor(
     message: string,
     public notePath: string,
-    public hasTranscript: boolean
+    public hasTranscript: boolean,
+    /** The PDF download failed with this error (a URL import): "다시 시도" is the first choice. */
+    public downloadError: string | null = null
   ) {
     super(message);
     this.name = "MissingPdfError";

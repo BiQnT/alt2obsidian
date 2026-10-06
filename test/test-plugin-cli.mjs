@@ -78,6 +78,8 @@ function makeApp() {
       },
     },
     fileManager: {
+      // Obsidian's trash (the user's trash setting): gone from the vault.
+      trashFile: async (f) => void (files.delete(f.path), binaries.delete(f.path)),
       // Obsidian's processFrontMatter, enough for adding one key.
       processFrontMatter: async (f, fn) => {
         const content = files.get(f.path);
@@ -692,6 +694,16 @@ try {
     assert.ok(files.get(notePath).includes("구간 2 메모"));
     console.log("PASS: a lecture without slides stops before any token unless the user chose 요약 노트; the summary note (3 calls, sections, concepts) and its re-import (2 calls, memo kept)");
 
+    // A PDF put next to the summary note by hand (not attached, so not marked):
+    // "요약 노트 다시 만들기" stays a summary import, and a plain import does not use it.
+    files.set("Alt2Obsidian/CSED423/Lectures/L9.pdf", "<binary>");
+    binaries.set("Alt2Obsidian/CSED423/Lectures/L9.pdf", enc("%PDF-1.7 stray"));
+    const keepSummary = await plugin.prepareCliImport("", pv, "CSED423", undefined, { withoutPdf: "summary" });
+    assert.deepEqual([keepSummary.plan, keepSummary.pdfSource, !!keepSummary.transcriptPlan], [null, null, true], "the user's choice: a summary note");
+    await assert.rejects(plugin.prepareCliImport("", pv, "CSED423"), (e) => e.name === "MissingPdfError", "an unmarked PDF next to a summary note is not the slides");
+    files.delete("Alt2Obsidian/CSED423/Lectures/L9.pdf");
+    binaries.delete("Alt2Obsidian/CSED423/Lectures/L9.pdf");
+
     // Verification against the transcript sections (no PDF).
     const vsrc = "노트/L9 정리.md";
     files.set(vsrc, "# L9\n- write back policy를 설명했다\n- coherence protocol snooping은 다루지 않았다 (거짓)\n");
@@ -743,6 +755,32 @@ try {
     const vconv = await plugin.prepareVerification({ targetPath: notePath, markdown: files.get(vsrc), source: "x", sourcePath: vsrc });
     assert.equal(vconv.plan.unit, "slide", "a slide note is checked against its slides");
     files.delete(vsrc);
+    // Alt gets the slides later: the attached PDF still wins, the estimate says so,
+    // and "Alt 슬라이드로 바꾸기" (only the frontmatter line goes) switches the next import to Alt's.
+    const withAlt = plugin.previewFromBundle({ ...noSlides("local-9"), pdf: new ArrayBuffer(8), pdfPath: "/alt/L9.pdf" });
+    const still = await plugin.prepareCliImport("", withAlt, "CSED423");
+    assert.deepEqual([still.pdfSource, still.altPdfIgnored], ["attached", true]);
+    assert.equal(plugin.lectureKindFor({ altType: "slide", hasSlides: true, hasTranscript: true, notePath }), "attached");
+    const beforeSwitch = files.get(notePath);
+    await plugin.useAltSlides(notePath);
+    assert.equal(files.get(notePath), beforeSwitch.replace('alt_pdf_source: "attached"\n', ""), "only the mark is removed");
+    const switched = await plugin.prepareCliImport("", withAlt, "CSED423");
+    assert.deepEqual([switched.pdfSource, switched.altPdfIgnored], ["alt", false], "the next import uses Alt's slides");
+    assert.equal(plugin.lectureKindFor({ altType: "slide", hasSlides: true, hasTranscript: true, notePath }), "slides");
+    // "첨부 해제": the attached PDF to the trash and the mark gone; the lecture has no slides again.
+    await plugin.attachPdf(notePath, { kind: "disk", name: "again.pdf", data: pdfBytes });
+    assert.match(files.get(notePath).slice(0, files.get(notePath).indexOf("\n---\n", 4)), /\nalt_pdf_source: "attached"(\n|$)/);
+    await plugin.detachPdf(notePath);
+    assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf"), "the attached PDF is in the trash");
+    const fmText = (t) => t.slice(0, t.indexOf("\n---\n", 4));
+    assert.ok(!/alt_pdf_source/.test(fmText(files.get(notePath))), "the mark is gone from the frontmatter (the backed-up old note may still mention it)");
+    assert.equal(plugin.lectureKindFor({ altType: "note", hasSlides: false, hasTranscript: true, notePath }), "transcript");
+    await assert.rejects(plugin.prepareCliImport("", pv, "CSED423"), (e) => e.name === "MissingPdfError");
+    // Before the first import, a PDF attached next to the future note wins over Alt's and the estimate says so.
+    const fresh = plugin.previewFromBundle({ ...noSlides("local-10"), title: "L10", pdf: new ArrayBuffer(8), pdfPath: "/alt/L10.pdf" });
+    await plugin.attachPdf("Alt2Obsidian/CSED423/Lectures/L10.md", { kind: "disk", name: "l10.pdf", data: pdfBytes });
+    const pre = await plugin.prepareCliImport("", fresh, "CSED423");
+    assert.deepEqual([pre.pdfSource, pre.altPdfIgnored], ["attached", true], "the user's file, not silently overwritten by Alt's");
     console.log("PASS: PDF attached from the vault: copied as <lecture>.pdf, alt_pdf_source marked; the next import is a slide import and keeps the summary note under 이전 노트 백업");
 
     // A URL lecture without a PDF: the same choice; a PDF from disk (read into memory) makes it a slide lecture.
@@ -767,6 +805,29 @@ try {
     const att3 = await plugin.attachPdf(urlNote, { kind: "disk", name: "lec8-v2.pdf", data: enc("%PDF-1.7 v2") });
     assert.deepEqual([att3.replaced, att3.marked], [true, false]);
     assert.equal((files.get(urlNote).match(/^alt_pdf_source:/gm) ?? []).length, 1);
+    // A URL PDF that fails to download is not "no slides": the error says so and offers a retry.
+    const dlPv = preview();
+    dlPv.pdfData = null;
+    dlPv.pdfUrl = "https://example.invalid/lec5.pdf";
+    dlPv.altData = { ...dlPv.altData, title: "Lec5 Download", metadata: { ...dlPv.altData.metadata, noteId: "note-5" } };
+    plugin.pdfProcessor.downloadPdf = async () => {
+      throw new Error("network down");
+    };
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      await assert.rejects(plugin.prepareCliImport("u5", dlPv, "CSED311"), (e) => e.name === "MissingPdfError" && e.downloadError === "network down" && /내려받지 못했습니다/.test(e.message));
+    } finally {
+      console.warn = warn;
+      delete plugin.pdfProcessor.downloadPdf;
+    }
+    // A page parsed only in part (title and description) asks too, before any estimate.
+    const partialPv = preview();
+    partialPv.pdfData = null;
+    partialPv.altData = { ...partialPv.altData, title: "Lec4 Partial", parseQuality: "partial", transcript: null, metadata: { ...partialPv.altData.metadata, noteId: "note-4" } };
+    await assert.rejects(plugin.prepareCliImport("u4", partialPv, "CSED311"), (e) => e.name === "MissingPdfError" && /일부만 읽었습니다/.test(e.message));
+    const partialOk = await plugin.prepareCliImport("u4", partialPv, "CSED311", undefined, { withoutPdf: "summary" });
+    assert.deepEqual([partialOk.plan, partialOk.transcriptPlan], [null, null], "the chosen lecture-level note");
     // A slide note is never replaced by a summary note, even when its PDF is gone: stopped before any token.
     files.delete("Alt2Obsidian/CSED311/Lectures/Lec8 Disk.pdf");
     binaries.delete("Alt2Obsidian/CSED311/Lectures/Lec8 Disk.pdf");
@@ -793,7 +854,7 @@ try {
     assert.equal(vc.pdfSource, "vault");
     await plugin.runCliImport(vc, { onConfirmUpdate: async () => true });
     assert.ok(!/alt_pdf_source/.test(files.get(copyNote)), "not marked as attached");
-    assert.equal(plugin.lectureKindFor({ altType: null, hasSlides: false, hasTranscript: true, notePath: copyNote }), "transcript", "the sidebar does not call it attached either");
+    assert.equal(plugin.lectureKindFor({ altType: null, hasSlides: false, hasTranscript: true, notePath: copyNote }), "vault-copy", "a slide note with its saved PDF: a slide lecture (never 노트(전사만))");
     // A PDF next to the note spelled <note>.PDF is used and written in place, never doubled as <note>.pdf.
     const upperPv = preview();
     upperPv.pdfData = null;

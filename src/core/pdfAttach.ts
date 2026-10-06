@@ -13,6 +13,9 @@ export const ATTACHED_KEY = "alt_pdf_source";
 export const ATTACHED_VALUE = "attached";
 export const ATTACHED_LINE = `${ATTACHED_KEY}: "${ATTACHED_VALUE}"`;
 
+/** Larger files are refused (a lecture deck is far smaller; this keeps a wrong pick from filling memory). */
+export const MAX_ATTACH_BYTES = 300 * 1024 * 1024;
+
 /** A PDF starts with "%PDF-" (some files carry a few bytes of junk before it, allowed up to 1024 bytes). */
 export function looksLikePdf(data: ArrayBuffer): boolean {
   const bytes = new Uint8Array(data, 0, Math.min(1024, data.byteLength));

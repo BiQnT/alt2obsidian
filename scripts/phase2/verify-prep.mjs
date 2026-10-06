@@ -537,9 +537,14 @@ function normalizePageText(text) {
 }
 
 // src/core/sections.ts
-var SECTION_HEADING_WORD = "\u23F1 \uAD6C\uAC04";
-var SECTION_HEADING_PREFIX = `## ${SECTION_HEADING_WORD}`;
-var SECTION_MARKER_RE = /<!-- alt2obs:section:(\d+) hash:([0-9a-f]{8}) (start|end) -->/g;
+var SECTION_HEADING_PATTERN = "## \u23F1 \uAD6C\uAC04 (\\d+)";
+var SECTION_MARKER_PATTERN = "<!-- alt2obs:section:(\\d+) hash:([0-9a-f]{8}) (start|end) -->";
+function sectionMarkerRegex() {
+  return new RegExp(SECTION_MARKER_PATTERN, "g");
+}
+function sectionHeadingLineRegex() {
+  return new RegExp(`^${SECTION_HEADING_PATTERN}[^\\n]*$`, "gm");
+}
 function formatClock(ms) {
   const total = Math.max(0, Math.floor(ms / 1e3));
   const h = Math.floor(total / 3600);
@@ -558,14 +563,17 @@ function sectionRange(startMs, endMs) {
     return "";
   return `[${formatClock(startMs)}~${formatClock(endMs)}]`;
 }
-var HEADING_RE = /^## ⏱ 구간 (\d+)(?: \[([0-9:]+)~([0-9:]+)\])?[ \t]*$/;
+var HEADING_RE = new RegExp(`^${SECTION_HEADING_PATTERN}(?: \\[([0-9:]+)~([0-9:]+)\\])?(.*)$`);
 function parseSectionHeading(line) {
-  const m = line.match(HEADING_RE);
+  const m = line.replace(/\r$/, "").match(HEADING_RE);
   if (!m)
+    return null;
+  if (m[4] && !/^\s/.test(m[4]))
     return null;
   const startMs = m[2] ? parseClock(m[2]) : null;
   const endMs = m[3] ? parseClock(m[3]) : null;
-  return { num: Number(m[1]), startMs, endMs, text: line.replace(/^## /, "").trim() };
+  const suffix = m[4].trim();
+  return { num: Number(m[1]), startMs, endMs, text: line.replace(/\r$/, "").replace(/^## /, "").trim(), suffix, plain: suffix === "" };
 }
 function headingLinkTarget(heading) {
   return heading.replace(/[!"#$%&()*+,.:;<=>?@^`{|}~\\/[\]\r\n]/g, " ").replace(/\s+/g, " ").trim();
@@ -578,6 +586,7 @@ var SECTION_MAX_MS = 15 * 6e4;
 var UNTIMED_TARGET_CHARS = 4e3;
 var UNTIMED_MIN_CHARS = 3e3;
 var UNTIMED_MAX_CHARS = 5500;
+var LONG_PAUSE_MS = 6e4;
 var TOPIC_WINDOW_MS = 12e4;
 var TOPIC_WINDOW_CHARS = 600;
 function termCounts(text) {
@@ -712,8 +721,17 @@ function splitTranscriptSections(segments) {
   if (segs.length === 0)
     return { spans: [], segs, timed };
   if (timed) {
-    const pos2 = segs.map((s) => s.startMs);
-    const end = Math.max(...segs.map((s) => s.endMs));
+    const pos2 = [];
+    let skipped = 0;
+    segs.forEach((s, i) => {
+      if (i > 0) {
+        const gap = s.startMs - segs[i - 1].endMs;
+        if (gap > LONG_PAUSE_MS)
+          skipped += gap - LONG_PAUSE_MS;
+      }
+      pos2.push(s.startMs - skipped);
+    });
+    const end = Math.max(...segs.map((s) => s.endMs)) - skipped;
     const starts2 = boundaries(segs, {
       pos: pos2,
       end,
@@ -804,19 +822,17 @@ var DEFAULT_PLUGIN_DATA = {
 };
 
 // src/core/merge.ts
-var SECTION_H2 = /(^|\n)## ⏱ 구간 \d+[^\n]*/g;
 function splitSectionNote(content) {
   const fmMatch = content.match(/^---\n[\s\S]*?\n---\n*/);
   const frontmatter = fmMatch ? fmMatch[0] : "";
   const body = fmMatch ? content.slice(fmMatch[0].length) : content;
   const markers = [];
-  const re = new RegExp(SECTION_MARKER_RE.source, "g");
+  const re = sectionMarkerRegex();
   let m;
   while ((m = re.exec(body)) !== null) {
     markers.push({ idx: m.index, end: m.index + m[0].length, num: parseInt(m[1], 10), hash: m[2], type: m[3] });
   }
-  const sections = [];
-  const ranges = [];
+  const pairs = [];
   const used = /* @__PURE__ */ new Set();
   for (let i = 0; i < markers.length; i++) {
     const s = markers[i];
@@ -827,36 +843,34 @@ function splitSectionNote(content) {
       continue;
     used.add(i);
     used.add(k);
-    sections.push({ num: s.num, hash: s.hash, heading: null, lead: "", managed: body.slice(s.end, markers[k].idx), after: "" });
-    ranges.push({ startIdx: s.idx, endIdx: markers[k].end });
+    pairs.push({ num: s.num, hash: s.hash, startIdx: s.idx, startEnd: s.end, endIdx: markers[k].idx, endEnd: markers[k].end });
   }
-  if (sections.length === 0)
-    return { frontmatter, preamble: body, sections };
-  const firstHeading = (from, to) => {
-    const at = body.slice(from, to).search(/(^|\n)## ⏱ 구간 \d+/);
-    if (at < 0)
-      return -1;
-    return from + at + (body[from + at] === "\n" ? 1 : 0);
-  };
-  const firstH2 = firstHeading(0, ranges[0].startIdx);
-  const preamble = body.slice(0, firstH2 >= 0 ? firstH2 : ranges[0].startIdx);
-  let leadFrom = firstH2 >= 0 ? firstH2 : ranges[0].startIdx;
-  for (let i = 0; i < sections.length; i++) {
-    const region = body.slice(leadFrom, ranges[i].startIdx);
-    const headings = Array.from(region.matchAll(SECTION_H2));
-    const last = headings.length > 0 ? headings[headings.length - 1] : null;
-    let lead = region;
-    if (last && last.index !== void 0) {
-      const lineStart = last.index + (last[0].startsWith("\n") ? 1 : 0);
-      sections[i].heading = last[0].replace(/^\n/, "").trimEnd();
-      lead = region.slice(0, lineStart) + region.slice(lineStart + sections[i].heading.length);
+  if (pairs.length === 0)
+    return { frontmatter, preamble: body, sections: [] };
+  const headings = pairs.map((p, i) => {
+    const from = i === 0 ? 0 : pairs[i - 1].endEnd;
+    const region = body.slice(from, p.startIdx);
+    let found = null;
+    for (const h of region.matchAll(sectionHeadingLineRegex())) {
+      if (h.index !== void 0 && parseSectionHeading(h[0])?.num === p.num)
+        found = { start: from + h.index, end: from + h.index + h[0].length, text: h[0] };
     }
-    sections[i].lead = lead.split("\n").filter((l) => !/^## ⏱ 구간 \d+/.test(l) && !/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
-    const end = i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length;
-    const nextH2 = firstHeading(ranges[i].endIdx, end);
-    sections[i].after = body.slice(ranges[i].endIdx, nextH2 >= 0 ? nextH2 : end);
-    leadFrom = nextH2 >= 0 ? nextH2 : end;
-  }
+    return found;
+  });
+  const preamble = body.slice(0, headings[0]?.start ?? pairs[0].startIdx);
+  const sections = pairs.map((p, i) => {
+    const h = headings[i];
+    const next = i + 1 < pairs.length ? headings[i + 1]?.start ?? pairs[i + 1].startIdx : body.length;
+    return {
+      num: p.num,
+      hash: p.hash,
+      heading: h ? h.text.trimEnd() : null,
+      parsed: h ? parseSectionHeading(h.text) : null,
+      lead: h ? body.slice(h.end, p.startIdx).trim() : "",
+      managed: body.slice(p.startEnd, p.endIdx),
+      after: body.slice(p.endEnd, next)
+    };
+  });
   return { frontmatter, preamble, sections };
 }
 

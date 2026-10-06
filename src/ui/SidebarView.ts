@@ -431,6 +431,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
       line(d.timestamps, alignmentStatus(d.timestamps, hasTranscript));
     } else if (kind === "attached") {
       line(d.timestamps, `첨부한 PDF 사용 · ${alignmentStatus(d.timestamps, hasTranscript)}`);
+      if (d.hasSlides && d.pdfPath) align.createDiv({ cls: "alt2obsidian-muted", text: "Alt에도 슬라이드가 있습니다. 지금은 첨부한 PDF를 씁니다." });
+    } else if (kind === "vault-copy") {
+      line(d.timestamps, `Alt에 지금 슬라이드가 없어 노트 옆에 저장된 PDF로 가져옵니다 · ${alignmentStatus(d.timestamps, hasTranscript)}`);
     } else if (kind === "slides-missing") {
       line(false, "슬라이드 강의인데 Alt에 아직 슬라이드가 없습니다. Alt에서 슬라이드를 첨부한 뒤 새로고침하세요. 지금 만들려면 PDF를 첨부하거나 전사로 요약 노트를 만드세요.");
     } else if (kind === "transcript") {
@@ -471,14 +474,52 @@ export class Alt2ObsidianSidebarView extends ItemView {
       button("새로고침", () => void this.refreshLocal(), { cta: true, title: "Alt에서 슬라이드를 첨부했으면 노트를 다시 읽습니다" });
       button("PDF 첨부", () => void this.attachForLocal(it), { work: true });
       if (!slideNote) button(hasTranscript ? "요약 노트 만들기" : "강의 노트 만들기", () => void this.handleLocalImport(it, { withoutPdf: "summary" }), { work: true });
-    } else if (kind === "slides" || kind === "attached") {
+    } else if (kind === "slides" || kind === "attached" || kind === "vault-copy") {
       button(imported ? "다시 가져오기" : "가져오기", () => void this.handleLocalImport(it), { cta: true, work: true });
+      if (kind === "attached") {
+        const notePath = this.notePathOf(it);
+        if (d?.hasSlides && d.pdfPath) {
+          button("Alt 슬라이드로 바꾸기", () => void this.switchToAlt(it, notePath), { work: true, title: "다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 씁니다" });
+        }
+        button("첨부 해제", () => this.confirmDetach(it, notePath), { work: true, title: "첨부한 PDF를 휴지통으로 옮기고 표시를 지웁니다" });
+      }
     } else if (kind === "transcript") {
       button("PDF 첨부", () => void this.attachForLocal(it), { work: true, title: "강의 PDF를 골라 슬라이드 강의로 가져옵니다" });
-      button(imported ? "요약 노트 다시 만들기" : "요약 노트 만들기", () => void this.handleLocalImport(it, { withoutPdf: "summary" }), { cta: true, work: true });
+      if (!slideNote) button(imported ? "요약 노트 다시 만들기" : "요약 노트 만들기", () => void this.handleLocalImport(it, { withoutPdf: "summary" }), { cta: true, work: true });
     } else {
       button(imported ? "다시 가져오기" : "강의 노트 만들기", () => void this.handleLocalImport(it, { withoutPdf: "summary" }), { cta: true, work: true });
     }
+  }
+
+  /** "Alt 슬라이드로 바꾸기": the attached mark goes; the next import uses Alt's PDF. */
+  private async switchToAlt(it: LocalItem, notePath: string): Promise<void> {
+    try {
+      await this.plugin.useAltSlides(notePath);
+      this.showSuccess("다음 가져오기부터 Alt의 슬라이드를 씁니다. 다시 가져오기를 누르세요.");
+      this.refreshStatuses();
+    } catch (e) {
+      this.showError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /** "첨부 해제" after a confirmation: the attached PDF to the trash, the mark removed. */
+  private confirmDetach(it: LocalItem, notePath: string): void {
+    const pdf = this.plugin.siblingPdf(notePath);
+    new ConfirmModal(
+      this.app,
+      "첨부 해제",
+      `첨부한 PDF(${pdf?.path ?? attachedPdfPath(notePath)})를 휴지통으로 옮기고 노트의 alt_pdf_source 표시를 지웁니다. 노트 내용은 바뀌지 않습니다. 이미 슬라이드 노트로 가져왔다면 다음 가져오기에는 PDF를 다시 첨부해야 합니다.`,
+      "첨부 해제",
+      async () => {
+        try {
+          await this.plugin.detachPdf(notePath);
+          this.showSuccess("첨부를 해제했습니다.");
+          this.refreshStatuses();
+        } catch (e) {
+          this.showError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    ).open();
   }
 
   /**
@@ -749,6 +790,11 @@ export class Alt2ObsidianSidebarView extends ItemView {
       // No slides PDF: the user chooses (spec 4.10); nothing falls back silently.
       this.hideProgress();
       const choice = await this.showNoPdfChoice(preview.altData.title, e);
+      if (choice === "retry") {
+        this.hideCliPanel();
+        this.updateProgress(5, "PDF를 다시 내려받는 중...");
+        return this.executeCliImport(url, preview, subject, opts);
+      }
       if (choice === "cancel") {
         this.hideCliPanel();
         this.showSuccess("가져오기를 취소했습니다. 토큰은 쓰지 않았습니다.");
@@ -807,15 +853,19 @@ export class Alt2ObsidianSidebarView extends ItemView {
     }
   }
 
-  /** A lecture without a slides PDF: "요약 노트 만들기", "PDF 첨부" or cancel. */
-  private showNoPdfChoice(title: string, e: MissingPdfError): Promise<"summary" | "attach" | "cancel"> {
+  /**
+   * A lecture without a slides PDF: "요약 노트 만들기", "PDF 첨부" or cancel;
+   * when the PDF download failed, "다시 시도" comes first.
+   */
+  private showNoPdfChoice(title: string, e: MissingPdfError): Promise<"summary" | "attach" | "retry" | "cancel"> {
     const panel = this.cliPanel!;
     panel.empty();
     panel.show();
     return new Promise((resolve) => {
-      panel.createEl("h6", { text: `슬라이드 PDF 없음: ${title}`, cls: "alt2obsidian-section-header" });
+      panel.createEl("h6", { text: `${e.downloadError ? "슬라이드 PDF를 내려받지 못함" : "슬라이드 PDF 없음"}: ${title}`, cls: "alt2obsidian-section-header" });
       panel.createDiv({ cls: "alt2obsidian-muted", text: e.message });
       const rows = panel.createEl("ul", { cls: "alt2obsidian-estimate-list" });
+      if (e.downloadError) rows.createEl("li", { text: "다시 시도: 네트워크나 공유 설정 문제였다면 다시 내려받아 슬라이드 강의로 가져옵니다." });
       rows.createEl("li", {
         text: e.hasTranscript
           ? "요약 노트: 전사를 약 12분 구간으로 나눠 구간별 요약(시각 표시), 전체 요약, 개념을 만듭니다. 예상 사용량은 다음 화면에서 봅니다."
@@ -823,7 +873,9 @@ export class Alt2ObsidianSidebarView extends ItemView {
       });
       rows.createEl("li", { text: `PDF 첨부: 보관함이나 컴퓨터의 PDF를 ${e.notePath.replace(/\.md$/, ".pdf")}로 복사하고 슬라이드 강의로 가져옵니다 (슬라이드별 해설, 전사 정렬, Synced Viewer).` });
       const actions = panel.createDiv({ cls: "alt2obsidian-estimate-actions" });
-      actions.createEl("button", { text: e.hasTranscript ? "요약 노트 만들기" : "강의 노트 만들기", cls: "mod-cta" }).addEventListener("click", () => resolve("summary"));
+      const summaryText = e.hasTranscript ? "요약 노트 만들기" : "강의 노트 만들기";
+      if (e.downloadError) actions.createEl("button", { text: "다시 시도", cls: "mod-cta" }).addEventListener("click", () => resolve("retry"));
+      actions.createEl("button", { text: summaryText, cls: e.downloadError ? "" : "mod-cta" }).addEventListener("click", () => resolve("summary"));
       actions.createEl("button", { text: "PDF 첨부" }).addEventListener("click", () => resolve("attach"));
       actions.createEl("button", { text: "취소" }).addEventListener("click", () => resolve("cancel"));
     });
@@ -883,6 +935,7 @@ export class Alt2ObsidianSidebarView extends ItemView {
         if (prepared.plan) {
           const pdfPath = this.plugin.siblingPdf(prepared.notePath)?.path ?? attachedPdfPath(prepared.notePath);
           if (prepared.pdfSource === "attached") rows.createEl("li", { text: `첨부한 PDF를 슬라이드로 씁니다: ${pdfPath}` });
+          if (prepared.altPdfIgnored) rows.createEl("li", { text: "Alt에도 슬라이드 PDF가 있지만 첨부한 PDF를 씁니다. Alt 슬라이드를 쓰려면 아래 목록 패널의 'Alt 슬라이드로 바꾸기'를 누르세요." });
           if (prepared.pdfSource === "vault") rows.createEl("li", { text: `Alt의 슬라이드 파일을 읽지 못해 노트 옆에 저장해 둔 PDF를 씁니다: ${pdfPath}` });
           const skipped = e.slidesTemplated + e.slidesDeduped + e.slidesReused;
           rows.createEl("li", {

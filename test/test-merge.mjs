@@ -42,7 +42,7 @@ const altData = {
 };
 
 // Builds a page-anchored note for slide texts, exactly as the plugin does.
-async function note(texts, summary = "## 개요\n요약 본문") {
+async function note(texts, summary = "## 개요\n요약 본문", errors = []) {
   const slides = [];
   for (let i = 0; i < texts.length; i++) {
     slides.push({
@@ -54,7 +54,7 @@ async function note(texts, summary = "## 개요\n요약 본문") {
   }
   const { lectureMarkdown } = await new NoteGenerator(null).generatePageAnchored(
     altData,
-    { slides, errors: [], totalWallTimeMs: 0, perSlideWallTimeMs: [] },
+    { slides, errors, totalWallTimeMs: 0, perSlideWallTimeMs: [] },
     { processedSummary: summary, concepts: [], tags: [], subjectSuggestion: "S" },
     "S"
   );
@@ -251,6 +251,7 @@ async function reimport(oldTexts, newTexts) {
   assert.match(md, /\n## 이전 노트 백업\n/);
   assert.ok(md.includes("MY INTRO") && md.includes("MY LEGACY MEMO"), "user text outside the block kept");
   assert.ok(md.includes("본문"), "old managed body kept");
+  assert.ok(md.includes("```yaml\n---\ntitle: lec\n---\n```\n\nMY INTRO"), "the old frontmatter is a fenced block in the backup");
   assert.ok((summary.notes ?? []).some((n) => n.includes("이전 노트 백업")), "modal mentions the backup");
   const again = await pluginMerge(legacy.replace("MY INTRO", "MY INTRO\n\n## 이전 노트 백업\n\nolder"), next);
   assert.ok(again.md.includes("older") && again.md.includes("MY LEGACY MEMO"), "an older backup section is kept, not dropped");
@@ -267,6 +268,24 @@ async function reimport(oldTexts, newTexts) {
   assert.equal(thrice, once, "third re-import changes nothing");
   assert.deepEqual(sections(once).out.map((s) => s.memo), ["memo alpha", "memo beta", "memo gamma"]);
   console.log("PASS: re-importing an unchanged deck is idempotent");
+}
+
+// A freshly written note re-imported unchanged is byte for byte the same file.
+{
+  const fresh = await note(["alpha", "beta", "gamma"]);
+  assert.equal((await pluginMerge(fresh, fresh)).md, fresh, "first re-import changes nothing");
+  // The failure list is replaced, never kept in the last slide's memo.
+  const failing = await note(["alpha", "beta"], "요약", [{ slideNum: 2, reason: "응답에 이 슬라이드가 없음" }, { slideNum: 0, reason: "개념 추출 실패" }]);
+  assert.ok(failing.includes("<!-- alt2obs:failures start -->\n## ⚠️ 처리 실패 슬라이드\n\n- 슬라이드 2: 응답에 이 슬라이드가 없음\n- 전체: 개념 추출 실패\n<!-- alt2obs:failures end -->"));
+  assert.equal((await pluginMerge(failing, failing)).md, failing);
+  const healed = (await pluginMerge(addMemos(failing), await note(["alpha", "beta"], "요약"))).md;
+  assert.ok(!healed.includes("처리 실패") && !healed.includes("alt2obs:failures"), "a clean re-import drops the old list");
+  assert.deepEqual(sections(healed).out.map((x) => x.memo), ["memo alpha", "memo beta"]);
+  // A note saved with CRLF keeps its memos.
+  const crlf = (await pluginMerge(addMemos(fresh).replace(/\n/g, "\r\n"), fresh)).md;
+  assert.deepEqual(sections(crlf).out.map((x) => x.memo), ["memo alpha", "memo beta", "memo gamma"]);
+  assert.ok(!crlf.includes("\r"));
+  console.log("PASS: unchanged first re-import is byte-identical; the failure list is replaced; CRLF notes keep their memos; the backed-up frontmatter is fenced");
 }
 
 console.log(`PASS: merge-note.mjs matched the plugin merge in all ${cliRuns} merge scenarios`);

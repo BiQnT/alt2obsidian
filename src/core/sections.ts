@@ -24,13 +24,28 @@
 
 /** Heading text of section N (without "## "). */
 export const SECTION_HEADING_WORD = "⏱ 구간";
-export const SECTION_HEADING_PREFIX = `## ${SECTION_HEADING_WORD}`;
 
-/** Start and end markers of a section's managed block. */
-export const SECTION_MARKER_RE = /<!-- alt2obs:section:(\d+) hash:([0-9a-f]{8}) (start|end) -->/g;
+/**
+ * The patterns every section regex is built from (one source for the
+ * generator, the merge, the verifier and the Skill): a heading line
+ * "## ⏱ 구간 N" (any text may follow), and a start or end marker with
+ * groups (num, hash, kind).
+ */
+export const SECTION_HEADING_PATTERN = "## ⏱ 구간 (\\d+)";
+export const SECTION_MARKER_PATTERN = "<!-- alt2obs:section:(\\d+) hash:([0-9a-f]{8}) (start|end) -->";
+
+/** A new regex for the start and end markers (global: callers iterate it). */
+export function sectionMarkerRegex(): RegExp {
+  return new RegExp(SECTION_MARKER_PATTERN, "g");
+}
+
+/** A heading line of some section, at the start of a line (multiline). */
+export function sectionHeadingLineRegex(): RegExp {
+  return new RegExp(`^${SECTION_HEADING_PATTERN}[^\\n]*$`, "gm");
+}
 
 export function hasSectionMarkers(content: string): boolean {
-  return /<!-- alt2obs:section:\d+ hash:[0-9a-f]{8} (start|end) -->/.test(content);
+  return new RegExp(SECTION_MARKER_PATTERN).test(content);
 }
 
 export function sectionMarker(num: number, hash: string, kind: "start" | "end"): string {
@@ -69,29 +84,26 @@ export interface SectionHeading {
   num: number;
   startMs: number | null;
   endMs: number | null;
-  /** The heading text without "## ". */
+  /** The heading text without "## " (with the user's own text after the range, if any). */
   text: string;
+  /** What the user wrote after the generated part ("" when nothing): kept across re-imports. */
+  suffix: string;
+  /** Exactly the generated form, nothing written after it. */
+  plain: boolean;
 }
 
-const HEADING_RE = /^## ⏱ 구간 (\d+)(?: \[([0-9:]+)~([0-9:]+)\])?[ \t]*$/;
+const HEADING_RE = new RegExp(`^${SECTION_HEADING_PATTERN}(?: \\[([0-9:]+)~([0-9:]+)\\])?(.*)$`);
 
-/** A section heading line, or null. */
+/** A section heading line (the generated form, possibly with the user's text after it), or null. */
 export function parseSectionHeading(line: string): SectionHeading | null {
-  const m = line.match(HEADING_RE);
+  const m = line.replace(/\r$/, "").match(HEADING_RE);
   if (!m) return null;
+  // "## ⏱ 구간 12" must not read as section 1 followed by "2".
+  if (m[4] && !/^\s/.test(m[4])) return null;
   const startMs = m[2] ? parseClock(m[2]) : null;
   const endMs = m[3] ? parseClock(m[3]) : null;
-  return { num: Number(m[1]), startMs, endMs, text: line.replace(/^## /, "").trim() };
-}
-
-/** Every section heading of a note, in order. */
-export function sectionHeadings(content: string): SectionHeading[] {
-  const out: SectionHeading[] = [];
-  for (const line of content.split("\n")) {
-    const h = parseSectionHeading(line.replace(/\r$/, ""));
-    if (h) out.push(h);
-  }
-  return out;
+  const suffix = m[4].trim();
+  return { num: Number(m[1]), startMs, endMs, text: line.replace(/\r$/, "").replace(/^## /, "").trim(), suffix, plain: suffix === "" };
 }
 
 /**

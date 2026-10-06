@@ -175,7 +175,6 @@ export function estimateTranscriptSummary(
     slidesTemplated: 0,
     slidesDeduped: 0,
     slidesReused: 0,
-    sectionsTotal: plan.sections.length,
     sectionsGenerated: generated,
     sectionsReused: plan.sections.length - generated,
   };

@@ -8,7 +8,7 @@ import {
   OVERVIEW_BLOCK_START,
   OVERVIEW_BLOCK_END,
 } from "../types";
-import { hasSectionMarkers, SECTION_MARKER_RE, sectionMarker } from "./sections";
+import { hasSectionMarkers, parseSectionHeading, SectionHeading, sectionHeadingLineRegex, sectionMarker, sectionMarkerRegex } from "./sections";
 
 /**
  * A page-anchored note must never be overwritten by a single-block note
@@ -49,7 +49,14 @@ export function assertNoPageAnchoredDowngrade(currentContent: string, nextConten
   }
 }
 
-export function mergeManagedNote(currentContent: string, nextContent: string): string {
+/** LF line endings: a note saved with CRLF (Windows, some sync tools) merges like any other. */
+export function toLf(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+export function mergeManagedNote(current: string, next: string): string {
+  const currentContent = toLf(current);
+  const nextContent = toLf(next);
   const nextParts = splitManagedNote(nextContent);
   const currentParts = splitManagedNote(currentContent);
 
@@ -68,15 +75,38 @@ export function mergeManagedNote(currentContent: string, nextContent: string): s
   return appendPreviousNoteBackup(currentContent, nextContent, { skipIfBackupExists: true });
 }
 
+/** Why a note was backed up, shown in the backup's callout. */
+export type BackupReason = "managed" | "to-slides" | "to-sections";
+
+const BACKUP_REASONS: Record<BackupReason, string> = {
+  managed: "이 내용은 Alt2Obsidian 관리 구간이 도입되기 전의 기존 노트입니다.",
+  "to-slides": "이 내용은 슬라이드별 노트로 바뀌기 전의 전사 구간 요약 노트입니다. 내 메모는 필요한 슬라이드 아래로 옮기세요.",
+  "to-sections": "이 내용은 전사 구간 요약 노트로 바뀌기 전의 강의 노트입니다. 내 메모는 필요한 구간 아래로 옮기세요.",
+};
+
+/**
+ * The old note's text for the backup: its frontmatter, if any, as a fenced
+ * YAML block (raw it would render as a rule and loose text, and could be
+ * mistaken for the note's own frontmatter), then the rest as it was.
+ */
+function backupBody(current: string): string {
+  const fm = current.match(/^---\n([\s\S]*?)\n---\n*/);
+  if (!fm) return current.trim();
+  let fence = "```";
+  while (fm[1].includes(fence)) fence += "`";
+  return [`${fence}yaml`, "---", fm[1], "---", fence, "", current.slice(fm[0].length).trim()].join("\n").trim();
+}
+
 /**
  * Append the whole previous note under "## 이전 노트 백업" so nothing the user
  * wrote is lost when the new note cannot merge with it (a note without
- * managed markers, or a 1.0.x single-block note migrating to page-anchored).
+ * managed markers, a 1.0.x single-block note migrating to page-anchored, a
+ * transcript summary note becoming a slide note).
  */
 function appendPreviousNoteBackup(
   currentContent: string,
   nextContent: string,
-  opts: { skipIfBackupExists: boolean }
+  opts: { skipIfBackupExists: boolean; reason?: BackupReason }
 ): string {
   // Plan Task 1.3 backward-compat: skip the "## 이전 노트 백업" write if the
   // current file already has one. Honors Principle 2 (1.0.x notes
@@ -93,9 +123,9 @@ function appendPreviousNoteBackup(
     "## 이전 노트 백업",
     "",
     "> [!note]",
-    "> 이 내용은 Alt2Obsidian 관리 구간이 도입되기 전의 기존 노트입니다.",
+    `> ${BACKUP_REASONS[opts.reason ?? "managed"]}`,
     "",
-    currentContent.trim(),
+    backupBody(currentContent),
     "",
   ].join("\n");
 }
@@ -266,11 +296,16 @@ interface SectionKey {
 /**
  * Pairs incoming sections with existing ones (spike 1.0b two-pass rule,
  * shared by slide and transcript sections): first by hash in order, then
- * the unmatched ones by number ("drift"); what is left is an insertion
- * (incoming) or an orphan (existing). `matched` maps an incoming index to
- * an existing index.
+ * (transcript sections, when `overlap` is given) by the most shared time,
+ * then the unmatched ones by number ("drift"); what is left is an
+ * insertion (incoming) or an orphan (existing). `matched` maps an incoming
+ * index to an existing index.
  */
-function pairSections(existing: SectionKey[], next: SectionKey[]): {
+function pairSections(
+  existing: SectionKey[],
+  next: SectionKey[],
+  overlap?: (existingIdx: number, nextIdx: number) => number
+): {
   matched: Map<number, number>;
   used: Set<number>;
   reorders: Array<{ from: number; to: number; hash: string }>;
@@ -304,15 +339,35 @@ function pairSections(existing: SectionKey[], next: SectionKey[]): {
     }
   });
 
+  const drift = (i: number, idx: number) => {
+    used.add(idx);
+    matched.set(i, idx);
+    drifts.push({ slideNum: next[i].num, oldHash: existing[idx].hash, newHash: next[i].hash });
+  };
+
+  // PASS 1b: the existing section sharing the most time (at least half of the shorter one).
+  if (overlap) {
+    next.forEach((_, i) => {
+      if (matched.has(i)) return;
+      let best = -1;
+      let bestShare = 0.5;
+      existing.forEach((_, idx) => {
+        if (used.has(idx)) return;
+        const share = overlap(idx, i);
+        if (share >= bestShare && (best < 0 || share > bestShare)) {
+          best = idx;
+          bestShare = share;
+        }
+      });
+      if (best >= 0) drift(i, best);
+    });
+  }
+
   // PASS 2: N-match-with-drift for hash-unmatched incoming.
   next.forEach((ns, i) => {
     if (matched.has(i)) return;
     const idx = existing.findIndex((s, j) => !used.has(j) && s.num === ns.num);
-    if (idx >= 0) {
-      used.add(idx);
-      matched.set(i, idx);
-      drifts.push({ slideNum: ns.num, oldHash: existing[idx].hash, newHash: ns.hash });
-    }
+    if (idx >= 0) drift(i, idx);
   });
 
   // PASS 3: insertions: hash-unmatched + N-unmatched
@@ -328,12 +383,41 @@ function pairSections(existing: SectionKey[], next: SectionKey[]): {
   return { matched, used, reorders, insertions, deletions, drifts };
 }
 
-/** User free-space under a section: kept when paired, else an empty memo callout; one blank line around it. */
-function freeSpace(after: string | undefined): string {
-  const kept = after && after.trim().length > 0 ? after : "\n\n> [!note] 내 메모\n> \n\n";
-  // Same shape for kept and default memos (one blank line before, one
-  // after) so re-importing an unchanged note leaves the file unchanged.
-  return "\n" + kept.replace(/^\n+|\n+$/g, "") + "\n\n";
+const DEFAULT_MEMO = "> [!note] 내 메모\n> ";
+
+/** User free-space under a section: kept when paired and not empty, else an empty memo callout. */
+function memoOf(after: string | undefined): string {
+  const kept = after ? after.replace(/^\n+|\n+$/g, "") : "";
+  return kept.trim().length > 0 ? kept : DEFAULT_MEMO;
+}
+
+// ---- Failure lists ("⚠️ 처리 실패 슬라이드/구간") ----
+// The generated list sits after the last section between these markers, so
+// a re-import replaces it instead of keeping the old one in the last
+// section's free space. A list from before 2.0.0-beta.6 has no markers and
+// stays as it is.
+export const FAILURES_START = "<!-- alt2obs:failures start -->";
+export const FAILURES_END = "<!-- alt2obs:failures end -->";
+const FAILURES_RE = /\n*<!-- alt2obs:failures start -->[\s\S]*?<!-- alt2obs:failures end -->[ \t]*/g;
+
+/** The failure list block of a note: heading and one line per failure, inside the markers. */
+export function failuresBlock(heading: string, lines: string[]): string {
+  return [FAILURES_START, heading, "", ...lines, FAILURES_END].join("\n");
+}
+
+/** The failure list block of a generated note, or "". */
+function failuresOf(content: string): string {
+  const m = content.match(/<!-- alt2obs:failures start -->[\s\S]*?<!-- alt2obs:failures end -->/);
+  return m ? m[0] : "";
+}
+
+function withoutFailures(text: string): string {
+  return text.replace(FAILURES_RE, "\n");
+}
+
+/** Sections, then the new failure list, then the orphan list, then one newline (the generator's layout). */
+function assemble(head: string, sections: string[], failures: string, orphans: string): string {
+  return head + [sections.join("\n\n"), failures, orphans].filter((x) => x.length > 0).join("\n\n") + "\n";
 }
 
 /**
@@ -354,6 +438,8 @@ export function mergeMultiManagedNote(
   confirmDeckReplacement: boolean;
   notes: string[];
 } {
+  existingContent = toLf(existingContent);
+  nextContent = toLf(nextContent);
   const existing = splitMultiManagedNote(existingContent);
   const next = splitMultiManagedNote(nextContent);
 
@@ -364,7 +450,7 @@ export function mergeMultiManagedNote(
     // backup instead of dropping it. Always append here, even over an older
     // backup: nesting beats losing text.
     return {
-      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false }),
+      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false, reason: hasSectionMarkers(existingContent) ? "to-slides" : "managed" }),
       reorders: [],
       insertions: next.sections.map((s) => s.slideNum),
       deletions: [],
@@ -386,21 +472,20 @@ export function mergeMultiManagedNote(
     existing.sections.length > 0 &&
     deletions.length > 0.5 * existing.sections.length;
 
-  // Re-emit: frontmatter + preamble + sections (with preserved free-space) + orphan footer
-  const sectionMarkdown = next.sections
-    .map((ns, i) => {
-      const idx = matched.get(i);
-      const cand = idx === undefined ? undefined : existing.sections[idx];
-      return [
-        `## 📚 슬라이드 ${ns.slideNum}`,
-        "",
-        formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "start"),
-        ns.managed.trim(),
-        formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "end"),
-        freeSpace(cand?.after),
-      ].join("\n");
-    })
-    .join("\n");
+  // Re-emit: frontmatter + preamble + sections (with preserved free-space) + failures + orphan footer
+  const sectionMarkdown = next.sections.map((ns, i) => {
+    const idx = matched.get(i);
+    const cand = idx === undefined ? undefined : existing.sections[idx];
+    return [
+      `## 📚 슬라이드 ${ns.slideNum}`,
+      "",
+      formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "start"),
+      ns.managed.trim(),
+      formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "end"),
+      "",
+      memoOf(cand ? withoutFailures(cand.after) : undefined),
+    ].join("\n");
+  });
 
   let orphanFooter = "";
   if (deletions.length > 0) {
@@ -410,14 +495,14 @@ export function mergeMultiManagedNote(
       .map((s) => {
         const dupSuffix = s.dup !== undefined ? ` dup:${s.dup}` : "";
         const orphanMarker = `<!-- alt2obs:orphan slide:${s.slideNum} hash:${s.hash}${dupSuffix} -->`;
-        return `${orphanMarker}\n${s.after.trim()}`;
+        return `${orphanMarker}\n${withoutFailures(s.after).trim()}`;
       })
       .join("\n\n");
-    orphanFooter = `\n\n## 🗑️ 삭제된 슬라이드 (orphan)\n\n${orphanBlocks}\n`;
+    orphanFooter = `## 🗑️ 삭제된 슬라이드 (orphan)\n\n${orphanBlocks}`;
   }
 
   const { preamble, notes } = mergeOverviewPreamble(existing.preamble, next.preamble);
-  const merged = next.frontmatter + preamble + sectionMarkdown + orphanFooter;
+  const merged = assemble(next.frontmatter + preamble, sectionMarkdown, failuresOf(nextContent), orphanFooter);
 
   return { merged, reorders, insertions, deletions, drifts, confirmDeckReplacement, notes };
 }
@@ -428,38 +513,40 @@ export function mergeMultiManagedNote(
 // `<!-- alt2obs:section:N hash:H start --> ... <!-- ... end -->`, then the
 // user's free space (`> [!note] 내 메모`) up to the next section heading.
 
-/** "## ⏱ 구간 N" heading line, anywhere in a text. */
-const SECTION_H2 = /(^|\n)## ⏱ 구간 \d+[^\n]*/g;
-
 export interface NoteSection {
   num: number;
   hash: string;
   /** The section's heading line as written ("## ⏱ 구간 3 [24:10~36:02]"), null when none precedes the block. */
   heading: string | null;
-  /**
-   * Text between the end of the previous section's free space and this
-   * section's start marker, without this section's heading line: what the
-   * user wrote under the heading, or a section whose end marker was deleted.
-   * Generated notes have none. Kept in place on re-import.
-   */
+  /** The heading parsed (times, the user's text after the range), null without a heading. */
+  parsed: SectionHeading | null;
+  /** Text between the heading and the start marker (what the user wrote under the heading). */
   lead: string;
   managed: string;
+  /** From the end marker to the next section's heading (or start marker), or the end of the note. */
   after: string;
 }
 
+/**
+ * Sections of a transcript summary note. A section's heading is the last
+ * "## ⏱ 구간 N" line with its own number before its start marker; the user's
+ * free space runs from its end marker up to the next section's heading, so
+ * anything between (a memo, a line the user wrote that looks like a
+ * heading, the text of a section whose end marker was deleted) stays where
+ * it is.
+ */
 export function splitSectionNote(content: string): { frontmatter: string; preamble: string; sections: NoteSection[] } {
   const fmMatch = content.match(/^---\n[\s\S]*?\n---\n*/);
   const frontmatter = fmMatch ? fmMatch[0] : "";
   const body = fmMatch ? content.slice(fmMatch[0].length) : content;
 
   const markers: Array<{ idx: number; end: number; num: number; hash: string; type: "start" | "end" }> = [];
-  const re = new RegExp(SECTION_MARKER_RE.source, "g");
+  const re = sectionMarkerRegex();
   let m: RegExpExecArray | null;
   while ((m = re.exec(body)) !== null) {
     markers.push({ idx: m.index, end: m.index + m[0].length, num: parseInt(m[1], 10), hash: m[2], type: m[3] as "start" | "end" });
   }
-  const sections: NoteSection[] = [];
-  const ranges: Array<{ startIdx: number; endIdx: number }> = [];
+  const pairs: Array<{ num: number; hash: string; startIdx: number; startEnd: number; endIdx: number; endEnd: number }> = [];
   const used = new Set<number>();
   for (let i = 0; i < markers.length; i++) {
     const s = markers[i];
@@ -468,65 +555,82 @@ export function splitSectionNote(content: string): { frontmatter: string; preamb
     if (k < 0) continue; // unpaired start: ignore
     used.add(i);
     used.add(k);
-    sections.push({ num: s.num, hash: s.hash, heading: null, lead: "", managed: body.slice(s.end, markers[k].idx), after: "" });
-    ranges.push({ startIdx: s.idx, endIdx: markers[k].end });
+    pairs.push({ num: s.num, hash: s.hash, startIdx: s.idx, startEnd: s.end, endIdx: markers[k].idx, endEnd: markers[k].end });
   }
-  if (sections.length === 0) return { frontmatter, preamble: body, sections };
+  if (pairs.length === 0) return { frontmatter, preamble: body, sections: [] };
 
-  /** Offset of the first section heading in body[from, to), or -1. */
-  const firstHeading = (from: number, to: number): number => {
-    const at = body.slice(from, to).search(/(^|\n)## ⏱ 구간 \d+/);
-    if (at < 0) return -1;
-    return from + at + (body[from + at] === "\n" ? 1 : 0);
-  };
-  // The preamble stops before the first section's heading (headings are re-emitted).
-  const firstH2 = firstHeading(0, ranges[0].startIdx);
-  const preamble = body.slice(0, firstH2 >= 0 ? firstH2 : ranges[0].startIdx);
-
-  // Free space: from the end marker to the next section heading (or start), or EOF.
-  // Lead: from there (or the preamble's end) to this start marker, minus this heading.
-  let leadFrom = firstH2 >= 0 ? firstH2 : ranges[0].startIdx;
-  for (let i = 0; i < sections.length; i++) {
-    const region = body.slice(leadFrom, ranges[i].startIdx);
-    const headings = Array.from(region.matchAll(SECTION_H2));
-    const last = headings.length > 0 ? headings[headings.length - 1] : null;
-    let lead = region;
-    if (last && last.index !== undefined) {
-      const lineStart = last.index + (last[0].startsWith("\n") ? 1 : 0);
-      sections[i].heading = last[0].replace(/^\n/, "").trimEnd();
-      lead = region.slice(0, lineStart) + region.slice(lineStart + sections[i].heading!.length);
+  // Each section's own heading line: [start, end) offsets in body, or null.
+  const headings = pairs.map((p, i) => {
+    const from = i === 0 ? 0 : pairs[i - 1].endEnd;
+    const region = body.slice(from, p.startIdx);
+    let found: { start: number; end: number; text: string } | null = null;
+    for (const h of region.matchAll(sectionHeadingLineRegex())) {
+      if (h.index !== undefined && parseSectionHeading(h[0])?.num === p.num) found = { start: from + h.index, end: from + h.index + h[0].length, text: h[0] };
     }
-    // Headings and marker lines of a broken section are the plugin's; its text and memo are kept.
-    sections[i].lead = lead
-      .split("\n")
-      .filter((l) => !/^## ⏱ 구간 \d+/.test(l) && !/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(l))
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-    const end = i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length;
-    const nextH2 = firstHeading(ranges[i].endIdx, end);
-    sections[i].after = body.slice(ranges[i].endIdx, nextH2 >= 0 ? nextH2 : end);
-    leadFrom = nextH2 >= 0 ? nextH2 : end;
-  }
+    return found;
+  });
+  const preamble = body.slice(0, headings[0]?.start ?? pairs[0].startIdx);
+  const sections: NoteSection[] = pairs.map((p, i) => {
+    const h = headings[i];
+    const next = i + 1 < pairs.length ? headings[i + 1]?.start ?? pairs[i + 1].startIdx : body.length;
+    return {
+      num: p.num,
+      hash: p.hash,
+      heading: h ? h.text.trimEnd() : null,
+      parsed: h ? parseSectionHeading(h.text) : null,
+      lead: h ? body.slice(h.end, p.startIdx).trim() : "",
+      managed: body.slice(p.startEnd, p.endIdx),
+      after: body.slice(p.endEnd, next),
+    };
+  });
   return { frontmatter, preamble, sections };
 }
 
 /**
+ * Kept user text without the plugin's leftovers of a broken section: stray
+ * section markers, meta lines, the old failure list, and a heading in the
+ * exact generated form of a section that is written again anyway.
+ */
+function keptText(text: string, emitted: Set<number>): string {
+  return withoutFailures(text)
+    .split("\n")
+    .filter((line) => {
+      if (/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(line)) return false;
+      const h = parseSectionHeading(line);
+      return !(h && h.plain && emitted.has(h.num));
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+/** Share of the shorter section's time that two sections share (0 without times). */
+function timeOverlap(a: SectionHeading | null, b: SectionHeading | null): number {
+  if (!a || !b || a.startMs === null || a.endMs === null || b.startMs === null || b.endMs === null) return 0;
+  const shared = Math.min(a.endMs, b.endMs) - Math.max(a.startMs, b.startMs);
+  const shorter = Math.min(a.endMs - a.startMs, b.endMs - b.startMs);
+  return shared > 0 && shorter > 0 ? shared / shorter : 0;
+}
+
+/**
  * Transcript summary note merge: memos follow their section (by transcript
- * hash, else by number), the overview block is refreshed like a slide
- * note's, sections that are gone keep their memos under "## 🗑️ 사라진 구간
- * (orphan)". An older note without sections (the 2.0.0-beta.5 lecture-level
- * note of the same lecture) is kept whole as a backup.
+ * hash, else by shared time, else by number), text under a heading and
+ * text the user added after a heading's time range are kept, the overview
+ * block is refreshed like a slide note's, sections that are gone keep their
+ * memos under "## 🗑️ 사라진 구간 (orphan)". An older note without sections
+ * (the 2.0.0-beta.5 lecture-level note of the same lecture) is kept whole
+ * as a backup.
  */
 export function mergeTranscriptNote(
   existingContent: string,
   nextContent: string
 ): Omit<NoteMergeResult, "mode"> {
+  existingContent = toLf(existingContent);
+  nextContent = toLf(nextContent);
   const existing = splitSectionNote(existingContent);
   const next = splitSectionNote(nextContent);
   if (existing.sections.length === 0) {
     return {
-      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false }),
+      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false, reason: "to-sections" }),
       reorders: [],
       insertions: next.sections.map((s) => s.num),
       deletions: [],
@@ -535,33 +639,45 @@ export function mergeTranscriptNote(
       notes: existingContent.trim() ? [TRANSCRIPT_MIGRATION_NOTE] : [],
     };
   }
-  const { matched, used, reorders, insertions, deletions, drifts } = pairSections(existing.sections, next.sections);
+  const { matched, used, reorders, insertions, deletions, drifts } = pairSections(existing.sections, next.sections, (e, n) =>
+    timeOverlap(existing.sections[e].parsed, next.sections[n].parsed)
+  );
   const confirmDeckReplacement = deletions.length > 0.5 * existing.sections.length;
-  const sectionMarkdown = next.sections
-    .map((ns, i) => {
-      const idx = matched.get(i);
-      const lead = idx === undefined ? "" : existing.sections[idx].lead;
-      return [
-        ns.heading ?? `## ⏱ 구간 ${ns.num}`,
-        "",
-        ...(lead ? [lead, ""] : []),
-        sectionMarker(ns.num, ns.hash, "start"),
-        ns.managed.trim(),
-        sectionMarker(ns.num, ns.hash, "end"),
-        freeSpace(idx === undefined ? undefined : existing.sections[idx].after),
-      ].join("\n");
-    })
-    .join("\n");
+  const emitted = new Set(next.sections.map((s) => s.num));
+  const sectionMarkdown = next.sections.map((ns, i) => {
+    const idx = matched.get(i);
+    const old = idx === undefined ? undefined : existing.sections[idx];
+    const suffix = old?.parsed?.suffix ?? "";
+    const lead = old ? keptText(old.lead, emitted).trim() : "";
+    return [
+      (ns.heading ?? `## ⏱ 구간 ${ns.num}`) + (suffix ? ` ${suffix}` : ""),
+      "",
+      ...(lead ? [lead, ""] : []),
+      sectionMarker(ns.num, ns.hash, "start"),
+      ns.managed.trim(),
+      sectionMarker(ns.num, ns.hash, "end"),
+      "",
+      memoOf(old ? keptText(old.after, emitted) : undefined),
+    ].join("\n");
+  });
   let orphanFooter = "";
   if (deletions.length > 0) {
     const blocks = existing.sections
       .filter((_, i) => !used.has(i))
-      .map((s) => `<!-- alt2obs:orphan section:${s.num} hash:${s.hash} -->\n${[s.lead, s.after.trim()].filter(Boolean).join("\n\n")}`)
+      .map((s) => `<!-- alt2obs:orphan section:${s.num} hash:${s.hash} -->\n${[keptText(s.lead, emitted).trim(), keptText(s.after, emitted).trim()].filter(Boolean).join("\n\n")}`)
       .join("\n\n");
-    orphanFooter = `\n\n## 🗑️ 사라진 구간 (orphan)\n\n${blocks}\n`;
+    orphanFooter = `## 🗑️ 사라진 구간 (orphan)\n\n${blocks}`;
   }
   const { preamble, notes } = mergeOverviewPreamble(existing.preamble, next.preamble);
-  return { merged: next.frontmatter + preamble + sectionMarkdown + orphanFooter, reorders, insertions, deletions, drifts, confirmDeckReplacement, notes };
+  return {
+    merged: assemble(next.frontmatter + preamble, sectionMarkdown, failuresOf(nextContent), orphanFooter),
+    reorders,
+    insertions,
+    deletions,
+    drifts,
+    confirmDeckReplacement,
+    notes,
+  };
 }
 
 /**
@@ -668,7 +784,9 @@ export interface NoteMergeResult {
  * merge otherwise (which keeps its "## 이전 노트 백업" behaviour for 1.0.x
  * notes).
  */
-export function mergeNote(currentContent: string, nextContent: string): NoteMergeResult {
+export function mergeNote(current: string, next: string): NoteMergeResult {
+  const currentContent = toLf(current);
+  const nextContent = toLf(next);
   assertNoPageAnchoredDowngrade(currentContent, nextContent);
   if (hasMultiManagedMarkers(nextContent) || hasMultiManagedMarkers(currentContent)) {
     return { mode: "multi", ...mergeMultiManagedNote(currentContent, nextContent) };

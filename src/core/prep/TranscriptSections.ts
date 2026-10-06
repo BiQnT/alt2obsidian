@@ -2,7 +2,8 @@
 // deterministic, no LLM, no tokens.
 //
 // 1. Split: the timestamped transcript is cut on segment boundaries into
-//    sections of 9 to 15 minutes (about 12; a 2 hour lecture gives 8 to 10).
+//    sections of 9 to 15 minutes of talk (about 12; a 2 hour lecture gives
+//    8 to 10; a silence over a minute counts as one minute).
 //    Inside that window the cut goes where the talk changes topic: the word
 //    overlap of the two minutes before and after a boundary is lowest (a
 //    cheap TextTiling), with a bonus for a pause and a small pull toward 12
@@ -31,6 +32,8 @@ export const UNTIMED_MIN_CHARS = 3000;
 export const UNTIMED_MAX_CHARS = 5500;
 /** Compressed transcript kept per section (characters). */
 export const SECTION_CAP_CHARS = 3000;
+/** Silence longer than this counts as this long when sections are measured. */
+const LONG_PAUSE_MS = 60_000;
 /** Words on each side of a boundary compared for the topic shift. */
 const TOPIC_WINDOW_MS = 120_000;
 const TOPIC_WINDOW_CHARS = 600;
@@ -223,8 +226,19 @@ export function splitTranscriptSections(segments: TranscriptSegment[] | TimedSeg
   const { segs, timed } = cleanSegments(segments);
   if (segs.length === 0) return { spans: [], segs, timed };
   if (timed) {
-    const pos = segs.map((s) => s.startMs as number);
-    const end = Math.max(...segs.map((s) => s.endMs as number));
+    // Lengths count talk, not silence: a pause over a minute (a break, the
+    // recording left running) counts as one minute, so no section is a few
+    // seconds of speech before a long gap.
+    const pos: number[] = [];
+    let skipped = 0;
+    segs.forEach((s, i) => {
+      if (i > 0) {
+        const gap = (s.startMs as number) - (segs[i - 1].endMs as number);
+        if (gap > LONG_PAUSE_MS) skipped += gap - LONG_PAUSE_MS;
+      }
+      pos.push((s.startMs as number) - skipped);
+    });
+    const end = Math.max(...segs.map((s) => s.endMs as number)) - skipped;
     const starts = boundaries(segs, {
       pos,
       end,

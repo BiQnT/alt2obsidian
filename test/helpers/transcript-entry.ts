@@ -17,3 +17,4 @@ export { UsageTracker } from "../../src/llm/usage";
 export * from "../../src/verify/NoteVerifier";
 export { normalizeConcepts } from "../../src/core/conceptNames";
 export { timedSegments } from "../../src/pipeline/alignment";
+export { preservedFrontmatterLines, removeFrontmatterLine } from "../../src/generator/NoteGenerator";

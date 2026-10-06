@@ -880,8 +880,8 @@ var DEFAULT_PLUGIN_DATA = {
 };
 
 // src/core/sections.ts
-var SECTION_HEADING_WORD = "\u23F1 \uAD6C\uAC04";
-var SECTION_HEADING_PREFIX = `## ${SECTION_HEADING_WORD}`;
+var SECTION_HEADING_PATTERN = "## \u23F1 \uAD6C\uAC04 (\\d+)";
+var HEADING_RE = new RegExp(`^${SECTION_HEADING_PATTERN}(?: \\[([0-9:]+)~([0-9:]+)\\])?(.*)$`);
 
 // src/core/merge.ts
 function splitMultiManagedNote(content) {

@@ -71,8 +71,7 @@ export interface BudgetEstimate {
   slidesTemplated: number;
   slidesDeduped: number;
   slidesReused: number;
-  /** Transcript summary note (spec 4.10): sections, sent to the LLM, and reused unchanged. */
-  sectionsTotal?: number;
+  /** Transcript summary note (spec 4.10): sections sent to the LLM, and reused unchanged. */
   sectionsGenerated?: number;
   sectionsReused?: number;
 }

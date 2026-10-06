@@ -632,7 +632,8 @@
   color: var(--text-muted);
 }
 .alt2obsidian-kind.is-slides,
-.alt2obsidian-kind.is-attached {
+.alt2obsidian-kind.is-attached,
+.alt2obsidian-kind.is-vault-copy {
   background: rgba(var(--color-blue-rgb), 0.15);
   color: var(--color-blue);
 }

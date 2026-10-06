@@ -68,14 +68,37 @@ var OVERVIEW_BLOCK_START = "<!-- alt2obs:overview start -->";
 var OVERVIEW_BLOCK_END = "<!-- alt2obs:overview end -->";
 
 // src/core/sections.ts
-var SECTION_HEADING_WORD = "\u23F1 \uAD6C\uAC04";
-var SECTION_HEADING_PREFIX = `## ${SECTION_HEADING_WORD}`;
-var SECTION_MARKER_RE = /<!-- alt2obs:section:(\d+) hash:([0-9a-f]{8}) (start|end) -->/g;
+var SECTION_HEADING_PATTERN = "## \u23F1 \uAD6C\uAC04 (\\d+)";
+var SECTION_MARKER_PATTERN = "<!-- alt2obs:section:(\\d+) hash:([0-9a-f]{8}) (start|end) -->";
+function sectionMarkerRegex() {
+  return new RegExp(SECTION_MARKER_PATTERN, "g");
+}
+function sectionHeadingLineRegex() {
+  return new RegExp(`^${SECTION_HEADING_PATTERN}[^\\n]*$`, "gm");
+}
 function hasSectionMarkers(content) {
-  return /<!-- alt2obs:section:\d+ hash:[0-9a-f]{8} (start|end) -->/.test(content);
+  return new RegExp(SECTION_MARKER_PATTERN).test(content);
 }
 function sectionMarker(num, hash, kind) {
   return `<!-- alt2obs:section:${num} hash:${hash} ${kind} -->`;
+}
+function parseClock(text) {
+  const m = text.trim().match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+  if (!m)
+    return null;
+  return ((m[1] ? Number(m[1]) * 3600 : 0) + Number(m[2]) * 60 + Number(m[3])) * 1e3;
+}
+var HEADING_RE = new RegExp(`^${SECTION_HEADING_PATTERN}(?: \\[([0-9:]+)~([0-9:]+)\\])?(.*)$`);
+function parseSectionHeading(line) {
+  const m = line.replace(/\r$/, "").match(HEADING_RE);
+  if (!m)
+    return null;
+  if (m[4] && !/^\s/.test(m[4]))
+    return null;
+  const startMs = m[2] ? parseClock(m[2]) : null;
+  const endMs = m[3] ? parseClock(m[3]) : null;
+  const suffix = m[4].trim();
+  return { num: Number(m[1]), startMs, endMs, text: line.replace(/\r$/, "").replace(/^## /, "").trim(), suffix, plain: suffix === "" };
 }
 
 // src/core/merge.ts
@@ -94,7 +117,12 @@ function assertNoPageAnchoredDowngrade(currentContent, nextContent) {
     );
   }
 }
-function mergeManagedNote(currentContent, nextContent) {
+function toLf(text) {
+  return text.replace(/\r\n?/g, "\n");
+}
+function mergeManagedNote(current, next) {
+  const currentContent = toLf(current);
+  const nextContent = toLf(next);
   const nextParts = splitManagedNote(nextContent);
   const currentParts = splitManagedNote(currentContent);
   if (currentParts.managed) {
@@ -107,6 +135,20 @@ function mergeManagedNote(currentContent, nextContent) {
   }
   return appendPreviousNoteBackup(currentContent, nextContent, { skipIfBackupExists: true });
 }
+var BACKUP_REASONS = {
+  managed: "\uC774 \uB0B4\uC6A9\uC740 Alt2Obsidian \uAD00\uB9AC \uAD6C\uAC04\uC774 \uB3C4\uC785\uB418\uAE30 \uC804\uC758 \uAE30\uC874 \uB178\uD2B8\uC785\uB2C8\uB2E4.",
+  "to-slides": "\uC774 \uB0B4\uC6A9\uC740 \uC2AC\uB77C\uC774\uB4DC\uBCC4 \uB178\uD2B8\uB85C \uBC14\uB00C\uAE30 \uC804\uC758 \uC804\uC0AC \uAD6C\uAC04 \uC694\uC57D \uB178\uD2B8\uC785\uB2C8\uB2E4. \uB0B4 \uBA54\uBAA8\uB294 \uD544\uC694\uD55C \uC2AC\uB77C\uC774\uB4DC \uC544\uB798\uB85C \uC62E\uAE30\uC138\uC694.",
+  "to-sections": "\uC774 \uB0B4\uC6A9\uC740 \uC804\uC0AC \uAD6C\uAC04 \uC694\uC57D \uB178\uD2B8\uB85C \uBC14\uB00C\uAE30 \uC804\uC758 \uAC15\uC758 \uB178\uD2B8\uC785\uB2C8\uB2E4. \uB0B4 \uBA54\uBAA8\uB294 \uD544\uC694\uD55C \uAD6C\uAC04 \uC544\uB798\uB85C \uC62E\uAE30\uC138\uC694."
+};
+function backupBody(current) {
+  const fm = current.match(/^---\n([\s\S]*?)\n---\n*/);
+  if (!fm)
+    return current.trim();
+  let fence = "```";
+  while (fm[1].includes(fence))
+    fence += "`";
+  return [`${fence}yaml`, "---", fm[1], "---", fence, "", current.slice(fm[0].length).trim()].join("\n").trim();
+}
 function appendPreviousNoteBackup(currentContent, nextContent, opts) {
   const hasExistingBackup = /(^|\n)## 이전 노트 백업\s*\n/.test(currentContent);
   if (opts.skipIfBackupExists && hasExistingBackup || currentContent.trim().length === 0) {
@@ -118,9 +160,9 @@ function appendPreviousNoteBackup(currentContent, nextContent, opts) {
     "## \uC774\uC804 \uB178\uD2B8 \uBC31\uC5C5",
     "",
     "> [!note]",
-    "> \uC774 \uB0B4\uC6A9\uC740 Alt2Obsidian \uAD00\uB9AC \uAD6C\uAC04\uC774 \uB3C4\uC785\uB418\uAE30 \uC804\uC758 \uAE30\uC874 \uB178\uD2B8\uC785\uB2C8\uB2E4.",
+    `> ${BACKUP_REASONS[opts.reason ?? "managed"]}`,
     "",
-    currentContent.trim(),
+    backupBody(currentContent),
     ""
   ].join("\n");
 }
@@ -221,7 +263,7 @@ function formatSlideMarker(slideNum, hash, dup, kind) {
   const dupSuffix = dup !== void 0 ? ` dup:${dup}` : "";
   return `<!-- alt2obs:slide:${slideNum} hash:${hash}${dupSuffix} ${kind} -->`;
 }
-function pairSections(existing, next) {
+function pairSections(existing, next, overlap) {
   const used = /* @__PURE__ */ new Set();
   const matched = /* @__PURE__ */ new Map();
   const reorders = [];
@@ -245,15 +287,36 @@ function pairSections(existing, next) {
       }
     }
   });
+  const drift = (i, idx) => {
+    used.add(idx);
+    matched.set(i, idx);
+    drifts.push({ slideNum: next[i].num, oldHash: existing[idx].hash, newHash: next[i].hash });
+  };
+  if (overlap) {
+    next.forEach((_, i) => {
+      if (matched.has(i))
+        return;
+      let best = -1;
+      let bestShare = 0.5;
+      existing.forEach((_2, idx) => {
+        if (used.has(idx))
+          return;
+        const share = overlap(idx, i);
+        if (share >= bestShare && (best < 0 || share > bestShare)) {
+          best = idx;
+          bestShare = share;
+        }
+      });
+      if (best >= 0)
+        drift(i, best);
+    });
+  }
   next.forEach((ns, i) => {
     if (matched.has(i))
       return;
     const idx = existing.findIndex((s, j) => !used.has(j) && s.num === ns.num);
-    if (idx >= 0) {
-      used.add(idx);
-      matched.set(i, idx);
-      drifts.push({ slideNum: ns.num, oldHash: existing[idx].hash, newHash: ns.hash });
-    }
+    if (idx >= 0)
+      drift(i, idx);
   });
   next.forEach((ns, i) => {
     if (!matched.has(i))
@@ -265,16 +328,30 @@ function pairSections(existing, next) {
   });
   return { matched, used, reorders, insertions, deletions, drifts };
 }
-function freeSpace(after) {
-  const kept = after && after.trim().length > 0 ? after : "\n\n> [!note] \uB0B4 \uBA54\uBAA8\n> \n\n";
-  return "\n" + kept.replace(/^\n+|\n+$/g, "") + "\n\n";
+var DEFAULT_MEMO = "> [!note] \uB0B4 \uBA54\uBAA8\n> ";
+function memoOf(after) {
+  const kept = after ? after.replace(/^\n+|\n+$/g, "") : "";
+  return kept.trim().length > 0 ? kept : DEFAULT_MEMO;
+}
+var FAILURES_RE = /\n*<!-- alt2obs:failures start -->[\s\S]*?<!-- alt2obs:failures end -->[ \t]*/g;
+function failuresOf(content) {
+  const m = content.match(/<!-- alt2obs:failures start -->[\s\S]*?<!-- alt2obs:failures end -->/);
+  return m ? m[0] : "";
+}
+function withoutFailures(text) {
+  return text.replace(FAILURES_RE, "\n");
+}
+function assemble(head, sections, failures, orphans) {
+  return head + [sections.join("\n\n"), failures, orphans].filter((x) => x.length > 0).join("\n\n") + "\n";
 }
 function mergeMultiManagedNote(existingContent, nextContent) {
+  existingContent = toLf(existingContent);
+  nextContent = toLf(nextContent);
   const existing = splitMultiManagedNote(existingContent);
   const next = splitMultiManagedNote(nextContent);
   if (existing.sections.length === 0) {
     return {
-      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false }),
+      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false, reason: hasSectionMarkers(existingContent) ? "to-slides" : "managed" }),
       reorders: [],
       insertions: next.sections.map((s) => s.slideNum),
       deletions: [],
@@ -297,41 +374,37 @@ function mergeMultiManagedNote(existingContent, nextContent) {
       formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "start"),
       ns.managed.trim(),
       formatSlideMarker(ns.slideNum, ns.hash, ns.dup, "end"),
-      freeSpace(cand?.after)
+      "",
+      memoOf(cand ? withoutFailures(cand.after) : void 0)
     ].join("\n");
-  }).join("\n");
+  });
   let orphanFooter = "";
   if (deletions.length > 0) {
     const orphanBlocks = existing.sections.map((s, i) => used.has(i) ? null : s).filter((s) => s !== null).map((s) => {
       const dupSuffix = s.dup !== void 0 ? ` dup:${s.dup}` : "";
       const orphanMarker = `<!-- alt2obs:orphan slide:${s.slideNum} hash:${s.hash}${dupSuffix} -->`;
       return `${orphanMarker}
-${s.after.trim()}`;
+${withoutFailures(s.after).trim()}`;
     }).join("\n\n");
-    orphanFooter = `
+    orphanFooter = `## \u{1F5D1}\uFE0F \uC0AD\uC81C\uB41C \uC2AC\uB77C\uC774\uB4DC (orphan)
 
-## \u{1F5D1}\uFE0F \uC0AD\uC81C\uB41C \uC2AC\uB77C\uC774\uB4DC (orphan)
-
-${orphanBlocks}
-`;
+${orphanBlocks}`;
   }
   const { preamble, notes } = mergeOverviewPreamble(existing.preamble, next.preamble);
-  const merged = next.frontmatter + preamble + sectionMarkdown + orphanFooter;
+  const merged = assemble(next.frontmatter + preamble, sectionMarkdown, failuresOf(nextContent), orphanFooter);
   return { merged, reorders, insertions, deletions, drifts, confirmDeckReplacement, notes };
 }
-var SECTION_H2 = /(^|\n)## ⏱ 구간 \d+[^\n]*/g;
 function splitSectionNote(content) {
   const fmMatch = content.match(/^---\n[\s\S]*?\n---\n*/);
   const frontmatter = fmMatch ? fmMatch[0] : "";
   const body = fmMatch ? content.slice(fmMatch[0].length) : content;
   const markers = [];
-  const re = new RegExp(SECTION_MARKER_RE.source, "g");
+  const re = sectionMarkerRegex();
   let m;
   while ((m = re.exec(body)) !== null) {
     markers.push({ idx: m.index, end: m.index + m[0].length, num: parseInt(m[1], 10), hash: m[2], type: m[3] });
   }
-  const sections = [];
-  const ranges = [];
+  const pairs = [];
   const used = /* @__PURE__ */ new Set();
   for (let i = 0; i < markers.length; i++) {
     const s = markers[i];
@@ -342,44 +415,59 @@ function splitSectionNote(content) {
       continue;
     used.add(i);
     used.add(k);
-    sections.push({ num: s.num, hash: s.hash, heading: null, lead: "", managed: body.slice(s.end, markers[k].idx), after: "" });
-    ranges.push({ startIdx: s.idx, endIdx: markers[k].end });
+    pairs.push({ num: s.num, hash: s.hash, startIdx: s.idx, startEnd: s.end, endIdx: markers[k].idx, endEnd: markers[k].end });
   }
-  if (sections.length === 0)
-    return { frontmatter, preamble: body, sections };
-  const firstHeading = (from, to) => {
-    const at = body.slice(from, to).search(/(^|\n)## ⏱ 구간 \d+/);
-    if (at < 0)
-      return -1;
-    return from + at + (body[from + at] === "\n" ? 1 : 0);
-  };
-  const firstH2 = firstHeading(0, ranges[0].startIdx);
-  const preamble = body.slice(0, firstH2 >= 0 ? firstH2 : ranges[0].startIdx);
-  let leadFrom = firstH2 >= 0 ? firstH2 : ranges[0].startIdx;
-  for (let i = 0; i < sections.length; i++) {
-    const region = body.slice(leadFrom, ranges[i].startIdx);
-    const headings = Array.from(region.matchAll(SECTION_H2));
-    const last = headings.length > 0 ? headings[headings.length - 1] : null;
-    let lead = region;
-    if (last && last.index !== void 0) {
-      const lineStart = last.index + (last[0].startsWith("\n") ? 1 : 0);
-      sections[i].heading = last[0].replace(/^\n/, "").trimEnd();
-      lead = region.slice(0, lineStart) + region.slice(lineStart + sections[i].heading.length);
+  if (pairs.length === 0)
+    return { frontmatter, preamble: body, sections: [] };
+  const headings = pairs.map((p, i) => {
+    const from = i === 0 ? 0 : pairs[i - 1].endEnd;
+    const region = body.slice(from, p.startIdx);
+    let found = null;
+    for (const h of region.matchAll(sectionHeadingLineRegex())) {
+      if (h.index !== void 0 && parseSectionHeading(h[0])?.num === p.num)
+        found = { start: from + h.index, end: from + h.index + h[0].length, text: h[0] };
     }
-    sections[i].lead = lead.split("\n").filter((l) => !/^## ⏱ 구간 \d+/.test(l) && !/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
-    const end = i + 1 < ranges.length ? ranges[i + 1].startIdx : body.length;
-    const nextH2 = firstHeading(ranges[i].endIdx, end);
-    sections[i].after = body.slice(ranges[i].endIdx, nextH2 >= 0 ? nextH2 : end);
-    leadFrom = nextH2 >= 0 ? nextH2 : end;
-  }
+    return found;
+  });
+  const preamble = body.slice(0, headings[0]?.start ?? pairs[0].startIdx);
+  const sections = pairs.map((p, i) => {
+    const h = headings[i];
+    const next = i + 1 < pairs.length ? headings[i + 1]?.start ?? pairs[i + 1].startIdx : body.length;
+    return {
+      num: p.num,
+      hash: p.hash,
+      heading: h ? h.text.trimEnd() : null,
+      parsed: h ? parseSectionHeading(h.text) : null,
+      lead: h ? body.slice(h.end, p.startIdx).trim() : "",
+      managed: body.slice(p.startEnd, p.endIdx),
+      after: body.slice(p.endEnd, next)
+    };
+  });
   return { frontmatter, preamble, sections };
 }
+function keptText(text, emitted) {
+  return withoutFailures(text).split("\n").filter((line) => {
+    if (/^<!-- alt2obs:(?:section:\d+ hash:[0-9a-f]{8} (?:start|end)|meta [^\n]*) -->\s*$/.test(line))
+      return false;
+    const h = parseSectionHeading(line);
+    return !(h && h.plain && emitted.has(h.num));
+  }).join("\n").replace(/\n{3,}/g, "\n\n");
+}
+function timeOverlap(a, b) {
+  if (!a || !b || a.startMs === null || a.endMs === null || b.startMs === null || b.endMs === null)
+    return 0;
+  const shared = Math.min(a.endMs, b.endMs) - Math.max(a.startMs, b.startMs);
+  const shorter = Math.min(a.endMs - a.startMs, b.endMs - b.startMs);
+  return shared > 0 && shorter > 0 ? shared / shorter : 0;
+}
 function mergeTranscriptNote(existingContent, nextContent) {
+  existingContent = toLf(existingContent);
+  nextContent = toLf(nextContent);
   const existing = splitSectionNote(existingContent);
   const next = splitSectionNote(nextContent);
   if (existing.sections.length === 0) {
     return {
-      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false }),
+      merged: appendPreviousNoteBackup(existingContent, nextContent, { skipIfBackupExists: false, reason: "to-sections" }),
       reorders: [],
       insertions: next.sections.map((s) => s.num),
       deletions: [],
@@ -388,34 +476,47 @@ function mergeTranscriptNote(existingContent, nextContent) {
       notes: existingContent.trim() ? [TRANSCRIPT_MIGRATION_NOTE] : []
     };
   }
-  const { matched, used, reorders, insertions, deletions, drifts } = pairSections(existing.sections, next.sections);
+  const { matched, used, reorders, insertions, deletions, drifts } = pairSections(
+    existing.sections,
+    next.sections,
+    (e, n) => timeOverlap(existing.sections[e].parsed, next.sections[n].parsed)
+  );
   const confirmDeckReplacement = deletions.length > 0.5 * existing.sections.length;
+  const emitted = new Set(next.sections.map((s) => s.num));
   const sectionMarkdown = next.sections.map((ns, i) => {
     const idx = matched.get(i);
-    const lead = idx === void 0 ? "" : existing.sections[idx].lead;
+    const old = idx === void 0 ? void 0 : existing.sections[idx];
+    const suffix = old?.parsed?.suffix ?? "";
+    const lead = old ? keptText(old.lead, emitted).trim() : "";
     return [
-      ns.heading ?? `## \u23F1 \uAD6C\uAC04 ${ns.num}`,
+      (ns.heading ?? `## \u23F1 \uAD6C\uAC04 ${ns.num}`) + (suffix ? ` ${suffix}` : ""),
       "",
       ...lead ? [lead, ""] : [],
       sectionMarker(ns.num, ns.hash, "start"),
       ns.managed.trim(),
       sectionMarker(ns.num, ns.hash, "end"),
-      freeSpace(idx === void 0 ? void 0 : existing.sections[idx].after)
+      "",
+      memoOf(old ? keptText(old.after, emitted) : void 0)
     ].join("\n");
-  }).join("\n");
+  });
   let orphanFooter = "";
   if (deletions.length > 0) {
     const blocks = existing.sections.filter((_, i) => !used.has(i)).map((s) => `<!-- alt2obs:orphan section:${s.num} hash:${s.hash} -->
-${[s.lead, s.after.trim()].filter(Boolean).join("\n\n")}`).join("\n\n");
-    orphanFooter = `
+${[keptText(s.lead, emitted).trim(), keptText(s.after, emitted).trim()].filter(Boolean).join("\n\n")}`).join("\n\n");
+    orphanFooter = `## \u{1F5D1}\uFE0F \uC0AC\uB77C\uC9C4 \uAD6C\uAC04 (orphan)
 
-## \u{1F5D1}\uFE0F \uC0AC\uB77C\uC9C4 \uAD6C\uAC04 (orphan)
-
-${blocks}
-`;
+${blocks}`;
   }
   const { preamble, notes } = mergeOverviewPreamble(existing.preamble, next.preamble);
-  return { merged: next.frontmatter + preamble + sectionMarkdown + orphanFooter, reorders, insertions, deletions, drifts, confirmDeckReplacement, notes };
+  return {
+    merged: assemble(next.frontmatter + preamble, sectionMarkdown, failuresOf(nextContent), orphanFooter),
+    reorders,
+    insertions,
+    deletions,
+    drifts,
+    confirmDeckReplacement,
+    notes
+  };
 }
 function mergeOverviewPreamble(existingPreamble, nextPreamble) {
   const nextSection = extractOverviewSection(nextPreamble);
@@ -473,7 +574,9 @@ function findOverviewBlock(text) {
     return null;
   return { bodyStart, bodyEnd };
 }
-function mergeNote(currentContent, nextContent) {
+function mergeNote(current, next) {
+  const currentContent = toLf(current);
+  const nextContent = toLf(next);
   assertNoPageAnchoredDowngrade(currentContent, nextContent);
   if (hasMultiManagedMarkers(nextContent) || hasMultiManagedMarkers(currentContent)) {
     return { mode: "multi", ...mergeMultiManagedNote(currentContent, nextContent) };
