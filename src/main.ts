@@ -256,7 +256,7 @@ export default class Alt2ObsPlugin extends Plugin {
     this.applyCommentHiding();
 
     // Add ribbon icon
-    this.addRibbonIcon("book-open", "Alt2Obs", () => {
+    this.addRibbonIcon("book-open", "Alt 강의 가져오기", () => {
       void this.activateSidebarView();
     });
 
@@ -269,7 +269,7 @@ export default class Alt2ObsPlugin extends Plugin {
 
     this.addCommand({
       id: "import-note",
-      name: "Import Alt note (local list or URL)",
+      name: "Import lecture note (local list or URL)",
       callback: () => this.activateSidebarView(),
     });
 
@@ -381,7 +381,7 @@ export default class Alt2ObsPlugin extends Plugin {
     const active = this.app.workspace.getActiveFile();
     const mdPath = active?.extension.toLowerCase() === "pdf" ? active.path.replace(/\.pdf$/i, ".md") : active?.extension === "md" ? active.path : null;
     if (!mdPath || !isLectureFrontmatter(this.frontmatterOf(mdPath))) {
-      new Notice("강의 노트(Alt에서 가져온 노트)를 연 뒤 다시 시도하세요.");
+      new Notice("Alt에서 가져온 강의 노트를 연 뒤 다시 시도하세요.");
       return;
     }
     await this.attachPdfInteractive(mdPath);

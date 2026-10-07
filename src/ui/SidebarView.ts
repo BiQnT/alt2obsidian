@@ -82,7 +82,7 @@ export class Alt2ObsSidebarView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Alt2Obs";
+    return "Alt 강의 노트";
   }
 
   getIcon(): string {
@@ -964,7 +964,7 @@ export class Alt2ObsSidebarView extends ItemView {
         if (prepared.plan) {
           const pdfPath = this.plugin.siblingPdf(prepared.notePath)?.path ?? attachedPdfPath(prepared.notePath);
           if (prepared.pdfSource === "attached") rows.createEl("li", { text: `첨부한 PDF를 슬라이드로 씁니다: ${pdfPath}` });
-          if (prepared.altPdfIgnored) rows.createEl("li", { text: "Alt에도 슬라이드 PDF가 있지만 첨부한 PDF를 씁니다. Alt 슬라이드를 쓰려면 아래 목록 패널의 'Alt 슬라이드로 바꾸기'를 누르세요." });
+          if (prepared.altPdfIgnored) rows.createEl("li", { text: "Alt에도 슬라이드 PDF가 있지만 첨부한 PDF를 씁니다. Alt 슬라이드를 쓰려면 아래 목록 패널에서 이 버튼을 누르세요: Alt 슬라이드로 바꾸기" });
           if (prepared.pdfSource === "vault") rows.createEl("li", { text: `Alt의 슬라이드 파일을 읽지 못해 노트 옆에 저장해 둔 PDF를 씁니다: ${pdfPath}` });
           const skipped = e.slidesTemplated + e.slidesDeduped + e.slidesReused;
           rows.createEl("li", {
@@ -1000,7 +1000,7 @@ export class Alt2ObsSidebarView extends ItemView {
           if (!tp.timed) rows.createEl("li", { text: "전사에 시각이 없어(URL) 글자 수로 구간을 나눕니다. 구간에 시각이 없고, 이 노트는 노트 검증에 쓸 수 없습니다." });
           rows.createEl("li", { text: "슬라이드가 없어 슬라이드별 해설과 synced viewer는 없습니다. 강의 PDF를 첨부하면 슬라이드 노트로 바꿀 수 있습니다 (메모 보존)." });
         } else {
-          rows.createEl("li", { text: "PDF와 전사가 없어 Alt 요약과 메모로 강의 노트를 만듭니다." });
+          rows.createEl("li", { text: "Alt 요약과 메모로 강의 노트를 만듭니다 (PDF와 전사가 없음)." });
         }
         rows.createEl("li", {
           cls: "alt2obs-muted",

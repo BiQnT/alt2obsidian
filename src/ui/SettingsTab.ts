@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type Alt2ObsPlugin from "../main";
-import { CliName, EffortLevel, PresetId, ProviderId, TaskId } from "../types";
+import { CliName, DEFAULT_SETTINGS, EffortLevel, PresetId, ProviderId, TaskId } from "../types";
 import {
   applyPreset,
   defaultTaskSetting,
@@ -382,7 +382,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName("핵심 다이어그램 이미지 저장")
-      .setDesc("도표·그림 위주 슬라이드(강의당 최대 8장)를 과목 폴더의 Attachments/에 PNG로 저장하고 해당 슬라이드 해설 안에 넣습니다. 스크립트로 고르므로 토큰이 들지 않습니다.")
+      .setDesc("도표·그림 위주 슬라이드(강의당 최대 8장)를 과목 폴더 안 Attachments/<강의>-<쪽>.png 파일로 저장하고 해당 슬라이드 해설 안에 넣습니다. 스크립트로 고르므로 토큰이 들지 않습니다.")
       .addToggle((t) =>
         t.setValue(g.saveKeyDiagrams).onChange(async (value) => {
           g.saveKeyDiagrams = value;
@@ -467,10 +467,10 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
       .setDesc("Vault 내에서 노트가 저장될 기본 폴더")
       .addText((text) =>
         text
-          .setPlaceholder("Alt2Obsidian")
+          .setPlaceholder(DEFAULT_SETTINGS.baseFolderPath)
           .setValue(this.settings.baseFolderPath)
           .onChange(async (value) => {
-            this.settings.baseFolderPath = value || "Alt2Obsidian";
+            this.settings.baseFolderPath = value || DEFAULT_SETTINGS.baseFolderPath;
             await this.save();
             this.plugin.updateBasePath();
           })
