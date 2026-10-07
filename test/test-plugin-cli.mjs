@@ -74,8 +74,10 @@ function makeApp() {
       getMarkdownFiles: () => [...files.keys()].filter((p) => p.endsWith(".md")).map(tfile),
       createBinary: async (p, d) => void (files.set(p, "<binary>"), binaries.set(p, d)),
       modifyBinary: async (f, d) => void (files.set(f.path, "<binary>"), binaries.set(f.path, d)),
-      // Obsidian's vault.trash(file, true): the system trash (else .trash), recoverable.
-      trash: async (f, system) => void (assert.equal(system, true, "the system trash"), trashed.push(f.path), files.delete(f.path), binaries.delete(f.path)),
+      // The vault's own trash ignores the user's "Deleted files" setting.
+      trash: async () => {
+        throw new Error("use fileManager.trashFile(file): the user's deletion setting");
+      },
       adapter: {
         getResourcePath: (p) => p,
         exists: async (p) => config.has(p) || [...config.keys()].some((k) => k.startsWith(p + "/")),
@@ -94,10 +96,8 @@ function makeApp() {
       },
     },
     fileManager: {
-      // Obsidian's trash (the user's trash setting): gone from the vault.
-      trashFile: async () => {
-        throw new Error("use vault.trash(file, true): the recoverable trash");
-      },
+      // Obsidian's trash (the user's "Deleted files" setting): gone from the vault.
+      trashFile: async (f) => void (trashed.push(f.path), files.delete(f.path), binaries.delete(f.path)),
       renameFile: async (f, to) => {
         files.set(to, files.get(f.path));
         if (binaries.has(f.path)) binaries.set(to, binaries.get(f.path));
@@ -1033,7 +1033,7 @@ try {
     await plugin.attachPdf(notePath, { kind: "disk", name: "again.pdf", data: pdfBytes });
     assert.match(files.get(notePath).slice(0, files.get(notePath).indexOf("\n---\n", 4)), /\nalt_pdf_source: "attached"(\n|$)/);
     await plugin.detachPdf(notePath);
-    assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf") && trashed.filter((p) => p.endsWith("/L9.pdf")).length === 2, "the attached copy is in the (system) trash");
+    assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf") && trashed.filter((p) => p.endsWith("/L9.pdf")).length === 2, "the attached copy is trashed");
     const fmText = (t) => t.slice(0, t.indexOf("\n---\n", 4));
     assert.ok(!/alt_pdf_source/.test(fmText(files.get(notePath))), "the mark is gone from the frontmatter (the backed-up old note may still mention it)");
     assert.equal(plugin.lectureKindFor({ altType: "note", hasSlides: false, hasTranscript: true, notePath }), "transcript");

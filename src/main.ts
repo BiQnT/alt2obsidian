@@ -1711,10 +1711,10 @@ export default class Alt2ObsPlugin extends Plugin {
 
   /**
    * The attached PDF next to a note leaves its place: a copy the plugin made
-   * (see `attachedPdfIsCopy`) goes to the trash with the vault's documented
-   * recoverable path (the system trash, else the vault's .trash folder),
-   * never deleted for good; any other file is the user's own and is never
-   * trashed: renamed to a free "<note> (첨부한 PDF).pdf" when `rename` (so an
+   * (see `attachedPdfIsCopy`) is deleted the way the user set Obsidian to
+   * delete files (FileManager.trashFile: the system trash by default, the
+   * vault's .trash folder, or for good); any other file is the user's own
+   * and is never trashed: renamed to a free "<note> (첨부한 PDF).pdf" when `rename` (so an
    * import cannot overwrite it), else left where it is.
    */
   private async releaseAttachedPdf(notePath: string, rename: boolean): Promise<{ pdfPath: string | null; trashed: boolean; keptAt: string | null }> {
@@ -1723,7 +1723,7 @@ export default class Alt2ObsPlugin extends Plugin {
     if (!pdf) return { pdfPath: null, trashed: false, keptAt: null };
     const path = pdf.path;
     if (await this.attachedPdfIsCopy(notePath)) {
-      await this.app.vault.trash(pdf, true);
+      await this.app.fileManager.trashFile(pdf);
       await this.recordCopy(path, null);
       return { pdfPath: path, trashed: true, keptAt: null };
     }

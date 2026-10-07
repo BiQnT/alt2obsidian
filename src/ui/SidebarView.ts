@@ -491,7 +491,7 @@ export class Alt2ObsSidebarView extends ItemView {
     }
   }
 
-  /** What happens to the attached PDF, for the confirmation text (only a plugin-made copy goes to the trash). */
+  /** What happens to the attached PDF, for the confirmation text (only a plugin-made copy is deleted). */
   private attachedFate(notePath: string, rename: boolean, isCopy: boolean): string {
     const pdf = this.plugin.siblingPdf(notePath);
     const path = pdf?.path ?? attachedPdfPath(notePath);
@@ -501,13 +501,13 @@ export class Alt2ObsSidebarView extends ItemView {
         ? `${path}는 플러그인이 만든 사본이 아니거나 그 뒤 바뀐 파일이라 지우지 않고, Alt PDF가 그 자리에 저장되지 않도록 "${path.replace(/\.pdf$/i, "")} (첨부한 PDF).pdf"로 이름을 바꿔 둡니다.`
         : `${path}는 플러그인이 만든 사본이 아니거나 그 뒤 바뀐 파일이라 지우지 않고 그대로 둡니다.`;
     }
-    return `첨부할 때 플러그인이 만든 사본(${path})은 시스템 휴지통으로 옮깁니다(안 되면 보관함의 .trash 폴더). 영구 삭제하지 않으며 원본 파일은 그대로입니다.`;
+    return `첨부할 때 플러그인이 만든 사본(${path})은 Obsidian에서 정한 파일 삭제 방식대로(기본은 시스템 휴지통) 지웁니다. 원본 파일은 그대로입니다.`;
   }
 
   /** Message after the attached PDF left. */
   private releasedText(r: { pdfPath: string | null; trashed: boolean; keptAt: string | null }): string {
     if (!r.pdfPath) return "";
-    if (r.trashed) return ` 첨부한 사본(${r.pdfPath})은 휴지통으로 옮겼습니다.`;
+    if (r.trashed) return ` 첨부한 사본(${r.pdfPath})은 Obsidian에서 정한 파일 삭제 방식대로 지웠습니다.`;
     return r.keptAt && r.keptAt !== r.pdfPath ? ` 원래 파일은 ${r.keptAt}로 이름을 바꿔 두었습니다.` : ` 원래 파일(${r.pdfPath})은 그대로 두었습니다.`;
   }
 
