@@ -481,7 +481,7 @@ export class Alt2ObsSidebarView extends ItemView {
         if (d?.hasSlides && d.pdfPath) {
           button("Alt 슬라이드로 바꾸기", () => void this.switchToAlt(it, notePath), { work: true, title: "다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 씁니다" });
         }
-        button("첨부 해제", () => void this.confirmDetach(it, notePath), { work: true, title: "첨부한 PDF 사본을 휴지통으로 옮기고 표시를 지웁니다 (보관함의 원래 파일은 그대로)" });
+        button("첨부 해제", () => void this.confirmDetach(it, notePath), { work: true, title: "첨부할 때 만든 PDF 사본을 Obsidian에서 정한 파일 삭제 방식대로 지우고 첨부 표시를 없앱니다 (원본 파일은 그대로)" });
       }
     } else if (kind === "transcript") {
       button("PDF 첨부", () => void this.attachForLocal(it), { work: true, title: "강의 PDF를 골라 슬라이드 강의로 가져옵니다" });
