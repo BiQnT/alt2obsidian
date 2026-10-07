@@ -22,10 +22,10 @@ Single source for every LLM prompt used by the Alt2Obs plugin (named Alt2Obsidia
 | `concept-extraction-gists.md` | CLI path concept extraction from gists (system: `concept-extraction.system.*.md`) | `subject`, `langInstruction`, `existingConceptHint`, `subjectTags`, `linkCandidates`, `gists` |
 | `concept-extraction.md` | concept extraction | `subject`, `langInstruction`, `existingConceptHint`, `summary` |
 | `concept-extraction.system.ko.md`, `concept-extraction.system.en.md` | concept extraction (system, by language) | none |
-| `summary-from-transcript.md` (+ `.system.md`) | overview when the Alt summary is short | `memoContext`, `transcript` |
-| `summary-enhance-transcript.md` (+ `.system.md`) | overview enrichment from the transcript | `summary`, `transcript` |
-| `summary-enhance-material.md` (+ `.system.md`) | overview enrichment from PDF excerpts | `summary`, `pageCount`, `excerptPageCount`, `excerptScope`, `materialText` |
-| `summary-from-material.md` (+ `.system.md`) | overview from PDF excerpts when Alt parsing is partial | `memoContext`, `pageCount`, `excerptPageCount`, `materialText` |
+| `summary-from-transcript.md` (+ `.system.md`) | overview from the transcript when the Alt summary is short (lecture-level note without slide gists, and the Skill's slide path), in the shape of `overview-from-gists.md` without ranges | `memoContext`, `transcript` |
+| `summary-enhance-transcript.md` (+ `.system.md`) | overview from the Alt summary and the transcript, same shape without ranges | `summary`, `transcript` |
+| `summary-enhance-material.md` (+ `.system.md`) | the overview rewritten in the same shape with what only the PDF excerpts hold, and page ranges `(p.3~5)` in `## 흐름` | `summary`, `pageCount`, `excerptPageCount`, `excerptScope`, `materialText` |
+| `summary-from-material.md` (+ `.system.md`) | overview from PDF excerpts when Alt parsing is partial, same shape with page ranges in `## 흐름` | `memoContext`, `pageCount`, `excerptPageCount`, `materialText` |
 | `subject-detection.md` | subject code fallback | `title` |
 | `note-verify.system.md` | note verification (system): verdict rules and answer format | none |
 | `note-verify.user.md` | note verification: one batch of up to 20 claims | `title`, `claimCount`, `idList`, `claimBlocks` |
@@ -48,4 +48,8 @@ Every batch call sends, in this order: the fixed instructions (`slide-commentary
 
 ## Writing style
 
-Every Korean text the notes get from these prompts (slide commentary, section summaries, overviews, concept notes) ends its sentences in "~다". Academic terms stay in English inside Korean sentences and link as `[[English (한국어)|English]]`. The commentary and section prompts carry a list of Korean AI tells to avoid (meta talk about the slide, filler, translationese, enumeration preambles, em and en dashes) and allow at most one callout per slide or section. The style block of `slide-commentary-batch.system.md` and `slide-commentary.system.md` is identical (test-skill-prompts).
+The Korean text the notes get from these prompts ends its sentences in "~다": slide commentary, section summaries, gists, overviews (their `## 흐름` items are noun phrases) and Korean concept notes. Academic terms and concept names stay in English inside Korean sentences, general words in Korean. Concept links are `[[English (한국어)|English]]`: the commentary and section prompts ask for them, and the code links the rest (`linkConceptNames` in `src/core/markdown.ts`).
+
+Every overview prompt (`overview-from-gists.md`, `overview-from-sections.md` and the four `summary-*.md`) asks for the same shape: `## 개요` (2 to 4 sentences), `## 핵심 개념` (4 to 8 `**Term:** definition` bullets) and `## 흐름` (3 to 7 numbered topics), with slide, section or page ranges only in `## 흐름` and only where the input has them, no callouts and at most 1200 characters. The commentary allows at most one callout per slide, the section summaries one per section.
+
+The commentary, section and overview prompts share one list of Korean AI tells to avoid (filler and inflation, stock closings, translationese, enumeration preambles, repeated sentence openers, the "A가 아니라 B다" frame, quote marks for emphasis, emoji, em and en dashes); test-skill-prompts checks that the list is identical in all of them. The commentary and section prompts also ban talk about the slide or the section itself ("이 슬라이드는", "이 구간에서는"). The style block of `slide-commentary-batch.system.md` and `slide-commentary.system.md` is identical (test-skill-prompts), and no prompt contains an em or en dash (test-prompts).

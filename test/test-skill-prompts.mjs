@@ -68,6 +68,15 @@ const tells = (file) => {
   return t.slice(start, end);
 };
 const sharedTells = tells("slide-commentary-batch.system.md");
-const tellFiles = ["slide-commentary.system.md", "transcript-section-batch.system.md", "overview-from-gists.md", "overview-from-sections.md"];
+const tellFiles = [
+  "slide-commentary.system.md",
+  "transcript-section-batch.system.md",
+  "overview-from-gists.md",
+  "overview-from-sections.md",
+  "summary-from-transcript.md",
+  "summary-enhance-transcript.md",
+  "summary-from-material.md",
+  "summary-enhance-material.md",
+];
 for (const file of tellFiles) assert.equal(tells(file), sharedTells, `${file} carries the shared list of AI tells`);
-console.log(`PASS: the commentary, section and overview prompts share one list of AI tells (${tellFiles.length + 1} files)`);
+console.log(`PASS: the commentary, section, overview and summary prompts share one list of AI tells (${tellFiles.length + 1} files)`);

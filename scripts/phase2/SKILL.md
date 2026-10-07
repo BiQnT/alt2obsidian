@@ -111,7 +111,7 @@ b. **Lecture-material pass** (always attempted): write the seed text `<title>\n\
 
    If it prints `{"material":null}`, keep `S`. Otherwise generate with `summary-enhance-material.system.md` + `summary-enhance-material.md`, `{{summary}}` = `S` truncated, and `{{pageCount}}`, `{{excerptPageCount}}`, `{{excerptScope}}`, `{{materialText}}` taken verbatim from the JSON. The result replaces `S`.
 
-`S` is now the enhanced summary. Save it to `/tmp/alt2obs-<noteId>/summary.md`.
+`S` is now the overview. Save it to `/tmp/alt2obs-<noteId>/summary.md`. These prompts give it the shape of the plugin's overview, in the plain "~다" style: `## 개요` (2 to 4 sentences), `## 핵심 개념` (4 to 8 `**Term:** definition` bullets) and `## 흐름` (3 to 7 topics, with page ranges such as `(p.3~5)` after the material pass). The plugin builds its overview from per-slide gists (`overview-from-gists.md`); the Skill cannot, because its commentary comes later (step 6), has no gists, and step 4 extracts the concepts from `S`. When neither pass runs (no transcript or an Alt summary of 2500 characters or more, and a PDF without a text layer), `S` stays Alt's own summary.
 
 ### 4. Extract concepts
 
