@@ -270,7 +270,7 @@ export class VerifyPanel {
       panel.empty();
       panel.hide();
     });
-    if (focused) (panel.querySelector(`select[aria-label="${CSS.escape(focused)}"]`) as HTMLElement | null)?.focus();
+    if (focused) panel.querySelector<HTMLElement>(`select[aria-label="${CSS.escape(focused)}"]`)?.focus();
   }
 
   private async run(prepared: PreparedVerification): Promise<void> {
@@ -322,7 +322,7 @@ export class VerifyPanel {
       const open = panel.createEl("button", { cls: "mod-cta" });
       setIcon(open.createSpan(), "file-check");
       open.appendText(" 결과 노트 열기");
-      open.addEventListener("click", () => this.app.workspace.openLinkText(res.path, "", false));
+      open.addEventListener("click", () => void this.app.workspace.openLinkText(res.path, "", false));
     } catch (e) {
       panel.empty();
       panel.createDiv({ cls: "alt2obs-error", text: controller.signal.aborted ? "검증을 취소했습니다. 결과 노트는 바뀌지 않았습니다." : e instanceof Error ? e.message : String(e) });

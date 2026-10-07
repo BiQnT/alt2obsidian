@@ -46,7 +46,6 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.addClass("alt2obs-settings");
 
-    containerEl.createEl("h2", { text: "Alt2Obs 설정" });
     const notice = containerEl.createDiv({ cls: "alt2obs-disclosure" });
     notice.createEl("strong", { text: "외부 프로그램 실행과 구독 사용량 안내" });
     notice.createEl("p", {
@@ -68,7 +67,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
   // ---- LLM connections ----
 
   private renderConnections(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "LLM 연결" });
+    new Setting(containerEl).setName("LLM 연결").setHeading();
     const grid = containerEl.createDiv({ cls: "alt2obs-cards" });
     this.renderCliCard(grid, "claude", "Claude CLI", "claudePath");
     const codexCard = this.renderCliCard(grid, "codex", "Codex CLI", "codexPath");
@@ -89,7 +88,10 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
    */
   private renderLegacyKeys(containerEl: HTMLElement): void {
     const stored = this.settings as unknown as Record<string, unknown>;
-    const present = LEGACY_KEY_FIELDS.filter((k) => typeof stored[k] === "string" && (stored[k] as string).trim() !== "");
+    const present = LEGACY_KEY_FIELDS.filter((k) => {
+      const value = stored[k];
+      return typeof value === "string" && value.trim() !== "";
+    });
     if (present.length === 0) return;
     let armed = false;
     new Setting(containerEl)
@@ -128,7 +130,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     pathKey: "claudePath" | "codexPath"
   ): HTMLElement {
     const card = grid.createDiv({ cls: "alt2obs-card" });
-    card.createEl("h4", { text: label });
+    card.createDiv({ cls: "alt2obs-card-title", text: label });
     const status = card.createDiv({ cls: "alt2obs-card-status" });
     const renderStatus = () => {
       status.empty();
@@ -162,21 +164,19 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     const input = row.createEl("input", { type: "text", placeholder: `/.../bin/${name}` });
     input.value = this.settings[pathKey];
     input.setAttr("aria-label", `${label} 실행 파일 경로`);
-    input.addEventListener("input", async () => {
+    input.addEventListener("input", () => {
       this.settings[pathKey] = input.value.trim();
-      await this.save();
+      void this.save();
     });
     const button = row.createEl("button", { text: "다시 찾기" });
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", () => {
       button.disabled = true;
       button.setText("찾는 중...");
-      try {
-        await this.plugin.detectCli(name, true);
-      } finally {
+      void this.plugin.detectCli(name, true).finally(() => {
         button.disabled = false;
         button.setText("다시 찾기");
         renderStatus();
-      }
+      });
     });
     return card;
   }
@@ -184,7 +184,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
   // ---- per-task table ----
 
   private renderTasks(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "작업별 모델" });
+    new Setting(containerEl).setName("작업별 모델").setHeading();
     new Setting(containerEl)
       .setName("프리셋")
       .setDesc(
@@ -219,7 +219,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
       )
       .addText((text) =>
         text
-          .setPlaceholder("자동 (claude mcp list)")
+          .setPlaceholder("자동")
           .setValue(this.settings.notionFetchTool)
           .onChange(async (value) => {
             const v = value.trim();
@@ -310,7 +310,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
         text.inputEl.removeClass("is-invalid");
         if (modelSelect) modelSelect.value = task.model;
       });
-      text.inputEl.addEventListener("change", async () => {
+      text.inputEl.addEventListener("change", () => {
         const value = text.inputEl.value.trim();
         if (!value) return;
         if (!isSafeModelName(value)) {
@@ -319,7 +319,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
         }
         task.model = value;
         rememberModel(this.settings, provider, value);
-        await changed(true);
+        void changed(true);
       });
     });
 
@@ -336,7 +336,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
   // ---- generation options ----
 
   private renderGeneration(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "생성 옵션" });
+    new Setting(containerEl).setName("생성 옵션").setHeading();
     const g = this.settings.generation;
     const numberSetting = (
       name: string,
@@ -397,7 +397,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
   // ---- usage ----
 
   private renderUsage(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "사용량" });
+    new Setting(containerEl).setName("사용량").setHeading();
     const u = this.plugin.data.usageTotals;
     const desc =
       u.calls === 0
@@ -429,11 +429,11 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
   // ---- reading ----
 
   private renderView(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "보기" });
+    new Setting(containerEl).setName("보기").setHeading();
     new Setting(containerEl)
       .setName("관리 주석 숨기기")
       .setDesc(
-        "강의 노트의 <!-- alt2obs:... --> 줄(슬라이드 표시, 해시, 메타데이터, 요약 구간 표시)을 Live Preview와 Synced Viewer에서 감춥니다. " +
+        "강의 노트의 <!-- alt2obs:... --> 줄(슬라이드 표시, 해시, 메타데이터, 요약 구간 표시)을 Live Preview와 synced viewer에서 감춥니다. " +
           "커서가 그 줄이나 바로 위아래 줄에 있으면 보이고, 소스 모드에서는 항상 보입니다. 감춘 줄은 실수로 지워지지 않게 편집을 막습니다. " +
           "직접 쓴 줄이라도 한 줄 전체가 <!-- alt2obs 로 시작하는 주석이면 함께 감춰집니다. 노트 내용은 바뀌지 않으며 이 줄들은 다시 가져올 때 메모를 지키는 데 쓰이니 지우지 마세요."
       )
@@ -447,7 +447,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("강의 PDF를 열면 뷰어로 열기")
       .setDesc(
-        "파일 탐색기나 링크로 강의 PDF(같은 폴더에 같은 이름의 강의 노트가 있는 PDF)를 열면 그 탭이 PDF와 노트를 나란히 보여주는 Synced Viewer로 바뀝니다. " +
+        "파일 탐색기나 링크로 강의 PDF(같은 폴더에 같은 이름의 강의 노트가 있는 PDF)를 열면 그 탭이 PDF와 노트를 나란히 보여주는 synced viewer로 바뀝니다. " +
           "같은 강의의 뷰어가 이미 열려 있으면 그 탭을 보여줍니다. 뷰어의 'PDF만 보기'로 연 탭, Obsidian을 켤 때나 이 설정을 켤 때 이미 열려 있던 PDF 탭은 그대로 둡니다. " +
           "강의 노트(.md)를 열 때는 바뀌지 않습니다."
       )
@@ -464,7 +464,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
   // ---- storage and help ----
 
   private renderStorage(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "저장" });
+    new Setting(containerEl).setName("저장").setHeading();
     new Setting(containerEl)
       .setName("저장 폴더")
       .setDesc("Vault 내에서 노트가 저장될 기본 폴더")
@@ -508,8 +508,8 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
   }
 
   private renderHelp(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "사용법" });
-    const usageEl = containerEl.createEl("div", { cls: "setting-item-description" });
+    new Setting(containerEl).setName("사용법").setHeading();
+    const usageEl = containerEl.createDiv({ cls: "setting-item-description" });
     usageEl.createEl("p", {
       text:
         "강의 노트는 PDF 슬라이드와 1:1로 대응하는 섹션으로 생성됩니다. " +
@@ -517,8 +517,8 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     });
     usageEl.createEl("p", {
       text:
-        "강의 PDF를 열면 PDF와 노트가 좌우로 동기 스크롤되는 Synced Viewer가 열립니다('보기' 설정에서 끌 수 있음). " +
-        "강의 노트(.md)에서는 명령 팔레트의 'Open Synced Viewer (PDF + lecture .md)'나 사이드바의 '뷰어로 열기'를 쓰세요.",
+        "강의 PDF를 열면 PDF와 노트가 좌우로 동기 스크롤되는 synced viewer가 열립니다('보기' 설정에서 끌 수 있음). " +
+        "강의 노트(.md)에서는 명령 팔레트의 'Open synced viewer (PDF + lecture .md)'나 사이드바의 '뷰어로 열기'를 쓰세요.",
     });
   }
 }

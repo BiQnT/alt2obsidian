@@ -24,7 +24,7 @@ export class PdfProcessor {
         method: "GET",
       });
       return response.arrayBuffer;
-    } catch (e) {
+    } catch {
       throw new Error(
         "PDF 다운로드에 실패했습니다. 서명된 URL이 만료되었을 수 있습니다."
       );
@@ -116,7 +116,7 @@ export class PdfProcessor {
           const scale = Math.min(maxWidth / baseViewport.width, 2);
           const viewport = page.getViewport({ scale });
 
-          const canvas = document.createElement("canvas");
+          const canvas = createEl("canvas");
           canvas.width = Math.ceil(viewport.width);
           canvas.height = Math.ceil(viewport.height);
           const ctx = canvas.getContext("2d");
@@ -165,7 +165,7 @@ export class PdfProcessor {
           const page = await pdf.getPage(pageNum);
           const base = page.getViewport({ scale: 1 });
           const viewport = page.getViewport({ scale: ANALYSIS_LONG_EDGE / Math.max(base.width, base.height) });
-          const canvas = document.createElement("canvas");
+          const canvas = createEl("canvas");
           canvas.width = Math.max(1, Math.round(viewport.width));
           canvas.height = Math.max(1, Math.round(viewport.height));
           const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -204,7 +204,7 @@ export class PdfProcessor {
         const page = await pdf.getPage(pageNum);
         const base = page.getViewport({ scale: 1 });
         const viewport = page.getViewport({ scale: longEdge / Math.max(base.width, base.height) });
-        const canvas = document.createElement("canvas");
+        const canvas = createEl("canvas");
         canvas.width = Math.round(viewport.width);
         canvas.height = Math.round(viewport.height);
         const ctx = canvas.getContext("2d");

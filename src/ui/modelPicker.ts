@@ -25,7 +25,7 @@ export interface ModelPickerOptions {
   recent: Partial<Record<ProviderId, string[]>>;
   onChange(next: TaskLLMSetting): void;
   /** Makes the run's choice the saved default ("기본값으로 저장"). */
-  onSaveDefault?(next: TaskLLMSetting): Promise<void>;
+  onSaveDefault?: (next: TaskLLMSetting) => Promise<void>;
   disabled?: boolean;
 }
 
@@ -83,16 +83,19 @@ export function renderModelPicker(container: HTMLElement, o: ModelPickerOptions)
     if (o.onSaveDefault) {
       const save = note.createEl("button", { text: "기본값으로 저장", cls: "alt2obs-picker-save" });
       save.disabled = disabled;
-      save.addEventListener("click", async () => {
-        save.disabled = true;
-        try {
-          await o.onSaveDefault!(v);
-          note.empty();
-          note.createSpan({ cls: "alt2obs-muted", text: "설정의 기본값으로 저장했습니다." });
-        } catch (e) {
-          save.disabled = false;
-          note.createSpan({ cls: "alt2obs-error", text: `저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}` });
-        }
+      const onSaveDefault = o.onSaveDefault;
+      save.addEventListener("click", () => {
+        void (async () => {
+          save.disabled = true;
+          try {
+            await onSaveDefault(v);
+            note.empty();
+            note.createSpan({ cls: "alt2obs-muted", text: "설정의 기본값으로 저장했습니다." });
+          } catch (e) {
+            save.disabled = false;
+            note.createSpan({ cls: "alt2obs-error", text: `저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}` });
+          }
+        })();
       });
     }
   }

@@ -19,7 +19,7 @@ import {
   TaskId,
   TaskLLMSetting,
 } from "./types";
-import { AltPublicUrlSource, bundleFromAltData } from "./sources/AltPublicUrlSource";
+import { AltPublicUrlSource } from "./sources/AltPublicUrlSource";
 import { AltLocalSource, altUserDataDir, connectAltLocal, ConnectResult, inferSubject, LectureBundle } from "./sources";
 import { alignLecture, buildAlignmentCheckPrompt, checkAlignmentWithLlm, LectureAlignment } from "./pipeline/alignment";
 import { layoutAlignmentText } from "./core/prep/pageLayout";
@@ -238,7 +238,7 @@ export default class Alt2ObsPlugin extends Plugin {
 
     // Add ribbon icon
     this.addRibbonIcon("book-open", "Alt2Obs", () => {
-      this.activateSidebarView();
+      void this.activateSidebarView();
     });
 
     // Add command
@@ -262,7 +262,7 @@ export default class Alt2ObsPlugin extends Plugin {
 
     this.addCommand({
       id: "open-synced-viewer",
-      name: "Open Synced Viewer (PDF + lecture .md)",
+      name: "Open synced viewer (PDF + lecture .md)",
       callback: () => this.openSyncedViewerForActiveNote(),
     });
 
@@ -402,7 +402,7 @@ export default class Alt2ObsPlugin extends Plugin {
     const stillShown = !!leaf && (leaf.view as { file?: TFile | null })?.file?.path === file.path;
     const decision = decidePdfOpen({
       enabled: this.data.settings.openPdfInViewer,
-      viewType: stillShown ? leaf!.view.getViewType() : null,
+      viewType: stillShown ? leaf.view.getViewType() : null,
       pdfPath: file.path,
       bypass: !!leaf && this.nativePdfLeaves.get(leaf) === file.path,
       busy: this.redirecting.has(file.path),
@@ -424,7 +424,7 @@ export default class Alt2ObsPlugin extends Plugin {
         const history = (leaf as unknown as { history?: { backHistory?: unknown[]; back?: () => Promise<void> } }).history;
         if (history?.back && (history.backHistory?.length ?? 0) > 0) await history.back();
         else leaf.detach();
-        this.app.workspace.revealLeaf(same);
+        void this.app.workspace.revealLeaf(same);
         return;
       }
       // replacesPdf: the viewer keeps the PDF step out of the tab's history,
@@ -466,7 +466,7 @@ export default class Alt2ObsPlugin extends Plugin {
     if (view instanceof SyncedViewerView && view.getState().mdPath === mdPath && view.getState().pdfPath === pdfPath) {
       // Same pair (a re-import): load both again, the PDF may have changed.
       await view.openPair(mdPath, pdfPath);
-      this.app.workspace.revealLeaf(existing);
+      void this.app.workspace.revealLeaf(existing);
       return;
     }
     const leaf = existing ?? this.app.workspace.getLeaf(true);
@@ -475,7 +475,7 @@ export default class Alt2ObsPlugin extends Plugin {
       active: true,
       state: { mdPath, pdfPath },
     });
-    this.app.workspace.revealLeaf(leaf);
+    void this.app.workspace.revealLeaf(leaf);
   }
 
   /** Editor extensions registered once; emptied or filled when the setting changes. */
@@ -882,7 +882,7 @@ export default class Alt2ObsPlugin extends Plugin {
   /** Timestamped transcript of a local note for the Synced Viewer panel; null when unknown. */
   async loadTranscript(localId: string): Promise<Array<{ startMs: number; endMs: number; text: string }> | null> {
     try {
-      const json = JSON.parse(await fsp.readFile(this.transcriptCachePath(localId), "utf8"));
+      const json = JSON.parse(await fsp.readFile(this.transcriptCachePath(localId), "utf8")) as { segments?: unknown } | null;
       if (Array.isArray(json?.segments)) {
         return (json.segments as Array<[number, number, string]>).map(([startMs, endMs, text]) => ({ startMs, endMs, text }));
       }
@@ -1294,7 +1294,7 @@ export default class Alt2ObsPlugin extends Plugin {
   /** Parsed frontmatter of a vault note, or null. */
   private frontmatterOf(path: string): Record<string, unknown> | null {
     const f = this.app.vault.getAbstractFileByPath(path);
-    return f instanceof TFile ? ((this.app.metadataCache.getFileCache(f)?.frontmatter as Record<string, unknown> | undefined) ?? null) : null;
+    return f instanceof TFile ? (this.app.metadataCache.getFileCache(f)?.frontmatter ?? null) : null;
   }
 
   /** The setting a task of this run uses: the run's choice, else the saved setting. */
@@ -1783,14 +1783,14 @@ export default class Alt2ObsPlugin extends Plugin {
           "Alt에 슬라이드가 없으면 강의 PDF를 첨부하세요. 다음 가져오기부터 그 PDF를 슬라이드로 씁니다.",
         ]
       : pending
-        ? ["이 노트는 녹음 전사로 만든 요약 노트입니다. PDF가 첨부되어 있으니 사이드바의 Alt 노트 목록에서 이 강의를 다시 가져오면 슬라이드 노트로 바뀌고 Synced Viewer로 볼 수 있습니다 (내 메모는 '이전 노트 백업'에 보존)."]
+        ? ["이 노트는 녹음 전사로 만든 요약 노트입니다. PDF가 첨부되어 있으니 사이드바의 Alt 노트 목록에서 이 강의를 다시 가져오면 슬라이드 노트로 바뀌고 synced viewer로 볼 수 있습니다 (내 메모는 '이전 노트 백업'에 보존)."]
         : [
-            "이 강의에는 슬라이드 PDF가 없어 녹음 전사로 요약 노트를 만들었습니다. Synced Viewer는 PDF와 슬라이드별 노트를 나란히 보여 주므로 이 노트에는 쓸 수 없습니다.",
-            "강의 PDF를 첨부하면 다음 가져오기에서 슬라이드 노트로 바뀌고(슬라이드별 해설, 전사 정렬, 슬라이드 대조 검증) Synced Viewer로 볼 수 있습니다. 지금 노트의 내용과 내 메모는 '이전 노트 백업'에 그대로 남습니다.",
+            "이 강의에는 슬라이드 PDF가 없어 녹음 전사로 요약 노트를 만들었습니다. Synced viewer는 PDF와 슬라이드별 노트를 나란히 보여 주므로 이 노트에는 쓸 수 없습니다.",
+            "강의 PDF를 첨부하면 다음 가져오기에서 슬라이드 노트로 바뀌고(슬라이드별 해설, 전사 정렬, 슬라이드 대조 검증) synced viewer로 볼 수 있습니다. 지금 노트의 내용과 내 메모는 '이전 노트 백업'에 그대로 남습니다.",
           ];
     const choice = await choose(
       this.app,
-      "Synced Viewer를 열 수 없습니다",
+      "Synced viewer를 열 수 없습니다",
       paragraphs,
       pending && summaryNote ? [{ id: "close", text: "닫기", cta: true }] : [{ id: "close", text: "닫기" }, { id: "attach", text: "PDF 첨부", cta: true }]
     );
@@ -1848,7 +1848,7 @@ export default class Alt2ObsPlugin extends Plugin {
       return {
         page: img.pageNum,
         path: attachmentPathForNote(notePath, img.pageNum),
-        data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+        data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
       };
     });
   }
@@ -2467,7 +2467,7 @@ export default class Alt2ObsPlugin extends Plugin {
       this.app.workspace.getLeavesOfType(VIEW_TYPE_SIDEBAR);
 
     if (existing.length > 0) {
-      this.app.workspace.revealLeaf(existing[0]);
+      void this.app.workspace.revealLeaf(existing[0]);
       return;
     }
 
@@ -2477,15 +2477,15 @@ export default class Alt2ObsPlugin extends Plugin {
         type: VIEW_TYPE_SIDEBAR,
         active: true,
       });
-      this.app.workspace.revealLeaf(leaf);
+      void this.app.workspace.revealLeaf(leaf);
     }
   }
 
   async loadPluginData(): Promise<void> {
-    const own = await this.loadData();
+    const own = (await this.loadData()) as Record<string, unknown> | null;
     // First load after the rename to Alt2Obs (2.0.0): the old plugin's data comes along once.
     const legacy = own ? null : await this.readLegacyData();
-    const saved = own || legacy || {};
+    const saved = (own || legacy || {}) as Partial<PluginData> & Record<string, unknown>;
     this.data = Object.assign({}, DEFAULT_PLUGIN_DATA, saved);
     // Keep every 1.x value; add the 2.0 per-task settings (spec 4.2).
     const { settings, needsCliDefault, movedTasks, removedFrom, filled } = migrateSettings(saved.settings);

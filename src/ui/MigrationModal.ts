@@ -38,16 +38,18 @@ export class MigrationModal extends Modal {
     actions.createEl("button", { text: "닫기" }).addEventListener("click", () => this.close());
     if (p.moves.length === 0) return;
     const run = actions.createEl("button", { text: `옮기기 (${p.moves.length}개)`, cls: "mod-cta" });
-    run.addEventListener("click", async () => {
-      run.disabled = true;
-      run.textContent = "옮기는 중...";
-      try {
-        this.showResult(await this.apply(p));
-      } catch (e) {
-        run.disabled = false;
-        run.textContent = `옮기기 (${p.moves.length}개)`;
-        contentEl.createDiv({ cls: "alt2obs-error", text: e instanceof Error ? e.message : String(e) });
-      }
+    run.addEventListener("click", () => {
+      void (async () => {
+        run.disabled = true;
+        run.textContent = "옮기는 중...";
+        try {
+          this.showResult(await this.apply(p));
+        } catch (e) {
+          run.disabled = false;
+          run.textContent = `옮기기 (${p.moves.length}개)`;
+          contentEl.createDiv({ cls: "alt2obs-error", text: e instanceof Error ? e.message : String(e) });
+        }
+      })();
     });
   }
 

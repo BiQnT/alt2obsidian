@@ -71,7 +71,7 @@ class PdfSourceModal extends Modal {
     contentEl.empty();
     contentEl.addClass("alt2obs-attach-modal");
     contentEl.createEl("h2", { text: "강의 PDF 첨부" });
-    contentEl.createEl("p", { text: `"${this.opts.title}"의 슬라이드 PDF를 고르세요. ${this.opts.target}로 복사하고, 이후 가져오기는 이 강의를 슬라이드 강의로 다룹니다 (슬라이드별 해설, 전사 정렬, Synced Viewer, 슬라이드 대조 검증).` });
+    contentEl.createEl("p", { text: `"${this.opts.title}"의 슬라이드 PDF를 고르세요. ${this.opts.target}로 복사하고, 이후 가져오기는 이 강의를 슬라이드 강의로 다룹니다 (슬라이드별 해설, 전사 정렬, synced viewer, 슬라이드 대조 검증).` });
     if (this.opts.replacing) contentEl.createEl("p", { cls: "alt2obs-error", text: `이미 있는 ${this.opts.target}를 고른 PDF로 바꿉니다.` });
     const actions = contentEl.createDiv({ cls: "alt2obs-update-actions" });
     actions.createEl("button", { text: "취소" }).addEventListener("click", () => this.close());
@@ -84,7 +84,7 @@ class PdfSourceModal extends Modal {
       new VaultPdfSuggestModal(this.app, (file) => onDone(file ? { kind: "vault", path: file.path } : null)).open();
     });
     const input = contentEl.createEl("input", { type: "file", attr: { accept: "application/pdf,.pdf" } });
-    input.style.display = "none";
+    input.hide();
     const fromDisk = actions.createEl("button", { text: "컴퓨터에서 고르기", cls: "mod-cta" });
     fromDisk.addEventListener("click", () => input.click());
     input.addEventListener("change", () => {

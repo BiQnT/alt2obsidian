@@ -458,10 +458,10 @@ export class Alt2ObsSidebarView extends ItemView {
       const pdf = this.plugin.siblingPdf(path);
       const transcriptNote = this.vaultNotes.find((v) => v.path === path)?.kind === "transcript";
       if (pdf && !transcriptNote) {
-        button("뷰어로 열기", () => void this.plugin.openSyncedViewer(path, pdf.path), { title: "PDF와 노트를 나란히, 스크롤을 맞춰 엽니다 (Synced Viewer)" });
+        button("뷰어로 열기", () => void this.plugin.openSyncedViewer(path, pdf.path), { title: "PDF와 노트를 나란히, 스크롤을 맞춰 엽니다 (synced viewer)" });
       } else {
         // No slides: the viewer cannot open; say why and offer "PDF 첨부" (spec 4.10).
-        button("뷰어로 열기", () => void this.plugin.explainNoViewer(path).then(() => this.refreshStatuses()), { title: "슬라이드가 없는 강의는 Synced Viewer가 없습니다" });
+        button("뷰어로 열기", () => void this.plugin.explainNoViewer(path).then(() => this.refreshStatuses()), { title: "슬라이드가 없는 강의는 synced viewer가 없습니다" });
       }
       button("노트 열기", () => void this.app.workspace.openLinkText(path, "", false));
     }
@@ -646,7 +646,7 @@ export class Alt2ObsSidebarView extends ItemView {
       text: "가져오기",
       cls: "alt2obs-import-btn mod-cta",
     });
-    this.importBtn.addEventListener("click", () => this.handleImport());
+    this.importBtn.addEventListener("click", () => void this.handleImport());
 
     // Subject section
     const subjectRow = section.createDiv({ cls: "alt2obs-subject-input" });
@@ -657,7 +657,7 @@ export class Alt2ObsSidebarView extends ItemView {
     if (subjects.length > 0) {
       const chipsContainer = subjectRow.createDiv({ cls: "alt2obs-subject-chips" });
       for (const s of subjects) {
-        const chip = chipsContainer.createEl("span", {
+        const chip = chipsContainer.createSpan({
           text: s,
           cls: "alt2obs-subject-chip",
         });
@@ -725,7 +725,7 @@ export class Alt2ObsSidebarView extends ItemView {
     // Sync plugin data if stale entries were removed
     if (validImports.length !== this.plugin.data.recentImports.length) {
       this.plugin.data.recentImports = validImports;
-      this.plugin.savePluginData();
+      void this.plugin.savePluginData();
     }
 
     if (validImports.length === 0) {
@@ -770,7 +770,7 @@ export class Alt2ObsSidebarView extends ItemView {
       }
 
       item.addEventListener("click", () => {
-        this.app.workspace.openLinkText(record.path, "", false);
+        void this.app.workspace.openLinkText(record.path, "", false);
       });
     }
   }
@@ -900,7 +900,7 @@ export class Alt2ObsSidebarView extends ItemView {
           ? "요약 노트: 전사를 약 12분 구간으로 나눠 구간별 요약(시각 표시), 전체 요약, 개념을 만듭니다. 예상 사용량은 다음 화면에서 봅니다."
           : "강의 노트: 전사가 없어 Alt 요약과 메모로 강의 노트를 만듭니다.",
       });
-      rows.createEl("li", { text: `PDF 첨부: 보관함이나 컴퓨터의 PDF를 ${e.notePath.replace(/\.md$/, ".pdf")}로 복사하고 슬라이드 강의로 가져옵니다 (슬라이드별 해설, 전사 정렬, Synced Viewer).` });
+      rows.createEl("li", { text: `PDF 첨부: 보관함이나 컴퓨터의 PDF를 ${e.notePath.replace(/\.md$/, ".pdf")}로 복사하고 슬라이드 강의로 가져옵니다 (슬라이드별 해설, 전사 정렬, synced viewer).` });
       const actions = panel.createDiv({ cls: "alt2obs-estimate-actions" });
       const summaryText = e.hasTranscript ? "요약 노트 만들기" : "강의 노트 만들기";
       if (e.downloadError) actions.createEl("button", { text: "다시 시도", cls: "mod-cta" }).addEventListener("click", () => resolve("retry"));
@@ -998,7 +998,7 @@ export class Alt2ObsSidebarView extends ItemView {
             rows.createEl("li", { text: `전사 ${tp.transcriptChars.before.toLocaleString()}자를 ${tp.transcriptChars.after.toLocaleString()}자로 압축 (구간당 최대 ${SECTION_CAP_CHARS.toLocaleString()}자)` });
           }
           if (!tp.timed) rows.createEl("li", { text: "전사에 시각이 없어(URL) 글자 수로 구간을 나눕니다. 구간에 시각이 없고, 이 노트는 노트 검증에 쓸 수 없습니다." });
-          rows.createEl("li", { text: "슬라이드가 없어 슬라이드별 해설과 Synced Viewer는 없습니다. 강의 PDF를 첨부하면 슬라이드 노트로 바꿀 수 있습니다 (메모 보존)." });
+          rows.createEl("li", { text: "슬라이드가 없어 슬라이드별 해설과 synced viewer는 없습니다. 강의 PDF를 첨부하면 슬라이드 노트로 바꿀 수 있습니다 (메모 보존)." });
         } else {
           rows.createEl("li", { text: "PDF와 전사가 없어 Alt 요약과 메모로 강의 노트를 만듭니다." });
         }
@@ -1033,7 +1033,7 @@ export class Alt2ObsSidebarView extends ItemView {
         }
         const cancel = actions.createEl("button", { text: "취소" });
         cancel.addEventListener("click", () => resolve({ choice: "cancel", prepared }));
-        if (focused) (panel.querySelector(`select[aria-label="${CSS.escape(focused)}"]`) as HTMLElement | null)?.focus();
+        if (focused) panel.querySelector<HTMLElement>(`select[aria-label="${CSS.escape(focused)}"]`)?.focus();
       };
       render();
     });
@@ -1179,7 +1179,7 @@ export class Alt2ObsSidebarView extends ItemView {
     });
     retry.addEventListener("click", () => {
       this.clearMessage();
-      this.handleImport();
+      void this.handleImport();
     });
   }
 

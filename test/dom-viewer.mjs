@@ -82,9 +82,11 @@ const note = [
   ...sections,
 ].join("\n");
 writeFileSync(join(dir, "note.md"), note);
+// The viewer's layout comes from the plugin's styles.css, as in Obsidian.
+writeFileSync(join(dir, "styles.css"), readFileSync(join(repo, "styles.css")));
 writeFileSync(
   join(dir, "index.html"),
-  '<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;width:1400px}#host{height:800px}</style></head>' +
+  '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="styles.css"><style>body{margin:0;width:1400px}#host{height:800px}</style></head>' +
     '<body><div id="host"></div><pre id="out">pending</pre><script type="module" src="./bundle.js"></script></body></html>'
 );
 await esbuild.build({
@@ -98,7 +100,7 @@ await esbuild.build({
   plugins: [inlinePdfWorker, { name: "obsidian-stub", setup: (b) => b.onResolve({ filter: /^obsidian$/ }, () => ({ path: join(repo, "test/helpers/obsidian-browser-stub.js") })) }],
 });
 
-const types = { ".html": "text/html", ".js": "text/javascript", ".md": "text/plain; charset=utf-8", ".pdf": "application/pdf" };
+const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".md": "text/plain; charset=utf-8", ".pdf": "application/pdf" };
 const server = createServer((req, res) => {
   const file = join(dir, decodeURIComponent(new URL(req.url, "http://x").pathname));
   if (!file.startsWith(dir) || !existsSync(file)) return void res.writeHead(404).end();
