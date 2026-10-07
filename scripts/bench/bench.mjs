@@ -55,7 +55,12 @@ if (!existsSync(args.pdf)) throw new Error(`no such PDF: ${args.pdf}`);
 function readTranscript(file) {
   const raw = read(file);
   if (raw === null || !raw.trimStart().startsWith("{")) return { transcript: raw, segments: null };
-  const json = JSON.parse(raw);
+  let json;
+  try {
+    json = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`${file}: not a transcript cache JSON (${e.message})`);
+  }
   if (!Array.isArray(json?.segments)) throw new Error(`${file}: no segments array`);
   const segments = json.segments.map(([startMs, endMs, text]) => ({ startMs, endMs, text: String(text ?? ""), speaker: "" }));
   return { transcript: segments.map((s) => s.text).join("\n"), segments };

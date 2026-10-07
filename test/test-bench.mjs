@@ -47,7 +47,15 @@ try {
   assert.equal(even.transcriptAligned, false, "the same text as plain text is split evenly");
   assert.ok(aligned.transcriptChars.before > 0 && aligned.transcriptChars.before !== even.transcriptChars.before, "the slides get the aligned spans");
   assert.match(bench(["--provider", "claude-cli", "--transcript", cache, "--dry-run"]), /\| transcript per slide +\| aligned by timestamps/);
-  console.log("PASS: bench reads the plugin's transcript cache JSON and aligns it by its timestamps; plain text is split evenly");
+  // A broken cache file is named in the error.
+  const broken = join(s.dir, "broken.json");
+  writeFileSync(broken, '{"v":1,"segments":[[0,1000,"cut off');
+  assert.throws(
+    () => bench(["--provider", "claude-cli", "--transcript", broken, "--dry-run"]),
+    (e) => e.stderr.includes(`${broken}: not a transcript cache JSON (`),
+    "the error names the file"
+  );
+  console.log("PASS: bench reads the plugin's transcript cache JSON and aligns it by its timestamps; plain text is split evenly; a broken cache file is named");
 
   for (const [provider, bin] of [["claude-cli", FAKE_CLAUDE], ["codex-cli", FAKE_CODEX]]) {
     const before = s.calls().length;
