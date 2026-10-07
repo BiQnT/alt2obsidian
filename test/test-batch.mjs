@@ -109,6 +109,28 @@ assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "�
   }
 }
 
+// ---- answer checks: the floor follows how much the slide holds, the upper bounds have slack ----
+{
+  const slide = (page, kind, textChars, transcript) => ({ page, kind, textChars, transcript });
+  const thin = slide(1, "content", 79, "");
+  const content = slide(2, "content", 80, "");
+  const spoken = slide(3, "content", 20, "교수님이 예를 든다");
+  const visual = slide(4, "visual", 300, "");
+  const check = (s, commentary) => m.checkBatchAnswer({ slides: [{ slide: s.page, commentary, gist: "요지다" }] }, [s]);
+  const ok = (s, len) => check(s, "가".repeat(len)).ok.has(s.page);
+  assert.deepEqual([ok(thin, 4), ok(thin, 5)], [false, true], "little to say: 5 characters");
+  assert.ok(check(thin, "6강을 마친다.").ok.has(1), "a closing sentence passes");
+  assert.deepEqual([ok(content, 39), ok(content, 40)], [false, true], "80 characters of text: 40");
+  assert.deepEqual([ok(spoken, 39), ok(spoken, 40)], [false, true], "short text with a transcript: 40");
+  assert.equal(check(content, "내용 없음.").failed.get(2), "해설이 너무 짧음 (6자)", "a junk answer is asked for again");
+  assert.equal(check(spoken, "Parsing").failed.get(3), "해설이 너무 짧음 (7자)");
+  assert.equal(m.minCommentaryChars(slide(5, "visual", 0, "  ")), 5, "a blank transcript is none");
+  assert.deepEqual([ok(content, 1440), ok(content, 1441)], [true, false], "content: 900 x 1.6");
+  assert.deepEqual([ok(visual, 1600), ok(visual, 1601)], [true, false], "visual: 1000 x 1.6");
+  assert.equal(check(visual, "가".repeat(1601)).failed.get(4), "해설이 너무 김 (1601자)");
+  console.log("PASS: answer checks: 5 characters for a slide with little to say, 40 otherwise; at most 1.6 times the upper bound");
+}
+
 // ---- usage limit stops the remaining batches ----
 {
   const s = fakeSession("limit");

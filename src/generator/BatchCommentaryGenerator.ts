@@ -36,9 +36,21 @@ export interface LectureContext {
 /** The prompt's upper bounds: richer slides up to 900 characters (visual 1000), simple ones 100 to 300. */
 export const COMMENTARY_LIMITS = { content: 900, visual: 1000 } as const;
 export const GIST_LIMIT = 60;
-/** Answers are checked with slack: models count characters loosely. A closing slide gets one short sentence ("6강을 마친다."). */
-const MIN_COMMENTARY_CHARS = 5;
+/**
+ * Answers are checked with slack: models count characters loosely. Only a
+ * slide with little to say (under 80 characters of text and no transcript,
+ * such as a closing slide the analyzer did not template) may get one short
+ * sentence ("6강을 마친다."). Any other slide needs at least 40 characters,
+ * so a junk answer ("내용 없음.") is asked for again and, failing twice,
+ * does not replace the previous commentary.
+ */
+const MIN_COMMENTARY_CHARS = { thin: 5, normal: 40 } as const;
+const THIN_SLIDE_TEXT_CHARS = 80;
 const MAX_SLACK = 1.6;
+
+export function minCommentaryChars(s: PlannedSlide): number {
+  return s.textChars < THIN_SLIDE_TEXT_CHARS && !s.transcript.trim() ? MIN_COMMENTARY_CHARS.thin : MIN_COMMENTARY_CHARS.normal;
+}
 
 export const BATCH_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -127,7 +139,7 @@ export function checkBatchAnswer(
     }
     const commentary = typeof it.commentary === "string" ? it.commentary.trim() : "";
     const limit = s.kind === "visual" ? COMMENTARY_LIMITS.visual : COMMENTARY_LIMITS.content;
-    if (commentary.length < MIN_COMMENTARY_CHARS) {
+    if (commentary.length < minCommentaryChars(s)) {
       failed.set(s.page, `해설이 너무 짧음 (${commentary.length}자)`);
       continue;
     }
