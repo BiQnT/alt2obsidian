@@ -207,7 +207,7 @@ function killTree(child: { pid?: number; kill(signal?: NodeJS.Signals): boolean 
  * Runs `fn` after `ms` and returns what cancels it, on the timers a bare
  * setTimeout would use: window's in Obsidian (the directory's
  * prefer-window-timers rule), Node's where there is no window (the Node
- * test suite, the Skill's CLIs in scripts/phase2).
+ * test suite).
  */
 function later(fn: () => void, ms: number): () => void {
   if (typeof window === "undefined") {
