@@ -49,7 +49,7 @@ function mmss(ms: number): string {
   return h > 0 ? `${h}:${m}:${sec}` : `${m}:${sec}`;
 }
 
-export const VIEW_TYPE_SYNCED_VIEWER = "alt2obsidian-synced-viewer";
+export const VIEW_TYPE_SYNCED_VIEWER = "alt2obs-synced-viewer";
 
 interface SyncedViewerState {
   mdPath: string | null;
@@ -537,13 +537,13 @@ export class SyncedViewerView extends ItemView {
     try {
       await this.loadMarkdown(this.mdPath, mdTop);
     } catch (e) {
-      console.warn("[Alt2Obsidian] SyncedViewer markdown load failed:", e);
+      console.warn("[Alt2Obs] SyncedViewer markdown load failed:", e);
       new Notice("강의 노트를 불러올 수 없습니다.");
     }
     try {
       await this.loadPdf(this.pdfPath, pdfTop);
     } catch (e) {
-      console.warn("[Alt2Obsidian] SyncedViewer PDF load failed:", e);
+      console.warn("[Alt2Obs] SyncedViewer PDF load failed:", e);
       new Notice("PDF를 불러올 수 없습니다.");
     }
   }
@@ -611,7 +611,7 @@ export class SyncedViewerView extends ItemView {
       // Keep the reading position after an edit elsewhere.
       await this.loadMarkdown(this.mdPath, this.mdPaneEl.scrollTop);
     } catch (e) {
-      console.warn("[Alt2Obsidian] SyncedViewer markdown refresh failed:", e);
+      console.warn("[Alt2Obs] SyncedViewer markdown refresh failed:", e);
     }
   }
 
@@ -727,7 +727,7 @@ export class SyncedViewerView extends ItemView {
       } catch (renderErr) {
         placeholder.setText(`슬라이드 ${pageNum} 렌더 실패`);
         console.warn(
-          `[Alt2Obsidian] SyncedViewer page ${pageNum} render failed:`,
+          `[Alt2Obs] SyncedViewer page ${pageNum} render failed:`,
           renderErr
         );
       }
@@ -900,7 +900,7 @@ export class SyncedViewerView extends ItemView {
         this.pageCanvases[i] = next;
       } catch (e) {
         console.warn(
-          `[Alt2Obsidian] SyncedViewer rescale page ${pageNum} failed:`,
+          `[Alt2Obs] SyncedViewer rescale page ${pageNum} failed:`,
           e
         );
       }

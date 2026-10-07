@@ -1,6 +1,6 @@
 # Prompts
 
-Single source for every LLM prompt used by the Alt2Obsidian plugin and the alt2obs Skill (spec 4.7). The plugin bundles these files as strings at build time (esbuild `.md` text loader) and renders them with `src/prompts/render.ts`. The Skill reads the same files.
+Single source for every LLM prompt used by the Alt2Obs plugin (named Alt2Obsidian before 2.0.0) and the alt2obs Skill (spec 4.7). The plugin bundles these files as strings at build time (esbuild `.md` text loader) and renders them with `src/prompts/render.ts`. The Skill reads the same files.
 
 ## Template rules
 

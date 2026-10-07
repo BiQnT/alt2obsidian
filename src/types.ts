@@ -43,7 +43,7 @@ export interface GenerationOptions {
   onlyChangedSlides: boolean;
 }
 
-export interface Alt2ObsidianSettings {
+export interface Alt2ObsSettings {
   baseFolderPath: string;
   language: "ko" | "en";
   /**
@@ -118,7 +118,9 @@ export const CLAUDE_TASK_DEFAULTS: Record<TaskId, TaskLLMSetting> = {
   verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification },
 };
 
-export const DEFAULT_SETTINGS: Alt2ObsidianSettings = {
+export const DEFAULT_SETTINGS: Alt2ObsSettings = {
+  // The folder name from before the rename to Alt2Obs (2.0.0): existing
+  // vaults and the Skill keep writing to the same place.
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
   settingsVersion: 3,
@@ -329,7 +331,7 @@ export interface CliDetection {
 }
 
 export interface PluginData {
-  settings: Alt2ObsidianSettings;
+  settings: Alt2ObsSettings;
   recentImports: ImportRecord[];
   cliDetection: Partial<Record<CliName, CliDetection>>;
   usageTotals: UsageTotals;
@@ -347,6 +349,12 @@ export interface PluginData {
   removedProviderNotice?: Array<"gemini" | "ollama"> | boolean;
   /** Lines of the once-only Notice about empty model/effort filled with the task defaults. */
   pendingFilledNotice?: string[];
+  /**
+   * This data was imported from the plugin before the rename (Alt2Obsidian,
+   * id "alt2obsidian") on the first load of Alt2Obs: the user is told once
+   * and asked to disable and remove the old plugin.
+   */
+  pendingRenameNotice?: boolean;
   /**
    * The model id each requested model resolved to on its last real run
    * (Claude: the modelUsage key of the CLI result), keyed by

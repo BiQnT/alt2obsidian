@@ -34,7 +34,7 @@ export function sameTaskSetting(a: TaskLLMSetting, b: TaskLLMSetting): boolean {
 }
 
 function select(parent: HTMLElement, aria: string, options: Array<{ value: string; label: string; title?: string }>, value: string, disabled: boolean): HTMLSelectElement {
-  const el = parent.createEl("select", { cls: "dropdown alt2obsidian-picker-select" });
+  const el = parent.createEl("select", { cls: "dropdown alt2obs-picker-select" });
   el.setAttr("aria-label", aria);
   for (const o of options) {
     const opt = el.createEl("option", { text: o.label, attr: { value: o.value } });
@@ -52,9 +52,9 @@ function select(parent: HTMLElement, aria: string, options: Array<{ value: strin
  * "기본값으로 저장".
  */
 export function renderModelPicker(container: HTMLElement, o: ModelPickerOptions): HTMLElement {
-  const row = container.createDiv({ cls: "alt2obsidian-picker" });
-  row.createDiv({ cls: "alt2obsidian-picker-label", text: o.label });
-  const controls = row.createDiv({ cls: "alt2obsidian-picker-controls" });
+  const row = container.createDiv({ cls: "alt2obs-picker" });
+  row.createDiv({ cls: "alt2obs-picker-label", text: o.label });
+  const controls = row.createDiv({ cls: "alt2obs-picker-controls" });
   const v = o.value;
   const disabled = !!o.disabled;
   const providers: Array<{ value: string; label: string }> = TASK_PROVIDERS.map((p) => ({ value: p, label: PROVIDER_LABELS[p] }));
@@ -78,20 +78,20 @@ export function renderModelPicker(container: HTMLElement, o: ModelPickerOptions)
     effortEl.addEventListener("change", () => o.onChange({ provider, model: v.model, effort: effortEl.value as EffortLevel }));
   }
   if (!sameTaskSetting(v, o.saved)) {
-    const note = row.createDiv({ cls: "alt2obsidian-picker-note" });
-    note.createSpan({ cls: "alt2obsidian-muted", text: "이번 실행에만 씁니다. 설정은 그대로입니다." });
+    const note = row.createDiv({ cls: "alt2obs-picker-note" });
+    note.createSpan({ cls: "alt2obs-muted", text: "이번 실행에만 씁니다. 설정은 그대로입니다." });
     if (o.onSaveDefault) {
-      const save = note.createEl("button", { text: "기본값으로 저장", cls: "alt2obsidian-picker-save" });
+      const save = note.createEl("button", { text: "기본값으로 저장", cls: "alt2obs-picker-save" });
       save.disabled = disabled;
       save.addEventListener("click", async () => {
         save.disabled = true;
         try {
           await o.onSaveDefault!(v);
           note.empty();
-          note.createSpan({ cls: "alt2obsidian-muted", text: "설정의 기본값으로 저장했습니다." });
+          note.createSpan({ cls: "alt2obs-muted", text: "설정의 기본값으로 저장했습니다." });
         } catch (e) {
           save.disabled = false;
-          note.createSpan({ cls: "alt2obsidian-error", text: `저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}` });
+          note.createSpan({ cls: "alt2obs-error", text: `저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}` });
         }
       });
     }

@@ -35,7 +35,7 @@ export class RscParser {
     }
 
     console.log(
-      `[Alt2Obsidian] RSC chunks found: ${rawChunks.length}, sizes: [${rawChunks.map((c) => c.length).join(", ")}]`
+      `[Alt2Obs] RSC chunks found: ${rawChunks.length}, sizes: [${rawChunks.map((c) => c.length).join(", ")}]`
     );
 
     // Unescape chunks: each is [chunkType, "escaped_content"]
@@ -202,7 +202,7 @@ export class RscParser {
     }
 
     console.log(
-      `[Alt2Obsidian] RSC parse — title: ${!!title}, summary: ${summary?.length ?? 0} chars, ` +
+      `[Alt2Obs] RSC parse: title: ${!!title}, summary: ${summary?.length ?? 0} chars, ` +
       `memo: ${memo?.length ?? 0} chars, transcript: ${transcriptSegments.length} segments (${transcript?.length ?? 0} chars), pdfUrl: ${!!pdfUrl}`
     );
 

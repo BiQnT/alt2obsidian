@@ -1,4 +1,6 @@
-# Alt2Obsidian
+# Alt2Obs
+
+2.0.0부터 이름이 Alt2Obs(플러그인 id `alt2obs`)입니다. 이전 이름은 Alt2Obsidian(id `alt2obsidian`)이고, GitHub 저장소 이름은 그대로 `alt2obsidian`입니다.
 
 Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그인입니다.
 
@@ -128,7 +130,7 @@ npm install -g @openai/codex
 codex login
 ```
 
-Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니다. 플러그인은 처음 한 번 로그인 셸의 `command -v claude`와 흔한 설치 폴더(nvm, Homebrew, `~/.local/bin` 등)에서 실행 파일을 모두 찾아 각각 `--version`과 도움말(`claude --help`, `codex exec --help`, 모델 호출 없음)을 확인합니다. 이 플러그인이 쓰는 옵션이 도움말에 하나라도 없으면 그 실행 파일은 쓰지 않고, 옵션을 모두 갖춘 것 중 가장 새 버전을 저장합니다. 시험한 버전(Claude Code 2.1.283, Codex 0.155.1)보다 오래되었지만 옵션이 모두 있으면 설정 화면에 경고만 보여줍니다. 쓸 수 있는 실행 파일이 없으면 찾은 경로, 버전, 없는 옵션을 알려줍니다. 그래도 못 찾으면 **설정 → Alt2Obsidian → LLM 연결**에 `command -v claude` 결과(절대 경로)를 넣고 '다시 찾기'를 누르세요.
+Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니다. 플러그인은 처음 한 번 로그인 셸의 `command -v claude`와 흔한 설치 폴더(nvm, Homebrew, `~/.local/bin` 등)에서 실행 파일을 모두 찾아 각각 `--version`과 도움말(`claude --help`, `codex exec --help`, 모델 호출 없음)을 확인합니다. 이 플러그인이 쓰는 옵션이 도움말에 하나라도 없으면 그 실행 파일은 쓰지 않고, 옵션을 모두 갖춘 것 중 가장 새 버전을 저장합니다. 시험한 버전(Claude Code 2.1.283, Codex 0.155.1)보다 오래되었지만 옵션이 모두 있으면 설정 화면에 경고만 보여줍니다. 쓸 수 있는 실행 파일이 없으면 찾은 경로, 버전, 없는 옵션을 알려줍니다. 그래도 못 찾으면 **설정 → Alt2Obs → LLM 연결**에 `command -v claude` 결과(절대 경로)를 넣고 '다시 찾기'를 누르세요.
 
 **Windows**: 경로는 `where claude`로 찾고, 못 찾으면 `%APPDATA%\npm`, `%USERPROFILE%\.local\bin` 등을 살펴봅니다. npm으로 설치한 `claude.cmd` / `codex.cmd`는 셸 없이 실행하기 위해 스크립트 안의 JavaScript 파일을 찾아 `node.exe`로 직접 실행하고(`node.exe`가 PATH나 같은 폴더에 있어야 함), 네이티브 설치본(`claude.exe`)은 그대로 실행합니다. 취소하면 `taskkill /T /F`로 프로세스 트리를 종료하고, taskkill이 실패하면 직접 실행한 프로세스라도 종료합니다. `where`는 콘솔 코드 페이지로 경로를 출력하므로 사용자 이름에 한글 같은 비ASCII 문자가 있으면 결과가 깨질 수 있는데, 이때는 환경 변수로 만든 설치 폴더 탐색이 대신 찾습니다. Windows 경로는 단위 테스트로만 확인했고 실제 Windows PC에서는 아직 확인하지 않았습니다.
 
@@ -139,12 +141,12 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
    - `manifest.json`
    - `styles.css`
 
-2. Obsidian Vault 폴더에서 `.obsidian/plugins/alt2obsidian/` 폴더를 생성합니다:
+2. Obsidian Vault 폴더에서 `.obsidian/plugins/alt2obs/` 폴더를 생성합니다:
    ```
    내 Vault/
    └── .obsidian/
        └── plugins/
-           └── alt2obsidian/
+           └── alt2obs/
                ├── main.js
                ├── manifest.json
                └── styles.css
@@ -156,7 +158,7 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 
 5. **설정 → 커뮤니티 플러그인**에서 제한 모드를 비활성화합니다.
 
-6. 설치된 플러그인 목록에서 **Alt2Obsidian**을 활성화합니다.
+6. 설치된 플러그인 목록에서 **Alt2Obs**를 활성화합니다.
 
 ### 방법 2: BRAT (베타 자동 업데이트)
 
@@ -166,7 +168,7 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 
 > **현재 Obsidian 커뮤니티 플러그인 등록 리뷰 진행 중입니다.** 승인 전까지는 방법 1이나 2를 사용해주세요. 커뮤니티 플러그인에는 2.0.0 정식 배포 후 올립니다.
 
-1. **설정 → 커뮤니티 플러그인 → 탐색**에서 "Alt2Obsidian"을 검색합니다.
+1. **설정 → 커뮤니티 플러그인 → 탐색**에서 "Alt2Obs"를 검색합니다.
 2. **설치** → **활성화**를 클릭합니다.
 
 ## Alt 앱에서 노트 링크 가져오는 법 (URL 대체 경로)
@@ -187,7 +189,7 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
    ```
    https://www.altalt.io/en/note/0a471d1c-4ec6-4101-8de2-ccc1781770d4
    ```
-5. 이 URL을 Alt2Obsidian 사이드바에 붙여넣으면 됩니다.
+5. 이 URL을 Alt2Obs 사이드바에 붙여넣으면 됩니다.
 
 > **팁:** Alt 앱에서 **요약 버튼을 눌러 AI 요약을 먼저 생성**한 뒤 링크를 공유하면 가장 좋은 결과를 얻을 수 있습니다. 요약 없이 메모/트랜스크립트만 있는 노트도 지원하지만, Alt에서 생성한 요약이 있으면 더 정확한 개념 추출이 가능합니다.
 >
@@ -199,13 +201,13 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 
 ### 1단계: LLM 연결
 
-1. **설정 → Alt2Obsidian → LLM 연결**에서 Claude CLI / Codex CLI 카드에 경로와 버전이 보이는지 확인합니다.
+1. **설정 → Alt2Obs → LLM 연결**에서 Claude CLI / Codex CLI 카드에 경로와 버전이 보이는지 확인합니다.
    - 처음 설치했거나 1.x, 또는 Gemini/Ollama 설정에서 넘어오면 한 번 확인합니다. 로그인된 Claude CLI가 있으면 Claude CLI를, 없고 Codex CLI가 설치되어 있으면 Codex CLI를 씁니다. 확인은 `--version`, 도움말, `claude auth status`뿐이고 모델은 호출하지 않습니다.
 2. **작업별 모델**에서 작업마다 프로바이더, 모델, effort를 드롭다운으로 고릅니다. 모델은 `Opus 5.5 (claude-opus-5-5)`처럼 버전과 id로 보이고, 별칭은 `sonnet (최신 Sonnet, 현재 Sonnet 5.5)`처럼 지금 가리키는 모델과 함께 보입니다. 기본값: 슬라이드 해설은 `sonnet` + medium, 개념 추출은 `haiku` + low, 노트 검증은 `sonnet` + medium. **CLI 기본값**을 고르면 CLI 쪽 기본 모델(Claude는 계정 기본 모델)을 씁니다. 목록에 없는 모델은 **직접 입력...**으로 넣습니다. 여기 값은 기본값이고, 가져오기와 노트 검증의 예상 사용량 패널에서 그 실행만 다른 모델로 바꿀 수 있습니다.
 
 ### 2단계: Alt 노트 가져오기
 
-1. 왼쪽 리본의 📖 아이콘을 클릭하여 **Alt2Obsidian 사이드바**를 엽니다.
+1. 왼쪽 리본의 📖 아이콘을 클릭하여 **Alt2Obs 사이드바**를 엽니다.
 
 **Alt 노트 목록 (기본)**
 

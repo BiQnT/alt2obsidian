@@ -178,7 +178,7 @@ export abstract class CliProviderBase implements LLMProvider {
         return validate(raw);
       } catch (e) {
         lastError = e;
-        console.warn(`[Alt2Obsidian] ${this.name}: invalid JSON answer (attempt ${attempt + 1}/${attempts}): ${e instanceof Error ? e.message : String(e)}`);
+        console.warn(`[Alt2Obs] ${this.name}: invalid JSON answer (attempt ${attempt + 1}/${attempts}): ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     throw lastError instanceof Error ? lastError : new Error(`${this.name}: JSON 응답을 해석하지 못했습니다`);

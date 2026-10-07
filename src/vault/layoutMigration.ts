@@ -18,7 +18,7 @@ import { EXAM_DIR, LECTURES_DIR, SUBJECT_SUBDIRS } from "./layout";
 
 export interface VaultFileEntry {
   path: string;
-  /** Markdown files: an Alt2Obsidian lecture note (from its frontmatter). */
+  /** Markdown files: an Alt2Obs (Alt2Obsidian) lecture note (from its frontmatter). */
   isLectureNote?: boolean;
 }
 

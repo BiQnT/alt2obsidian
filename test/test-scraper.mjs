@@ -168,7 +168,7 @@ async function testNote(url, label) {
 }
 
 async function main() {
-  console.log("=== Alt2Obsidian Scraper Test ===");
+  console.log("=== Alt2Obs Scraper Test ===");
 
   const results = [];
   results.push(await testNote(SUMMARY_URL, "Note with LLM summary + slides"));

@@ -1,4 +1,4 @@
-// Re-import merge of Alt2Obsidian lecture notes. Pure module (no obsidian
+// Re-import merge of Alt2Obs lecture notes. Pure module (no obsidian
 // import) shared by VaultManager and the Skill CLI scripts/phase2/merge-note.mjs,
 // so a Skill re-import preserves memos exactly like a plugin re-import.
 
@@ -86,7 +86,7 @@ function mergeManagedLf(currentContent: string, nextContent: string): string {
 export type BackupReason = "managed" | "to-slides" | "to-sections";
 
 const BACKUP_REASONS: Record<BackupReason, string> = {
-  managed: "이 내용은 Alt2Obsidian 관리 구간이 도입되기 전의 기존 노트입니다.",
+  managed: "이 내용은 Alt2Obs 관리 구간이 도입되기 전의 기존 노트입니다.",
   "to-slides": "이 내용은 슬라이드별 노트로 바뀌기 전의 전사 구간 요약 노트입니다. 내 메모는 필요한 슬라이드 아래로 옮기세요.",
   "to-sections": "이 내용은 전사 구간 요약 노트로 바뀌기 전의 강의 노트입니다. 내 메모는 필요한 구간 아래로 옮기세요.",
 };

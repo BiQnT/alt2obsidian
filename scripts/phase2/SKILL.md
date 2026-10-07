@@ -1,11 +1,11 @@
 ---
 name: alt2obs
-description: Import an Alt (altalt.io) lecture into the user's Obsidian vault as notes compatible with the Alt2Obsidian 2.0 plugin. A lecture with slides gets page-anchored per-slide Korean commentary from Claude Code's native PDF vision (Read with pages parameter); a lecture without slides gets a transcript section summary note, or the user attaches a PDF and it is imported like a slide lecture. Uses the plugin's prompt files, writing rules and helper scripts, so the notes work in the plugin (Synced Viewer, re-import merge, note verification).
+description: Import an Alt (altalt.io) lecture into the user's Obsidian vault as notes compatible with the Alt2Obs 2.0 plugin (named Alt2Obsidian before 2.0.0). A lecture with slides gets page-anchored per-slide Korean commentary from Claude Code's native PDF vision (Read with pages parameter); a lecture without slides gets a transcript section summary note, or the user attaches a PDF and it is imported like a slide lecture. Uses the plugin's prompt files, writing rules and helper scripts, so the notes work in the plugin (Synced Viewer, re-import merge, note verification).
 ---
 
 # alt2obs Skill (Phase 2 Stage A — Claude Code Max import path)
 
-This Skill produces an Obsidian lecture note from an Alt note on this Mac (preferred: Alt's local data, with transcript timestamps) or from a public Alt URL (fallback). The output uses the Alt2Obsidian 2.0 plugin's storage format (`## 📚 슬라이드 N` sections, `<!-- alt2obs:slide:N hash:H start --> ... <!-- end -->` managed markers, `> [!note] 내 메모` callouts; for a lecture without slides `## ⏱ 구간 N [mm:ss~mm:ss]` sections in `<!-- alt2obs:section:N hash:H start --> ... <!-- end -->` markers), so the plugin's Synced Viewer renders it correctly and re-imports with either tool preserve user free-space through the same merge code.
+This Skill produces an Obsidian lecture note from an Alt note on this Mac (preferred: Alt's local data, with transcript timestamps) or from a public Alt URL (fallback). The output uses the Alt2Obs 2.0 plugin's storage format (`## 📚 슬라이드 N` sections, `<!-- alt2obs:slide:N hash:H start --> ... <!-- end -->` managed markers, `> [!note] 내 메모` callouts; for a lecture without slides `## ⏱ 구간 N [mm:ss~mm:ss]` sections in `<!-- alt2obs:section:N hash:H start --> ... <!-- end -->` markers), so the plugin's Synced Viewer renders it correctly and re-imports with either tool preserve user free-space through the same merge code.
 
 The Skill runs the import inside a Claude Code session: the commentary comes from the session's own vision (it reads each slide image), not from a CLI call the plugin starts. The plugin (2.0) calls the Claude Code or Codex CLI itself; both paths use the same prompt files, writing rules and deterministic helpers.
 
@@ -29,13 +29,13 @@ Parse from the user's message (or ask if missing):
 
 Exam periods are obsolete: 2.0 removed the plugin's exam summary (spec G5), so the Skill no longer asks for a `midterm` / `final` period and adds no period tag. Existing `Exam/` notes and period tags in old notes are left as they are.
 
-**Base folder.** `<base>` below is the plugin's "저장 폴더" setting: `settings.baseFolderPath` in `<vault>/.obsidian/plugins/alt2obsidian/data.json` (read it with `Read`), or `Alt2Obsidian` when that file or key is missing. Never assume the default without checking.
+**Base folder.** `<base>` below is the plugin's "저장 폴더" setting: `settings.baseFolderPath` in `<vault>/.obsidian/plugins/alt2obs/data.json` (read it with `Read`; `.obsidian` is the vault's config folder unless the user renamed it). The plugin was renamed from Alt2Obsidian (id `alt2obsidian`) in 2.0.0: when that file is missing, read `<vault>/.obsidian/plugins/alt2obsidian/data.json` instead. Use `Alt2Obsidian` (the default folder, unchanged by the rename) only when neither file has the key. Never assume the default without checking.
 
 ## Workflow
 
 ### 0. Resolve the repo root
 
-This skill is installed as a symlink to `scripts/phase2/SKILL.md` inside the Alt2Obsidian repo. Resolve the repo from the link target:
+This skill is installed as a symlink to `scripts/phase2/SKILL.md` inside the Alt2Obs repo (GitHub `BiQnT/alt2obsidian`). Resolve the repo from the link target:
 
 ```bash
 REPO="$(cd "$(dirname "$(readlink -f ~/.claude/skills/alt2obs/SKILL.md)")/../.." && pwd)"

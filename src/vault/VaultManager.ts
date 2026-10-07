@@ -163,7 +163,7 @@ export class VaultManager {
     lectureTitle: string,
     subject?: string
   ): Promise<string[]> {
-    // Organize concepts inside subject folder: Alt2Obsidian/{subject}/Concepts/
+    // Organize concepts inside subject folder: <base>/{subject}/Concepts/
     const conceptsFolder = subject
       ? normalizePath(conceptsFolderOf(this.basePath, subject))
       : normalizePath(`${this.basePath}/${CONCEPTS_DIR}`);

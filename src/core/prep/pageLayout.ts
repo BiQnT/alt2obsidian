@@ -59,7 +59,7 @@ export async function extractPageLayouts(pdf: PdfLayoutSource): Promise<PageLayo
         lines,
       });
     } catch (e) {
-      console.warn(`[Alt2Obsidian] layout extraction failed for page ${pageNum}:`, e);
+      console.warn(`[Alt2Obs] layout extraction failed for page ${pageNum}:`, e);
       out.push({ text: null, boxes: [], lines: [] });
     }
   }

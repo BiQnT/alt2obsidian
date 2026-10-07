@@ -23,7 +23,7 @@ async function extractPageTexts(pdf) {
         content.items.map((item) => item.str ?? "").join("")
       );
     } catch (e) {
-      console.warn(`[Alt2Obsidian] text extraction failed for page ${pageNum}:`, e);
+      console.warn(`[Alt2Obs] text extraction failed for page ${pageNum}:`, e);
       texts.push(null);
     }
   }

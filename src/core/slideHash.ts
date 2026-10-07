@@ -66,7 +66,7 @@ export async function extractPageTexts(pdf: PdfTextSource): Promise<Array<string
         content.items.map((item) => (item as { str?: string }).str ?? "").join("")
       );
     } catch (e) {
-      console.warn(`[Alt2Obsidian] text extraction failed for page ${pageNum}:`, e);
+      console.warn(`[Alt2Obs] text extraction failed for page ${pageNum}:`, e);
       texts.push(null);
     }
   }

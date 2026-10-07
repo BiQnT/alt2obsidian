@@ -256,7 +256,7 @@ export class AltLocalApiSource implements AltLocalSource {
           this.pathDb ??= this.openPathDb();
           path = (await this.pathDb.noteDetails(id)).pdfPath;
         } catch (e) {
-          console.warn("[Alt2Obsidian] slides path lookup in the database failed:", e);
+          console.warn("[Alt2Obs] slides path lookup in the database failed:", e);
         }
         this.pathMemo.set(id, path);
       }

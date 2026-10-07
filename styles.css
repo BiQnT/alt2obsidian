@@ -1,6 +1,6 @@
-/* Alt2Obsidian Sidebar Styles */
+/* Alt2Obs Sidebar Styles */
 
-.alt2obsidian-sidebar {
+.alt2obs-sidebar {
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -8,57 +8,57 @@
 }
 
 /* URL Input Section */
-.alt2obsidian-input-section {
+.alt2obs-input-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.alt2obsidian-input-section input[type="text"] {
+.alt2obs-input-section input[type="text"] {
   width: 100%;
   padding: 8px;
   border-radius: 4px;
 }
 
-.alt2obsidian-input-row {
+.alt2obs-input-row {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-.alt2obsidian-input-row input {
+.alt2obs-input-row input {
   flex: 1;
 }
 
-.alt2obsidian-subject-input {
+.alt2obs-subject-input {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.alt2obsidian-subject-input label {
+.alt2obs-subject-input label {
   font-size: 0.85em;
   color: var(--text-muted);
 }
 
 /* Import Button */
-.alt2obsidian-import-btn {
+.alt2obs-import-btn {
   cursor: pointer;
 }
 
-.alt2obsidian-import-btn:disabled {
+.alt2obs-import-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 /* Progress */
-.alt2obsidian-progress {
+.alt2obs-progress {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.alt2obsidian-progress-bar {
+.alt2obs-progress-bar {
   width: 100%;
   height: 6px;
   background: var(--background-modifier-border);
@@ -66,19 +66,19 @@
   overflow: hidden;
 }
 
-.alt2obsidian-progress-bar-fill {
+.alt2obs-progress-bar-fill {
   height: 100%;
   background: var(--interactive-accent);
   transition: width 0.3s ease;
 }
 
-.alt2obsidian-progress-text {
+.alt2obs-progress-text {
   font-size: 0.85em;
   color: var(--text-muted);
 }
 
 /* Section Headers */
-.alt2obsidian-section-header {
+.alt2obs-section-header {
   font-size: 0.9em;
   font-weight: 600;
   color: var(--text-muted);
@@ -90,13 +90,13 @@
 }
 
 /* Recent Imports List */
-.alt2obsidian-recent-list {
+.alt2obs-recent-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.alt2obsidian-recent-item {
+.alt2obs-recent-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -106,18 +106,18 @@
   font-size: 0.9em;
 }
 
-.alt2obsidian-recent-item:hover {
+.alt2obs-recent-item:hover {
   background: var(--background-modifier-hover);
 }
 
-.alt2obsidian-recent-item-title {
+.alt2obs-recent-item-title {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.alt2obsidian-recent-item-subject {
+.alt2obs-recent-item-subject {
   font-size: 0.8em;
   color: var(--text-muted);
   background: var(--background-modifier-border);
@@ -125,12 +125,12 @@
   border-radius: 3px;
 }
 
-.alt2obsidian-recent-item-date {
+.alt2obs-recent-item-date {
   font-size: 0.75em;
   color: var(--text-faint);
 }
 
-.alt2obsidian-recent-item-updated {
+.alt2obs-recent-item-updated {
   font-size: 0.75em;
   color: var(--text-accent);
   background: var(--background-modifier-border);
@@ -138,13 +138,13 @@
   border-radius: 3px;
 }
 
-.alt2obsidian-recent-item-partial {
+.alt2obs-recent-item-partial {
   font-size: 0.75em;
   color: var(--text-warning);
 }
 
 /* Error Messages */
-.alt2obsidian-error {
+.alt2obs-error {
   padding: 8px;
   border-radius: 4px;
   background: rgba(220, 53, 69, 0.15);
@@ -156,14 +156,14 @@
   gap: 8px;
 }
 
-.alt2obsidian-error-retry {
+.alt2obs-error-retry {
   cursor: pointer;
   text-decoration: underline;
   margin-left: auto;
 }
 
 /* Success Message */
-.alt2obsidian-success {
+.alt2obs-success {
   padding: 8px;
   border-radius: 4px;
   background: rgba(40, 167, 69, 0.15);
@@ -173,14 +173,14 @@
 }
 
 /* Subject Chips */
-.alt2obsidian-subject-chips {
+.alt2obs-subject-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 4px;
 }
 
-.alt2obsidian-subject-chip {
+.alt2obs-subject-chip {
   padding: 3px 10px;
   border-radius: 12px;
   background: var(--background-modifier-border);
@@ -191,19 +191,19 @@
   transition: all 0.15s ease;
 }
 
-.alt2obsidian-subject-chip:hover {
+.alt2obs-subject-chip:hover {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
 }
 
-.alt2obsidian-subject-chip.is-active {
+.alt2obs-subject-chip.is-active {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
   border-color: var(--interactive-accent);
 }
 
 /* Empty State */
-.alt2obsidian-empty {
+.alt2obs-empty {
   text-align: center;
   color: var(--text-muted);
   font-size: 0.85em;
@@ -211,30 +211,30 @@
 }
 
 
-.alt2obsidian-update-modal h2 {
+.alt2obs-update-modal h2 {
   margin-top: 0;
 }
 
-.alt2obsidian-update-section {
+.alt2obs-update-section {
   margin-top: 12px;
 }
 
-.alt2obsidian-update-section h3 {
+.alt2obs-update-section h3 {
   font-size: 0.9em;
   margin-bottom: 4px;
 }
 
-.alt2obsidian-update-section ul {
+.alt2obs-update-section ul {
   margin: 0;
   padding-left: 18px;
 }
 
-.alt2obsidian-update-empty {
+.alt2obs-update-empty {
   color: var(--text-muted);
   margin: 0;
 }
 
-.alt2obsidian-update-actions {
+.alt2obs-update-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -242,7 +242,7 @@
 }
 
 /* ---- 2.0: CLI estimate and run panels (sidebar) ---- */
-.alt2obsidian-cli-panel {
+.alt2obs-cli-panel {
   margin: 8px 0 12px;
   padding: 10px;
   border: 1px solid var(--background-modifier-border);
@@ -250,61 +250,61 @@
   background: var(--background-secondary);
 }
 
-.alt2obsidian-estimate-main {
+.alt2obs-estimate-main {
   font-weight: 600;
   margin: 4px 0 6px;
 }
 
-.alt2obsidian-estimate-list {
+.alt2obs-estimate-list {
   margin: 0 0 8px;
   padding-left: 18px;
   font-size: var(--font-ui-small);
 }
 
-.alt2obsidian-estimate-actions {
+.alt2obs-estimate-actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   margin-top: 8px;
 }
 
-.alt2obsidian-steps {
+.alt2obs-steps {
   margin: 4px 0 8px;
   padding-left: 20px;
   font-size: var(--font-ui-small);
   color: var(--text-muted);
 }
 
-.alt2obsidian-steps li.is-active {
+.alt2obs-steps li.is-active {
   color: var(--text-normal);
   font-weight: 600;
 }
 
-.alt2obsidian-steps li.is-done {
+.alt2obs-steps li.is-done {
   color: var(--text-faint);
 }
 
-.alt2obsidian-steps li.is-done::after {
+.alt2obs-steps li.is-done::after {
   content: " ✓";
 }
 
-.alt2obsidian-usage-line {
+.alt2obs-usage-line {
   margin: 6px 0;
   font-size: var(--font-ui-smaller);
   font-family: var(--font-monospace);
 }
 
-.alt2obsidian-cancel-btn {
+.alt2obs-cancel-btn {
   margin-top: 4px;
 }
 
-.alt2obsidian-muted {
+.alt2obs-muted {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
 
 /* ---- 2.0: settings ---- */
-.alt2obsidian-disclosure {
+.alt2obs-disclosure {
   padding: 8px 12px;
   margin-bottom: 12px;
   border-left: 3px solid var(--interactive-accent);
@@ -312,24 +312,24 @@
   font-size: var(--font-ui-small);
 }
 
-.alt2obsidian-disclosure p {
+.alt2obs-disclosure p {
   margin: 4px 0 0;
 }
 
-.alt2obsidian-cards {
+.alt2obs-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 10px;
   margin-bottom: 12px;
 }
 
-.alt2obsidian-card {
+.alt2obs-card {
   padding: 8px 12px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
 }
 
-.alt2obsidian-card h4 {
+.alt2obs-card h4 {
   margin: 4px 0;
 }
 
@@ -342,20 +342,20 @@
  * settings panes (the settings window at its 600px minimum): it turns rows
  * into columns, where the 16em basis would have become a 16em-tall gap.
  */
-.alt2obsidian-settings.alt2obsidian-settings .setting-item {
+.alt2obs-settings.alt2obs-settings .setting-item {
   flex-direction: row;
   flex-wrap: wrap;
   column-gap: 12px;
   row-gap: 6px;
 }
 
-.alt2obsidian-settings.alt2obsidian-settings .setting-item-info {
+.alt2obs-settings.alt2obs-settings .setting-item-info {
   flex: 1 1 16em;
   min-width: min(16em, 100%);
   margin-inline-end: 0;
 }
 
-.alt2obsidian-settings.alt2obsidian-settings .setting-item-control {
+.alt2obs-settings.alt2obs-settings .setting-item-control {
   flex: 0 1 auto;
   flex-wrap: wrap;
   min-width: 0;
@@ -365,79 +365,79 @@
  * CLI cards: plain blocks, not Setting rows (src/ui/SettingsTab.ts), so the
  * description is always as wide as the card.
  */
-.alt2obsidian-card-field {
+.alt2obs-card-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-top: 8px;
 }
 
-.alt2obsidian-card-label {
+.alt2obs-card-label {
   font-size: var(--font-ui-small);
   font-weight: var(--font-medium, 500);
 }
 
-.alt2obsidian-card-desc {
+.alt2obs-card-desc {
   display: block;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   line-height: var(--line-height-tight);
 }
 
-.alt2obsidian-card-row {
+.alt2obs-card-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 2px;
 }
 
-.alt2obsidian-card-row input[type="text"] {
+.alt2obs-card-row input[type="text"] {
   flex: 1 1 10em;
   min-width: 0;
 }
 
-.alt2obsidian-card-status {
+.alt2obs-card-status {
   font-size: var(--font-ui-small);
   color: var(--text-muted);
 }
 
-.alt2obsidian-card-status.is-ok {
+.alt2obs-card-status.is-ok {
   color: var(--text-success);
 }
 
-.alt2obsidian-card-status.is-missing {
+.alt2obs-card-status.is-missing {
   color: var(--text-warning);
 }
 
-.alt2obsidian-mono {
+.alt2obs-mono {
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
   word-break: break-all;
 }
 
 /* Task rows: provider, model and effort dropdowns (and the custom model field) wrap as needed. */
-.alt2obsidian-task-setting .setting-item-control {
+.alt2obs-task-setting .setting-item-control {
   justify-content: flex-start;
 }
 
-.alt2obsidian-settings-note {
+.alt2obs-settings-note {
   margin: 4px 0 12px;
 }
 
-.alt2obsidian-model-select {
+.alt2obs-model-select {
   max-width: 16em;
 }
 
-.alt2obsidian-model-input {
+.alt2obs-model-input {
   width: 12em;
 }
 
-.alt2obsidian-model-input.is-invalid {
+.alt2obs-model-input.is-invalid {
   border-color: var(--text-error);
 }
 
 /* ---- 2.0.0-beta.2: Alt local notes (mockup "1. 가져오기 사이드바") ---- */
-.alt2obsidian-head {
+.alt2obs-head {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -445,17 +445,17 @@
   border-bottom: 1px solid var(--background-modifier-border);
   margin-bottom: 10px;
 }
-.alt2obsidian-head-row {
+.alt2obs-head-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
-.alt2obsidian-head-title {
+.alt2obs-head-title {
   font-weight: 700;
   font-size: var(--font-ui-medium);
 }
-.alt2obsidian-status-chip {
+.alt2obs-status-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -469,49 +469,49 @@
   color: var(--text-muted);
   cursor: pointer;
 }
-.alt2obsidian-status-dot {
+.alt2obs-status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--text-faint);
 }
-.alt2obsidian-status-chip.is-api {
+.alt2obs-status-chip.is-api {
   background: rgba(var(--color-green-rgb), 0.15);
   color: var(--color-green);
 }
-.alt2obsidian-status-chip.is-api .alt2obsidian-status-dot {
+.alt2obs-status-chip.is-api .alt2obs-status-dot {
   background: var(--color-green);
 }
-.alt2obsidian-status-chip.is-db {
+.alt2obs-status-chip.is-db {
   background: rgba(var(--color-yellow-rgb), 0.15);
   color: var(--color-yellow);
 }
-.alt2obsidian-status-chip.is-db .alt2obsidian-status-dot {
+.alt2obs-status-chip.is-db .alt2obs-status-dot {
   background: var(--color-yellow);
 }
-.alt2obsidian-status-detail {
+.alt2obs-status-detail {
   font-size: var(--font-ui-smaller);
 }
-.alt2obsidian-tabs {
+.alt2obs-tabs {
   display: flex;
   gap: 3px;
   padding: 3px;
   border-radius: 7px;
   background: var(--background-primary);
 }
-.alt2obsidian-tab {
+.alt2obs-tab {
   flex: 1;
   height: 28px;
   box-shadow: none;
   background: transparent;
   color: var(--text-muted);
 }
-.alt2obsidian-tab.is-active {
+.alt2obs-tab.is-active {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
   font-weight: 600;
 }
-.alt2obsidian-search {
+.alt2obs-search {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -522,18 +522,18 @@
   background: var(--background-primary);
   margin-bottom: 8px;
 }
-.alt2obsidian-search input {
+.alt2obs-search input {
   flex: 1;
   border: 0;
   background: transparent;
   box-shadow: none;
   padding: 0;
 }
-.alt2obsidian-search-icon {
+.alt2obs-search-icon {
   display: inline-flex;
   color: var(--text-muted);
 }
-.alt2obsidian-note-list {
+.alt2obs-note-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -541,7 +541,7 @@
   overflow-y: auto;
   margin-bottom: 8px;
 }
-.alt2obsidian-folder {
+.alt2obs-folder {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -552,22 +552,22 @@
   cursor: pointer;
   border-radius: 6px;
 }
-.alt2obsidian-folder:hover {
+.alt2obs-folder:hover {
   background: var(--background-modifier-hover);
 }
-.alt2obsidian-folder-caret {
+.alt2obs-folder-caret {
   display: inline-flex;
 }
-.alt2obsidian-folder-caret svg {
+.alt2obs-folder-caret svg {
   width: 12px;
   height: 12px;
 }
-.alt2obsidian-folder-count {
+.alt2obs-folder-count {
   margin-left: auto;
   font-weight: 400;
   color: var(--text-faint);
 }
-.alt2obsidian-note-item {
+.alt2obs-note-item {
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -576,31 +576,31 @@
   border-radius: 6px;
   cursor: pointer;
 }
-.alt2obsidian-note-item:hover {
+.alt2obs-note-item:hover {
   background: var(--background-modifier-hover);
 }
-.alt2obsidian-note-item.is-selected {
+.alt2obs-note-item.is-selected {
   background: var(--background-modifier-active-hover);
 }
-.alt2obsidian-note-row {
+.alt2obs-note-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
-.alt2obsidian-note-title {
+.alt2obs-note-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.alt2obsidian-note-item.is-selected .alt2obsidian-note-title {
+.alt2obs-note-item.is-selected .alt2obs-note-title {
   font-weight: 600;
 }
-.alt2obsidian-note-meta {
+.alt2obs-note-meta {
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
-.alt2obsidian-chip {
+.alt2obs-chip {
   flex-shrink: 0;
   padding: 1px 8px;
   border-radius: 999px;
@@ -609,20 +609,20 @@
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
-.alt2obsidian-chip.is-new {
+.alt2obs-chip.is-new {
   background: rgba(var(--color-blue-rgb), 0.18);
   color: var(--color-blue);
 }
-.alt2obsidian-chip.is-changed {
+.alt2obs-chip.is-changed {
   background: rgba(var(--color-yellow-rgb), 0.18);
   color: var(--color-yellow);
 }
-.alt2obsidian-chip.is-link {
+.alt2obs-chip.is-link {
   background: rgba(var(--color-purple-rgb), 0.18);
   color: var(--color-purple);
 }
 /* Lecture kind in the note list (2.0.0-beta.6): 슬라이드 / 노트(전사만) / 슬라이드(미첨부). */
-.alt2obsidian-kind {
+.alt2obs-kind {
   display: inline-block;
   padding: 0 6px;
   border-radius: var(--radius-s);
@@ -631,22 +631,22 @@
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
-.alt2obsidian-kind.is-slides,
-.alt2obsidian-kind.is-attached,
-.alt2obsidian-kind.is-vault-copy {
+.alt2obs-kind.is-slides,
+.alt2obs-kind.is-attached,
+.alt2obs-kind.is-vault-copy {
   background: rgba(var(--color-blue-rgb), 0.15);
   color: var(--color-blue);
 }
-.alt2obsidian-kind.is-transcript,
-.alt2obsidian-kind.is-note {
+.alt2obs-kind.is-transcript,
+.alt2obs-kind.is-note {
   background: rgba(var(--color-green-rgb), 0.15);
   color: var(--color-green);
 }
-.alt2obsidian-kind.is-slides-missing {
+.alt2obs-kind.is-slides-missing {
   background: rgba(var(--color-orange-rgb), 0.18);
   color: var(--color-orange);
 }
-.alt2obsidian-note-footer {
+.alt2obs-note-footer {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -656,54 +656,54 @@
   border-radius: 8px;
   background: var(--background-secondary);
 }
-.alt2obsidian-footer-title {
+.alt2obs-footer-title {
   font-weight: 600;
 }
-.alt2obsidian-footer-row {
+.alt2obs-footer-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.alt2obsidian-footer-row label {
+.alt2obs-footer-row label {
   width: 36px;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
-.alt2obsidian-footer-row input {
+.alt2obs-footer-row input {
   flex: 1;
   min-width: 0;
 }
-.alt2obsidian-footer-row .alt2obsidian-muted {
+.alt2obs-footer-row .alt2obs-muted {
   font-size: 11px;
 }
-.alt2obsidian-align-line {
+.alt2obs-align-line {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
-.alt2obsidian-align-ok,
-.alt2obsidian-align-off {
+.alt2obs-align-ok,
+.alt2obs-align-off {
   display: inline-flex;
 }
-.alt2obsidian-align-ok {
+.alt2obs-align-ok {
   color: var(--color-green);
 }
-.alt2obsidian-align-ok svg,
-.alt2obsidian-align-off svg {
+.alt2obs-align-ok svg,
+.alt2obs-align-off svg {
   width: 14px;
   height: 14px;
 }
-.alt2obsidian-footer-actions {
+.alt2obs-footer-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
-.alt2obsidian-footer-import {
+.alt2obs-footer-import {
   flex: 2;
 }
-.alt2obsidian-link-offer {
+.alt2obs-link-offer {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -712,7 +712,7 @@
   font-size: var(--font-ui-smaller);
   background: rgba(var(--color-purple-rgb), 0.1);
 }
-.alt2obsidian-link-row {
+.alt2obs-link-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -720,93 +720,93 @@
 }
 
 /* Note verification tab (spec 4.6) */
-.alt2obsidian-verify-pane {
+.alt2obs-verify-pane {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-bottom: 10px;
 }
-.alt2obsidian-field-label {
+.alt2obs-field-label {
   font-size: var(--font-ui-smaller);
   font-weight: 600;
   color: var(--text-muted);
 }
-.alt2obsidian-verify-input input,
-.alt2obsidian-verify-input textarea,
-.alt2obsidian-verify-target {
+.alt2obs-verify-input input,
+.alt2obs-verify-input textarea,
+.alt2obs-verify-target {
   width: 100%;
 }
-.alt2obsidian-verify-input textarea {
+.alt2obs-verify-input textarea {
   resize: vertical;
   font-size: var(--font-ui-smaller);
 }
-.alt2obsidian-verify-counts {
+.alt2obs-verify-counts {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
 }
-.alt2obsidian-chip.is-ok {
+.alt2obs-chip.is-ok {
   background: rgba(var(--color-green-rgb), 0.18);
   color: var(--color-green);
 }
-.alt2obsidian-chip.is-bad {
+.alt2obs-chip.is-bad {
   background: rgba(var(--color-red-rgb), 0.18);
   color: var(--color-red);
 }
-.alt2obsidian-chip.is-unsure {
+.alt2obs-chip.is-unsure {
   background: rgba(var(--color-yellow-rgb), 0.18);
   color: var(--color-yellow);
 }
-.alt2obsidian-chip.is-missing {
+.alt2obs-chip.is-missing {
   background: rgba(var(--color-purple-rgb), 0.18);
   color: var(--color-purple);
 }
 
 /* Model choice for one run (sidebar import estimate, note verification) */
-.alt2obsidian-pickers {
+.alt2obs-pickers {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin: 6px 0 8px;
 }
-.alt2obsidian-picker {
+.alt2obs-picker {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.alt2obsidian-picker-label {
+.alt2obs-picker-label {
   font-size: var(--font-ui-smaller);
   font-weight: 600;
   color: var(--text-muted);
 }
-.alt2obsidian-picker-controls {
+.alt2obs-picker-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
-.alt2obsidian-picker-select {
+.alt2obs-picker-select {
   flex: 1 1 8em;
   min-width: 0;
   max-width: 100%;
   font-size: var(--font-ui-smaller);
 }
-.alt2obsidian-picker-select.is-model {
+.alt2obs-picker-select.is-model {
   order: -1;
   flex-basis: 100%;
 }
-.alt2obsidian-picker-note {
+.alt2obs-picker-note {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
-.alt2obsidian-picker-save {
+.alt2obs-picker-save {
   font-size: var(--font-ui-smaller);
   height: auto;
   padding: 2px 8px;
 }
-.alt2obsidian-model-line {
+.alt2obs-model-line {
   font-family: inherit;
   word-break: break-word;
 }

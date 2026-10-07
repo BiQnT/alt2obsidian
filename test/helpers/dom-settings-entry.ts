@@ -2,7 +2,7 @@
 // Obsidian 1.14's setting DOM (test/helpers/obsidian-browser-stub.js) and
 // layout rules (test/fixtures/dom/obsidian-settings.css) plus styles.css,
 // at the pane width in ?w=. Measurements go to <pre id="out"> as JSON.
-import { Alt2ObsidianSettingsTab } from "../../src/ui/SettingsTab";
+import { Alt2ObsSettingsTab } from "../../src/ui/SettingsTab";
 import { DEFAULT_SETTINGS } from "../../src/types";
 // @ts-ignore resolved to test/helpers/obsidian-browser-stub.js
 import { Setting } from "obsidian";
@@ -28,7 +28,7 @@ const plugin: any = {
 function main() {
   const pane = document.getElementById("pane")!;
   pane.style.width = `${w}px`;
-  const tab = new (Alt2ObsidianSettingsTab as any)({}, plugin);
+  const tab = new (Alt2ObsSettingsTab as any)({}, plugin);
   pane.appendChild(tab.containerEl);
   tab.display();
   // Control: a plain Setting row with a path field and a button in a 280px
@@ -54,9 +54,9 @@ function main() {
       textH: Math.round((name?.height ?? 0) + (desc?.height ?? 0)),
     };
   });
-  const cards = Array.from(tab.containerEl.querySelectorAll(".alt2obsidian-card")).map((card: any) => ({
+  const cards = Array.from(tab.containerEl.querySelectorAll(".alt2obs-card")).map((card: any) => ({
     cardW: Math.round(card.clientWidth - parseFloat(getComputedStyle(card).paddingLeft) - parseFloat(getComputedStyle(card).paddingRight)),
-    descW: Math.round(box(card.querySelector(".alt2obsidian-card-desc"))!.width),
+    descW: Math.round(box(card.querySelector(".alt2obs-card-desc"))!.width),
     inputW: Math.round(box(card.querySelector("input"))!.width),
   }));
   const controlDescW = Math.round(box(control.querySelector(".setting-item-description"))!.width);

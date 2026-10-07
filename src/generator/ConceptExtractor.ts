@@ -163,7 +163,7 @@ export function validateConcepts(raw: unknown): ConceptResult {
   for (const c of concepts) {
     if (c.definition.length < 80) {
       console.warn(
-        `[Alt2Obsidian] concept "${c.name}" has a short definition (${c.definition.length} chars), consider re-running with a stronger model.`
+        `[Alt2Obs] concept "${c.name}" has a short definition (${c.definition.length} chars), consider re-running with a stronger model.`
       );
     }
   }
@@ -171,7 +171,7 @@ export function validateConcepts(raw: unknown): ConceptResult {
     const orphan = concepts.find((c) => !c.relatedConcepts || c.relatedConcepts.length === 0);
     if (orphan) {
       console.warn(
-        `[Alt2Obsidian] concept "${orphan.name}" has no relatedConcepts despite ${concepts.length} concepts in the lecture, graph linking may be incomplete.`
+        `[Alt2Obs] concept "${orphan.name}" has no relatedConcepts despite ${concepts.length} concepts in the lecture, graph linking may be incomplete.`
       );
     }
   }

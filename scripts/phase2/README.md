@@ -1,6 +1,6 @@
 # Phase 2 Stage A — Claude Code Skill MVP
 
-Skill that imports an Alt lecture into the Obsidian vault using Claude Code Max's session vision instead of the plugin's Gemini call. Output is byte-compatible with the Alt2Obsidian 1.1.0 plugin's page-anchored format — Synced Viewer works on it, regen preserves your `> [!note] 내 메모` callouts.
+Skill that imports an Alt lecture into the Obsidian vault using Claude Code Max's session vision instead of the plugin's Gemini call. Output is byte-compatible with the Alt2Obs plugin's page-anchored format (the plugin was named Alt2Obsidian before 2.0.0). The Synced Viewer works on it, regen preserves your `> [!note] 내 메모` callouts.
 
 ## Files
 

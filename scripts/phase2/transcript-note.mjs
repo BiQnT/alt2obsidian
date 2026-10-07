@@ -131,6 +131,8 @@ var CLAUDE_TASK_DEFAULTS = {
   verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification }
 };
 var DEFAULT_SETTINGS = {
+  // The folder name from before the rename to Alt2Obs (2.0.0): existing
+  // vaults and the Skill keep writing to the same place.
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
   settingsVersion: 3,
@@ -506,7 +508,7 @@ function validateConcepts(raw) {
   for (const c of concepts) {
     if (c.definition.length < 80) {
       console.warn(
-        `[Alt2Obsidian] concept "${c.name}" has a short definition (${c.definition.length} chars), consider re-running with a stronger model.`
+        `[Alt2Obs] concept "${c.name}" has a short definition (${c.definition.length} chars), consider re-running with a stronger model.`
       );
     }
   }
@@ -514,7 +516,7 @@ function validateConcepts(raw) {
     const orphan = concepts.find((c) => !c.relatedConcepts || c.relatedConcepts.length === 0);
     if (orphan) {
       console.warn(
-        `[Alt2Obsidian] concept "${orphan.name}" has no relatedConcepts despite ${concepts.length} concepts in the lecture, graph linking may be incomplete.`
+        `[Alt2Obs] concept "${orphan.name}" has no relatedConcepts despite ${concepts.length} concepts in the lecture, graph linking may be incomplete.`
       );
     }
   }

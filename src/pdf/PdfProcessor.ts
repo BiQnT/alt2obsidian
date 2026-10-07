@@ -44,7 +44,7 @@ export class PdfProcessor {
         await pdf.destroy();
       }
     } catch (e) {
-      console.warn("[Alt2Obsidian] PDF text extraction failed:", e);
+      console.warn("[Alt2Obs] PDF text extraction failed:", e);
       return null;
     }
   }
@@ -60,7 +60,7 @@ export class PdfProcessor {
       await pdf.destroy();
       return count;
     } catch (e) {
-      console.warn("[Alt2Obsidian] getPageCount failed:", e);
+      console.warn("[Alt2Obs] getPageCount failed:", e);
       return 0;
     }
   }
@@ -133,7 +133,7 @@ export class PdfProcessor {
           canvas.height = 0;
         } catch (pageErr) {
           console.warn(
-            `[Alt2Obsidian] PDF page ${pageNum} render failed:`,
+            `[Alt2Obs] PDF page ${pageNum} render failed:`,
             pageErr
           );
         }
@@ -142,7 +142,7 @@ export class PdfProcessor {
       await pdf.destroy();
       return results;
     } catch (e) {
-      console.warn("[Alt2Obsidian] PDF page render setup failed:", e);
+      console.warn("[Alt2Obs] PDF page render setup failed:", e);
       return [];
     }
   }
@@ -181,7 +181,7 @@ export class PdfProcessor {
           canvas.width = 0;
           canvas.height = 0;
         } catch (e) {
-          console.warn(`[Alt2Obsidian] analysis render failed for page ${pageNum}:`, e);
+          console.warn(`[Alt2Obs] analysis render failed for page ${pageNum}:`, e);
           grays.push(null);
         }
       }
@@ -220,7 +220,7 @@ export class PdfProcessor {
         await pdf.destroy();
       }
     } catch (e) {
-      console.warn(`[Alt2Obsidian] JPEG render failed for page ${pageNum}:`, e);
+      console.warn(`[Alt2Obs] JPEG render failed for page ${pageNum}:`, e);
       return null;
     }
   }

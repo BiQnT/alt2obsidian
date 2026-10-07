@@ -2,7 +2,7 @@
 // Pure module (no obsidian import) so it is unit-tested in Node.
 
 import {
-  Alt2ObsidianSettings,
+  Alt2ObsSettings,
   CLAUDE_TASK_DEFAULTS,
   DEFAULT_GENERATION,
   DEFAULT_SETTINGS,
@@ -87,7 +87,7 @@ export interface FilledTask {
 }
 
 export interface MigrationOutcome {
-  settings: Alt2ObsidianSettings;
+  settings: Alt2ObsSettings;
   /** The CLI choice (Claude, else Codex) still has to be made once: see `chooseCli`. */
   needsCliDefault: boolean;
   /**
@@ -114,8 +114,8 @@ export interface MigrationOutcome {
  * Unknown keys (the 1.x Gemini key and model) are kept as they are.
  */
 export function migrateSettings(saved: unknown): MigrationOutcome {
-  const raw = (saved && typeof saved === "object" ? saved : {}) as Partial<Alt2ObsidianSettings> & Record<string, unknown>;
-  const settings: Alt2ObsidianSettings = {
+  const raw = (saved && typeof saved === "object" ? saved : {}) as Partial<Alt2ObsSettings> & Record<string, unknown>;
+  const settings: Alt2ObsSettings = {
     ...DEFAULT_SETTINGS,
     ...raw,
     generation: { ...DEFAULT_GENERATION, ...(raw.generation ?? {}) },
@@ -158,8 +158,8 @@ export function migrateSettings(saved: unknown): MigrationOutcome {
   return { settings, needsCliDefault: movedTasks.length > 0, movedTasks, removedFrom: Array.from(removedFrom), filled };
 }
 
-function pickRecentModels(raw: unknown): Alt2ObsidianSettings["recentModels"] {
-  const out: Alt2ObsidianSettings["recentModels"] = {};
+function pickRecentModels(raw: unknown): Alt2ObsSettings["recentModels"] {
+  const out: Alt2ObsSettings["recentModels"] = {};
   if (!raw || typeof raw !== "object") return out;
   for (const p of TASK_PROVIDERS) {
     const list = (raw as Record<string, unknown>)[p];
@@ -183,7 +183,7 @@ export function chooseCli(claudeUsable: boolean, codexFound: boolean): ProviderI
  * to the Codex CLI with the Codex task defaults. Other tasks, including
  * ones the user set to the Claude CLI, stay.
  */
-export function moveClaudeTasksToCodex(settings: Alt2ObsidianSettings, ids: TaskId[]): void {
+export function moveClaudeTasksToCodex(settings: Alt2ObsSettings, ids: TaskId[]): void {
   for (const id of ids) {
     if (settings.tasks[id].provider === "claude-cli") settings.tasks[id] = defaultTaskSetting("codex-cli", id);
   }
@@ -200,7 +200,7 @@ export function describeFilled(filled: FilledTask[]): string[] {
 /** The once-only Notice after Gemini/Ollama tasks moved to a CLI. */
 export function removedProviderMessage(removedFrom: RemovedProvider[], cli: ProviderId | null): string {
   const names = removedFrom.map((p) => (p === "ollama" ? "Ollama" : "Gemini API")).join("와 ") || "Gemini API와 Ollama";
-  const head = `Alt2Obsidian: ${names} 지원이 끝났습니다. `;
+  const head = `Alt2Obs: ${names} 지원이 끝났습니다. `;
   const where = cli ? `해당 작업을 ${PROVIDER_LABELS[cli]}로 옮겼습니다. 설정의 '작업별 모델'에서 확인하세요.` : "Claude Code나 Codex CLI를 설치하고 로그인한 뒤 설정의 'LLM 연결'에서 '다시 찾기'를 누르세요.";
   const cloud = removedFrom.includes("ollama")
     ? " 이제 슬라이드 텍스트와 전사가 이 컴퓨터의 Ollama 대신 클라우드 모델(Claude 또는 Codex 계정)로 보내집니다. 원하지 않으면 가져오기 전에 설정을 확인하세요."
@@ -219,7 +219,7 @@ const TOP_MODEL: Partial<Record<ProviderId, string>> = { "claude-cli": "opus" };
  *   concepts stay light.
  * - custom: nothing changes (it is what any manual edit switches to).
  */
-export function applyPreset(settings: Alt2ObsidianSettings, preset: PresetId): void {
+export function applyPreset(settings: Alt2ObsSettings, preset: PresetId): void {
   settings.preset = preset;
   if (preset === "custom") return;
   for (const id of TASK_IDS) {
@@ -236,7 +236,7 @@ export function applyPreset(settings: Alt2ObsidianSettings, preset: PresetId): v
   }
 }
 
-export function rememberModel(settings: Alt2ObsidianSettings, provider: ProviderId, model: string): void {
+export function rememberModel(settings: Alt2ObsSettings, provider: ProviderId, model: string): void {
   const m = model.trim();
   if (!m) return;
   const list = (settings.recentModels[provider] ?? []).filter((x) => x !== m);
