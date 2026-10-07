@@ -342,6 +342,25 @@ for (const [label, Provider, bin] of [
   assert.deepEqual(m.parseJsonText('Here you go:\n{"a":{"b":2}}\nHope this helps.'), { a: { b: 2 } });
   assert.deepEqual(m.parseJsonText('First try:\n```json\n{"a":1,\n```\nFixed:\n```json\n{"a":2}\n```\nDone.'), { a: 2 }, "last fenced block");
   assert.throws(() => m.parseJsonText("no json here"));
+  // A raw `\|` (a table wikilink) inside a JSON string is repaired; nothing else is.
+  const linkIn = (json) => m.parseJsonText(json).c;
+  assert.equal(linkIn(String.raw`{"c":"| [[A (가)\\|a]] |"}`), String.raw`| [[A (가)\|a]] |`, "a valid \\\\| is read as is");
+  assert.equal(m.repairPipeEscapes(String.raw`{"c":"[[A (가)\\|a]]"}`), String.raw`{"c":"[[A (가)\\|a]]"}`, "a valid \\\\| is left alone");
+  assert.equal(linkIn(String.raw`{"c":"| [[A (가)\|a]] |"}`), String.raw`| [[A (가)\|a]] |`, "a raw \\| is repaired");
+  assert.equal(linkIn(String.raw`{"c":"x\\\|y"}`), String.raw`x\\|y`, "an escaped backslash, then a raw \\|");
+  assert.equal(linkIn(String.raw`{"c":"say \"hi\" [[A\|b]] \u00e9\n"}`), 'say "hi" [[A\\|b]] é\n', "other escapes and quotes inside the string stay");
+  assert.equal(linkIn('Here you go:\n' + String.raw`{"c":"[[A\|b]]"}` + '\nDone.'), String.raw`[[A\|b]]`, "repaired in the brace span too");
+  assert.equal(linkIn('```json\n' + String.raw`{"c":"[[A\|b]]"}` + '\n```'), String.raw`[[A\|b]]`, "and in a fence");
+  assert.equal(m.repairPipeEscapes(String.raw`{"c":1} \| {"d":"\q"}`), String.raw`{"c":1} \| {"d":"\q"}`, "outside strings and other escapes: untouched");
+  for (const bad of [String.raw`{"c":"\q"}`, String.raw`{"c":"[[A\|b]] \q"}`]) {
+    let expected;
+    try {
+      JSON.parse(bad);
+    } catch (e) {
+      expected = e.message;
+    }
+    assert.throws(() => m.parseJsonText(bad), (e) => e instanceof SyntaxError && e.message === expected, "other invalid escapes still fail, with the original error");
+  }
   // Login failure only from the CLI's error field, never stderr noise (review N6).
   const noisy = new m.CliRunError("exit", "x", "warn: GET /v1/oauth token refresh 401 from a plugin");
   assert.equal(m.isAuthError(noisy), false);
@@ -365,5 +384,5 @@ for (const [label, Provider, bin] of [
   assert.equal(x.text, "hello");
   assert.deepEqual(x.usage, { calls: 1, inputTokens: 50, cachedInputTokens: 20, outputTokens: 5, imagesSent: 0, costUsd: 0 });
   assert.throws(() => m.parseCodexEvents('{"type":"turn.failed","error":{"message":"quota"}}'), /quota/);
-  console.log("PASS: Claude JSON result and Codex JSONL parsing (usage with cache reads)");
+  console.log("PASS: Claude JSON result and Codex JSONL parsing (usage with cache reads); a raw \\| in a JSON string is repaired, other invalid escapes still fail");
 }
