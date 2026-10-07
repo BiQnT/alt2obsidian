@@ -473,6 +473,26 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   assert.equal(imported.stored().altToObsImport, "done");
   const imported800 = await makePlugin(undefined, (config) => config.set(OTHER_DATA, JSON.stringify(dataWith(800))));
   assert.equal(cap(imported800), 800, "2.0.0's own value stays");
+  // 2.0.0's data.json unreadable (retried on every start) and this data at 600: the move is saved at load, the retry stands.
+  const quietWarn = console.warn;
+  console.warn = () => {};
+  const unreadableOther = (config) => config.set(OTHER_DATA, "{ not json");
+  const unreadable = await makePlugin(dataWith(600), unreadableOther);
+  assert.equal(cap(unreadable), 1200);
+  assert.equal(unreadable.saves(), 1, "saved at load, so the move happens once");
+  assert.equal(unreadable.stored().settings.generation.transcriptCapChars, 1200);
+  assert.equal(unreadable.stored().transcriptCapChecked, true);
+  assert.equal(unreadable.stored().altToObsImport, "retry", "2.0.0's data is still tried on the next start");
+  unreadable.plugin.data.settings.generation.transcriptCapChars = 600;
+  await unreadable.plugin.savePluginData();
+  const stillUnreadable = await makePlugin(unreadable.stored(), unreadableOther);
+  assert.equal(cap(stillUnreadable), 600, "a 600 set after the move stays on the next start");
+  assert.equal(stillUnreadable.saves(), 0, "nothing saved at load");
+  assert.equal(stillUnreadable.plugin.data.altToObsImport, "retry");
+  const unreadable800 = await makePlugin(dataWith(800), unreadableOther);
+  assert.equal(cap(unreadable800), 800);
+  assert.equal(unreadable800.saves(), 0, "nothing moved, nothing saved at load");
+  console.warn = quietWarn;
   // The import command on data already checked (a 600 chosen since): 2.0.0's data replaces it and gets its own check.
   const command = await makePlugin(chosen, (config) => config.set(OTHER_DATA, JSON.stringify(dataWith(600))));
   assert.equal(cap(command), 600, "2.0.0 not read: this data was checked for it");
