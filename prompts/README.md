@@ -31,6 +31,14 @@ Single source for every LLM prompt used by the Alt2Obsidian plugin and the alt2o
 | `note-verify.user.md` | note verification: one batch of up to 20 claims | `title`, `claimCount`, `idList`, `claimBlocks` |
 | `note-verify.claim.md` | one claim with its evidence inside `claimBlocks` | `id`, `claim`, `evidence` |
 | `note-verify-missing.md` | note verification: slides no claim covers, the model picks the missing candidates | `title`, `slides` |
+| `transcript-section-batch.system.md` | section summaries of a lecture without slides, CLI path (fixed instructions, cached prefix); the Skill gets it from `transcript-note.mjs prep` | none |
+| `transcript-section-batch.context.md` | section summaries: lecture-wide context, identical for every batch | `title`, `duration`, `sectionCount`, `subjectTags`, `knownConcepts`, `sectionList` |
+| `transcript-section-batch.user.md` | section summaries: this batch, always last | `sectionNums`, `sectionBlocks` |
+| `transcript-section-batch.section.md` | one section inside `sectionBlocks` | `heading`, `text` |
+| `overview-from-sections.md` (+ `.system.md`) | overview of a lecture without slides from the section gists + Alt summary | `title`, `altSummary`, `gists` |
+| `concept-extraction-sections.md` | concept extraction from the section gists (system: `concept-extraction.system.*.md`) | `subject`, `langInstruction`, `existingConceptHint`, `subjectTags`, `linkCandidates`, `gists` |
+| `note-verify-transcript.system.md` | note verification of a lecture without slides (system): the evidence is STT transcript sections only | none |
+| `note-verify-missing-sections.md` | note verification of a lecture without slides: sections no claim covers, with their gist | `title`, `sections` |
 | `notion-fetch.md` | Notion MCP fetch (Claude CLI with only the Notion fetch tool): raw markdown or `UNCHANGED` | `url`, `cachedEdited` |
 | `alignment-check.md` | optional LLM check of low-confidence transcript alignment spans (task "전사 정렬 확인", off by default) | `title`, `parts` |
 

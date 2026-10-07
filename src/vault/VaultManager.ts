@@ -7,12 +7,14 @@ import { sanitizeFilename } from "../utils/helpers";
 import { ConceptRegistry } from "./ConceptRegistry";
 import { ambiguousKorean, findSameConcept, sameConcept } from "../core/conceptNames";
 import { CONCEPTS_DIR, conceptsFolder as conceptsFolderOf, EXAM_DIR, subjectFolder } from "./layout";
+import { hasSectionMarkers } from "../core/sections";
 import {
   assertNoPageAnchoredDowngrade,
   findOverviewBlock,
   hasMultiManagedMarkers,
   mergeMultiManagedNote,
   mergeNote,
+  mergeTranscriptNote,
   splitManagedNote,
   splitMultiManagedNote,
 } from "../core/merge";
@@ -135,6 +137,16 @@ export class VaultManager {
     // and adds the backup note), so the modal matches merge-note.mjs.
     if (nextHasMulti) {
       const merge = mergeMultiManagedNote(currentContent, nextContent);
+      summary.slideReorders = merge.reorders;
+      summary.slideInsertions = merge.insertions;
+      summary.slideDeletions = merge.deletions;
+      summary.slideDrifts = merge.drifts;
+      summary.confirmDeckReplacement = merge.confirmDeckReplacement;
+      if (merge.notes.length > 0) summary.notes = [...(summary.notes ?? []), ...merge.notes];
+    } else if (hasSectionMarkers(nextContent)) {
+      // Transcript summary note (spec 4.10): the same details, counted in sections.
+      const merge = mergeTranscriptNote(currentContent, nextContent);
+      summary.unit = "section";
       summary.slideReorders = merge.reorders;
       summary.slideInsertions = merge.insertions;
       summary.slideDeletions = merge.deletions;

@@ -8,7 +8,8 @@
 //   FAKE_CLI_STATE    JSON file for per-test counters (retry scenarios)
 //   FAKE_CLI_MODE     comma-separated: ok | drop:<page> | dropalways:<page> |
 //                     short:<page> | hang | limit | badjson | textlimit |
-//                     crash | loggedout | hangbig:<n> (hang when the batch has more than n slides)
+//                     crash | loggedout | hangbig:<n> (hang when the batch has more than n slides) |
+//                     dropsection:<n> | dropsectionalways:<n> (transcript section summaries)
 //   FAKE_CLI_PIDFILE  (hang) the fake and its child write their pids here
 
 "use strict";
@@ -69,6 +70,20 @@ function answer(stdin, schema) {
       slides.push({ slide: page, commentary: body, gist: `슬라이드 ${page}의 요지` });
     }
     result = { slides };
+  } else if (schema && schema.properties && schema.properties.sections) {
+    // Transcript section summaries (lectures without slides).
+    const sections = [];
+    const re = /^### 구간 (\d+)/gm;
+    let m;
+    while ((m = re.exec(stdin)) !== null) {
+      const num = Number(m[1]);
+      const seen = (state.seen[`s${num}`] = (state.seen[`s${num}`] || 0) + 1);
+      if (ms.includes(`dropsectionalways:${num}`)) continue;
+      if (ms.includes(`dropsection:${num}`) && seen === 1) continue;
+      const summary = `- 구간 ${num}: [[캐시]]를 설명함 [00:00]\n- ` + "내용 ".repeat(40).trim() + "\n\n> [!definition] 캐시\n> 자주 쓰는 데이터를 가까이 두는 메모리";
+      sections.push({ section: num, summary, gist: `구간 ${num}의 요지다` });
+    }
+    result = { sections };
   } else if (schema && schema.properties && schema.properties.concepts) {
     result = {
       concepts: [

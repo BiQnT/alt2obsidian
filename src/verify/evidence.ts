@@ -28,6 +28,7 @@ export interface TranscriptChunk {
 }
 
 export interface SlideHit {
+  /** Slide number, or the section number when the lecture has no slides (spec 4.10). */
   slide: number;
   score: number;
   /** Distinct claim terms found in the slide. */
@@ -35,6 +36,8 @@ export interface SlideHit {
   /** Share of the claim's distinct terms found in the slide. */
   coverage: number;
   excerpt: string;
+  /** Section evidence: when the excerpt was said. */
+  startMs?: number;
 }
 
 export interface TranscriptHit {
@@ -364,4 +367,65 @@ export function uncoveredSlides(slideTexts: string[], evidence: ClaimEvidence[],
     out.push({ slide: i + 1, title, keySentences: rest.length > 200 ? `${rest.slice(0, 197)}...` : rest });
   });
   return out.slice(0, maxSlides);
+}
+
+// ---- Lectures without slides (spec 4.10) ----
+// The documents are the transcript sections of the summary note (about 12
+// minutes each): BM25 over the section text plus the glossary hints, exactly
+// like slides. Each section hit then carries the excerpt of its best chunk
+// (about 420 characters) and the time that chunk starts, so the evidence is
+// "구간 N [mm:ss]: ..."; there is no separate transcript evidence.
+
+export interface VerifySection {
+  num: number;
+  startMs: number;
+  endMs: number;
+  /** The note's heading text ("⏱ 구간 3 [24:10~36:02]"), null when the note has no section headings. */
+  heading: string | null;
+  /** The section's one-line gist from the note, "" when unknown. */
+  gist: string;
+}
+
+/** Sections as stored spans: a segment belongs to the section its start falls in. */
+export function sectionSpans(sections: VerifySection[]): StoredSpan[] {
+  return sections.map((s, i) => ({
+    slide: s.num,
+    startMs: i === 0 ? 0 : Math.floor(s.startMs / 100) * 100,
+    endMs: i + 1 < sections.length ? Math.floor(sections[i + 1].startMs / 100) * 100 : Number.MAX_SAFE_INTEGER,
+    low: false,
+  }));
+}
+
+/** Each section hit gets the excerpt and time of its best chunk for the claim; transcript hits are dropped. */
+export function withSectionExcerpts(evidence: ClaimEvidence[], index: EvidenceIndex): ClaimEvidence[] {
+  return evidence.map((e) => {
+    const terms = retrievalTerms(e.claim.text);
+    const scores = bm25(terms, index.chunkIndex);
+    const termSet = new Set(terms);
+    const slides = e.slides.map((h) => {
+      let best = -1;
+      for (let i = 0; i < index.chunks.length; i++) {
+        if (index.chunks[i].slide !== h.slide) continue;
+        if (best < 0 || scores[i] > scores[best]) best = i;
+      }
+      if (best < 0) return h;
+      const chunk = index.chunks[best];
+      return { ...h, excerpt: bestExcerpt(chunk.text, termSet, TRANSCRIPT_EXCERPT_CHARS), startMs: chunk.startMs };
+    });
+    return { ...e, slides, transcript: [] };
+  });
+}
+
+/** Sections no claim covers (directly, 30% of its terms), with their gist as the title; nearly empty sections skipped. */
+export function uncoveredSections(sections: VerifySection[], sectionTexts: string[], evidence: ClaimEvidence[], max = 40): UncoveredSlide[] {
+  const linked = new Set<number>();
+  for (const e of evidence) if (e.source === "direct") for (const h of e.slides) if (h.coverage >= LINK_COVERAGE) linked.add(h.slide);
+  const out: UncoveredSlide[] = [];
+  sections.forEach((sec, i) => {
+    if (linked.has(sec.num)) return;
+    const text = (sectionTexts[i] ?? "").replace(/\s+/g, " ").trim();
+    if (normalizePageText(text).length < 30) return;
+    out.push({ slide: sec.num, title: sec.gist || `구간 ${sec.num}`, keySentences: sec.gist ? "" : text.length > 200 ? `${text.slice(0, 197)}...` : text });
+  });
+  return out.slice(0, max);
 }

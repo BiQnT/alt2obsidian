@@ -258,6 +258,8 @@ export interface ImportUpdateSummary {
   confirmDeckReplacement?: boolean;
   /** Free-text notes appended to the user-facing summary modal. */
   notes?: string[];
+  /** What the slide* fields count: slides (default) or transcript sections (spec 4.10). */
+  unit?: "slide" | "section";
 }
 
 export interface ImportRecord {
@@ -352,6 +354,27 @@ export interface PluginData {
    * next to aliases and as "마지막 실행" in the settings.
    */
   resolvedModels?: Record<string, { id: string; at: string }>;
+  /**
+   * PDFs the plugin copied next to a lecture note when the user attached
+   * one (spec 4.10): path, size and SHA-1 at copy time. "첨부 해제" and "Alt
+   * 슬라이드로 바꾸기" move a file to the trash only when it still matches
+   * its record; any other file is the user's own and is never trashed.
+   * Kept up to date on vault renames; records of missing files are pruned.
+   */
+  attachedCopies?: AttachedCopy[];
+  /**
+   * 2.0.0-beta.6 development data: paths of user files attached in place.
+   * Read only, as "never trash" (renames still update it).
+   */
+  attachedInPlace?: string[];
+}
+
+/** A PDF the plugin copied when the user attached one. */
+export interface AttachedCopy {
+  path: string;
+  size: number;
+  /** Hex SHA-1 of the copied bytes. */
+  sha1: string;
 }
 
 export const DEFAULT_PLUGIN_DATA: PluginData = {

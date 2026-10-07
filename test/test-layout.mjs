@@ -84,6 +84,7 @@ function makeVault(initial) {
   };
   const app = {
     vault: {
+      on: () => ({}),
       getFiles: () => [...store.keys()].map(tfile),
       getMarkdownFiles: () => [...store.keys()].filter((p) => p.endsWith(".md")).map(tfile),
       getAbstractFileByPath: (p) => (store.has(p) ? tfile(p) : null),

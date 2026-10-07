@@ -24,8 +24,13 @@ import { AltLocalSource, altUserDataDir, connectAltLocal, ConnectResult, inferSu
 import { alignLecture, buildAlignmentCheckPrompt, checkAlignmentWithLlm, LectureAlignment } from "./pipeline/alignment";
 import { layoutAlignmentText } from "./core/prep/pageLayout";
 import { computeSlideHash } from "./core/slideHash";
-import { splitMultiManagedNote } from "./core/merge";
-import { isLinkCandidate, LocalNoteStatus, slideChangeCount, VaultNoteInfo } from "./core/noteStatus";
+import { hasMultiManagedMarkers, splitMultiManagedNote } from "./core/merge";
+import { isLinkCandidate, LectureKind, lectureKind, LocalNoteStatus, MissingPdfError, slideChangeCount, VaultNoteInfo } from "./core/noteStatus";
+import { hasSectionMarkers } from "./core/sections";
+import { ATTACHED_LINE, attachedPdfPath, looksLikePdf, markedAttached, MAX_ATTACH_BYTES, sha1Hex } from "./core/pdfAttach";
+import { parseExistingSections, planTranscript, TranscriptPlan, verifySectionsFromNote } from "./pipeline/transcriptPlan";
+import { estimateTranscriptSummary, runTranscriptSummary } from "./pipeline/transcriptPipeline";
+import { choose, pickPdf, PickedPdf } from "./ui/attachPdf";
 import { PdfProcessor } from "./pdf/PdfProcessor";
 import { createTaskProvider } from "./llm/index";
 import {
@@ -62,7 +67,7 @@ import type { BatchProgress, LectureContext } from "./generator/BatchCommentaryG
 import { BudgetEstimate, CallShape, estimateCalls, exceedsCap } from "./core/budget/estimate";
 import conceptExtractionTemplateText from "../prompts/concept-extraction.md";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
-import { insertFrontmatterLine, NoteGenerator } from "./generator/NoteGenerator";
+import { insertFrontmatterLine, NoteGenerator, preservedFrontmatterLines, removeFrontmatterLine } from "./generator/NoteGenerator";
 import { VaultManager } from "./vault/VaultManager";
 import { Alt2ObsidianSettingsTab } from "./ui/SettingsTab";
 import {
@@ -98,7 +103,7 @@ import { parseAlignment } from "./core/prep/TranscriptAligner";
 import { applyLayoutMigration, MigrationPlan, MigrationResult, planLayoutMigration, VaultFileEntry } from "./vault/layoutMigration";
 import { MigrationModal } from "./ui/MigrationModal";
 import { normalizeConcepts } from "./core/conceptNames";
-import { decidePdfOpen, lectureNoteForPdf } from "./ui/pdfOpen";
+import { decidePdfOpen, isLectureFrontmatter, lectureNoteForPdf } from "./ui/pdfOpen";
 import { renderPrompt } from "./prompts/render";
 import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
 import summaryFromTranscriptSystemTemplate from "../prompts/summary-from-transcript.system.md";
@@ -117,8 +122,21 @@ export interface PreparedImport {
   subject: string;
   notePath: string;
   pdfData: ArrayBuffer | null;
-  /** null: no PDF, the lecture-level flow runs instead. */
+  /** Slide plan; null without a PDF (then `transcriptPlan`, or the lecture-level flow). */
   plan: DeckPlan | null;
+  /**
+   * Lecture without slides, the user chose "요약 노트 만들기" (spec 4.10):
+   * transcript sections summarized into a summary note. Null otherwise.
+   */
+  transcriptPlan: TranscriptPlan | null;
+  /**
+   * Where the slides PDF comes from: Alt (or the URL), a PDF the user
+   * attached in the plugin, or the vault copy next to a slide note whose
+   * Alt PDF cannot be read now; null without a PDF.
+   */
+  pdfSource: "alt" | "attached" | "vault" | null;
+  /** Alt (or the URL) has a slides PDF too, but the attached one is used. */
+  altPdfIgnored: boolean;
   context: LectureContext;
   estimate: BudgetEstimate;
   overCap: boolean;
@@ -212,6 +230,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
       );
     });
 
+    // Attached PDF copies are tracked by path: follow renames and moves (spec 4.10).
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => void this.onVaultRename(file, oldPath).catch((e) => console.warn("[Alt2Obsidian] attach record update failed:", e))));
+
     // Live Preview: hide the alt2obs management comment lines (setting "관리 주석 숨기기").
     this.registerEditorExtension(this.editorExtensions);
     this.applyCommentHiding();
@@ -246,12 +267,19 @@ export default class Alt2ObsidianPlugin extends Plugin {
       callback: () => this.openSyncedViewerForActiveNote(),
     });
 
+    this.addCommand({
+      id: "attach-lecture-pdf",
+      name: "Attach lecture PDF to the current lecture note",
+      callback: () => this.attachPdfToActiveNote(),
+    });
+
     // Register settings tab
     this.addSettingTab(new Alt2ObsidianSettingsTab(this.app, this));
 
     // The login-shell lookup can take a moment: run it after startup.
     this.app.workspace.onLayoutReady(() => {
       this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obsidian] CLI default check failed:", e));
+      this.pruneAttachRecords().catch((e) => console.warn("[Alt2Obsidian] attach record prune failed:", e));
       // Lecture PDFs opened from now on go to the Synced Viewer (setting
       // "강의 PDF를 열면 뷰어로 열기"). Registered after the layout is
       // restored, and the PDF tabs it restored are left as plain PDFs.
@@ -299,11 +327,27 @@ export default class Alt2ObsidianPlugin extends Plugin {
       return;
     }
     const pdfFile = this.siblingPdf(mdPath);
-    if (!pdfFile) {
+    // A lecture without slides (spec 4.10) has no viewer: say why, offer "PDF 첨부".
+    if (!pdfFile || this.frontmatterOf(mdPath)?.alt_kind === "transcript") {
+      if (isLectureFrontmatter(this.frontmatterOf(mdPath))) {
+        await this.explainNoViewer(mdPath);
+        return;
+      }
       new Notice(`같은 폴더에 같은 이름의 PDF가 없습니다: ${mdPath.replace(/\.md$/, ".pdf")}. 강의를 가져오면 PDF가 함께 저장됩니다.`);
       return;
     }
     await this.openSyncedViewer(mdPath, pdfFile.path);
+  }
+
+  /** Command "Attach lecture PDF": the open lecture note (or its PDF) gets a PDF; the next import makes it a slide note. */
+  async attachPdfToActiveNote(): Promise<void> {
+    const active = this.app.workspace.getActiveFile();
+    const mdPath = active?.extension.toLowerCase() === "pdf" ? active.path.replace(/\.pdf$/i, ".md") : active?.extension === "md" ? active.path : null;
+    if (!mdPath || !isLectureFrontmatter(this.frontmatterOf(mdPath))) {
+      new Notice("강의 노트(Alt에서 가져온 노트)를 연 뒤 다시 시도하세요.");
+      return;
+    }
+    await this.attachPdfInteractive(mdPath);
   }
 
   /**
@@ -608,6 +652,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
         altLocalId: typeof fm.alt_local_id === "string" ? fm.alt_local_id : undefined,
         altId: typeof fm.alt_id === "string" ? fm.alt_id : undefined,
         altCreated: typeof fm.alt_created === "string" ? fm.alt_created : undefined,
+        kind: typeof fm.alt_kind === "string" ? fm.alt_kind : undefined,
+        slideNote: fm.slide_count !== undefined && fm.slide_count !== null,
+        pdfSource: typeof fm.alt_pdf_source === "string" ? fm.alt_pdf_source : undefined,
       });
     }
     return out;
@@ -760,19 +807,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
    * - URL import: an existing `alt_local_id` / `alt_source` and `alt_alignment`.
    */
   private preservedFrontmatter(notePath: string, sourceKind: "alt-local" | "alt-url" | undefined, alignment: LectureAlignment | null): string[] {
-    const lines: string[] = [];
-    const file = this.app.vault.getAbstractFileByPath(notePath);
-    const fm = file instanceof TFile ? this.app.metadataCache.getFileCache(file)?.frontmatter : undefined;
-    const str = (v: unknown) => (typeof v === "string" && v ? v : null);
-    if (sourceKind === "alt-local") {
-      if (str(fm?.alt_id)) lines.push(`alt_id: ${JSON.stringify(fm!.alt_id)}`);
-      if (alignment && alignment.value) lines.push(`alt_alignment: ${JSON.stringify(alignment.value)}`);
-    } else {
-      if (str(fm?.alt_local_id)) lines.push(`alt_local_id: ${JSON.stringify(fm!.alt_local_id)}`);
-      if (str(fm?.alt_source)) lines.push(`alt_source: ${JSON.stringify(fm!.alt_source)}`);
-      if (str(fm?.alt_alignment)) lines.push(`alt_alignment: ${JSON.stringify(fm!.alt_alignment)}`);
-    }
-    return lines;
+    return preservedFrontmatterLines(this.frontmatterOf(notePath), sourceKind, alignment?.value || null);
   }
 
   /** Test hook: where the transcript cache lives (default: the OS cache folder). */
@@ -1075,8 +1110,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
     let pdfPath: string | undefined;
     if (pdfData) {
       onProgress?.("PDF 저장 중...", 95);
-      // Sibling of the note (the Synced Viewer looks for <note>.pdf).
-      pdfPath = await vm.saveRawFile(pdfData, `${noteStem}.pdf`);
+      // Sibling of the note (the Synced Viewer looks for <note>.pdf); an existing <note>.PDF is reused.
+      pdfPath = await vm.saveRawFile(pdfData, this.siblingPdf(notePath)?.path ?? `${noteStem}.pdf`);
     }
     // Same path on every import: an image is replaced, never duplicated.
     for (const a of args.attachments ?? []) await vm.saveRawFile(a.data, a.path);
@@ -1110,12 +1145,21 @@ export default class Alt2ObsidianPlugin extends Plugin {
   /**
    * Download and analyze the deck, plan the batches and estimate the tokens
    * (spec 5.1 to 5.5). Nothing is sent to an LLM here.
+   *
+   * The slides PDF is Alt's (or the URL's), else a PDF the user attached
+   * next to the note (spec 4.10; an attached PDF also wins over Alt's). A
+   * lecture with no PDF at all stops here with a MissingPdfError unless
+   * `withoutPdf: "summary"` says the user chose "요약 노트 만들기": then its
+   * transcript is cut into sections for a summary note (or, without a
+   * transcript, the lecture-level note is made from Alt's summary). There is
+   * no silent fallback to a note without slides.
    */
   async prepareCliImport(
     url: string,
     preview: ImportPreview,
     subjectOverride: string | undefined,
-    onProgress?: (stage: string, percent: number) => void
+    onProgress?: (stage: string, percent: number) => void,
+    opts: { withoutPdf?: "summary" } = {}
   ): Promise<PreparedImport> {
     const settings = this.data.settings;
     // Fail before any work when a configured CLI cannot be found.
@@ -1128,6 +1172,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const subject = subjectOverride || preview.suggestedSubject;
     const vm = this.vaultManager!;
     const altData = preview.altData;
+    const partial = altData.parseQuality === "partial";
     const notePath = this.resolveNotePath(preview, subject);
     const context: LectureContext = {
       title: altData.title,
@@ -1136,39 +1181,116 @@ export default class Alt2ObsidianPlugin extends Plugin {
     };
 
     onProgress?.("PDF 내려받는 중...", 10);
-    const pdfData = altData.parseQuality === "partial" ? null : await this.downloadPdfForImport(preview);
+    const download = partial ? { data: null, error: null } : await this.fetchAltPdf(preview);
+    const altPdf = download.data;
+    const existingNote = await vm.readNoteIfExists(notePath);
+    // The slides PDF, in this order (one that cannot be read is skipped):
+    // - a PDF the user attached: the note is marked, or there is no note yet
+    //   (attachPdf marks every existing note), so it wins over Alt's;
+    // - Alt's (or the URL's);
+    // - the copy an earlier import saved next to a note that is not a
+    //   summary note (a slide note whose Alt PDF cannot be read now).
+    // "요약 노트 만들기" is the user's explicit choice: no PDF then.
+    const sibling = this.siblingPdf(notePath);
+    const marked = markedAttached(existingNote);
+    const summaryNote = !!existingNote && hasSectionMarkers(existingNote) && !hasMultiManagedMarkers(existingNote);
+    const attachedFirst = !!sibling && (marked || !existingNote);
+    const candidates: Array<{ source: NonNullable<PreparedImport["pdfSource"]>; load: () => Promise<ArrayBuffer> }> = [];
+    if (opts.withoutPdf !== "summary") {
+      if (sibling && attachedFirst) candidates.push({ source: "attached", load: () => this.app.vault.readBinary(sibling) });
+      if (altPdf) candidates.push({ source: "alt", load: async () => altPdf });
+      if (sibling && !attachedFirst && !summaryNote) candidates.push({ source: "vault", load: () => this.app.vault.readBinary(sibling) });
+    }
+    let pdfData: ArrayBuffer | null = null;
+    let pdfSource: PreparedImport["pdfSource"] = null;
     let plan: DeckPlan | null = null;
     let alignment: LectureAlignment | null = null;
     let slideTexts: string[] = [];
-    if (pdfData && this.pdfProcessor) {
+    let unreadable: string | null = null;
+    for (const c of this.pdfProcessor ? candidates : []) {
+      const data = await c.load();
       onProgress?.("슬라이드 분석 중...", 20);
-      const { layouts, grays } = await this.pdfProcessor.analyzeForPrep(pdfData, (page, total) =>
-        onProgress?.(`슬라이드 분석 (${page}/${total})...`, 20 + Math.round((page / total) * 60))
-      );
-      if (layouts.length > 0) {
-        const analysis = await analyzeSlides(layouts, grays, {
+      let prep: Awaited<ReturnType<PdfProcessor["analyzeForPrep"]>>;
+      try {
+        prep = await this.pdfProcessor!.analyzeForPrep(data, (page, total) =>
+          onProgress?.(`슬라이드 분석 (${page}/${total})...`, 20 + Math.round((page / total) * 60))
+        );
+      } catch (e) {
+        unreadable = unreadable ?? (e instanceof Error ? e.message : String(e));
+        continue;
+      }
+      const { layouts, grays } = prep;
+      if (layouts.length === 0) {
+        unreadable = unreadable ?? "페이지가 없음";
+        continue;
+      }
+      const analysis = await analyzeSlides(layouts, grays, {
+        sourceId: altData.metadata.noteId,
+        imageRule: settings.generation.imageRule,
+      });
+      // Timestamped transcript (local sources): aligned to the slides, no tokens (spec 4.3).
+      slideTexts = layouts.map(layoutAlignmentText);
+      alignment = alignLecture(slideTexts, preview.bundle?.transcript, { scanned: analysis.scanned });
+      plan = planDeck({
+        ...analysis,
+        layouts,
+        transcript: altData.transcript,
+        transcriptChunks: alignment?.chunks,
+        transcriptCapChars: settings.generation.transcriptCapChars,
+        batchSize: batchSizeFor(settings.tasks.commentary.provider, settings.generation.batchSize),
+        deckTitle: altData.title,
+        existing: settings.generation.onlyChangedSlides && existingNote ? parseExistingSlides(existingNote) : undefined,
+      });
+      pdfData = data;
+      pdfSource = c.source;
+      break;
+    }
+    let transcriptPlan: TranscriptPlan | null = null;
+    if (!plan) {
+      const segments = partial ? [] : preview.bundle?.transcript ?? [];
+      const hasTranscript = segments.some((x) => x.text.trim().length > 0);
+      if (opts.withoutPdf !== "summary") {
+        throw new MissingPdfError(
+          download.error
+            ? `슬라이드 PDF를 내려받지 못했습니다 (${download.error}). 다시 시도하거나, 강의 PDF를 첨부하거나, 슬라이드 없이 요약 노트를 만들 수 있습니다.`
+            : unreadable
+              ? `슬라이드 PDF를 읽지 못했습니다 (${unreadable}). 다른 PDF를 첨부하거나 슬라이드 없이 요약 노트를 만들 수 있습니다.`
+              : partial
+                ? "Alt 노트 페이지를 일부만 읽었습니다 (제목과 설명만, PDF와 전사 없음). 강의 PDF를 첨부하거나 읽은 내용만으로 노트를 만들 수 있습니다."
+                : "이 강의에는 슬라이드 PDF가 없습니다. 강의 PDF를 첨부하거나 슬라이드 없이 요약 노트를 만들 수 있습니다.",
+          notePath,
+          hasTranscript,
+          download.error
+        );
+      }
+      if (hasTranscript) {
+        onProgress?.("전사를 구간으로 나누는 중...", 40);
+        transcriptPlan = await planTranscript({
+          segments,
           sourceId: altData.metadata.noteId,
-          imageRule: settings.generation.imageRule,
+          existing: existingNote ? parseExistingSections(existingNote) : undefined,
+          reuse: settings.generation.onlyChangedSlides,
         });
-        const existingNote = settings.generation.onlyChangedSlides ? await vm.readNoteIfExists(notePath) : null;
-        // Timestamped transcript (local sources): aligned to the slides, no tokens (spec 4.3).
-        slideTexts = layouts.map(layoutAlignmentText);
-        alignment = alignLecture(slideTexts, preview.bundle?.transcript, { scanned: analysis.scanned });
-        plan = planDeck({
-          ...analysis,
-          layouts,
-          transcript: altData.transcript,
-          transcriptChunks: alignment?.chunks,
-          transcriptCapChars: settings.generation.transcriptCapChars,
-          batchSize: batchSizeFor(settings.tasks.commentary.provider, settings.generation.batchSize),
-          deckTitle: altData.title,
-          existing: existingNote ? parseExistingSlides(existingNote) : undefined,
-        });
+      }
+      // A slide note (or a summary note, without a transcript now) is never
+      // replaced by a note without slides: stop before any token is spent.
+      if (existingNote && hasMultiManagedMarkers(existingNote)) {
+        throw new Error("이 강의에는 이미 슬라이드별 노트가 있어 슬라이드 없는 노트로 덮어쓰지 않습니다. Alt에서 슬라이드 PDF를 내려받거나 PDF를 첨부한 뒤 다시 가져오세요.");
+      }
+      if (existingNote && !transcriptPlan && hasSectionMarkers(existingNote)) {
+        throw new Error("이 강의에는 전사 구간 요약 노트가 있는데 지금은 전사가 없어 덮어쓰지 않습니다. Alt에서 전사가 보이는지 확인한 뒤 다시 가져오세요.");
       }
     }
     onProgress?.("예산 산정 완료", 100);
     const diagramPages = plan && settings.generation.saveKeyDiagrams ? selectKeyDiagrams(plan.slides, plan.scanned) : [];
-    return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, context, fewerImages: false, alignment, slideTexts, diagramPages, overrides: {} });
+    const altPdfIgnored = pdfSource === "attached" && !!altPdf;
+    return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, transcriptPlan, pdfSource, altPdfIgnored, context, fewerImages: false, alignment, slideTexts, diagramPages, overrides: {} });
+  }
+
+  /** Parsed frontmatter of a vault note, or null. */
+  private frontmatterOf(path: string): Record<string, unknown> | null {
+    const f = this.app.vault.getAbstractFileByPath(path);
+    return f instanceof TFile ? ((this.app.metadataCache.getFileCache(f)?.frontmatter as Record<string, unknown> | undefined) ?? null) : null;
   }
 
   /** The setting a task of this run uses: the run's choice, else the saved setting. */
@@ -1214,12 +1336,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const concepts = this.runTask(p, "concepts");
     const alignmentTask = this.runTask(p, "alignment");
     const asProvider = (id: ProviderId | "none"): ProviderId => (id === "none" ? "claude-cli" : id);
+    const efforts = { commentaryEffort: this.estimatedEffort(commentary), conceptEffort: this.estimatedEffort(concepts) };
     let estimate: BudgetEstimate = p.plan
-      ? estimateLecture(p.plan, p.context, p.preview.altData.summary, asProvider(commentary.provider), asProvider(concepts.provider), {
-          commentaryEffort: this.estimatedEffort(commentary),
-          conceptEffort: this.estimatedEffort(concepts),
-        })
-      : this.estimateLectureLevel(p.preview, commentary, concepts);
+      ? estimateLecture(p.plan, p.context, p.preview.altData.summary, asProvider(commentary.provider), asProvider(concepts.provider), efforts)
+      : p.transcriptPlan
+        ? estimateTranscriptSummary(p.transcriptPlan, p.context, p.preview.altData.summary, asProvider(commentary.provider), asProvider(concepts.provider), efforts)
+        : this.estimateLectureLevel(p.preview, commentary, concepts);
     // Optional alignment check (spec 4.3 step 3): one small text call.
     const checkPrompt = p.alignment && alignmentTask.provider !== "none" ? buildAlignmentCheckPrompt(p.preview.altData.title, p.alignment, p.slideTexts) : null;
     if (checkPrompt && alignmentTask.provider !== "none") {
@@ -1295,6 +1417,10 @@ export default class Alt2ObsidianPlugin extends Plugin {
       let { plan, alignment } = prepared;
       const altData = preview.altData;
 
+      if (prepared.transcriptPlan) {
+        return await this.runTranscriptImport(prepared, prepared.transcriptPlan, { commentaryLlm, conceptLlm, commentaryTask, usage, signal, hooks });
+      }
+
       if (!plan || !pdfData) {
         // No PDF: 1.x lecture-level note, generated by the CLI provider.
         hooks.onStep?.("overview");
@@ -1355,7 +1481,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
             effort: commentaryTask.effort,
             conceptModel: usage.modelFor("concepts") ?? undefined,
           }),
-          ...this.preservedFrontmatter(prepared.notePath, altData.metadata.sourceKind, alignment),
+          // The attached mark follows the PDF this import used.
+          ...this.preservedFrontmatter(prepared.notePath, altData.metadata.sourceKind, alignment).filter((l) => !l.startsWith("alt_pdf_source:")),
+          ...(prepared.pdfSource === "attached" ? [ATTACHED_LINE] : []),
         ]
       );
       return await this.saveLecture({
@@ -1380,6 +1508,289 @@ export default class Alt2ObsidianPlugin extends Plugin {
         await this.recordUsage(usage).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
       }
     }
+  }
+
+  /**
+   * The summary note of a lecture without slides (spec 4.10): section
+   * summaries in batches, then the overview and the concepts from the
+   * section gists, written like a slide note (merge keeps the memos).
+   */
+  private async runTranscriptImport(
+    prepared: PreparedImport,
+    plan: TranscriptPlan,
+    r: { commentaryLlm: ILLMProvider; conceptLlm: ILLMProvider; commentaryTask: TaskLLMSetting; usage: UsageTracker; signal: AbortSignal; hooks: CliImportHooks }
+  ): Promise<ImportRecord> {
+    const { preview, subject, url } = prepared;
+    const altData = preview.altData;
+    const { hooks, signal, usage, commentaryTask } = r;
+    const run = await runTranscriptSummary({
+      plan,
+      context: prepared.context,
+      subject,
+      language: this.data.settings.language,
+      altSummary: altData.summary,
+      commentaryLlm: r.commentaryLlm,
+      conceptLlm: r.conceptLlm,
+      signal,
+      onStep: hooks.onStep,
+      onBatch: (p) => hooks.onBatch?.({ batch: p.batch, batches: p.batches, slidesDone: p.done, slidesTotal: p.total, retry: p.retry }),
+    });
+    if (signal.aborted) throw new CliRunError("aborted", "취소되었습니다");
+    // Nothing summarized at all: keep the existing note as it is.
+    const llmSections = plan.sections.filter((x) => x.mode === "llm").length;
+    if (llmSections > 0 && run.sectionsResult.generatedCount === 0) {
+      const first = run.sectionsResult.errors[0]?.reason ?? "알 수 없는 오류";
+      throw new Error(`전사 구간을 하나도 요약하지 못해 노트를 저장하지 않았습니다: ${first}`);
+    }
+    hooks.onStep?.("save");
+    const concepts = this.normalizeConcepts(run.concepts, new Set(prepared.context.knownConcepts));
+    const providerLabel = `${PROVIDER_LABELS[commentaryTask.provider]}${commentaryTask.model ? " " + commentaryTask.model : ""}`;
+    const { lectureMarkdown, conceptNotes } = new NoteGenerator(r.commentaryLlm).generateTranscriptNote(
+      altData,
+      { sections: run.sectionsResult.sections, errors: [...run.sectionsResult.errors, ...run.warnings.map((reason) => ({ section: 0, reason }))] },
+      { processedSummary: run.overview, concepts, tags: run.tags, subjectSuggestion: subject, knownConceptNames: prepared.context.knownConcepts },
+      subject,
+      [
+        formatUsageFrontmatter(usage.total(), providerLabel, {
+          model: usage.modelFor("commentary") || commentaryTask.model,
+          effort: commentaryTask.effort,
+          conceptModel: usage.modelFor("concepts") ?? undefined,
+        }),
+        ...this.preservedFrontmatter(prepared.notePath, altData.metadata.sourceKind, null),
+      ]
+    );
+    return this.saveLecture({
+      url,
+      altData,
+      subject,
+      lectureMarkdown,
+      conceptNotes,
+      pdfData: null,
+      notePath: prepared.notePath,
+      bundle: preview.bundle,
+      onProgress: hooks.onProgress,
+      onConfirmUpdate: hooks.onConfirmUpdate,
+      signal,
+    });
+  }
+
+  // ---- lectures without slides: kind and attached PDF (spec 4.10) ----
+
+  /** The note an import of this Alt local note writes (the same rule as an import). */
+  notePathForLocal(note: { id: string; title: string; lectureDate: string | null }, subject: string): string {
+    const preview = {
+      altData: { title: note.title, summary: "", pdfUrl: null, transcript: null, parseQuality: "full" as const, metadata: { noteId: note.id, createdAt: note.lectureDate, visibility: null, sourceKind: "alt-local" as const } },
+      pdfData: null,
+      suggestedSubject: subject,
+    };
+    return this.resolveNotePath(preview, subject);
+  }
+
+  /**
+   * The PDF next to a note that an import would use as attached: the note
+   * is marked so, or there is no note yet and Alt has no PDF (an unmarked
+   * PDF next to an existing note is the plugin's own copy).
+   */
+  attachedPdfFor(notePath: string, altHasPdf: boolean): TFile | null {
+    const sibling = this.siblingPdf(notePath);
+    if (!sibling) return null;
+    const note = this.app.vault.getAbstractFileByPath(notePath);
+    const fm = this.frontmatterOf(notePath);
+    return fm?.alt_pdf_source === "attached" || (!(note instanceof TFile) && !altHasPdf) ? sibling : null;
+  }
+
+  /** Kind of an Alt lecture as the sidebar shows it ("슬라이드", "노트(전사만)", ...). */
+  lectureKindFor(input: { altType: string | null; hasSlides: boolean; hasTranscript: boolean; notePath: string }): LectureKind {
+    const attached = !!this.attachedPdfFor(input.notePath, input.hasSlides);
+    const fm = this.frontmatterOf(input.notePath);
+    // A slide note with the PDF an earlier import saved next to it: imported with that copy.
+    const vaultCopy = !attached && !!this.siblingPdf(input.notePath) && fm?.slide_count !== undefined && fm?.slide_count !== null && fm?.alt_kind !== "transcript";
+    return lectureKind({ altType: input.altType, hasSlides: input.hasSlides, hasTranscript: input.hasTranscript, attachedPdf: attached, vaultCopy });
+  }
+
+  /** Records of the PDFs the plugin copied when the user attached one (and the legacy "never trash" list). */
+  private async recordCopy(path: string, data: ArrayBuffer | null): Promise<void> {
+    const copies = (this.data.attachedCopies ?? []).filter((c) => c.path !== path);
+    if (data) copies.push({ path, size: data.byteLength, sha1: await sha1Hex(data) });
+    this.data.attachedCopies = copies;
+    if (data && this.data.attachedInPlace) this.data.attachedInPlace = this.data.attachedInPlace.filter((p) => p !== path);
+    await this.savePluginData();
+  }
+
+  /** A vault rename (a note and its PDF moved, a folder renamed): the records follow the files. */
+  async onVaultRename(file: { path: string }, oldPath: string): Promise<void> {
+    const move = (p: string) => (p === oldPath ? file.path : p.startsWith(oldPath + "/") ? file.path + p.slice(oldPath.length) : p);
+    const copies = this.data.attachedCopies ?? [];
+    const inPlace = this.data.attachedInPlace ?? [];
+    if (!copies.some((c) => move(c.path) !== c.path) && !inPlace.some((p) => move(p) !== p)) return;
+    this.data.attachedCopies = copies.map((c) => ({ ...c, path: move(c.path) }));
+    if (this.data.attachedInPlace) this.data.attachedInPlace = inPlace.map(move);
+    await this.savePluginData();
+  }
+
+  /** Drops records whose file is gone. */
+  async pruneAttachRecords(): Promise<void> {
+    const exists = (p: string) => this.app.vault.getAbstractFileByPath(p) instanceof TFile;
+    const copies = this.data.attachedCopies ?? [];
+    const inPlace = this.data.attachedInPlace ?? [];
+    const keptCopies = copies.filter((c) => exists(c.path));
+    const keptInPlace = inPlace.filter(exists);
+    if (keptCopies.length === copies.length && keptInPlace.length === inPlace.length) return;
+    this.data.attachedCopies = keptCopies;
+    if (this.data.attachedInPlace) this.data.attachedInPlace = keptInPlace;
+    await this.savePluginData();
+  }
+
+  /**
+   * The PDF next to a note is a copy the plugin made and nobody changed
+   * since: a record with its path, the same size and the same SHA-1. Any
+   * other file (the user's own, moved or renamed there, or a copy the user
+   * edited) is not, and is never trashed.
+   */
+  async attachedPdfIsCopy(notePath: string): Promise<boolean> {
+    const pdf = this.siblingPdf(notePath);
+    if (!pdf || (this.data.attachedInPlace ?? []).includes(pdf.path)) return false;
+    const record = (this.data.attachedCopies ?? []).find((c) => c.path === pdf.path);
+    if (!record) return false;
+    const data = await this.app.vault.readBinary(pdf);
+    return data.byteLength === record.size && (await sha1Hex(data)) === record.sha1;
+  }
+
+  /**
+   * The attached PDF next to a note leaves its place: a copy the plugin made
+   * (see `attachedPdfIsCopy`) goes to the trash with the vault's documented
+   * recoverable path (the system trash, else the vault's .trash folder),
+   * never deleted for good; any other file is the user's own and is never
+   * trashed: renamed to a free "<note> (첨부한 PDF).pdf" when `rename` (so an
+   * import cannot overwrite it), else left where it is.
+   */
+  private async releaseAttachedPdf(notePath: string, rename: boolean): Promise<{ pdfPath: string | null; trashed: boolean; keptAt: string | null }> {
+    await this.pruneAttachRecords();
+    const pdf = this.siblingPdf(notePath);
+    if (!pdf) return { pdfPath: null, trashed: false, keptAt: null };
+    const path = pdf.path;
+    if (await this.attachedPdfIsCopy(notePath)) {
+      await this.app.vault.trash(pdf, true);
+      await this.recordCopy(path, null);
+      return { pdfPath: path, trashed: true, keptAt: null };
+    }
+    if (!rename) return { pdfPath: path, trashed: false, keptAt: path };
+    const stem = notePath.replace(/\.md$/i, "");
+    let target = `${stem} (첨부한 PDF).pdf`;
+    for (let n = 2; this.app.vault.getAbstractFileByPath(target); n++) target = `${stem} (첨부한 PDF ${n}).pdf`;
+    await this.app.fileManager.renameFile(pdf, target);
+    await this.onVaultRename({ path: target }, path);
+    return { pdfPath: path, trashed: false, keptAt: target };
+  }
+
+  /** The note loses its `alt_pdf_source` line (as text; nothing else changes). */
+  private async unmarkAttached(notePath: string): Promise<void> {
+    const note = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(note instanceof TFile)) return;
+    const content = await this.app.vault.read(note);
+    if (markedAttached(content)) await this.app.vault.modify(note, removeFrontmatterLine(content, "alt_pdf_source"));
+  }
+
+  /**
+   * "Alt 슬라이드로 바꾸기": the next import uses Alt's PDF instead of the
+   * attached one, and writes Alt's PDF as `<note>.pdf`. So the attached PDF
+   * leaves first (see `releaseAttachedPdf`: a copy to the trash, the user's
+   * own file renamed, never overwritten), then the mark goes.
+   */
+  async useAltSlides(notePath: string): Promise<{ pdfPath: string | null; trashed: boolean; keptAt: string | null }> {
+    const released = await this.releaseAttachedPdf(notePath, true);
+    await this.unmarkAttached(notePath);
+    return released;
+  }
+
+  /**
+   * "첨부 해제": the attached PDF leaves (a copy to the trash, the user's own
+   * vault file stays where it is) and the note loses its `alt_pdf_source`
+   * line. Nothing else in the note changes.
+   */
+  async detachPdf(notePath: string): Promise<{ pdfPath: string | null; trashed: boolean; keptAt: string | null }> {
+    const released = await this.releaseAttachedPdf(notePath, false);
+    await this.unmarkAttached(notePath);
+    return released;
+  }
+
+  /**
+   * Copies a picked PDF next to the lecture note (`<note>.pdf`, or the
+   * existing `.PDF` sibling) and marks an existing note `alt_pdf_source:
+   * "attached"` (one frontmatter line; nothing else in the note changes).
+   * The next import uses it as the slides: a summary note becomes a slide
+   * note, its old text kept under "이전 노트 백업".
+   */
+  async attachPdf(notePath: string, picked: PickedPdf): Promise<{ pdfPath: string; replaced: boolean; marked: boolean }> {
+    let data: ArrayBuffer;
+    let name: string;
+    if (picked.kind === "vault") {
+      const f = this.app.vault.getAbstractFileByPath(picked.path);
+      if (!(f instanceof TFile)) throw new Error(`보관함에서 PDF를 찾지 못했습니다: ${picked.path}`);
+      data = await this.app.vault.readBinary(f);
+      name = picked.path;
+    } else {
+      data = picked.data;
+      name = picked.name;
+    }
+    if (data.byteLength > MAX_ATTACH_BYTES) throw new Error(`PDF가 너무 큽니다 (${Math.round(data.byteLength / 1048576)} MB, 최대 ${MAX_ATTACH_BYTES / 1048576} MB): ${name}`);
+    if (!looksLikePdf(data)) throw new Error(`PDF 파일이 아닙니다: ${name}`);
+    const existing = this.siblingPdf(notePath);
+    const target = existing?.path ?? attachedPdfPath(notePath);
+    // The user's own file already at <note>.pdf is used where it is (no copy, so no record: never trashed).
+    const inPlace = picked.kind === "vault" && picked.path === target;
+    if (!inPlace) await this.vaultManager!.saveRawFile(data, target);
+    await this.recordCopy(target, inPlace ? null : data);
+    let marked = false;
+    const note = this.app.vault.getAbstractFileByPath(notePath);
+    if (note instanceof TFile) {
+      const content = await this.app.vault.read(note);
+      if (!markedAttached(content)) {
+        // One line inserted as text (processFrontMatter would reformat the YAML).
+        await this.app.vault.modify(note, insertFrontmatterLine(content, ATTACHED_LINE));
+        marked = true;
+      }
+    }
+    return { pdfPath: target, replaced: !!existing, marked };
+  }
+
+  /** "PDF 첨부" from a command or the viewer explanation: pick, copy, and say what happens next. */
+  async attachPdfInteractive(notePath: string): Promise<boolean> {
+    const target = this.siblingPdf(notePath)?.path ?? attachedPdfPath(notePath);
+    const picked = await pickPdf(this.app, { title: notePath.split("/").pop()!.replace(/\.md$/, ""), target, replacing: !!this.siblingPdf(notePath) });
+    if (!picked) return false;
+    try {
+      const res = await this.attachPdf(notePath, picked);
+      new Notice(`PDF를 첨부했습니다: ${res.pdfPath}\n사이드바의 Alt 노트 목록에서 이 강의를 다시 가져오면 슬라이드 노트로 바뀝니다 (내 메모는 보존).`, 10000);
+      return true;
+    } catch (e) {
+      new Notice(`PDF를 첨부하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+  }
+
+  /** A lecture note without a PDF has no Synced Viewer: say why and offer "PDF 첨부". */
+  async explainNoViewer(notePath: string): Promise<void> {
+    const pending = !!this.siblingPdf(notePath);
+    const summaryNote = this.frontmatterOf(notePath)?.alt_kind === "transcript";
+    const paragraphs = !summaryNote
+      ? [
+          `이 강의 노트 옆에 PDF가 없습니다: ${attachedPdfPath(notePath)}. Alt에 슬라이드가 있으면 사이드바에서 다시 가져올 때 함께 저장됩니다.`,
+          "Alt에 슬라이드가 없으면 강의 PDF를 첨부하세요. 다음 가져오기부터 그 PDF를 슬라이드로 씁니다.",
+        ]
+      : pending
+        ? ["이 노트는 녹음 전사로 만든 요약 노트입니다. PDF가 첨부되어 있으니 사이드바의 Alt 노트 목록에서 이 강의를 다시 가져오면 슬라이드 노트로 바뀌고 Synced Viewer로 볼 수 있습니다 (내 메모는 '이전 노트 백업'에 보존)."]
+        : [
+            "이 강의에는 슬라이드 PDF가 없어 녹음 전사로 요약 노트를 만들었습니다. Synced Viewer는 PDF와 슬라이드별 노트를 나란히 보여 주므로 이 노트에는 쓸 수 없습니다.",
+            "강의 PDF를 첨부하면 다음 가져오기에서 슬라이드 노트로 바뀌고(슬라이드별 해설, 전사 정렬, 슬라이드 대조 검증) Synced Viewer로 볼 수 있습니다. 지금 노트의 내용과 내 메모는 '이전 노트 백업'에 그대로 남습니다.",
+          ];
+    const choice = await choose(
+      this.app,
+      "Synced Viewer를 열 수 없습니다",
+      paragraphs,
+      pending && summaryNote ? [{ id: "close", text: "닫기", cta: true }] : [{ id: "close", text: "닫기" }, { id: "attach", text: "PDF 첨부", cta: true }]
+    );
+    if (choice === "attach") await this.attachPdfInteractive(notePath);
   }
 
   /** "기본값으로 저장" of a run's model choice: the task's saved setting (the preset becomes 사용자 지정). */
@@ -1566,7 +1977,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
   /**
    * Claims, evidence and the estimate (no tokens): the lecture's slide texts
    * from its sibling PDF, its timestamped transcript and stored alignment
-   * when it is an Alt local note.
+   * when it is an Alt local note. A lecture without slides (a transcript
+   * summary note, or any lecture note with no PDF) is checked against its
+   * transcript sections instead (spec 4.10).
    */
   async prepareVerification(input: { targetPath: string; markdown: string; source: string; sourcePath?: string }): Promise<PreparedVerification> {
     const target = this.app.vault.getAbstractFileByPath(input.targetPath);
@@ -1577,7 +1990,11 @@ export default class Alt2ObsidianPlugin extends Plugin {
       throw new Error("강의 노트나 검증 결과 노트는 검증할 노트로 고를 수 없습니다.");
     }
     const pdf = this.siblingPdf(input.targetPath);
-    if (!pdf || !this.pdfProcessor) throw new Error(`강의 PDF가 없어 슬라이드와 대조할 수 없습니다: ${input.targetPath.replace(/\.md$/, ".pdf")}`);
+    const lectureContent = await this.app.vault.cachedRead(target);
+    // A summary note; a slide note keeps an old summary note only as a backup (its section markers there do not count).
+    const transcriptNote =
+      this.frontmatterOf(input.targetPath)?.alt_kind === "transcript" || (hasSectionMarkers(lectureContent) && !hasMultiManagedMarkers(lectureContent));
+    if (!pdf || !this.pdfProcessor || transcriptNote) return this.prepareTranscriptVerification(target, lectureContent, input, outPath);
     const layouts = await this.pdfProcessor.getPageLayouts(await this.app.vault.readBinary(pdf));
     const slideTexts = layouts.map(layoutAlignmentText);
     const fm = this.app.metadataCache.getFileCache(target)?.frontmatter;
@@ -1591,6 +2008,29 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
     const plan = planVerification({ lecture: target.basename, notePath: target.path, noteMarkdown: input.markdown, slideTexts, transcript });
     return this.withVerifyChoice({ targetPath: input.targetPath, outPath, source: input.source, plan }, this.data.settings.tasks.verification);
+  }
+
+  /**
+   * Verification of a lecture without slides: the evidence is its
+   * timestamped transcript, cut into the note's sections (their headings
+   * carry the times). A URL import has no timestamps and cannot be checked.
+   */
+  private async prepareTranscriptVerification(
+    target: TFile,
+    lectureContent: string,
+    input: { markdown: string; source: string },
+    outPath: string
+  ): Promise<PreparedVerification> {
+    const id = this.frontmatterOf(target.path)?.alt_local_id;
+    const segments = typeof id === "string" && id ? await this.loadTranscript(id) : null;
+    if (!segments || segments.length === 0) {
+      throw new Error(
+        `강의 PDF도, 시각이 있는 전사도 없어 대조할 수 없습니다: ${target.path}. URL로 가져온 강의의 전사에는 시각이 없습니다. 강의 PDF를 첨부해 다시 가져오거나, Alt 노트 목록에서 가져온 강의를 고르세요.`
+      );
+    }
+    const sections = verifySectionsFromNote(lectureContent, segments);
+    const plan = planVerification({ lecture: target.basename, notePath: target.path, noteMarkdown: input.markdown, slideTexts: [], transcript: { segments, spans: null }, sections });
+    return this.withVerifyChoice({ targetPath: target.path, outPath, source: input.source, plan }, this.data.settings.tasks.verification);
   }
 
   /**
@@ -1955,6 +2395,18 @@ export default class Alt2ObsidianPlugin extends Plugin {
   /** Concepts as written to the vault (see `normalizeConcepts` in src/core/conceptNames.ts). */
   private normalizeConcepts(concepts: ConceptData[], existingConceptNames: Set<string>): ConceptData[] {
     return normalizeConcepts(concepts, existingConceptNames);
+  }
+
+  /** Alt's (or the URL's) PDF, with the download error when there was a PDF to download and it failed. */
+  private async fetchAltPdf(preview: ImportPreview): Promise<{ data: ArrayBuffer | null; error: string | null }> {
+    if (preview.pdfData) return { data: preview.pdfData, error: null };
+    if (!preview.pdfUrl || !this.pdfProcessor) return { data: null, error: null };
+    try {
+      return { data: await this.pdfProcessor.downloadPdf(preview.pdfUrl), error: null };
+    } catch (e) {
+      console.warn("[Alt2Obsidian] PDF download failed:", e);
+      return { data: null, error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   private async downloadPdfForImport(

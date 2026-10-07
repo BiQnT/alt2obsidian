@@ -621,6 +621,31 @@
   background: rgba(var(--color-purple-rgb), 0.18);
   color: var(--color-purple);
 }
+/* Lecture kind in the note list (2.0.0-beta.6): 슬라이드 / 노트(전사만) / 슬라이드(미첨부). */
+.alt2obsidian-kind {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+.alt2obsidian-kind.is-slides,
+.alt2obsidian-kind.is-attached,
+.alt2obsidian-kind.is-vault-copy {
+  background: rgba(var(--color-blue-rgb), 0.15);
+  color: var(--color-blue);
+}
+.alt2obsidian-kind.is-transcript,
+.alt2obsidian-kind.is-note {
+  background: rgba(var(--color-green-rgb), 0.15);
+  color: var(--color-green);
+}
+.alt2obsidian-kind.is-slides-missing {
+  background: rgba(var(--color-orange-rgb), 0.18);
+  color: var(--color-orange);
+}
 .alt2obsidian-note-footer {
   display: flex;
   flex-direction: column;

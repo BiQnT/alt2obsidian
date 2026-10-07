@@ -11,6 +11,12 @@ export interface VaultNoteInfo {
   altId?: string;
   /** Alt creation time of a URL import (ISO), used for the date match. */
   altCreated?: string;
+  /** `alt_kind`: "transcript" for a summary note of a lecture without slides (spec 4.10). */
+  kind?: string;
+  /** `alt_pdf_source`: "attached" when the user attached the PDF in the plugin. */
+  pdfSource?: string;
+  /** A slide note (`slide_count` in its frontmatter). */
+  slideNote?: boolean;
 }
 
 export function normalizeTitle(title: string): string {
@@ -78,5 +84,75 @@ export function statusChip(status: LocalNoteStatus): { text: string; cls: string
       return status.changed && status.changed > 0
         ? { text: `슬라이드 ${status.changed}장 변경`, cls: "is-changed" }
         : { text: "가져옴", cls: "is-imported" };
+  }
+}
+
+// ---- Lecture kind (spec 4.10, 2.0.0-beta.6) ----
+// Alt's "노트 추가" dialog creates a note of type "note" (a recording and its
+// transcript; Alt cannot attach slides to it) or "slide" (slides can be
+// attached in Alt); older notes are "legacy". The plugin shows which kind a
+// lecture is, so the user knows why it has no slide commentary:
+//   slides          a slides PDF exists (Alt's)                 -> slide path
+//   attached        the user attached a PDF in the plugin       -> slide path
+//   vault-copy      no slides in Alt now, but a slide note with -> slide path with that copy
+//                   the PDF saved next to it by an earlier import
+//   slides-missing  type "slide" but no slides attached in Alt  -> attach in Alt and refresh;
+//                   "PDF 첨부" or "요약 노트 만들기" in the plugin
+//   transcript      type "note" (or "legacy", or a URL note) without slides,
+//                   with a transcript                           -> "요약 노트 만들기" or "PDF 첨부"
+//   empty           no slides and no transcript                 -> a lecture-level note from Alt's summary and memo
+
+export type LectureKind = "slides" | "attached" | "vault-copy" | "slides-missing" | "transcript" | "empty";
+
+export interface LectureKindFacts {
+  /** lecture_notes.type ("note" | "slide" | "legacy"); null or "" when unknown (URL source). */
+  altType?: string | null;
+  /** Alt has a slides PDF for the note. */
+  hasSlides: boolean;
+  /** The transcript has text. */
+  hasTranscript: boolean;
+  /**
+   * A PDF the user attached in the plugin is next to the note (`<note>.pdf`)
+   * and is used: the note is marked `alt_pdf_source: "attached"`, or Alt has
+   * no PDF for it.
+   */
+  attachedPdf: boolean;
+  /** A slide note exists and the PDF an earlier import saved is next to it (not attached). */
+  vaultCopy?: boolean;
+}
+
+export function lectureKind(f: LectureKindFacts): LectureKind {
+  if (f.attachedPdf) return "attached";
+  if (f.hasSlides) return "slides";
+  if (f.vaultCopy) return "vault-copy";
+  if (f.altType === "slide") return "slides-missing";
+  return f.hasTranscript ? "transcript" : "empty";
+}
+
+export const LECTURE_KIND_LABELS: Record<LectureKind, string> = {
+  slides: "슬라이드",
+  attached: "슬라이드(PDF 첨부)",
+  "vault-copy": "슬라이드(저장된 PDF)",
+  "slides-missing": "슬라이드(미첨부)",
+  transcript: "노트(전사만)",
+  empty: "노트(전사 없음)",
+};
+
+/**
+ * An import found no slides PDF (none in Alt, none attached) and the user
+ * did not choose "요약 노트 만들기": the import stops before any token is
+ * spent instead of silently making a note without slides. `notePath` is
+ * where an attached PDF would go (`<note>.pdf`).
+ */
+export class MissingPdfError extends Error {
+  constructor(
+    message: string,
+    public notePath: string,
+    public hasTranscript: boolean,
+    /** The PDF download failed with this error (a URL import): "다시 시도" is the first choice. */
+    public downloadError: string | null = null
+  ) {
+    super(message);
+    this.name = "MissingPdfError";
   }
 }
