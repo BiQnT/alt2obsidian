@@ -9,6 +9,9 @@
  *   becomes a column and the control takes the full width (the settings
  *   window opens at 900px and can be made as narrow as 600px, which leaves
  *   about 400px for the pane).
+ * - a tab drawn from setting definitions (1.13 and later) is setting groups:
+ *   at most 700px wide and centred, a heading row, then the rows in one box
+ *   with 20px padding each (the desktop values, checked on 2026-10-08).
  */
 body { margin: 0; font: 13px/1.4 -apple-system, "Apple SD Gothic Neo", sans-serif; }
 .vertical-tab-content { container-type: inline-size; padding: 0 32px; box-sizing: border-box; }
@@ -30,3 +33,9 @@ button { white-space: nowrap; padding: 4px 12px; }
   .setting-item:not(:is(.mod-toggle, .setting-item-heading)) .setting-item-control { width: 100%; justify-content: flex-start; }
   .setting-item:not(:is(.mod-toggle, .setting-item-heading)) .setting-item-control :is(button, input, select) { width: 100%; max-width: 100%; }
 }
+.setting-group { width: 100%; max-width: 700px; margin-inline: auto; }
+.setting-group + .setting-group { margin-top: 24px; }
+.setting-group .setting-group-search:empty { display: none; }
+.setting-group .setting-items { border-radius: 12px; background: #f6f6f6; }
+.setting-group .setting-item:not(.setting-item-heading) { border: none; padding: 20px; margin-bottom: 0; }
+.setting-group .setting-item-heading { padding: 0 16px; margin-bottom: 16px; flex-wrap: wrap; }

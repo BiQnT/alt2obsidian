@@ -4,7 +4,9 @@
 // and HTML comment lines (dropped, like Obsidian's reading view). Setting
 // builds the DOM Obsidian 1.14 builds (div.setting-item > div.setting-item-info
 // > name + description, then div.setting-item-control; a dropdown adds a
-// hidden measuring select).
+// hidden measuring select), and its controls call their onChange/onClick
+// callbacks from DOM events. requireApiVersion compares with
+// window.obsidianApiVersion (default 1.12.3, before the declarative settings).
 const P = HTMLElement.prototype;
 P.createEl = function (tag, o = {}) {
   if (typeof o === "string") o = { cls: o };
@@ -87,26 +89,27 @@ export class Setting {
   setHeading() { this.settingEl.addClass("setting-item-heading"); return this; }
   addText(cb) {
     const inputEl = this.controlEl.createEl("input", { type: "text" });
-    const c = { inputEl, setPlaceholder: (p) => (inputEl.placeholder = p, c), setValue: (v) => (inputEl.value = v, c), onChange: () => c };
+    const c = { inputEl, setPlaceholder: (p) => (inputEl.placeholder = p, c), setValue: (v) => (inputEl.value = v, c), onChange: (f) => (inputEl.addEventListener("input", () => f(inputEl.value)), c) };
     cb(c);
     return this;
   }
   addButton(cb) {
     const buttonEl = this.controlEl.createEl("button");
-    const c = { buttonEl, setButtonText: (t) => (buttonEl.textContent = t, c), setWarning: () => c, setDisabled: (d) => (buttonEl.disabled = d, c), onClick: () => c };
+    const c = { buttonEl, setButtonText: (t) => (buttonEl.textContent = t, c), setWarning: () => c, setDisabled: (d) => (buttonEl.disabled = d, c), onClick: (f) => (buttonEl.addEventListener("click", f), c) };
     cb(c);
     return this;
   }
   addDropdown(cb) {
     const selectEl = this.controlEl.createEl("select", { cls: "dropdown" });
     this.controlEl.createEl("select", { cls: "dropdown is-measuring" });
-    const c = { selectEl, addOption: (v, t) => (selectEl.createEl("option", { text: t, attr: { value: v } }), c), setValue: (v) => (selectEl.value = v, c), onChange: () => c };
+    const c = { selectEl, addOption: (v, t) => (selectEl.createEl("option", { text: t, attr: { value: v } }), c), setValue: (v) => (selectEl.value = v, c), onChange: (f) => (selectEl.addEventListener("change", () => f(selectEl.value)), c) };
     cb(c);
     return this;
   }
   addToggle(cb) {
     const toggleEl = this.controlEl.createEl("label", { cls: "checkbox-container" });
-    const c = { toggleEl, setValue: () => c, onChange: () => c };
+    const on = () => toggleEl.classList.contains("is-enabled");
+    const c = { toggleEl, setValue: (v) => (toggleEl.toggleClass("is-enabled", !!v), c), onChange: (f) => (toggleEl.addEventListener("click", () => (toggleEl.toggleClass("is-enabled", !on()), f(on()))), c) };
     cb(c);
     return this;
   }
@@ -121,5 +124,11 @@ export class PluginSettingTab {
 }
 export class Modal { constructor(app) { this.app = app; this.contentEl = document.createElement("div"); } open() {} close() {} }
 export const setIcon = () => {};
+export function requireApiVersion(version) {
+  const have = (window.obsidianApiVersion ?? "1.12.3").split(".").map(Number);
+  const want = version.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if (have[i] !== want[i]) return have[i] > want[i];
+  return true;
+}
 // PdfProcessor imports it for URL imports; the DOM tests read local files.
 export const requestUrl = () => { throw new Error("requestUrl is not available in tests"); };

@@ -7,8 +7,6 @@
 // its own. Under TypeScript 5 every installed @types package is loaded, so
 // Node's APIs typed fine here while the scanner saw them as error types
 // (643 no-unsafe-* reports on 2.0.1); tsconfig.json now names "node".
-// What the scanner still reports, by choice: the settings tab's
-// prefer-setting-definitions (see eslint.config.mjs).
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import base from "./eslint.config.mjs";
