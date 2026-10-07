@@ -1,4 +1,4 @@
-# Alt2Obs user guide
+# <img src="assets/logo.png" alt="" width="32" align="top"> Alt2Obs user guide
 
 [한국어](user-guide.ko.md) · [README](../README.md)
 

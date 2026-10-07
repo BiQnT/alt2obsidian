@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/assets/logo.svg" alt="Alt2Obs 로고" width="96">
+  <img src="docs/assets/banner.png" alt="Alt2Obs: 도트 Alt 키가 크리스털로 바뀌는 그림" width="384">
   <h1>Alt2Obs</h1>
   <p><strong>Alt 강의 녹음과 슬라이드를 서로 이어진 Obsidian 노트로 바꿉니다.</strong></p>
   <p>
@@ -121,7 +121,6 @@ npm run test:dom   # 헤드리스 Chromium에서 뷰어, 설정 화면, PDF.js �
 
 <!--
 Images to capture
-- docs/assets/logo.svg: 플러그인 로고. 따로 추가 예정(스크린샷 아님).
 - docs/assets/screenshot-viewer.png: README.md와 같은 이미지. 슬라이드 강의를 연 Synced Viewer, 왼쪽 PDF와 오른쪽 노트가 같은 슬라이드, 툴바에 "정렬 기준 동기화 · 전사 매칭", "전사 패널"을 열어 [mm:ss] 줄이 몇 개 보이는 상태.
 - docs/assets/screenshot-import.png: README.md와 같은 이미지. 사이드바 "Alt 노트 목록" 탭에서 강의 하나를 고른 상태(종류 칩 "슬라이드", 상태 칩, 과목 칸)와 "가져오기 전 예상 사용량" 패널(모델 선택, "시작" 버튼).
 -->

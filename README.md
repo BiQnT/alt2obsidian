@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/assets/logo.svg" alt="Alt2Obs logo" width="96">
+  <img src="docs/assets/banner.png" alt="Alt2Obs: a pixel Alt key turning into a crystal" width="384">
   <h1>Alt2Obs</h1>
   <p><strong>Turn Alt lecture recordings and slides into connected Obsidian notes.</strong></p>
   <p>
@@ -121,7 +121,6 @@ A release ships `main.js`, `manifest.json` and `styles.css`; the PDF.js worker i
 
 <!--
 Images to capture
-- docs/assets/logo.svg: the plugin logo, added separately (not a screenshot).
 - docs/assets/screenshot-viewer.png: the Synced Viewer on a slide lecture, PDF on the left and the note on the right at the same slide, toolbar visible with "정렬 기준 동기화 · 전사 매칭", and the transcript panel ("전사 패널") open with a few [mm:ss] lines. About 1600 px wide.
 - docs/assets/screenshot-import.png: the sidebar on the "Alt 노트 목록" tab, a lecture selected with its kind chip ("슬라이드") and status chip, the subject field, and the "가져오기 전 예상 사용량" panel with its model pickers and the "시작" button. Sidebar width, about 840 px tall or more.
 -->
