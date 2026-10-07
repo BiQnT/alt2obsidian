@@ -211,7 +211,7 @@ alt_alignment: "1:0-95.2 2:95.2-210 ..."
 ## 📋 전체 요약
 
 <!-- alt2obs:overview start -->
-[overview of the lecture, built from Alt's summary and a one-line gist per slide]
+[overview built from Alt's summary and a one-line gist per slide: ### 개요 (overview), ### 핵심 개념 (key concepts), ### 흐름 (flow, topics with their slide ranges)]
 <!-- alt2obs:overview end -->
 
 ## 📚 슬라이드 1
@@ -220,9 +220,9 @@ alt_alignment: "1:0-95.2 2:95.2-210 ..."
 [commentary written from the slide text (and image, for diagram slides) and that slide's transcript]
 
 > [!definition] Pipelining
-> 여러 명령어를 서로 다른 단계에서 동시에 실행해 throughput을 높이는 기법.
+> 여러 명령어를 서로 다른 단계에서 겹쳐 실행해 throughput을 높이는 기법이다.
 
-[[Pipeline Hazard (파이프라인 해저드)|Pipeline Hazard]]는 다음 슬라이드에서 다룹니다.
+단계 사이에 의존이 생기면 [[Pipeline Hazard (파이프라인 해저드)|Pipeline Hazard]]가 생긴다.
 
 <!-- alt2obs:meta img:5d0c9e... gist:"..." -->
 <!-- alt2obs:slide:1 hash:a3f5b2c1 end -->
@@ -239,7 +239,7 @@ alt_alignment: "1:0-95.2 2:95.2-210 ..."
 - The `<!-- alt2obs:meta ... -->` line at the end of each block keeps the slide's image signal and a one-line gist, so a re-import can skip unchanged slides.
 - `alt_alignment` stores which part of the recording belongs to each slide; the viewer uses it.
 - `alt2obs_usage` records the model and effort the CLI actually used and the tokens spent.
-- Slide commentary is in Korean; academic terms and concept names stay in English (`Context Switch`, `vruntime`).
+- Slide commentary is in Korean in the plain "~다" style, with academic terms and concept names in English (`Context Switch`, `vruntime`). It explains the why and the lecture's own examples from the transcript, and adds a callout only where one helps.
 - With **핵심 다이어그램 이미지 저장** (save key diagram images) on, up to 8 diagram-heavy slides per lecture are saved as `Attachments/<lecture>-<page>.png` and embedded at the end of their commentary. The script picks them, so no tokens are spent.
 
 ### Summary note
@@ -265,17 +265,17 @@ alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effor
 ## 📋 전체 요약
 
 <!-- alt2obs:overview start -->
-[overview built from the section gists and Alt's summary]
+[overview built from the section gists and Alt's summary: ### 개요, ### 핵심 개념, ### 흐름 (topics with their section ranges)]
 <!-- alt2obs:overview end -->
 
 ## ⏱ 구간 1 [00:00~10:46]
 
 <!-- alt2obs:section:1 hash:d46472eb start -->
-- random experiment를 단순한 sub-experiment의 sequence로 구성해 다룰 수 있음 [00:00]
-- 패킷이 도착하기까지 필요한 전송 횟수가 관심사임 [06:57]
+- random experiment는 단순한 sub-experiment의 sequence로 나눠 다룬다. [00:00]
+- 패킷이 도착하기까지 필요한 전송 횟수를 구한다. [06:57]
 
 > [!example] 재전송 모델
-> A1, ..., A(M-1)은 실패, A(M)은 성공으로 두고 각 전송을 독립으로 가정함
+> A1, ..., A(M-1)은 실패, A(M)은 성공으로 두고 각 전송은 독립이라고 가정한다.
 
 <!-- alt2obs:meta img:none gist:"..." -->
 <!-- alt2obs:section:1 hash:d46472eb end -->
@@ -352,7 +352,7 @@ Many Alt lectures are a recording and a transcript only. You can make a summary 
 
 ### Summary notes
 
-**요약 노트 만들기** (make a summary note) cuts the transcript into sections of 9 to 15 minutes of speech, about 12 minutes each, where the topic changes. A pause longer than a minute counts as one minute. This is a script, so it spends no tokens; a 2-hour lecture gets 8 to 10 sections. Each section gets a bullet summary with the `[mm:ss]` time of each point and definition or example callouts, and the overview and concept notes are made from the section gists. A 2-hour lecture takes 3 calls: section summaries, overview and concepts. The estimate, progress, cancel, usage record and model choice work as for slide lectures.
+**요약 노트 만들기** (make a summary note) cuts the transcript into sections of 9 to 15 minutes of speech, about 12 minutes each, where the topic changes. A pause longer than a minute counts as one minute. This is a script, so it spends no tokens; a 2-hour lecture gets 8 to 10 sections. Each section gets a bullet summary with the `[mm:ss]` time of each point and a definition or example callout where one helps, and the overview and concept notes are made from the section gists. A 2-hour lecture takes 3 calls: section summaries, overview and concepts. The estimate, progress, cancel, usage record and model choice work as for slide lectures.
 
 On a re-import, sections whose transcript did not change keep their summary without a call, and memos stay with their section.
 

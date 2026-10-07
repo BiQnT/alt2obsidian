@@ -4,12 +4,15 @@ Condensed history of Alt2Obs (named Alt2Obsidian before 2.0.0). Release notes an
 
 ## 2.0.2 (2026-10-08)
 
+- **Notes that read less like AI output.** Slide commentary, summary note sections, overviews and concept notes are written in the plain "~다" style, with academic terms in English. The commentary explains why, keeps the professor's examples and warnings from the transcript, structures itself with bold labels, nested bullets, small tables and inline code, adds a callout only where it helps (at most one per slide), does not talk about "this slide" and avoids a list of Korean AI tells. Slides with a lot to explain may run to 900 characters (diagram slides 1000); simple ones stay short.
+- **A shorter overview.** The block at the top of a note is now 개요 (what the lecture covers and where it sits), 핵심 개념 (one-line definitions) and 흐름 (the topics with their slide or section ranges); the details stay in the slide commentary.
 - **Documentation in English.** README.md is now in English, with the Korean version in README.ko.md. A full user guide in both languages (docs/user-guide.md, docs/user-guide.ko.md) covers setup, importing, the notes, the viewer, note checking, settings and troubleshooting. The privacy section lists every network service, account and file outside the vault the plugin uses. New pixel logo and banner.
 - **Settings search on Obsidian 1.13 and later.** The settings tab is drawn from Obsidian's setting definitions, so its settings show up in Obsidian's settings search (also under English words such as model, effort, folder, Claude, Codex and Notion). Older Obsidian keeps the previous screen. On 1.13 and later the number fields save on Enter or when you leave the field, a value below the minimum or with a fraction is refused, and an emptied field goes back to its default.
 - **Detaching a PDF or switching to Alt slides** deletes the plugin's copy the way Obsidian's **Deleted files** setting says (system trash by default) instead of always moving it to the system trash. The confirmation now warns that this cannot be undone when Obsidian is set to delete files permanently.
 - Timers use `window.setTimeout` in Obsidian and Node's timers under plain Node.
 - In-app texts corrected: what happens when a CLI call times out, when the plugin copies Alt's database, and Alt's default data folder on Linux (`$XDG_CONFIG_HOME/alt`, else `~/.config/alt`).
 - Directory scan: type checking now matches the scanner (TypeScript 6 with Node types), `npm run lint` includes `lint:directory`, a local run of the scanner's source rules, and the settings rows use a CSS `gap` instead of `column-gap`.
+- The import benchmark (`scripts/bench`) also reads the plugin's transcript cache JSON and aligns it to the slides by its timestamps, like a local import.
 
 ## 2.0.1 (2026-10-07)
 
