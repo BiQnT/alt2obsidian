@@ -3,6 +3,9 @@
 // Linted: the plugin source (src/), package.json and manifest.json. Not
 // linted, as in the directory's scanner: tests, the Skill and build scripts
 // (scripts/), docs, prompts, *.mjs build files and the build output.
+// `npm run lint` then runs `npm run lint:directory`: these rules over src/
+// with type information built as the directory's TypeScript 6 builds it
+// (eslint.directory.config.mjs).
 import { defineConfig, globalIgnores } from "eslint/config";
 import obsidianmd from "eslint-plugin-obsidianmd";
 import { DEFAULT_BRANDS } from "eslint-plugin-obsidianmd/dist/lib/rules/ui/brands.js";
