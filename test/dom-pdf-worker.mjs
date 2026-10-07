@@ -6,7 +6,10 @@
  * extraction, page layouts, gray renders, JPEG and PNG renders all work,
  * several documents can be open at once, no worker file is fetched from
  * the server, PDF.js never falls back to its main-thread "fake worker", and
- * once the URL is revoked (plugin unload) no new document can start.
+ * once the URL is revoked (plugin unload) no new document can start. The
+ * same documents are opened once more with PDF.js's origin check forced to
+ * fail, as it may on Obsidian's app://obsidian.md page: the worker then
+ * starts through PDF.js's import() wrapper, and everything still works.
  *
  * Needs a Chromium binary, so it is not part of `npm test`:
  *   npm run test:dom                 (finds Playwright's headless shell or Google Chrome)
@@ -137,5 +140,9 @@ assert.ok(r.jpeg.ink > 0, "the JPEG render has the page's text");
 assert.deepEqual(r.pngs.map((p) => p.page), [1, 4]);
 assert.ok(r.pngs.every((p) => p.ink > 0), `PNG renders are not blank (${JSON.stringify(r.pngs)})`);
 assert.equal(r.materialPages, FIXTURE_PAGES.length, "lecture material text extraction");
+assert.ok(r.wrapper.wrapperCalls >= 3, `the wrapper path was taken for every document (${r.wrapper.wrapperCalls})`);
+assert.equal(r.wrapper.realWorker, true, "the wrapper starts a real module worker too");
+assert.deepEqual(r.wrapper.texts, r.texts, "same text through the wrapper");
+assert.equal(r.wrapper.jpeg, true, "renders through the wrapper");
 assert.ok(r.afterRevoke.startsWith("failed"), `a revoked URL starts no new document (${r.afterRevoke})`);
-console.log("PASS: PDF.js worker bundled into main.js: module worker from a Blob URL (no worker file, no fake worker), text, layouts, gray, JPEG and PNG renders, concurrent documents, revoked on unload");
+console.log("PASS: PDF.js worker bundled into main.js: module worker from a Blob URL, directly and through PDF.js's cross-origin wrapper (no worker file, no fake worker), text, layouts, gray, JPEG and PNG renders, concurrent documents, revoked on unload");

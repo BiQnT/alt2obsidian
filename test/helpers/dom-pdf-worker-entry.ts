@@ -49,6 +49,33 @@ async function main() {
   const pngs = await processor.renderPagesToImages(data, [1, 4], 400);
   const material = await processor.extractLectureMaterialContext(data, "Cache coherence MESI");
 
+  // Obsidian's page (app://obsidian.md) may not count as the Blob URL's
+  // origin: PDF.js then starts a module worker from its own small wrapper
+  // that import()s the Blob URL. Forced here, for every document opened.
+  const W = (pdfjsLib as any).PDFWorker;
+  const sameOrigin = W._isSameOrigin;
+  const createWrapper = W._createCDNWrapper;
+  let wrapperCalls = 0;
+  W._isSameOrigin = () => false;
+  W._createCDNWrapper = (u: string) => {
+    wrapperCalls++;
+    return createWrapper(u);
+  };
+  let wrapper: { realWorker: boolean; texts: Array<string | null>; jpeg: boolean; wrapperCalls: number };
+  try {
+    const task2 = pdfjsLib.getDocument({ data: data.slice(0) });
+    const doc2 = await task2.promise;
+    const worker2 = (task2 as any)._worker;
+    const realWorker2 = !!worker2?._webWorker && worker2._webWorker instanceof Worker;
+    await doc2.destroy();
+    const texts2 = await processor.getPageTexts(data);
+    const jpeg2 = await processor.renderPageJpeg(data, 2, 400);
+    wrapper = { realWorker: realWorker2, texts: texts2, jpeg: !!jpeg2, wrapperCalls };
+  } finally {
+    W._isSameOrigin = sameOrigin;
+    W._createCDNWrapper = createWrapper;
+  }
+
   // Plugin unload revokes the URL: no new document can start a worker from it
   // (PDF.js then tries its main-thread fallback, which cannot load it either).
   console.log("revoke step");
@@ -71,6 +98,7 @@ async function main() {
     jpeg: jpeg ? { mime: jpeg.mimeType, ink: await inkShare(jpeg.base64, jpeg.mimeType) } : null,
     pngs: await Promise.all(pngs.map(async (p) => ({ page: p.pageNum, ink: await inkShare(p.base64Png, "image/png") }))),
     materialPages: material?.pageCount ?? null,
+    wrapper,
     afterRevoke,
   };
 }
