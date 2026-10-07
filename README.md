@@ -42,7 +42,7 @@ Formerly **Alt2Obsidian** (plugin id `alt2obsidian`). Since 2.0.0 the plugin is 
 
 **Coming from Alt2Obsidian**: Obsidian treats Alt2Obs as a new plugin. On its first start Alt2Obs imports the old plugin's settings and records once (the old folder is left as it is) and asks you to disable and remove "Alt2Obsidian"; while the old plugin is still enabled, every start shows a warning, since both would act on the same notes and PDFs. Notes, note markers and the default folder `Alt2Obsidian/` stay the same.
 
-Open source under the [MIT License](LICENSE). No ads, no telemetry.
+Open source under the [MIT License](LICENSE). No ads, no telemetry. `main.js` bundles [PDF.js](https://github.com/mozilla/pdf.js) (pdfjs-dist 4.10.38, Mozilla Foundation, Apache License 2.0, its license notice kept in the bundle) to read and render the slide PDFs.
 
 ---
 
@@ -530,6 +530,8 @@ node scripts/bench/bench.mjs --pdf deck.pdf --transcript t.txt --provider claude
 ## 라이선스
 
 [MIT License](LICENSE)
+
+`main.js`에는 슬라이드 PDF를 읽고 그리는 [PDF.js](https://github.com/mozilla/pdf.js)(pdfjs-dist 4.10.38, Mozilla Foundation, Apache License 2.0)가 들어 있고, 그 라이선스 고지도 함께 들어 있습니다.
 
 ## 제작자
 
