@@ -27,6 +27,11 @@ function makeVault() {
       create: async (p, c) => void files.set(p, c),
       read: async (f) => files.get(f.path),
       modify: async (f, c) => void files.set(f.path, c),
+      process: async (f, fn) => {
+        const next = fn(files.get(f.path));
+        files.set(f.path, next);
+        return next;
+      },
     },
   };
   return { vm: new VaultManager(app, "Alt2Obsidian"), files };

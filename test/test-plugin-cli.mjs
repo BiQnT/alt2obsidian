@@ -61,6 +61,12 @@ function makeApp() {
       create: async (p, c) => void files.set(p, c),
       read: async (f) => files.get(f.path),
       modify: async (f, c) => void files.set(f.path, c),
+      // Obsidian's atomic read-modify-write.
+      process: async (f, fn) => {
+        const next = fn(files.get(f.path));
+        files.set(f.path, next);
+        return next;
+      },
       cachedRead: async (f) => files.get(f.path),
       readBinary: async (f) => binaries.get(f.path) ?? new ArrayBuffer(8),
       getMarkdownFiles: () => [...files.keys()].filter((p) => p.endsWith(".md")).map(tfile),

@@ -22,13 +22,18 @@ export class VaultManager {
   private conceptRegistry = new ConceptRegistry();
   private conceptNameCache = new Map<string, Set<string>>();
 
+  /** The "저장 폴더" setting, normalized (a user-typed path). */
+  private basePath: string;
+
   constructor(
     private app: App,
-    private basePath: string
-  ) {}
+    basePath: string
+  ) {
+    this.basePath = normalizePath(basePath);
+  }
 
   setBasePath(path: string): void {
-    this.basePath = path;
+    this.basePath = normalizePath(path);
   }
 
   getBasePath(): string {
@@ -76,11 +81,10 @@ export class VaultManager {
       return { path: normalized, wasUpdate: false };
     }
 
-    const currentContent = await this.app.vault.read(existing);
     // Page-anchored or legacy single-block merge (src/core/merge.ts, shared
-    // with the Skill CLI). Throws before writing on a page-anchored downgrade.
-    const updatedContent = mergeNote(currentContent, content).merged;
-    await this.app.vault.modify(existing, updatedContent);
+    // with the Skill CLI), read and written atomically. Throws before writing
+    // on a page-anchored downgrade.
+    await this.app.vault.process(existing, (currentContent) => mergeNote(currentContent, content).merged);
 
     return { path: normalized, wasUpdate: true };
   }
@@ -185,12 +189,9 @@ export class VaultManager {
 
         if (existing instanceof TFile) {
           const currentContent = await this.app.vault.read(existing);
-          const updated = this.updateExistingConceptNote(
-            currentContent,
-            concept,
-            lectureTitle
-          );
-          if (updated !== currentContent) await this.app.vault.modify(existing, updated);
+          const update = (text: string) => this.updateExistingConceptNote(text, concept, lectureTitle);
+          // Written only when the lecture adds something (atomically, on the current text).
+          if (update(currentContent) !== currentContent) await this.app.vault.process(existing, update);
           savedPaths.push(path);
         } else if (this.conceptRegistry.acquire(concept.name)) {
           acquiredNames.push(concept.name);

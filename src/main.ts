@@ -260,16 +260,29 @@ export default class Alt2ObsPlugin extends Plugin {
       callback: () => new MigrationModal(this.app, this.planVaultMigration(), (plan) => this.applyVaultMigration(plan)).open(),
     });
 
+    // Offered while a note or a PDF is open; the command says when it is not a lecture's.
+    const noteOrPdfOpen = () => {
+      const ext = this.app.workspace.getActiveFile()?.extension.toLowerCase();
+      return ext === "md" || ext === "pdf";
+    };
     this.addCommand({
       id: "open-synced-viewer",
       name: "Open synced viewer (PDF + lecture .md)",
-      callback: () => this.openSyncedViewerForActiveNote(),
+      checkCallback: (checking) => {
+        if (!noteOrPdfOpen()) return false;
+        if (!checking) void this.openSyncedViewerForActiveNote();
+        return true;
+      },
     });
 
     this.addCommand({
       id: "attach-lecture-pdf",
       name: "Attach lecture PDF to the current lecture note",
-      callback: () => this.attachPdfToActiveNote(),
+      checkCallback: (checking) => {
+        if (!noteOrPdfOpen()) return false;
+        if (!checking) void this.attachPdfToActiveNote();
+        return true;
+      },
     });
 
     // Register settings tab
@@ -504,7 +517,7 @@ export default class Alt2ObsPlugin extends Plugin {
       const isLectureNote = !!fm && (!!fm.alt_id || !!fm.alt_local_id || source === "alt2obsidian" || source === "alt2obsidian-cc-skill");
       return { path: file.path, isLectureNote };
     });
-    return planLayoutMigration(this.data.settings.baseFolderPath, files);
+    return planLayoutMigration(normalizePath(this.data.settings.baseFolderPath), files);
   }
 
   /** Moves through app.fileManager.renameFile, so Obsidian rewrites links to the moved files. */
@@ -762,9 +775,8 @@ export default class Alt2ObsPlugin extends Plugin {
   async linkLocalNote(path: string, localId: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) throw new Error(`노트를 찾지 못했습니다: ${path}`);
-    // One line inserted as text (processFrontMatter would reformat the YAML).
-    const content = await this.app.vault.read(file);
-    await this.app.vault.modify(file, insertFrontmatterLine(content, `alt_local_id: ${JSON.stringify(localId)}`));
+    // One line inserted as text (processFrontMatter would reformat the YAML), atomically.
+    await this.app.vault.process(file, (content) => insertFrontmatterLine(content, `alt_local_id: ${JSON.stringify(localId)}`));
   }
 
   /**
@@ -1691,8 +1703,9 @@ export default class Alt2ObsPlugin extends Plugin {
   private async unmarkAttached(notePath: string): Promise<void> {
     const note = this.app.vault.getAbstractFileByPath(notePath);
     if (!(note instanceof TFile)) return;
-    const content = await this.app.vault.read(note);
-    if (markedAttached(content)) await this.app.vault.modify(note, removeFrontmatterLine(content, "alt_pdf_source"));
+    if (markedAttached(await this.app.vault.read(note))) {
+      await this.app.vault.process(note, (content) => removeFrontmatterLine(content, "alt_pdf_source"));
+    }
   }
 
   /**
@@ -1748,10 +1761,9 @@ export default class Alt2ObsPlugin extends Plugin {
     let marked = false;
     const note = this.app.vault.getAbstractFileByPath(notePath);
     if (note instanceof TFile) {
-      const content = await this.app.vault.read(note);
-      if (!markedAttached(content)) {
-        // One line inserted as text (processFrontMatter would reformat the YAML).
-        await this.app.vault.modify(note, insertFrontmatterLine(content, ATTACHED_LINE));
+      if (!markedAttached(await this.app.vault.read(note))) {
+        // One line inserted as text (processFrontMatter would reformat the YAML), atomically.
+        await this.app.vault.process(note, (content) => (markedAttached(content) ? content : insertFrontmatterLine(content, ATTACHED_LINE)));
         marked = true;
       }
     }
