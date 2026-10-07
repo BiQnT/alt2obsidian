@@ -501,7 +501,7 @@ export class Alt2ObsSidebarView extends ItemView {
         ? `${path}는 플러그인이 만든 사본이 아니거나 그 뒤 바뀐 파일이라 지우지 않고, Alt PDF가 그 자리에 저장되지 않도록 "${path.replace(/\.pdf$/i, "")} (첨부한 PDF).pdf"로 이름을 바꿔 둡니다.`
         : `${path}는 플러그인이 만든 사본이 아니거나 그 뒤 바뀐 파일이라 지우지 않고 그대로 둡니다.`;
     }
-    return `첨부할 때 플러그인이 만든 사본(${path})은 Obsidian에서 정한 파일 삭제 방식대로(기본은 시스템 휴지통) 지웁니다. 원본 파일은 그대로입니다.`;
+    return `첨부할 때 플러그인이 만든 사본(${path})은 Obsidian에서 정한 파일 삭제 방식대로(기본은 시스템 휴지통) 지웁니다. 영구 삭제로 정해 두었다면 되돌릴 수 없습니다. 원본 파일은 그대로입니다.`;
   }
 
   /** Message after the attached PDF left. */
