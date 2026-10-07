@@ -370,7 +370,14 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
       );
     numberSetting("슬라이드당 전사 상한 (자)", "군말과 반복을 지운 뒤 슬라이드 내용과 겹치는 문장부터 이 길이까지 남깁니다.", () => g.transcriptCapChars, (n) => (g.transcriptCapChars = n), 0);
     numberSetting("강의당 토큰 상한", "예상 입력+출력 토큰이 이 값을 넘으면 시작 전에 멈춥니다. 0이면 상한 없음.", () => g.tokenCapPerLecture, (n) => (g.tokenCapPerLecture = n), 0);
-    numberSetting("CLI 호출 제한 시간 (초)", "호출 하나가 이 시간을 넘기면 중단하고 그 슬라이드를 한 번 다시 요청합니다.", () => this.settings.cliTimeoutSec, (n) => (this.settings.cliTimeoutSec = n), 30);
+    numberSetting(
+      "CLI 호출 제한 시간 (초)",
+      "호출 하나가 이 시간을 넘기면 중단합니다. 슬라이드 여러 장을 묶은 호출은 반으로 나눠 한 번 더 보내고, 한 장만 보낸 호출은 다시 보내지 않습니다" +
+        "(그 슬라이드는 처리 실패로 남고, 예전 해설이 있으면 그대로 둡니다). 8장보다 많이 묶은 호출과 이미지가 든 호출은 제한 시간을 그만큼 늘려 잡습니다.",
+      () => this.settings.cliTimeoutSec,
+      (n) => (this.settings.cliTimeoutSec = n),
+      30
+    );
     new Setting(containerEl)
       .setName("바뀐 슬라이드만 다시 생성")
       .setDesc("다시 가져올 때 텍스트 해시와 이미지 신호가 모두 같은 슬라이드는 기존 해설을 그대로 씁니다.")
@@ -478,8 +485,10 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Alt 데이터 폴더")
       .setDesc(
-        "Alt 노트 목록을 읽을 Alt 앱 데이터 폴더. 비우면 기본 위치(macOS: ~/Library/Application Support/alt, Windows: %APPDATA%\\alt). " +
-          "플러그인은 이 폴더를 읽기만 합니다: Alt가 실행 중이면 로컬 API(토큰 파일), 꺼져 있으면 데이터베이스를 임시 폴더에 복사해 읽습니다."
+        "Alt 노트 목록을 읽을 Alt 앱 데이터 폴더. 비우면 기본 위치(macOS: ~/Library/Application Support/alt, Windows: %APPDATA%\\alt, Linux: ~/.config/alt). " +
+          "플러그인은 이 폴더를 읽기만 합니다. Alt가 실행 중이면 로컬 API(토큰 파일)로 읽고, API를 쓸 수 없으면(Alt가 꺼져 있거나, Alt 설정에서 로컬 서버를 껐거나, " +
+          "그 포트의 프로그램이 Alt인지 확인하지 못한 경우) 데이터베이스를 임시 폴더에 복사해 읽습니다. Alt가 실행 중이어도 동기화된 슬라이드 파일의 위치를 찾을 때는 " +
+          "사본을 만듭니다. 사본은 다시 연결하거나 플러그인을 끌 때 지웁니다."
       )
       .addText((text) =>
         text
