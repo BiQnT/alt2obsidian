@@ -356,6 +356,12 @@ export interface PluginData {
    */
   pendingRenameNotice?: boolean;
   /**
+   * The old plugin's data.json was there but could not be read when this
+   * data started: every start tries again, and data it can read replaces
+   * this data (then the flag goes).
+   */
+  legacyImportRetry?: boolean;
+  /**
    * The model id each requested model resolved to on its last real run
    * (Claude: the modelUsage key of the CLI result), keyed by
    * "<provider>:<requested>" ("" = the CLI default). Shown as "현재 ..."

@@ -41,6 +41,9 @@ export const PRESET_LABELS: Record<PresetId, string> = {
 /** "" = the CLI's own default. Both CLIs accept the rest (`claude --help`, Codex models cache). */
 export const EFFORT_LEVELS: EffortLevel[] = ["", "low", "medium", "high", "xhigh", "max"];
 
+/** API key fields of 1.x and 2.0.0-beta.3 settings that nothing reads any more. */
+export const LEGACY_KEY_FIELDS = ["apiKey", "geminiApiKey", "claudeApiKey"];
+
 /** Providers of 2.0.0-beta.3 and earlier that are gone; their tasks move to a CLI. */
 const REMOVED_PROVIDERS = ["gemini", "ollama"];
 

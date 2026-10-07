@@ -185,7 +185,8 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
 {
   const LEGACY_DATA = ".obsidian/plugins/alt2obsidian/data.json";
   const legacy = {
-    settings: { baseFolderPath: "Lectures", settingsVersion: 3, tasks: { commentary: { provider: "codex-cli", model: "", effort: "high" } } },
+    // 1.x and beta.3 API keys in the old data are left behind.
+    settings: { baseFolderPath: "Lectures", settingsVersion: 3, apiKey: "old-key", geminiApiKey: "g-key", claudeApiKey: "c-key", tasks: { commentary: { provider: "codex-cli", model: "", effort: "high" } } },
     recentImports: [{ url: "", title: "L1", subject: "S", path: "Lectures/S/Lectures/L1.md", date: "2026-10-01", parseQuality: "full", altLocalId: "n1" }],
     cliDetection: { codex: { path: "/opt/codex", version: "0.155.1", detectedAt: "2026-10-01T00:00:00.000Z", featuresOk: true } },
     attachedCopies: [{ path: "Lectures/S/Lectures/L1.pdf", size: 3, sha1: "abc" }],
@@ -201,6 +202,10 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   assert.deepEqual(d.attachedCopies, legacy.attachedCopies, "attach records come along (the copies stay recoverable)");
   assert.equal(imported.stored().settings.baseFolderPath, "Lectures", "saved as Alt2Obs data right away, so the import happens once");
   assert.equal(imported.stored().pendingRenameNotice, true);
+  for (const k of ["apiKey", "geminiApiKey", "claudeApiKey"]) {
+    assert.equal(d.settings[k], undefined, `${k} is not imported`);
+    assert.equal(imported.stored().settings[k], undefined, `${k} is not saved`);
+  }
   assert.equal(imported.config.get(LEGACY_DATA), legacyText, "the old data.json is not changed");
   assert.deepEqual([...imported.config.keys()], [LEGACY_DATA], "nothing written to the config folder");
   // The old plugin is still enabled: one notice that says what came along and to remove it, then a warning per start.
@@ -214,10 +219,27 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   n = notices.length;
   await imported.plugin.showRenameNotices();
   assert.ok(notices.length === n + 1 && notices[n].includes("아직 켜져 있습니다"), "the old plugin enabled: warned on start");
+  // While it is enabled, lecture PDFs are left to the old plugin (no race on one tab) and its tabs are not taken over.
+  const ws = imported.plugin.app.workspace;
+  ws.getMostRecentLeaf = ws.getLeavesOfType = () => {
+    throw new Error("no redirect while the old plugin is enabled");
+  };
+  await imported.plugin.onPdfOpened(Object.assign(new TFile(), { path: "Lectures/S/Lectures/L1.pdf" }));
+  assert.equal(await imported.plugin.adoptLegacyLeaves(), 0);
   imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt2obs"]));
   n = notices.length;
   await imported.plugin.showRenameNotices();
   assert.equal(notices.length, n, "disabled: nothing to say");
+  // Disabled: tabs Obsidian kept under the old view types become the Alt2Obs views with the same state.
+  const viewStates = [];
+  const oldLeaf = (type, state) => ({ getViewState: () => ({ type, state, pinned: true }), setViewState: async (vs) => void viewStates.push(vs) });
+  const oldLeaves = { "alt2obsidian-sidebar": [oldLeaf("alt2obsidian-sidebar", {})], "alt2obsidian-synced-viewer": [oldLeaf("alt2obsidian-synced-viewer", { mdPath: "L/a.md", pdfPath: "L/a.pdf" })] };
+  ws.getLeavesOfType = (type) => oldLeaves[type] ?? [];
+  assert.equal(await imported.plugin.adoptLegacyLeaves(), 2);
+  assert.deepEqual(viewStates, [
+    { type: "alt2obs-sidebar", state: {}, pinned: true, active: false },
+    { type: "alt2obs-synced-viewer", state: { mdPath: "L/a.md", pdfPath: "L/a.pdf" }, pinned: true, active: false },
+  ]);
   // New files copied into the old folder: that folder is Alt2Obs now, not the old plugin.
   imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt2obsidian"]));
   imported.config.set(".obsidian/plugins/alt2obsidian/manifest.json", JSON.stringify({ id: "alt2obs", name: "Alt2Obs" }));
@@ -232,15 +254,37 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   const fresh = await makePlugin(undefined);
   assert.equal(fresh.plugin.data.settings.baseFolderPath, "Alt2Obsidian", "default folder unchanged by the rename");
   assert.equal(fresh.stored(), undefined, "nothing imported, nothing saved at load");
+  // An old data.json that cannot be read: not a fresh install. The user is told, and every
+  // start tries again until it reads (then its data replaces what was saved meanwhile) or is gone.
   const warn = console.warn;
   const warned = [];
   console.warn = (...args) => warned.push(args.join(" "));
   const broken = await makePlugin(undefined, (config) => config.set(LEGACY_DATA, "{ not json"));
-  console.warn = warn;
   assert.ok(warned.some((w) => w.includes("could not be read")), "an unreadable old data.json is reported in the console");
   assert.equal(broken.plugin.data.pendingRenameNotice, undefined);
   assert.deepEqual(broken.plugin.data.recentImports, []);
-  console.log("PASS: rename to Alt2Obs: the old Alt2Obsidian data.json is imported once (read only), the user is told once, warned while the old plugin is enabled");
+  assert.equal(broken.stored(), undefined, "nothing saved at load");
+  assert.equal(broken.plugin.data.legacyImportRetry, true);
+  n = notices.length;
+  await broken.plugin.showRenameNotices();
+  assert.ok(notices.length === n + 1 && notices[n].includes("읽지 못해") && notices[n].includes("다시 시도"), notices[n]);
+  broken.plugin.data.settings.language = "en";
+  await broken.plugin.savePluginData();
+  assert.equal(broken.stored().legacyImportRetry, true, "a later save keeps asking for another try");
+  const stillBroken = await makePlugin(broken.stored(), (config) => config.set(LEGACY_DATA, "{ not json"));
+  assert.equal(stillBroken.plugin.data.settings.language, "en", "until then the saved data is used");
+  assert.equal(stillBroken.plugin.data.legacyImportRetry, true);
+  const readable = await makePlugin(broken.stored(), withLegacy);
+  console.warn = warn;
+  assert.equal(readable.plugin.data.settings.baseFolderPath, "Lectures", "readable now: imported");
+  assert.equal(readable.plugin.data.recentImports[0].altLocalId, "n1");
+  assert.equal(readable.stored().legacyImportRetry, undefined);
+  assert.equal(readable.stored().pendingRenameNotice, true);
+  assert.equal(readable.stored().settings.apiKey, undefined);
+  const gone = await makePlugin(broken.stored());
+  assert.equal(gone.plugin.data.settings.language, "en");
+  assert.equal(gone.stored().legacyImportRetry, undefined, "old data gone: nothing left to retry");
+  console.log("PASS: rename to Alt2Obs: the old Alt2Obsidian data.json is imported once (read only, without old API keys), the user is told once; an unreadable one is retried on every start; while the old plugin is enabled it is warned about and handles lecture PDFs alone; old view tabs are converted once it is off");
 }
 
 const s = fakeSession("ok");

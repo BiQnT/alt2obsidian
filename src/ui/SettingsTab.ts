@@ -8,6 +8,7 @@ import {
   effortChoices,
   isCliProvider,
   isSafeModelName,
+  LEGACY_KEY_FIELDS,
   ModelCatalog,
   modelChoices,
   modelName,
@@ -20,10 +21,6 @@ import {
   TASK_PROVIDERS,
 } from "../settings/llmSettings";
 import { compactTokens } from "../llm/usage";
-
-
-/** API key fields of 1.x and 2.0.0-beta.3 settings that nothing reads any more. */
-const LEGACY_KEY_FIELDS = ["apiKey", "geminiApiKey", "claudeApiKey"];
 
 export class Alt2ObsSettingsTab extends PluginSettingTab {
   plugin: Alt2ObsPlugin;
