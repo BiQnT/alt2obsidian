@@ -2,7 +2,7 @@
 
 Import Alt (altalt.io) lecture recordings, transcripts and slides into your Obsidian vault as structured notes, with per-slide commentary, a synced PDF viewer and note checking, using your own Claude Code or Codex CLI.
 
-Formerly **Alt2Obsidian** (plugin id `alt2obsidian`). Since 2.0.0 the plugin is Alt2Obs with the id `alt2obs`; the GitHub repository keeps the name `alt2obsidian`. The interface and the generated notes are in Korean (concept notes can be English, see the settings). A Korean description follows the English summary.
+Formerly **Alt2Obsidian** (plugin id `alt2obsidian`). Since 2.0.0 the plugin is Alt2Obs with the id `alt-to-obs`; the GitHub repository keeps the name `alt2obsidian`. The interface and the generated notes are in Korean (concept notes can be English, see the settings). A Korean description follows the English summary.
 
 ## English summary
 
@@ -38,7 +38,7 @@ Formerly **Alt2Obsidian** (plugin id `alt2obsidian`). Since 2.0.0 the plugin is 
 
 1. Community plugins (after the plugin is approved): **Settings → Community plugins → Browse**, search for "Alt2Obs", install and enable.
 2. BRAT: add `BiQnT/alt2obsidian` as a beta plugin.
-3. Manually: download `main.js`, `manifest.json` and `styles.css` from a [release](https://github.com/BiQnT/alt2obsidian/releases) into `<vault>/.obsidian/plugins/alt2obs/`, reload Obsidian and enable **Alt2Obs**.
+3. Manually: download `main.js`, `manifest.json` and `styles.css` from a [release](https://github.com/BiQnT/alt2obsidian/releases) into `<vault>/.obsidian/plugins/alt-to-obs/`, reload Obsidian and enable **Alt2Obs**.
 
 **Coming from Alt2Obsidian**: Obsidian treats Alt2Obs as a new plugin. On its first start Alt2Obs imports the old plugin's settings and records once, without the unused API keys of old versions (the old folder is left as it is), and asks you to disable and remove "Alt2Obsidian". If the old data file cannot be read, you are told, and every start tries again until it can be read. While the old plugin is still enabled, every start shows a warning and Alt2Obs leaves lecture PDFs to it, so the two never turn the same PDF tab into a viewer. Once the old plugin is off, tabs it left open are reopened as Alt2Obs views. Notes, note markers and the default folder `Alt2Obsidian/` stay the same; hotkeys of the old commands need to be set again.
 
@@ -48,7 +48,7 @@ Open source under the [MIT License](LICENSE). No ads, no telemetry. `main.js` bu
 
 ## 한국어
 
-2.0.0부터 이름이 Alt2Obs(플러그인 id `alt2obs`)입니다. 이전 이름은 Alt2Obsidian(id `alt2obsidian`)이고, GitHub 저장소 이름은 그대로 `alt2obsidian`입니다. 커뮤니티 플러그인 목록은 id에 "obsidian"이 들어간 플러그인을 받지 않아 이름을 바꿨습니다.
+2.0.0부터 이름이 Alt2Obs(플러그인 id `alt-to-obs`)입니다. 이전 이름은 Alt2Obsidian(id `alt2obsidian`)이고, GitHub 저장소 이름은 그대로 `alt2obsidian`입니다. 커뮤니티 플러그인 목록은 id에 "obsidian"이 들어간 플러그인을 받지 않아 이름을 바꿨습니다.
 
 Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그인입니다.
 
@@ -103,14 +103,14 @@ Obsidian 개발자 정책에 따라 이 플러그인이 쓰는 외부 서비스,
 
 ## 2.0.0에서 바뀐 점
 
-- **이름 변경: Alt2Obs (id `alt2obs`)**: Obsidian 커뮤니티 플러그인 목록에 올리려고 이름과 id를 바꿨습니다(id에 "obsidian"을 쓸 수 없음). 옵시디언은 새 id를 새 플러그인으로 다룹니다.
+- **이름 변경: Alt2Obs (id `alt-to-obs`)**: Obsidian 커뮤니티 플러그인 목록에 올리려고 이름과 id를 바꿨습니다(id에 "obsidian"을 쓸 수 없음). 옵시디언은 새 id를 새 플러그인으로 다룹니다.
   - Alt2Obs를 처음 켜면, 아직 자기 데이터가 없고 이전 플러그인의 `<설정 폴더>/plugins/alt2obsidian/data.json`이 있을 때 그 설정과 기록(CLI 경로, 사용량, 최근 노트, 첨부 기록)을 한 번 가져와 저장합니다. 예전 버전의 API 키(`apiKey`, `geminiApiKey`, `claudeApiKey`)는 쓰지 않으므로 가져오지 않습니다. 이전 폴더는 읽기만 하고 바꾸거나 지우지 않습니다.
   - 그 파일이 있는데 읽지 못하면 알리고, 새로 설치한 것으로 보지 않습니다: 읽힐 때까지 켤 때마다 다시 시도하고, 읽히면 그 사이 저장한 설정 대신 그 내용을 씁니다. 파일이 없어지면 더 시도하지 않습니다.
   - 가져온 뒤 한 번, 이전 **Alt2Obsidian**을 끄고 삭제하라는 알림이 뜹니다. 이전 플러그인이 아직 켜져 있으면 켤 때마다 경고하고, 그동안 강의 PDF를 뷰어로 바꾸는 일은 이전 플러그인에 맡깁니다(두 플러그인이 같은 PDF 탭을 서로 바꾸지 않게). 리본 아이콘이 두 개 보이는 정도는 그대로 둡니다.
   - 이전 플러그인이 꺼져 있으면, 옵시디언이 예전 뷰 종류(`alt2obsidian-sidebar`, `alt2obsidian-synced-viewer`)로 남겨 둔 탭을 같은 상태의 Alt2Obs 뷰로 바꿉니다.
   - 그대로인 것: 노트의 관리 주석(`alt2obs:*`, 예전 `alt2obsidian:start/end`), frontmatter의 `source` 값(`alt2obsidian`, `alt2obsidian-cc-skill`, `alt2obsidian-verify`), 기본 저장 폴더 `Alt2Obsidian/`, OS 캐시 폴더 이름 `alt2obsidian`(전사, Notion 페이지 캐시를 그대로 씀). 그래서 기존 노트, 캐시, 스킬이 그대로 동작합니다.
-  - 바뀐 것: 뷰 종류(`alt2obs-sidebar`, `alt2obs-synced-viewer`)와 CSS 클래스(`alt2obs-*`). `alt2obsidian-*` 클래스를 쓰는 CSS 스니펫이 있으면 `alt2obs-*`로 고치세요. 명령 이름 'Open Alt2Obsidian sidebar'는 'Open sidebar'로, 'Import Alt note (local list or URL)'은 'Import lecture note (local list or URL)'로, 'Open Synced Viewer (PDF + lecture .md)'는 'Open synced viewer (PDF + lecture .md)'로 바뀌었습니다(명령 id는 플러그인 id가 앞에 붙어 `alt2obs:...`가 됨. 단축키를 지정했다면 다시 지정). 리본 아이콘의 설명은 'Alt 강의 가져오기'입니다.
-  - 스킬은 `<vault>/.obsidian/plugins/alt2obs/data.json`을 먼저 읽고, 없으면 이전 `alt2obsidian` 폴더를 읽습니다.
+  - 바뀐 것: 뷰 종류(`alt-to-obs-sidebar`, `alt-to-obs-synced-viewer`)와 CSS 클래스(`alt-to-obs-*`). `alt2obsidian-*` 클래스를 쓰는 CSS 스니펫이 있으면 `alt-to-obs-*`로 고치세요. 명령 이름 'Open Alt2Obsidian sidebar'는 'Open sidebar'로, 'Import Alt note (local list or URL)'은 'Import lecture note (local list or URL)'로, 'Open Synced Viewer (PDF + lecture .md)'는 'Open synced viewer (PDF + lecture .md)'로 바뀌었습니다(명령 id는 플러그인 id가 앞에 붙어 `alt-to-obs:...`가 됨. 단축키를 지정했다면 다시 지정). 리본 아이콘의 설명은 'Alt 강의 가져오기'입니다.
+  - 스킬은 `<vault>/.obsidian/plugins/alt-to-obs/data.json`을 먼저 읽고, 없으면 이전 `alt2obsidian` 폴더를 읽습니다. 스킬 이름은 그대로 `/alt2obs`입니다.
 - **PDF.js 워커를 `main.js`에 넣음**: 커뮤니티 플러그인 설치는 `main.js`, `manifest.json`, `styles.css`만 받으므로, 따로 받던 `pdf.worker.min.mjs`(pdfjs-dist 4.10.38, 같은 파일)를 `main.js` 안에 넣고 Blob URL로 띄웁니다. 문서마다 모듈 워커를 하나씩 쓰는 동작은 같고, 플러그인을 끌 때 URL을 해제합니다. `main.js`는 약 0.85 MB에서 2.2 MB가 되었습니다.
 - **Obsidian 플러그인 지침 반영**: 공식 ESLint 규칙(eslint-plugin-obsidianmd)을 통과합니다(`npm run lint`). 설정 화면 맨 위의 플러그인 이름 제목을 없애고 구역 제목을 옵시디언 방식으로 바꿨고, 영어 UI 문구는 문장형 대소문자(sentence case)로 바꿨습니다. Synced viewer의 CSS는 `styles.css`로 옮겼습니다. 노트를 읽고 고쳐 쓰는 작업(가져오기 병합, 개념 노트 갱신, 연결·첨부 표시 한 줄)은 `Vault.process`로 한 번에 처리해 다른 플러그인의 동시 수정과 섞이지 않습니다. '저장 폴더' 설정은 `normalizePath`로 정리해 씁니다. 'Open synced viewer'와 'Attach lecture PDF' 명령은 노트나 PDF를 연 동안만 명령 팔레트에 보입니다.
 - **최소 Obsidian 버전 1.7.2**: 쓰는 API 중 가장 늦게 생긴 것(`Workspace.revealLeaf`가 Promise를 돌려주는 형태)의 버전입니다.
@@ -241,12 +241,12 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
    - `manifest.json`
    - `styles.css`
 
-2. Obsidian Vault 폴더에 `.obsidian/plugins/alt2obs/` 폴더를 만들고 세 파일을 넣습니다(`.obsidian`은 vault 설정 폴더의 기본 이름):
+2. Obsidian Vault 폴더에 `.obsidian/plugins/alt-to-obs/` 폴더를 만들고 세 파일을 넣습니다(`.obsidian`은 vault 설정 폴더의 기본 이름):
    ```
    내 Vault/
    └── .obsidian/
        └── plugins/
-           └── alt2obs/
+           └── alt-to-obs/
                ├── main.js
                ├── manifest.json
                └── styles.css
