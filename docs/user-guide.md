@@ -504,7 +504,7 @@ On Obsidian 1.13 and later the tab is drawn from setting definitions, so its set
 
 **The slide PDF is not on this computer.** A slide file synced to Alt from elsewhere may not be downloaded to this computer yet. Open the slides once in Alt, then select **새로고침** (refresh). Even while Alt runs, the plugin finds synced slide files through a copy of Alt's database, so this also needs `node:sqlite` (see above).
 
-**The import stops at the token cap or a usage limit.** Lower the effort, use **이미지 줄이기**, raise **강의당 토큰 상한**, or wait for your plan's limit to reset.
+**The import does not start over the token cap, or stops at a usage limit.** The cap is checked against the estimate before the import starts; an import that has started is not stopped at it. Lower the effort, use **이미지 줄이기**, raise **강의당 토큰 상한**, or wait for your plan's limit to reset.
 
 **A lecture PDF opens as a plain PDF.** The PDF must be in the same folder as a lecture note with the same name, and **강의 PDF를 열면 뷰어로 열기** must be on. Tabs that were open at startup, and tabs opened with **PDF만 보기**, stay PDFs. While Alt2Obs 2.0.0 is also enabled, no PDF is turned into the viewer.
 
