@@ -73,8 +73,12 @@ const LOW_TEXT_VISUAL_RATIO = 0.08;
 
 /** A whole first line that names a table of contents. */
 const TOC_LINE = /^(table of contents|contents|목차|차례|outline|agenda)\s*:?$/i;
-/** A whole line that only says thanks / Q&A / the end. "질문: 왜 ...?" does not match. */
-const THANKS_LINE = /^(thank you( very much)?|thanks|감사합니다|수고하셨습니다|q\s*&\s*a|questions?|any questions|질문 있나요|the end|끝)\s*[!.?]*$/i;
+/**
+ * A whole line of closing and Q&A phrases only, one or several ("Thank you!
+ * Questions?", "감사합니다. 질문?"); a bare "질문" only as "질문?".
+ * "질문: 왜 ...?" and "Thanks to Prof. X" do not match.
+ */
+const THANKS_LINE = /^(?:(?:thank(?:s| you)(?: (?:very|so) much)?(?: for (?:listening|watching|your attention|your time))?|any questions|questions?(?:\s*(?:&|and)\s*answers?)?|q\s*(?:&|and)\s*a|the end|감사합니다|고맙습니다|수고하셨습니다|(?:경청해|들어)\s*주셔서\s*감사합니다|질문\s*있(?:나요|으신가요|으세요|습니까)|질문(?:과|\s*&)\s*답변|질의\s*응답|질문(?=\s*\?)|끝)[\s!.?,]*)+$/i;
 /** Cover: lecture or course title in the first lines ... */
 const COVER_TITLE = /\b(lecture|lec\.?|chapter|week|unit|session)\s*\d+|\b[A-Z]{2,6}\s?-?\d{3,4}[A-Z]?\b|제\s*\d+\s*강|\d+\s*강\b|\d+\s*주차|강의/i;
 /** ... and an author or affiliation line. */

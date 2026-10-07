@@ -39,6 +39,13 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
   assert.equal(m.classifySlide(2, 30, "Contents of a cache line: tag, index", 0.01, ["Contents of a cache line: tag, index"]), "content");
   assert.equal(m.classifySlide(29, 30, "Thank you!", 0.02), "thanks");
   assert.equal(m.classifySlide(28, 30, "Q&A", 0.02), "thanks");
+  // Common closing and Q&A first lines, one phrase or several, are templated without a model call.
+  for (const first of ["Thank you! Questions?", "Thanks for listening", "Thank you for your attention.", "Questions & Answers", "Any Questions?", "감사합니다. 질문?", "질문 있으신가요?", "질의응답", "들어 주셔서 감사합니다"]) {
+    assert.equal(m.classifySlide(29, 30, `${first}gwangsun@postech.ac.kr`, 0.02, [first, "gwangsun@postech.ac.kr"]), "thanks", first);
+  }
+  for (const first of ["Summary", "Next lecture: Virtual Memory", "Thanks to Prof. Kim for the slides", "질문", "Questions about caches"]) {
+    assert.equal(m.classifySlide(29, 30, first, 0.02, [first]), "content", `${first} is not a closing line`);
+  }
   assert.equal(m.classifySlide(29, 30, "질문: 왜 캐시가 빠른가?", 0.02, ["질문: 왜 캐시가 빠른가?"]), "content", "a question slide is not a closing slide");
   assert.equal(m.classifySlide(29, 30, "46Question?Announcements- Textbook reading: P&H Ch. 5.1", 0.02, ["46", "Question?", "Announcements", "- Textbook reading: P&H Ch. 5.1"]), "content");
   // Cover with a long disclaimer (lec13 page 1) (review A.5).

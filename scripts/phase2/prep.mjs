@@ -27,7 +27,7 @@ var VISUAL_RATIO = 0.3;
 var LOW_TEXT_CHARS = 30;
 var LOW_TEXT_VISUAL_RATIO = 0.08;
 var TOC_LINE = /^(table of contents|contents|목차|차례|outline|agenda)\s*:?$/i;
-var THANKS_LINE = /^(thank you( very much)?|thanks|감사합니다|수고하셨습니다|q\s*&\s*a|questions?|any questions|질문 있나요|the end|끝)\s*[!.?]*$/i;
+var THANKS_LINE = /^(?:(?:thank(?:s| you)(?: (?:very|so) much)?(?: for (?:listening|watching|your attention|your time))?|any questions|questions?(?:\s*(?:&|and)\s*answers?)?|q\s*(?:&|and)\s*a|the end|감사합니다|고맙습니다|수고하셨습니다|(?:경청해|들어)\s*주셔서\s*감사합니다|질문\s*있(?:나요|으신가요|으세요|습니까)|질문(?:과|\s*&)\s*답변|질의\s*응답|질문(?=\s*\?)|끝)[\s!.?,]*)+$/i;
 var COVER_TITLE = /\b(lecture|lec\.?|chapter|week|unit|session)\s*\d+|\b[A-Z]{2,6}\s?-?\d{3,4}[A-Z]?\b|제\s*\d+\s*강|\d+\s*강\b|\d+\s*주차|강의/i;
 var COVER_AFFILIATION = /universit|department|dept\.|school of|college|institute|laborator|\blab\b|professor|prof\.|@[\w.-]+\.[a-z]{2,}|대학|학과|학부|연구실|교수/i;
 var COVER_MAX_CHARS = 1200;
