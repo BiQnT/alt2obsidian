@@ -54,7 +54,10 @@ export default defineConfig([
     // getSettingDefinitions() is an Obsidian 1.13 API: the typings this
     // plugin builds against (obsidian 1.12.3) do not have it, and below 1.13
     // (minAppVersion is 1.7.2) the tab needs display(), as the
-    // settings-tab/require-display rule says.
+    // settings-tab/require-display rule says. On 1.13 a non-empty list
+    // replaces display() altogether (the tab is drawn from the definitions),
+    // so settings search would mean rewriting this custom tab declaratively.
+    // The directory's scan still reports it.
     files: ["src/ui/SettingsTab.ts"],
     rules: { "obsidianmd/settings-tab/prefer-setting-definitions": "off" },
   },
