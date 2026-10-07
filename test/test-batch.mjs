@@ -59,7 +59,7 @@ for (const [label, Provider, bin] of [
     assert.equal(res.errors.length, 0);
     assert.equal(res.slides.length, 14);
     assert.equal(res.slides[0].commentary, "표지 슬라이드: **Lecture 7 Caches**");
-    assert.equal(res.slides[13].commentary, "마무리 슬라이드입니다.");
+    assert.equal(res.slides[13].commentary, "마무리 슬라이드다.");
 assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "슬라이드 2의 요지");
     const calls = s.calls();
     assert.equal(calls.length, 3);

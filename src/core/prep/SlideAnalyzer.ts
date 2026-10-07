@@ -402,15 +402,15 @@ export function selectKeyDiagrams(slides: SlideInfo[], scanned: boolean, max = M
 
 export function templateCommentary(slide: SlideInfo, deckTitle: string): string | null {
   if (slide.dupOf !== null) {
-    return `다음 슬라이드와 같은 내용입니다. 해설은 [[#📚 슬라이드 ${slide.dupOf}|슬라이드 ${slide.dupOf}]]을 보세요.`;
+    return `다음 슬라이드와 같은 내용이다. 해설은 [[#📚 슬라이드 ${slide.dupOf}|슬라이드 ${slide.dupOf}]]에 있다.`;
   }
   switch (slide.kind) {
     case "cover":
       return `표지 슬라이드: **${slide.title || deckTitle}**`;
     case "toc":
-      return "목차 슬라이드입니다. 이번 강의에서 다룰 항목을 소개합니다.";
+      return "목차 슬라이드다. 이번 강의에서 다룰 항목을 늘어놓는다.";
     case "thanks":
-      return "마무리 슬라이드입니다.";
+      return "마무리 슬라이드다.";
     default:
       return null;
   }

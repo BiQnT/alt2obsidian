@@ -50,7 +50,7 @@ assert.ok(!recorded.bare.slides[0].user.includes("[기존 개념") && !recorded.
 // Same writing rules for the Skill and the plugin.
 const block = (file) => {
   const t = readFileSync(join(repo, "prompts", file), "utf8");
-  const start = t.indexOf("문체 (모두 지킵니다):");
+  const start = t.indexOf("문체 (모두 지킨다):");
   assert.ok(start >= 0, `${file} has the 문체 block`);
   const end = t.indexOf("\n\n출력 형식:", start);
   return (end >= 0 ? t.slice(start, end) : t.slice(start)).trimEnd();

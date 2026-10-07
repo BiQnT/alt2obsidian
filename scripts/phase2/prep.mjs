@@ -292,15 +292,15 @@ function selectKeyDiagrams(slides, scanned, max = MAX_KEY_DIAGRAMS) {
 }
 function templateCommentary(slide, deckTitle) {
   if (slide.dupOf !== null) {
-    return `\uB2E4\uC74C \uC2AC\uB77C\uC774\uB4DC\uC640 \uAC19\uC740 \uB0B4\uC6A9\uC785\uB2C8\uB2E4. \uD574\uC124\uC740 [[#\u{1F4DA} \uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}|\uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}]]\uC744 \uBCF4\uC138\uC694.`;
+    return `\uB2E4\uC74C \uC2AC\uB77C\uC774\uB4DC\uC640 \uAC19\uC740 \uB0B4\uC6A9\uC774\uB2E4. \uD574\uC124\uC740 [[#\u{1F4DA} \uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}|\uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}]]\uC5D0 \uC788\uB2E4.`;
   }
   switch (slide.kind) {
     case "cover":
       return `\uD45C\uC9C0 \uC2AC\uB77C\uC774\uB4DC: **${slide.title || deckTitle}**`;
     case "toc":
-      return "\uBAA9\uCC28 \uC2AC\uB77C\uC774\uB4DC\uC785\uB2C8\uB2E4. \uC774\uBC88 \uAC15\uC758\uC5D0\uC11C \uB2E4\uB8F0 \uD56D\uBAA9\uC744 \uC18C\uAC1C\uD569\uB2C8\uB2E4.";
+      return "\uBAA9\uCC28 \uC2AC\uB77C\uC774\uB4DC\uB2E4. \uC774\uBC88 \uAC15\uC758\uC5D0\uC11C \uB2E4\uB8F0 \uD56D\uBAA9\uC744 \uB298\uC5B4\uB193\uB294\uB2E4.";
     case "thanks":
-      return "\uB9C8\uBB34\uB9AC \uC2AC\uB77C\uC774\uB4DC\uC785\uB2C8\uB2E4.";
+      return "\uB9C8\uBB34\uB9AC \uC2AC\uB77C\uC774\uB4DC\uB2E4.";
     default:
       return null;
   }

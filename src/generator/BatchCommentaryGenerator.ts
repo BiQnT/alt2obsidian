@@ -33,10 +33,11 @@ export interface LectureContext {
   knownConcepts: string[];
 }
 
-export const COMMENTARY_LIMITS = { content: 500, visual: 700 } as const;
+/** The prompt's upper bounds: richer slides up to 900 characters (visual 1000), simple ones 100 to 300. */
+export const COMMENTARY_LIMITS = { content: 900, visual: 1000 } as const;
 export const GIST_LIMIT = 60;
-/** Answers are checked with slack: models count characters loosely. */
-const MIN_COMMENTARY_CHARS = 80;
+/** Answers are checked with slack: models count characters loosely. A closing slide gets one short sentence ("6강을 마친다."). */
+const MIN_COMMENTARY_CHARS = 5;
 const MAX_SLACK = 1.6;
 
 export const BATCH_SCHEMA: Record<string, unknown> = {
@@ -52,7 +53,7 @@ export const BATCH_SCHEMA: Record<string, unknown> = {
         required: ["slide", "commentary", "gist"],
         properties: {
           slide: { type: "integer", description: "슬라이드 번호" },
-          commentary: { type: "string", description: "마크다운 해설. content 200~500자, visual 700자 이내" },
+          commentary: { type: "string", description: "마크다운 해설. content 900자 이내, visual 1000자 이내" },
           gist: { type: "string", description: "60자 이내 한 줄 요지" },
         },
       },
