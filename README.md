@@ -36,13 +36,13 @@ Formerly named **Alt2Obsidian**; since 2.0.0 the plugin is named Alt2Obs. Its pl
 
 **Install**
 
-1. Community plugins (after the plugin is approved): **Settings → Community plugins → Browse**, search for "Alt2Obs", install and enable.
+1. Community plugins: **Settings → Community plugins → Browse**, search for "Alt2Obs" (listed under the id `alt2obsidian`), install and enable. Installs from there update in place like any listed plugin.
 2. BRAT: add `BiQnT/alt2obsidian` as a beta plugin.
 3. Manually: download `main.js`, `manifest.json` and `styles.css` from a [release](https://github.com/BiQnT/alt2obsidian/releases) into `<vault>/.obsidian/plugins/alt2obsidian/`, reload Obsidian and enable **Alt2Obs**.
 
 **Updating from 1.x or a 2.0.0 beta**: no migration. 2.0.1 has the same id and folder (`alt2obsidian`), so it updates in place and keeps your settings, records, hotkeys and open tabs. Only CSS snippets written for the old `alt2obsidian-*` classes need the `alt-to-obs-*` classes (changed in 2.0.0).
 
-**Coming from 2.0.0 (id `alt-to-obs`)**: Obsidian treats 2.0.0 and 2.0.1 as two plugins, both listed as "Alt2Obs" (tell them apart by the version). On its first start 2.0.1 imports 2.0.0's settings and records once, read only and without the unused API keys of old versions, unless the `data.json` in its own folder changed later (1.x or a beta used again after 2.0.0); then that data is kept. After an import it asks you to disable and remove Alt2Obs 2.0.0. If 2.0.0's data file cannot be read, you are told, and every start tries again until it can be read. While 2.0.0 is still enabled, every start shows a warning and neither plugin turns lecture PDFs into the viewer; a 2.0.0 notice asking you to remove "Alt2Obsidian" means 2.0.1, so ignore it. Once 2.0.0 is off, its open tabs are reopened as 2.0.1 views. So: disable 2.0.0, enable 2.0.1, and delete 2.0.0 only after the import notice; a deleted 2.0.0 folder cannot be imported. Notes, note markers and the default folder `Alt2Obsidian/` stay the same; hotkeys set on 2.0.0's commands need to be set again.
+**Coming from 2.0.0 (id `alt-to-obs`)**: Obsidian treats 2.0.0 and 2.0.1 as two plugins, both listed as "Alt2Obs" (tell them apart by the version). On its first start 2.0.1 imports 2.0.0's settings and records once, read only and without the unused API keys of old versions, unless the `data.json` in its own folder changed later (1.x or a beta used again after 2.0.0); then that data is kept, a one-time notice names the file that was left out, and the command **Import settings from version 2.0.0 (alt-to-obs)** imports it anyway (after a confirmation). After an import it asks you to disable and remove Alt2Obs 2.0.0. If 2.0.0's data file cannot be read, you are told, and every start tries again until it can be read. While 2.0.0 is still enabled, every start shows a warning and neither plugin turns lecture PDFs into the viewer; a 2.0.0 notice asking you to remove "Alt2Obsidian" means 2.0.1, so ignore it. Once 2.0.0 is off, its open tabs are reopened as 2.0.1 views. So: disable 2.0.0, enable 2.0.1, and delete 2.0.0 only after the import notice; a deleted 2.0.0 folder cannot be imported. Notes, note markers and the default folder `Alt2Obsidian/` stay the same; hotkeys set on 2.0.0's commands need to be set again.
 
 Open source under the [MIT License](LICENSE). No ads, no telemetry. `main.js` bundles [PDF.js](https://github.com/mozilla/pdf.js) (pdfjs-dist 4.10.38, Mozilla Foundation, Apache License 2.0, its license notice kept in the bundle) to read and render the slide PDFs.
 
@@ -107,13 +107,13 @@ Obsidian 개발자 정책에 따라 이 플러그인이 쓰는 외부 서비스,
 
 - **플러그인 id를 `alt2obsidian`으로 되돌림**: 커뮤니티 플러그인 목록 관리자가 목록에 이미 있는 id `alt2obsidian`을 그대로 써도 된다고 확인해(2026-10-07) 2.0.0의 id `alt-to-obs`를 되돌렸습니다. 이름은 그대로 **Alt2Obs**이고 기능은 2.0.0과 같습니다. 플러그인 폴더는 다시 `<vault>/.obsidian/plugins/alt2obsidian/`입니다.
   - 1.x나 2.0.0 베타에서 올리면 옮길 것이 없습니다. id와 폴더가 같아 그 자리에서 업데이트되고 설정, 기록, 단축키, 열린 탭이 그대로입니다. 예전 `alt2obsidian-*` 클래스를 쓰는 CSS 스니펫만 `alt-to-obs-*`로 고치세요(2.0.0에서 바뀜).
-  - 2.0.0을 쓰던 vault: 옵시디언은 2.0.0과 2.0.1을 서로 다른 플러그인으로 다룹니다(목록에 둘 다 'Alt2Obs'로 보이고 버전으로 구별). 2.0.1을 처음 켜면 2.0.0의 `<설정 폴더>/plugins/alt-to-obs/data.json`을 한 번 가져와 바로 저장합니다. 가져오는 때는 2.0.1 폴더에 데이터가 없을 때와, 2.0.0의 data.json이 2.0.1 폴더의 data.json보다 나중에 바뀌었을 때입니다(1.x나 베타에서 2.0.0으로 옮겨 이어 쓴 경우. 수정 시각을 알 수 없으면 가져옴). 2.0.1 폴더의 data.json이 더 나중에 바뀌었으면(2.0.0 뒤에 1.x나 베타를 다시 쓴 경우) 그 데이터를 그대로 쓰고 2.0.0 데이터는 다시 보지 않습니다. 이 판단은 한 번만 하고 데이터의 `altToObsImport`에 남깁니다. `settingsVersion`은 2.0.0-beta.4부터 2.0.0까지 모두 3이라 구별에 쓸 수 없습니다.
+  - 2.0.0을 쓰던 vault: 옵시디언은 2.0.0과 2.0.1을 서로 다른 플러그인으로 다룹니다(목록에 둘 다 'Alt2Obs'로 보이고 버전으로 구별). 2.0.1을 처음 켜면 2.0.0의 `<설정 폴더>/plugins/alt-to-obs/data.json`을 한 번 가져와 바로 저장합니다. 가져오는 때는 2.0.1 폴더에 데이터가 없을 때와, 2.0.0의 data.json이 2.0.1 폴더의 data.json보다 나중에 바뀌었을 때입니다(1.x나 베타에서 2.0.0으로 옮겨 이어 쓴 경우. 수정 시각을 알 수 없으면 가져옴). 2.0.1 폴더의 data.json이 더 나중에 바뀌었으면(2.0.0 뒤에 1.x나 베타를 다시 쓴 경우) 그 데이터를 그대로 쓰고 2.0.0 데이터는 다시 보지 않습니다. 이때 한 번, 가져오지 않은 파일(`plugins/alt-to-obs/data.json`)을 알리고, 그래도 가져오려면 명령 **Import settings from version 2.0.0 (alt-to-obs)**를 실행하라고 안내합니다(확인 후 지금 설정과 기록을 2.0.0의 것으로 바꿈). 이 판단은 한 번만 하고 데이터의 `altToObsImport`에 남깁니다. `settingsVersion`은 2.0.0-beta.4부터 2.0.0까지 모두 3이라 구별에 쓸 수 없습니다.
   - 가져올 때 예전 API 키(`apiKey`, `geminiApiKey`, `claudeApiKey`)는 빼고, 첨부 기록은 가져옵니다. 2.0.0 폴더는 읽기만 하고 바꾸거나 지우지 않습니다. 그 파일이 있는데 읽지 못하면 알리고, 읽힐 때까지 켤 때마다 다시 시도해 읽히면 그 사이 저장한 설정 대신 그 내용을 씁니다. 파일이 없어지면 더 시도하지 않습니다.
   - 가져온 뒤 한 번, 버전이 2.0.0인 Alt2Obs를 끄고 삭제하라는 알림이 뜹니다. 2.0.0이 아직 켜져 있으면 켤 때마다 경고하고, 그동안은 두 플러그인 모두 강의 PDF를 뷰어로 바꾸지 않습니다(2.0.0은 id `alt2obsidian` 플러그인이 켜져 있으면 PDF를 그쪽에 맡기기 때문). 2.0.0이 'Alt2Obsidian을 끄고 삭제하라'고 알리면 2.0.1을 가리키는 것이니 따르지 마세요.
   - 뷰 종류는 1.x, 베타와 같은 `alt2obsidian-sidebar`, `alt2obsidian-synced-viewer`로 돌아가 2.0.0의 뷰와 겹치지 않습니다. 2.0.0이 꺼져 있으면 2.0.0의 뷰 종류(`alt-to-obs-sidebar`, `alt-to-obs-synced-viewer`)로 남은 탭을 같은 상태의 2.0.1 뷰로 바꿉니다. CSS 클래스는 2.0.0과 같은 `alt-to-obs-*`입니다.
   - 명령 id는 1.x, 베타와 같은 `alt2obsidian:...`입니다. 2.0.0 명령(`alt-to-obs:...`)에 단축키를 지정했다면 다시 지정하세요.
   - 2.0.1 파일을 2.0.0의 `alt-to-obs` 폴더에 덮어 넣었다면 그 폴더가 2.0.1의 폴더이므로 가져오지 않고 삭제하라고도 하지 않습니다.
-  - 스킬은 `<vault>/.obsidian/plugins/alt2obsidian/data.json`을 먼저 읽고, 없으면 `alt-to-obs` 폴더를 읽습니다.
+  - 스킬은 `<vault>/.obsidian/plugins/alt2obsidian/data.json`에 `altToObsImport`가 있거나 `alt-to-obs/data.json`이 없을 때 그 파일을 읽고, 아니면(2.0.1이 아직 가져오지 않음) `alt-to-obs/data.json`을 읽습니다.
   - `npm run lint`의 manifest 규칙은 모든 검사를 그대로 하고, id에 "obsidian"이 들어 있다는 지적만 이 id에 한해 넘깁니다(목록 관리자 확인).
 
 ## 2.0.0에서 바뀐 점
@@ -238,12 +238,12 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
 
 **Windows**: 경로는 `where claude`로 찾고, 못 찾으면 `%APPDATA%\npm`, `%USERPROFILE%\.local\bin` 등을 살펴봅니다. npm으로 설치한 `claude.cmd` / `codex.cmd`는 셸 없이 실행하기 위해 스크립트 안의 JavaScript 파일을 찾아 `node.exe`로 직접 실행하고(`node.exe`가 PATH나 같은 폴더에 있어야 함), 네이티브 설치본(`claude.exe`)은 그대로 실행합니다. 취소하면 `taskkill /T /F`로 프로세스 트리를 종료하고, taskkill이 실패하면 직접 실행한 프로세스라도 종료합니다. `where`는 콘솔 코드 페이지로 경로를 출력하므로 사용자 이름에 한글 같은 비ASCII 문자가 있으면 결과가 깨질 수 있는데, 이때는 환경 변수로 만든 설치 폴더 탐색이 대신 찾습니다. Windows 경로는 단위 테스트로만 확인했고 실제 Windows PC에서는 아직 확인하지 않았습니다.
 
-### 방법 1: 커뮤니티 플러그인 (등록 승인 후)
+### 방법 1: 커뮤니티 플러그인
 
 1. **설정 → 커뮤니티 플러그인**에서 제한 모드를 끄고 **탐색**을 누릅니다.
 2. "Alt2Obs"를 검색해 **설치**, **활성화**를 누릅니다.
 
-커뮤니티 플러그인 목록 등록은 심사 중일 수 있습니다. 목록에 없으면 방법 2나 3을 쓰세요.
+목록에는 이미 등록된 id `alt2obsidian`으로 올라 있고, 여기서 설치하면 다른 플러그인처럼 그 자리에서 업데이트됩니다. 새 버전이 아직 목록에 보이지 않으면 방법 2나 3을 쓰세요.
 
 ### 방법 2: BRAT
 
