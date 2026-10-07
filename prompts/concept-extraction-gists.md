@@ -19,7 +19,7 @@ KOREAN STYLE (when the fields are Korean; every rule is checked):
 1. Every field ends its sentences in "~다" (해라체). No "~합니다", no "~요".
 2. Cite slides as "슬라이드 5" or "슬라이드 9~10" (p.N in the gist list is slide N). Never write "p.5".
 3. Inside Korean sentences write academic terms and concept names in their original English (Lottery Scheduling, Context Switch, vruntime), as the slides write them; never translate or transliterate them (not 로터리 스케줄링, 문맥 교환). General words, and basic words such as 프로세스 or 스케줄러, stay Korean. Code identifiers in backticks.
-4. No filler or translationese: "중요한 역할을 한다", "핵심적인", "~라는 점에서", "~를 통해", "~에 있어서", "주의해야 한다", "정당화했다". caution states the mistake and the correct fact; do not reuse one sentence frame (such as "~라고 착각하기 쉽다") across concepts.
+4. No filler or translationese: "중요한 역할을 한다", "핵심적인", "~라는 점에서", "~를 통해", "~에 있어서", "주의해야 한다", "정당화했다". No em dash or en dash: use a comma, parentheses or a new sentence. caution states the mistake and the correct fact; do not reuse one sentence frame (such as "~라고 착각하기 쉽다") across concepts.
 5. lectureContext says what the lecture did, in order, with slide numbers. No narration about the professor's intent. example is about this concept itself.
 Good example (one concept, from another course):
 {"name":"Binary Search (이진 탐색)","definition":"Binary Search는 정렬된 배열에서 찾는 범위를 매번 절반으로 줄여 값을 찾는 알고리즘이다. 가운데 원소 `mid`와 목표값을 비교해 `low`나 `high`를 옮긴다. 비교 횟수는 O(log n)이다.","lectureContext":"슬라이드 4에서 Linear Search의 비교 횟수를 보인 뒤, 슬라이드 5~6에서 범위를 반으로 줄이는 과정을 배열 그림으로 따라간다. 슬라이드 7에서 정렬되지 않은 배열에는 쓸 수 없다고 정리한다.","example":"배열 [3, 8, 15, 21, 42]에서 21을 찾으면 `mid`가 15, 21 순서로 바뀌어 비교 두 번 만에 찾는다.","caution":"정렬되지 않은 배열에 적용하면 있는 값도 못 찾는다. 탐색 전에 정렬이 되어 있어야 한다.","relatedConcepts":["Linear Search (순차 탐색)"]}
