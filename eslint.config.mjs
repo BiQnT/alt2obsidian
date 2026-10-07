@@ -35,6 +35,31 @@ export default defineConfig([
     },
   },
   {
+    // "첨부 해제" and "Alt 슬라이드로 바꾸기" move only a PDF the plugin copied
+    // itself (recorded path, size and SHA-1) and always to a recoverable
+    // trash: vault.trash(file, true), the system trash, else the vault's
+    // .trash. FileManager.trashFile would follow a "permanently delete"
+    // setting, and the copy may be the only one left of the user's PDF.
+    files: ["src/main.ts"],
+    rules: { "obsidianmd/prefer-file-manager-trash-file": "off" },
+  },
+  {
+    // These modules also run under plain Node, where there is no window: the
+    // Skill's CLIs bundle lectureMaterial (scripts/phase2), and the CLI
+    // runner's timers are child-process watchdogs exercised by the Node test
+    // suite. Neither has anything to do with a popout window.
+    files: ["src/core/lectureMaterial.ts", "src/llm/cli/CliRunner.ts"],
+    rules: { "obsidianmd/prefer-window-timers": "off" },
+  },
+  {
+    // getSettingDefinitions() is an Obsidian 1.13 API: the typings this
+    // plugin builds against (obsidian 1.12.3) do not have it, and below 1.13
+    // (minAppVersion is 1.7.2) the tab needs display(), as the
+    // settings-tab/require-display rule says.
+    files: ["src/ui/SettingsTab.ts"],
+    rules: { "obsidianmd/settings-tab/prefer-setting-definitions": "off" },
+  },
+  {
     // The manifest, checked with the directory's rules (name, id and
     // description wording, no fundingUrl without donations, types).
     files: ["manifest.json"],

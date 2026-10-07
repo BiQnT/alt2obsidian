@@ -12,6 +12,7 @@ import { ALT_PORT_TRIES, readHttpServerConfig, tokenFilePath } from "./altPaths"
 import { OwnerVerifier, systemOwnerVerifier } from "./altOwnership";
 import { bundleFromRows, ComponentRow, detailsFromComponents, FolderRow, NoteRow, pickSlides, toSummary } from "./altRows";
 import { AltLocalSource, AltNoteDetails, AltNoteSummary, LectureBundle } from "./types";
+import { jsonValueText } from "../utils/helpers";
 
 const HOST = "127.0.0.1";
 
@@ -48,7 +49,7 @@ export async function probeAltStatus(port: number, timeoutMs = 800): Promise<{ v
   try {
     const res = await request(port, "/api/status", null, timeoutMs);
     if (res.status !== 200) return null;
-    const json = JSON.parse(res.body);
+    const json = JSON.parse(res.body) as { ok?: unknown; data?: { ok?: unknown; version?: unknown } | null } | null;
     const data = json?.data;
     if (json?.ok === true && data && data.ok === true && typeof data.version === "string") return { version: data.version };
     return null;
@@ -61,7 +62,7 @@ function flattenFolders(tree: unknown, out: Map<string, FolderRow>): void {
   if (!Array.isArray(tree)) return;
   for (const f of tree as Array<Record<string, unknown>>) {
     if (!f || typeof f.id !== "string") continue;
-    out.set(f.id, { id: f.id, name: String(f.name ?? ""), parent_id: typeof f.parent_id === "string" ? f.parent_id : null });
+    out.set(f.id, { id: f.id, name: jsonValueText(f.name), parent_id: typeof f.parent_id === "string" ? f.parent_id : null });
     flattenFolders(f.children, out);
   }
 }
@@ -71,7 +72,7 @@ function componentFromApi(raw: Record<string, unknown>): ComponentRow {
   return {
     id: String(raw.id),
     note_id: String(raw.note_id),
-    component_type: String(raw.component_type ?? ""),
+    component_type: jsonValueText(raw.component_type),
     title: typeof raw.title === "string" ? raw.title : null,
     content_text: typeof raw.content_text === "string" ? raw.content_text : null,
     metadata: typeof raw.metadata === "string" ? raw.metadata : raw.metadata ? JSON.stringify(raw.metadata) : null,
@@ -214,7 +215,7 @@ export class AltLocalApiSource implements AltLocalSource {
     if (res.status === 401) throw new AltApiError("Alt 로컬 API가 토큰을 거부했습니다. Alt를 다시 시작한 뒤 새로고침하세요.", 401);
     let json: { ok?: boolean; data?: unknown; error?: unknown };
     try {
-      json = JSON.parse(res.body);
+      json = JSON.parse(res.body) as { ok?: boolean; data?: unknown; error?: unknown };
     } catch {
       throw new AltApiError(`Alt 로컬 API 응답을 읽지 못했습니다 (HTTP ${res.status})`, res.status);
     }

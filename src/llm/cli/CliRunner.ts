@@ -223,7 +223,7 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
       const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
       target = resolveSpawnTarget(req.bin, platform, env[pathKey] ?? "");
     } catch (e) {
-      reject(e);
+      reject(e instanceof Error ? e : new Error(String(e)));
       return;
     }
     let settled = false;
@@ -668,7 +668,7 @@ export async function probeCliLogin(name: CliName, bin: string, timeoutMs = 20_0
   try {
     if (name === "claude") {
       const out = await runCli({ bin, args: ["auth", "status", "--json"], timeoutMs });
-      return JSON.parse(out.stdout).loggedIn === true;
+      return (JSON.parse(out.stdout) as { loggedIn?: unknown } | null)?.loggedIn === true;
     }
     // runCli resolves only on exit code 0; the message must also start a line with "Logged in".
     const out = await runCli({ bin, args: ["login", "status"], timeoutMs });

@@ -336,6 +336,18 @@ function sectionGistLines(gists, plan) {
   }).join("\n");
 }
 
+// src/utils/helpers.ts
+function jsonValueText(v) {
+  return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
+}
+function sanitizeFilename(name) {
+  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").trim();
+}
+function formatDate(date) {
+  const d = date || /* @__PURE__ */ new Date();
+  return d.toISOString().slice(0, 10);
+}
+
 // prompts/concept-extraction.md
 var concept_extraction_default = `You are analyzing a lecture note for the course "{{subject}}". Your job is to extract the key academic concepts so the student can build a connected concept network in their Obsidian vault.
 
@@ -498,11 +510,11 @@ function validateConcepts(raw) {
     throw new Error("Expected tags array");
   }
   const concepts = obj.concepts.map((c) => ({
-    name: String(c.name || ""),
-    definition: String(c.definition || ""),
-    example: c.example ? String(c.example) : void 0,
-    caution: c.caution ? String(c.caution) : void 0,
-    lectureContext: c.lectureContext ? String(c.lectureContext) : void 0,
+    name: jsonValueText(c.name || ""),
+    definition: jsonValueText(c.definition || ""),
+    example: c.example ? jsonValueText(c.example) : void 0,
+    caution: c.caution ? jsonValueText(c.caution) : void 0,
+    lectureContext: c.lectureContext ? jsonValueText(c.lectureContext) : void 0,
     relatedConcepts: Array.isArray(c.relatedConcepts) ? c.relatedConcepts.map(String) : []
   }));
   for (const c of concepts) {
@@ -521,15 +533,6 @@ function validateConcepts(raw) {
     }
   }
   return { concepts, tags: obj.tags.map(String) };
-}
-
-// src/utils/helpers.ts
-function sanitizeFilename(name) {
-  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").trim();
-}
-function formatDate(date) {
-  const d = date || /* @__PURE__ */ new Date();
-  return d.toISOString().slice(0, 10);
 }
 
 // src/core/conceptNames.ts

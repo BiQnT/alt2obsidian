@@ -1,5 +1,6 @@
 import { LLMProvider, ConceptData } from "../types";
 import { renderPrompt } from "../prompts/render";
+import { jsonValueText } from "../utils/helpers";
 import conceptExtractionTemplate from "../../prompts/concept-extraction.md";
 import conceptExtractionSystemKoTemplate from "../../prompts/concept-extraction.system.ko.md";
 import conceptExtractionSystemEnTemplate from "../../prompts/concept-extraction.system.en.md";
@@ -151,11 +152,11 @@ export function validateConcepts(raw: unknown): ConceptResult {
     throw new Error("Expected tags array");
   }
   const concepts: ConceptData[] = obj.concepts.map((c: Record<string, unknown>) => ({
-    name: String(c.name || ""),
-    definition: String(c.definition || ""),
-    example: c.example ? String(c.example) : undefined,
-    caution: c.caution ? String(c.caution) : undefined,
-    lectureContext: c.lectureContext ? String(c.lectureContext) : undefined,
+    name: jsonValueText(c.name || ""),
+    definition: jsonValueText(c.definition || ""),
+    example: c.example ? jsonValueText(c.example) : undefined,
+    caution: c.caution ? jsonValueText(c.caution) : undefined,
+    lectureContext: c.lectureContext ? jsonValueText(c.lectureContext) : undefined,
     relatedConcepts: Array.isArray(c.relatedConcepts) ? c.relatedConcepts.map(String) : [],
   }));
   // Soft quality warnings: do not fail the import, but surface what came

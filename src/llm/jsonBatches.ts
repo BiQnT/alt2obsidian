@@ -26,7 +26,7 @@ export interface JsonBatchProgress {
 
 export interface JsonBatchOptions<I, K, V> {
   batches: I[][];
-  key(item: I): K;
+  key: (item: I) => K;
   /** One LLM call for these items: the raw parsed JSON. Throws CliRunError when the process failed. */
   call(items: I[]): Promise<unknown>;
   /** Accepted answers by key, and a reason per requested item that failed. */

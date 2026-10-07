@@ -1,5 +1,3 @@
-import { AltNoteData, AltNoteMetadata } from "../types";
-
 const RSC_PUSH_REGEX = /self\.__next_f\.push\(\s*(\[[\s\S]*?\])\s*\)/g;
 // Alt migrated from Supabase to Cloudflare R2 for slide storage.
 // Primary extraction targets the "slides_url" JSON field; this regex is a fallback.
@@ -34,7 +32,7 @@ export class RscParser {
       return this.emptyResult();
     }
 
-    console.log(
+    console.debug(
       `[Alt2Obs] RSC chunks found: ${rawChunks.length}, sizes: [${rawChunks.map((c) => c.length).join(", ")}]`
     );
 
@@ -46,7 +44,8 @@ export class RscParser {
       const innerMatch = raw.match(/^\[\s*\d+\s*,\s*"([\s\S]*)"\s*\]$/);
       if (innerMatch) {
         try {
-          const unescaped = JSON.parse(`"${innerMatch[1]}"`);
+          // A JSON string literal parses to a string.
+          const unescaped = JSON.parse(`"${innerMatch[1]}"`) as string;
           unescapedChunks.push(unescaped);
         } catch {
           // Fallback: manual unescape
@@ -92,7 +91,7 @@ export class RscParser {
     const memoMatch = unescapedPayload.match(/"memo"\s*:\s*"((?:[^"\\]|\\.)+)"/);
     if (memoMatch) {
       try {
-        memo = JSON.parse(`"${memoMatch[1]}"`);
+        memo = JSON.parse(`"${memoMatch[1]}"`) as string;
       } catch {
         memo = memoMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
       }
@@ -154,11 +153,12 @@ export class RscParser {
       // Look for transcript JSON arrays: [{"createdAt":...,"segments":[{"text":"..."}]}]
       if (chunk.startsWith("[{") && chunk.includes('"segments"') && chunk.includes('"text"')) {
         try {
-          const parsed = JSON.parse(chunk);
+          const parsed: unknown = JSON.parse(chunk);
           if (Array.isArray(parsed)) {
-            for (const group of parsed) {
+            // A null entry throws here, like any malformed chunk: the regex fallback below takes over.
+            for (const group of parsed as Array<{ segments?: unknown }>) {
               if (Array.isArray(group.segments)) {
-                for (const seg of group.segments) {
+                for (const seg of group.segments as Array<{ text?: unknown }>) {
                   if (seg.text && typeof seg.text === "string" && seg.text.trim().length > 0) {
                     transcriptSegments.push(seg.text.trim());
                   }
@@ -171,7 +171,7 @@ export class RscParser {
           const textMatches = chunk.matchAll(/"text"\s*:\s*"((?:[^"\\]|\\.){5,})"/g);
           for (const tm of textMatches) {
             try {
-              const text = JSON.parse(`"${tm[1]}"`);
+              const text = JSON.parse(`"${tm[1]}"`) as string;
               if (text.length > 5 && !text.includes("/_next/")) {
                 transcriptSegments.push(text.trim());
               }
@@ -201,7 +201,7 @@ export class RscParser {
       }
     }
 
-    console.log(
+    console.debug(
       `[Alt2Obs] RSC parse: title: ${!!title}, summary: ${summary?.length ?? 0} chars, ` +
       `memo: ${memo?.length ?? 0} chars, transcript: ${transcriptSegments.length} segments (${transcript?.length ?? 0} chars), pdfUrl: ${!!pdfUrl}`
     );
@@ -237,7 +237,7 @@ export class RscParser {
     let match: RegExpExecArray | null;
     while ((match = stringRegex.exec(payload)) !== null) {
       try {
-        const decoded = JSON.parse(`"${match[1]}"`);
+        const decoded = JSON.parse(`"${match[1]}"`) as string;
         // Filter out non-content strings
         if (
           !decoded.includes("/_next/") &&

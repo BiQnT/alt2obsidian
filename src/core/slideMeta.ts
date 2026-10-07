@@ -30,7 +30,7 @@ export function parseSlideMeta(managed: string): SlideMeta | null {
   const m = managed.match(META_RE);
   if (!m) return null;
   try {
-    return { imageSignal: m[1] === "none" ? null : m[1], gist: JSON.parse(m[2]) };
+    return { imageSignal: m[1] === "none" ? null : m[1], gist: JSON.parse(m[2]) as string };
   } catch {
     return null;
   }

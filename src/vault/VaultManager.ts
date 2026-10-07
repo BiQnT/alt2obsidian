@@ -16,7 +16,6 @@ import {
   mergeNote,
   mergeTranscriptNote,
   splitManagedNote,
-  splitMultiManagedNote,
 } from "../core/merge";
 
 export class VaultManager {
@@ -54,8 +53,8 @@ export class VaultManager {
     await this.ensureFolder(dir);
 
     const existing = this.app.vault.getAbstractFileByPath(normalized);
-    if (existing) {
-      await this.app.vault.modify(existing as any, content);
+    if (existing instanceof TFile) {
+      await this.app.vault.modify(existing, content);
     } else {
       await this.app.vault.create(normalized, content);
     }
@@ -72,16 +71,16 @@ export class VaultManager {
     await this.ensureFolder(dir);
 
     const existing = this.app.vault.getAbstractFileByPath(normalized);
-    if (!existing) {
+    if (!(existing instanceof TFile)) {
       await this.app.vault.create(normalized, content);
       return { path: normalized, wasUpdate: false };
     }
 
-    const currentContent = await this.app.vault.read(existing as any);
+    const currentContent = await this.app.vault.read(existing);
     // Page-anchored or legacy single-block merge (src/core/merge.ts, shared
     // with the Skill CLI). Throws before writing on a page-anchored downgrade.
     const updatedContent = mergeNote(currentContent, content).merged;
-    await this.app.vault.modify(existing as any, updatedContent);
+    await this.app.vault.modify(existing, updatedContent);
 
     return { path: normalized, wasUpdate: true };
   }
@@ -93,7 +92,7 @@ export class VaultManager {
   ): Promise<ImportUpdateSummary> {
     const normalized = normalizePath(path);
     const existing = this.app.vault.getAbstractFileByPath(normalized);
-    if (!existing) {
+    if (!(existing instanceof TFile)) {
       return {
         isUpdate: false,
         addedSections: [],
@@ -104,7 +103,7 @@ export class VaultManager {
       };
     }
 
-    const currentContent = await this.app.vault.read(existing as any);
+    const currentContent = await this.app.vault.read(existing);
     assertNoPageAnchoredDowngrade(currentContent, nextContent);
     const nextHasMulti = hasMultiManagedMarkers(nextContent);
 
@@ -184,14 +183,14 @@ export class VaultManager {
         const path = normalizePath(`${conceptsFolder}/${filename}.md`);
         const existing = this.app.vault.getAbstractFileByPath(path);
 
-        if (existing) {
-          const currentContent = await this.app.vault.read(existing as any);
+        if (existing instanceof TFile) {
+          const currentContent = await this.app.vault.read(existing);
           const updated = this.updateExistingConceptNote(
             currentContent,
             concept,
             lectureTitle
           );
-          if (updated !== currentContent) await this.app.vault.modify(existing as any, updated);
+          if (updated !== currentContent) await this.app.vault.modify(existing, updated);
           savedPaths.push(path);
         } else if (this.conceptRegistry.acquire(concept.name)) {
           acquiredNames.push(concept.name);
@@ -220,7 +219,7 @@ export class VaultManager {
     const skip = new Set(["concept", "midterm", "final", subject.toLowerCase()]);
     for (const file of this.app.vault.getMarkdownFiles()) {
       if (!file.path.startsWith(prefix)) continue;
-      const raw = this.app.metadataCache.getFileCache(file)?.frontmatter?.tags;
+      const raw: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.tags;
       const tags: unknown[] = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(/[,\s]+/) : [];
       for (const t of tags) {
         const tag = String(t).replace(/^#/, "").trim();
@@ -237,8 +236,8 @@ export class VaultManager {
   /** Current content of a note, or null when it does not exist. */
   async readNoteIfExists(path: string): Promise<string | null> {
     const existing = this.app.vault.getAbstractFileByPath(normalizePath(path));
-    if (!existing || existing instanceof TFolder) return null;
-    return this.app.vault.read(existing as TFile);
+    if (!(existing instanceof TFile)) return null;
+    return this.app.vault.read(existing);
   }
 
   async getExistingConceptNames(subject: string): Promise<Set<string>> {
@@ -268,8 +267,8 @@ export class VaultManager {
     await this.ensureFolder(dir);
 
     const existing = this.app.vault.getAbstractFileByPath(normalized);
-    if (existing) {
-      await this.app.vault.modifyBinary(existing as any, data);
+    if (existing instanceof TFile) {
+      await this.app.vault.modifyBinary(existing, data);
     } else {
       await this.app.vault.createBinary(normalized, data);
     }

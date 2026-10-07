@@ -150,7 +150,7 @@ export function compressTranscript(chunk: string | null, slideText: string, capC
  */
 export function splitTranscriptEvenly(transcript: string | null, slideCount: number): Array<string | null> {
   if (!transcript || slideCount === 0) {
-    return new Array(slideCount).fill(null);
+    return new Array<string | null>(slideCount).fill(null);
   }
   const chunkSize = Math.ceil(transcript.length / slideCount);
   const chunks: Array<string | null> = [];

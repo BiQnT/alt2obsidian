@@ -98,6 +98,21 @@ export function codexPrompt(prompt: string, systemPrompt?: string): string {
   return `${head}\n\n${prompt}`;
 }
 
+/** One `codex exec --json` event: only the fields read here. */
+interface CodexEvent {
+  type?: unknown;
+  item?: { type?: unknown; text?: unknown } | null;
+  usage?: { input_tokens?: unknown; cached_input_tokens?: unknown; output_tokens?: unknown } | null;
+  error?: { message?: unknown } | null;
+  message?: unknown;
+}
+
+/** An event's message as text: a string as it is, another value as JSON, `fallback` when absent. */
+function eventText(v: unknown, fallback: string): string {
+  if (v === undefined || v === null) return fallback;
+  return typeof v === "string" ? v : JSON.stringify(v);
+}
+
 /** Parse `codex exec --json` JSONL. Throws when the turn failed. */
 export function parseCodexEvents(stdout: string, lastMessage = ""): CliCallResult {
   let text = "";
@@ -106,9 +121,9 @@ export function parseCodexEvents(stdout: string, lastMessage = ""): CliCallResul
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("{")) continue;
-    let ev: Record<string, any>;
+    let ev: CodexEvent;
     try {
-      ev = JSON.parse(trimmed);
+      ev = JSON.parse(trimmed) as CodexEvent;
     } catch {
       continue;
     }
@@ -119,9 +134,9 @@ export function parseCodexEvents(stdout: string, lastMessage = ""): CliCallResul
       usage.cachedInputTokens += Number(ev.usage.cached_input_tokens ?? 0);
       usage.outputTokens += Number(ev.usage.output_tokens ?? 0);
     } else if (ev.type === "turn.failed") {
-      failure = String(ev.error?.message ?? "turn failed");
+      failure = eventText(ev.error?.message, "turn failed");
     } else if (ev.type === "error") {
-      failure = String(ev.message ?? "error");
+      failure = eventText(ev.message, "error");
     }
   }
   if (!text && lastMessage.trim()) text = lastMessage;

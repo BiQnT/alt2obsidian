@@ -15,7 +15,7 @@ export class AltScraper {
     try {
       const response = await requestUrl({ url });
       html = response.text;
-    } catch (e) {
+    } catch {
       throw new Error("네트워크 연결을 확인해주세요");
     }
 

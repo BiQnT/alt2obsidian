@@ -40,7 +40,7 @@ function run(bin: string, args: string[], timeoutMs = 3000): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(bin, args, { timeout: timeoutMs, windowsHide: true, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       // lsof exits 1 when nothing matches; its (empty) output is still the answer.
-      if (err && !stdout) reject(err);
+      if (err && !stdout) reject(new Error(err.message));
       else resolve(stdout);
     });
   });

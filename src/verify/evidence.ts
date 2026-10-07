@@ -105,7 +105,7 @@ function buildIndex(docs: string[]): Bm25Index {
 }
 
 function bm25(terms: string[], index: Bm25Index, k1 = 1.2, b = 0.75): number[] {
-  const scores = new Array(index.tf.length).fill(0);
+  const scores = new Array<number>(index.tf.length).fill(0);
   for (const term of new Set(terms)) {
     const idf = index.idf.get(term);
     if (idf === undefined) continue;

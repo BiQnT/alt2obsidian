@@ -58,7 +58,8 @@ export function loadSqlite(): SqliteModule {
   } catch {
     // fall through to require
   }
-  const req = (globalThis as { require?: (id: string) => unknown }).require;
+  // Electron's renderer (Obsidian) has a global require; plain Node has getBuiltinModule above.
+  const req = typeof window === "undefined" ? undefined : (window as unknown as { require?: (id: string) => unknown }).require;
   if (typeof req === "function") {
     try {
       return req("node:sqlite") as SqliteModule;

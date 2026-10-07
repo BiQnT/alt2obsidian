@@ -1,3 +1,11 @@
+/**
+ * A value from parsed JSON as text: a string as it is, a number or boolean
+ * written out, anything else (null, an object) empty.
+ */
+export function jsonValueText(v: unknown): string {
+  return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
+}
+
 export function slugify(text: string): string {
   return text
     .trim()
@@ -8,6 +16,7 @@ export function slugify(text: string): string {
 
 export function sanitizeFilename(name: string): string {
   return name
+    // eslint-disable-next-line no-control-regex -- control characters are not allowed in file names
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
     .replace(/\.+$/, "")
     .trim();
@@ -38,8 +47,4 @@ export function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes.buffer;
-}
-
-export function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -52,7 +52,7 @@ export function isCliProvider(p: ProviderId | "none"): p is ProviderId {
 
 /** Model names are passed as one argv entry: refuse anything that could read as a flag. */
 export function isSafeModelName(model: string): boolean {
-  return model === "" || /^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,120}$/.test(model);
+  return model === "" || /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,120}$/.test(model);
 }
 
 /** A task's setting with the provider's defaults (spec 4.2 / D5). */
@@ -316,8 +316,8 @@ export interface ModelCatalog {
 
 function effortList(raw: unknown): EffortLevel[] {
   if (!Array.isArray(raw)) return [];
-  return raw
-    .map((l) => (l && typeof l === "object" ? (l as { effort?: unknown; id?: unknown }).effort ?? (l as { id?: unknown }).id : l))
+  return (raw as unknown[])
+    .map((l): unknown => (l && typeof l === "object" ? (l as { effort?: unknown; id?: unknown }).effort ?? (l as { id?: unknown }).id : l))
     .filter((e): e is EffortLevel => typeof e === "string" && e !== "" && EFFORT_LEVELS.includes(e as EffortLevel));
 }
 
@@ -341,8 +341,8 @@ export function parseClaudeModelCatalog(text: string): ModelInfo[] {
       if (typeof r.description === "string" && r.description) info.description = r.description;
       if (r.thinking?.type === "none") info.efforts = [];
       else if (Array.isArray(r.thinking?.effort_options)) {
-        info.efforts = effortList(r.thinking!.effort_options);
-        const recommended = (r.thinking!.effort_options as Array<{ id?: unknown; badge?: { message?: unknown } }>).find((o) => o?.badge?.message === "Recommended");
+        info.efforts = effortList(r.thinking.effort_options);
+        const recommended = (r.thinking.effort_options as Array<{ id?: unknown; badge?: { message?: unknown } }>).find((o) => o?.badge?.message === "Recommended");
         const level = effortList(recommended ? [recommended] : [])[0];
         if (level) info.defaultEffort = level;
       }
@@ -374,8 +374,8 @@ export function parseCodexModels(text: string): CodexModels {
   try {
     const data = JSON.parse(text) as { models?: unknown };
     if (!Array.isArray(data.models)) return out;
-    const visible = data.models
-      .filter((m): m is { slug: string; display_name?: unknown; description?: unknown; default_reasoning_level?: unknown; visibility?: string; priority?: number; supported_reasoning_levels?: unknown } => !!m && typeof m.slug === "string")
+    const visible = (data.models as unknown[])
+      .filter((m): m is { slug: string; display_name?: unknown; description?: unknown; default_reasoning_level?: unknown; visibility?: string; priority?: number; supported_reasoning_levels?: unknown } => !!m && typeof (m as { slug?: unknown }).slug === "string")
       .filter((m) => m.visibility === undefined || m.visibility === "list")
       .filter((m) => isSafeModelName(m.slug))
       .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));

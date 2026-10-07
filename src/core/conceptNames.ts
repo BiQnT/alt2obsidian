@@ -60,6 +60,7 @@ export function conceptKey(text: string): string {
   return text
     .normalize("NFC")
     .toLowerCase()
+    // eslint-disable-next-line no-control-regex -- control characters are not allowed in file names
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
     .replace(/\.+$/, "")
     .replace(/[\s_-]+/g, "");

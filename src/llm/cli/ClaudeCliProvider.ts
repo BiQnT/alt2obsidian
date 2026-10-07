@@ -108,7 +108,7 @@ export function findClaudeResult(stdout: string): ClaudeJsonResult | null {
     const t = line.trim();
     if (!t.startsWith("{")) continue;
     try {
-      const obj = JSON.parse(t);
+      const obj = JSON.parse(t) as { type?: unknown } | null;
       if (obj && obj.type === "result") return obj as ClaudeJsonResult;
     } catch {
       // not a JSON line
@@ -161,7 +161,7 @@ export function claudeResolvedModel(stdout: string, res: ClaudeJsonResult | null
     const t = line.trim();
     if (!t.startsWith("{") || !t.includes('"init"')) continue;
     try {
-      const ev = JSON.parse(t);
+      const ev = JSON.parse(t) as { type?: unknown; subtype?: unknown; model?: unknown } | null;
       if (ev?.type === "system" && ev.subtype === "init" && typeof ev.model === "string" && isSafeModelName(ev.model)) return ev.model;
     } catch {
       // not a JSON line

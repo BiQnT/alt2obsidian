@@ -1,3 +1,4 @@
+import { jsonValueText } from "../utils/helpers";
 // Minimal plate-json to markdown converter for Alt summaries and memos
 // (`note_components.content_text` with metadata.contentFormat "plate-json").
 // Alt's HTTP API returns the raw plate JSON too, so both local sources use it.
@@ -59,13 +60,13 @@ function renderInline(nodes: PlateNode[] | undefined): string {
       if (isText(n)) return renderLeaf(n);
       switch (n.type) {
         case "a": {
-          const label = renderInline(n.children) || String(n.url ?? "");
-          return n.url ? `[${label}](${String(n.url)})` : label;
+          const label = renderInline(n.children) || jsonValueText(n.url);
+          return n.url ? `[${label}](${jsonValueText(n.url)})` : label;
         }
         case "inline_equation":
-          return n.texExpression ? `$${String(n.texExpression)}$` : renderInline(n.children);
+          return n.texExpression ? `$${jsonValueText(n.texExpression)}$` : renderInline(n.children);
         case "mention":
-          return n.value ? `@${String(n.value)}` : renderInline(n.children);
+          return n.value ? `@${jsonValueText(n.value)}` : renderInline(n.children);
         case "recording_timestamp":
           return typeof n.ms === "number" ? `[${formatMs(n.ms)}]` : renderInline(n.children);
         default:
@@ -88,9 +89,9 @@ function tableToMarkdown(table: PlateNode): string {
   );
   if (rows.length === 0) return "";
   const width = Math.max(...rows.map((r) => r.length));
-  const pad = (r: string[]) => [...r, ...new Array(width - r.length).fill("")];
+  const pad = (r: string[]) => [...r, ...new Array<string>(width - r.length).fill("")];
   const line = (r: string[]) => `| ${pad(r).join(" | ")} |`;
-  return [line(rows[0]), line(new Array(width).fill("---")), ...rows.slice(1).map(line)].join("\n");
+  return [line(rows[0]), line(new Array<string>(width).fill("---")), ...rows.slice(1).map(line)].join("\n");
 }
 
 /** Markdown for a plate document (array of block nodes). */
@@ -167,7 +168,7 @@ export function plateToMarkdown(doc: unknown): string {
         blocks.push(tableToMarkdown(node), "");
         break;
       case "equation":
-        blocks.push(`$$\n${String(node.texExpression ?? renderInline(node.children))}\n$$`, "");
+        blocks.push(`$$\n${node.texExpression === undefined || node.texExpression === null ? renderInline(node.children) : jsonValueText(node.texExpression)}\n$$`, "");
         break;
       default: {
         // Containers (toggle, callout, column_group, column, and unknown
@@ -214,7 +215,7 @@ export function componentTextToMarkdown(contentText: string | null | undefined, 
   if (!contentText) return "";
   let format = "";
   try {
-    const meta = typeof metadata === "string" ? JSON.parse(metadata) : metadata;
+    const meta: unknown = typeof metadata === "string" ? JSON.parse(metadata) : metadata;
     format = (meta as { contentFormat?: string } | null)?.contentFormat ?? "";
   } catch {
     format = "";
@@ -222,7 +223,7 @@ export function componentTextToMarkdown(contentText: string | null | undefined, 
   const trimmed = contentText.trim();
   if (format === "plate-json" || trimmed.startsWith("[{")) {
     try {
-      const doc = JSON.parse(trimmed);
+      const doc: unknown = JSON.parse(trimmed);
       const md = plateToMarkdown(doc);
       // An unexpected shape converts to nothing: keep its text rather than lose it.
       return md || plainText(doc).trim();

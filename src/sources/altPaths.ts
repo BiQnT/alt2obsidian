@@ -38,7 +38,7 @@ export function tokenFilePath(userData: string): string {
 
 function readJson(path: string): Record<string, unknown> | null {
   try {
-    const v = JSON.parse(readFileSync(path, "utf8"));
+    const v: unknown = JSON.parse(readFileSync(path, "utf8"));
     return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
   } catch {
     return null;
