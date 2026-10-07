@@ -77,8 +77,13 @@ export interface PlanInput {
   transcriptCapChars: number;
   batchSize: number;
   deckTitle: string;
-  /** Previous note's slides; reuse needs matching text hash and image signal. */
+  /**
+   * Previous note's slides; reuse needs matching text hash and image signal.
+   * Without reuse they are still each LLM slide's `previous`.
+   */
   existing?: ExistingSlide[];
+  /** Reuse unchanged slides (setting "바뀐 슬라이드만 다시 생성"). */
+  reuse?: boolean;
 }
 
 /**
@@ -119,7 +124,7 @@ export function planDeck(input: PlanInput): DeckPlan {
     const candidates = pool.get(s.hash);
     const prev = candidates && candidates.length > 0 ? candidates.shift() : undefined;
     if (prev) used.add(prev);
-    if (prev && prev.gist && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal)) {
+    if (prev && prev.gist && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal) && input.reuse !== false) {
       return { ...s, text, transcript: "", mode: "reuse", reused: { commentary: prev.commentary, gist: prev.gist } };
     }
     const compressed = compressTranscript(runChunks[i] || null, text, input.transcriptCapChars);

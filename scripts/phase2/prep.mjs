@@ -1170,7 +1170,7 @@ function planDeck(input) {
     const prev = candidates && candidates.length > 0 ? candidates.shift() : void 0;
     if (prev)
       used.add(prev);
-    if (prev && prev.gist && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal)) {
+    if (prev && prev.gist && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal) && input.reuse !== false) {
       return { ...s, text, transcript: "", mode: "reuse", reused: { commentary: prev.commentary, gist: prev.gist } };
     }
     const compressed = compressTranscript(runChunks[i] || null, text, input.transcriptCapChars);

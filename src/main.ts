@@ -1293,7 +1293,9 @@ export default class Alt2ObsPlugin extends Plugin {
         transcriptCapChars: settings.generation.transcriptCapChars,
         batchSize: batchSizeFor(settings.tasks.commentary.provider, settings.generation.batchSize),
         deckTitle: altData.title,
-        existing: settings.generation.onlyChangedSlides && existingNote ? parseExistingSlides(existingNote) : undefined,
+        // Without reuse the old sections still back up the slides that fail (review H1).
+        existing: existingNote ? parseExistingSlides(existingNote) : undefined,
+        reuse: settings.generation.onlyChangedSlides,
       });
       pdfData = data;
       pdfSource = c.source;

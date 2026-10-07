@@ -287,6 +287,10 @@ async function deck(n, visualPages = []) {
   assert.deepEqual(same.slides.map((s) => s.mode), ["template", "reuse", "reuse", "reuse"]);
   assert.equal(same.batches.length, 0, "nothing left to generate");
   assert.equal(same.slides[2].reused.commentary, "해설 3");
+  // "바뀐 슬라이드만 다시 생성" off: every slide is generated again, the old sections still back up a failure.
+  const regen = m.planDeck({ ...d, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "T", existing, reuse: false });
+  assert.deepEqual(regen.slides.map((s) => s.mode), ["template", "llm", "llm", "llm"]);
+  assert.deepEqual(regen.slides.slice(1).map((s) => s.previous?.commentary), ["해설 2", "해설 3", "해설 4"], "previous kept for a failed slide");
   const changedImage = { ...d, slides: d.slides.map((s) => (s.page === 3 ? { ...s, imageSignal: "f".repeat(64) } : s)) };
   const partly = m.planDeck({ ...changedImage, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "T", existing });
   assert.deepEqual(partly.slides.map((s) => s.mode), ["template", "reuse", "llm", "reuse"], "image-only edit regenerates");

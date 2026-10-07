@@ -710,6 +710,23 @@ try {
     console.log("PASS: a run with no generated slide writes nothing; usage is recorded even when the update is declined");
   }
 
+  // "바뀐 슬라이드만 다시 생성" off (restyling a note): every slide is generated again, and one that fails keeps its old commentary (review H1).
+  {
+    plugin.data.settings.generation.onlyChangedSlides = false;
+    files.set(record.path, files.get(record.path).replace("슬라이드 3 해설.", "예전 해설 3."));
+    process.env.FAKE_CLI_MODE = "dropalways:3";
+    const regen = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");
+    assert.equal(regen.estimate.slidesReused, 0, "nothing reused");
+    assert.equal(regen.estimate.slidesGenerated, 6);
+    await plugin.runCliImport(regen, { onConfirmUpdate: async () => true });
+    process.env.FAKE_CLI_MODE = "ok";
+    const after = files.get(record.path);
+    assert.ok(after.includes("예전 해설 3."), "the failed slide keeps its old commentary");
+    assert.ok(after.includes("이전 해설을 유지했습니다"), "and is listed as failed");
+    assert.ok(!after.includes("삭제된 슬라이드 (orphan)"), "nothing orphaned");
+    console.log("PASS: with reuse off every slide is generated again; a slide that fails keeps its old commentary");
+  }
+
   // Alt local note (spec 4.1, 4.3): timestamped transcript aligned to the
   // slides, alt_local_id identity, a same-titled URL import never merged
   // into, one-time link of that note, transcript cached for the viewer.
