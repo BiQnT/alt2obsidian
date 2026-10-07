@@ -472,7 +472,7 @@ On Obsidian 1.13 and later the tab is drawn from setting definitions, so its set
 | **Notion MCP 조회 도구** | The tool used to fetch Notion pages, `mcp__<server>__notion-fetch` | empty (found with `claude mcp list`) |
 | **배치 크기** (batch size) | Slides per CLI call; half when the batch has images; twice for Codex | 8 |
 | **이미지 전송 규칙** (image rule) | **자동** (auto): images only for diagram-heavy slides and scanned PDFs, 1024 px JPEG. **텍스트만 (스캔 PDF 제외)** (text only, except scanned PDFs) | 자동 |
-| **슬라이드당 전사 상한 (자)** (transcript cap per slide, characters) | Transcript kept per slide after removing fillers and repeats | 600 |
+| **슬라이드당 전사 상한 (자)** (transcript cap per slide, characters) | Transcript kept per slide after removing fillers and repeats | 1200 |
 | **강의당 토큰 상한** (token cap per lecture) | Stop before starting when the estimate is over it; 0 means no cap | 0 |
 | **CLI 호출 제한 시간 (초)** (CLI timeout, seconds) | A call over this is stopped; a timed-out call with more than one slide is tried once more in two halves. Longer for calls with more than 8 slides or with images (minimum 30) | 300 |
 | **바뀐 슬라이드만 다시 생성** (regenerate only changed slides) | Reuse commentary when a slide's text hash and image signal are unchanged; summary notes reuse unchanged sections | on |

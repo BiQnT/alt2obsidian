@@ -17,7 +17,7 @@ node scripts/bench/bench.mjs --pdf deck.pdf --transcript transcript.txt --summar
   --provider codex-cli --effort medium --out /tmp/codex.md
 ```
 
-Options: `--model`, `--effort low|medium|high|xhigh|max`, `--concept-model` (default `haiku` for Claude), `--concept-effort` (default `low`), `--batch 8`, `--cap 600` (transcript characters per slide), `--image-rule auto|text-only`, `--fewer-images`, `--bin /path/to/cli`, `--timeout 300`, `--title`, `--subject`, `--json` (machine-readable result).
+Options: `--model`, `--effort low|medium|high|xhigh|max`, `--concept-model` (default `haiku` for Claude), `--concept-effort` (default `low`), `--batch 8`, `--cap 1200` (transcript characters per slide), `--image-rule auto|text-only`, `--fewer-images`, `--bin /path/to/cli`, `--timeout 300`, `--title`, `--subject`, `--json` (machine-readable result).
 
 The summary is a plain text file. The transcript is plain text (split evenly over the slides, like the URL source) or the plugin's transcript cache JSON (`{"v":1,"id":...,"segments":[[startMs,endMs,text],...]}`, in the plugin's cache folder under the note's `alt_local_id`): its timestamps align the transcript to the slides as the plugin does for a local import, and the result says which one ran (`transcript per slide`). With the Skill's scraper you can get them from an Alt URL: `node scripts/phase2/alt-scrape.mjs <url> > alt.json`, then save its `transcript` and `summary` fields.
 
