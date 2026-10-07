@@ -36,11 +36,15 @@ function makePlugin(): any {
     data: { settings, cliDetection, usageTotals },
     cliErrors,
     saves: 0,
+    catalogReads: 0,
     detectCli: async () => null,
     async savePluginData() {
       this.saves++;
     },
-    modelCatalog: () => ({ claude: [], codex: { models: [], efforts: {} }, resolved: { "claude-cli:sonnet": { id: "claude-sonnet-5-5", at: "2026-10-06" } } }),
+    modelCatalog() {
+      this.catalogReads++;
+      return { claude: [], codex: { models: [], efforts: {} }, resolved: { "claude-cli:sonnet": { id: "claude-sonnet-5-5", at: "2026-10-06" } } };
+    },
     applyCommentHiding: () => {},
     updateBasePath: () => {},
     keepOpenPdfTabsPlain: () => {},
@@ -52,7 +56,7 @@ function makePlugin(): any {
  * uses: a div.setting-group per group (its heading row, then div.setting-items),
  * a Setting per row with the row's name and description set before its
  * render callback runs, controls bound with getControlValue / setControlValue
- * (a number commits on change), and `visible` applied after drawing.
+ * (bindControl), and `visible` applied after drawing.
  */
 function renderDefinitions(tab: any, root: HTMLElement): void {
   root.empty();
@@ -78,9 +82,22 @@ function renderDefinitions(tab: any, root: HTMLElement): void {
   }
 }
 
+/**
+ * A control as Obsidian 1.14.4 binds it: the control's validate() runs on the
+ * stored value once drawn and on each change; a message is shown under the
+ * row and the change is not written. A number field commits on Enter or when
+ * it loses focus: empty is the default value (shown in the field), and a
+ * value that is not a number or is below the minimum shows Obsidian's error
+ * and goes no further. Escape puts back the field's last committed text.
+ */
 function bindControl(tab: any, setting: any, control: any): void {
   const value = tab.getControlValue(control.key) ?? control.defaultValue;
-  const write = (v: unknown) => void tab.setControlValue(control.key, v);
+  const write = async (v: unknown) => {
+    const error = await control.validate?.(v);
+    setting.setErrorMessage(error || null);
+    if (!error) await tab.setControlValue(control.key, v);
+  };
+  if (control.validate) void Promise.resolve(control.validate(value)).then((error: unknown) => error && setting.setErrorMessage(error));
   if (control.type === "toggle") setting.addToggle((t: any) => t.setValue(value).onChange(write));
   else if (control.type === "dropdown")
     setting.addDropdown((d: any) => {
@@ -94,8 +111,31 @@ function bindControl(tab: any, setting: any, control: any): void {
     });
   else if (control.type === "number")
     setting.addText((t: any) => {
-      t.setValue(String(value));
-      t.inputEl.addEventListener("change", () => write(parseFloat(t.inputEl.value)));
+      const input: HTMLInputElement = t.inputEl;
+      let last: number | null = typeof value === "number" && !Number.isNaN(value) ? value : null;
+      input.value = last === null ? "" : String(last);
+      const commit = () => {
+        if (input.value === "") {
+          last = control.defaultValue ?? 0;
+          input.value = String(last);
+          return void write(last);
+        }
+        const n = parseFloat(input.value);
+        if (Number.isNaN(n)) setting.setErrorMessage("Not a number");
+        else if (control.min !== undefined && n < control.min) setting.setErrorMessage(`At least ${control.min}`);
+        else {
+          last = n;
+          void write(n);
+        }
+      };
+      input.addEventListener("blur", commit);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") commit();
+        else if (e.key === "Escape") {
+          input.value = last === null ? "" : String(last);
+          setting.setErrorMessage(null);
+        }
+      });
     });
   else throw new Error(`control type ${control.type}`);
 }
@@ -183,7 +223,7 @@ function setup() {
 }
 
 function measure() {
-  const { tab } = setup();
+  const { plugin, tab } = setup();
   // Control: a plain Setting row with a path field and a button in a 280px
   // box, without the plugin's classes. Under these rules its description
   // collapses, which shows the rules reproduce what users saw in beta.3.
@@ -231,6 +271,7 @@ function measure() {
     outline,
     definitionNames: definitionNames(tab),
     displayNames: path === "old" ? displayNames(tab.containerEl) : [],
+    catalogReads: plugin.catalogReads,
   };
 }
 
@@ -254,10 +295,15 @@ async function interact() {
   // Drawn again: the task row shows the preset's model.
   out.commentaryModelSelect = (find(root, "슬라이드 해설").querySelector("select.alt-to-obs-model-select") as HTMLSelectElement).value;
 
-  const batch = find(root, "배치 크기").querySelector("input") as HTMLInputElement;
-  batch.value = "12";
-  batch.dispatchEvent(new Event(path === "new" ? "change" : "input"));
-  await tick();
+  // A number field: before 1.13 every keystroke saves; from 1.13 on Enter commits.
+  const batchInput = () => find(root, "배치 크기").querySelector("input") as HTMLInputElement;
+  const enter = async (text: string) => {
+    const input = batchInput();
+    input.value = text;
+    input.dispatchEvent(path === "new" ? new KeyboardEvent("keydown", { key: "Enter" }) : new Event("input"));
+    await tick();
+  };
+  await enter("12");
   out.batchSize = plugin.data.settings.generation.batchSize;
 
   const toggle = find(root, "핵심 다이어그램 이미지 저장").querySelector(".checkbox-container") as HTMLElement;
@@ -282,6 +328,18 @@ async function interact() {
 
   out.saves = plugin.saves;
   out.updates = tab.updates ?? null;
+
+  // The number field at its edges: what is saved, what the field shows, the error under the row.
+  const saves = plugin.saves;
+  const numbers: unknown[] = [];
+  for (const text of ["8.5", "0", ""]) {
+    await enter(text);
+    const row = find(root, "배치 크기");
+    const error = row.classList.contains("is-invalid") ? row.querySelector(".setting-item-error")?.textContent ?? "" : null;
+    numbers.push({ text, saved: plugin.data.settings.generation.batchSize, shown: batchInput().value, error });
+  }
+  out.numbers = numbers;
+  out.numberSaves = plugin.saves - saves;
   return out;
 }
 

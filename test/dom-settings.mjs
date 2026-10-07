@@ -16,8 +16,10 @@
  * (test/fixtures/dom/settings-outline.json: headings, names, descriptions,
  * controls with their values and options, blocks with their text), the
  * definitions draw exactly the same, every row display() draws has a
- * definition, and changes made through either path's controls save and
- * draw the tab again.
+ * definition, changes made through either path's controls save and draw
+ * the tab again, a number field at its edges behaves as each Obsidian's
+ * does (an empty, fractional or too small value), and the model list is
+ * read once per drawing of the task rows.
  *
  * Needs a Chromium binary, so it is not part of `npm test`:
  *   npm run test:dom                 (finds Playwright's headless shell or Google Chrome)
@@ -146,6 +148,7 @@ for (const r of results) {
   // A block row (notice, cards, model note, help) is the block, full width.
   assert.equal(r.blocks.length, r.path === "new" ? 4 : 0, `${at}: block rows`);
   for (const b of r.blocks) assert.ok(b.childW >= b.w - 40 - 2, `${at}: the block spans its row (${b.childW} of ${b.w}px)`);
+  assert.equal(r.catalogReads, 1, `${at}: the model list is read once for the four task rows`);
 }
 console.log(`PASS: settings tab under Obsidian 1.14 setting rules at panes of ${WIDTHS.join(", ")}px, drawn by display() and from the definitions: no collapsed description, CLI card descriptions span the card, no empty gaps (the plain Setting control collapses to ${results[0].controlDescW}px)`);
 
@@ -176,3 +179,27 @@ for (const path of ["old", "new"]) {
   assert.equal(r.updates, path === "new" ? 3 : null, `${path}: redraws`);
 }
 console.log("PASS: changes through the controls of either path save once each and draw the tab again (update() from 1.13 on)");
+
+// The batch size field (minimum 1, default 8) after 12 was saved, given
+// "8.5", then "0", then emptied. From 1.13 on: the tab's validate() refuses
+// a fraction (Obsidian would save 8 and show 8.5), Obsidian refuses a value
+// below the minimum, both with an error under the row, and an emptied field
+// is the default. Before 1.13: an empty or too small value is not saved
+// while the field shows it, and a fraction keeps its whole part.
+const NUMBERS = {
+  new: [
+    { text: "8.5", saved: 12, shown: "8.5", error: "정수로 입력하세요" },
+    { text: "0", saved: 12, shown: "0", error: "At least 1" },
+    { text: "", saved: 8, shown: "8", error: null },
+  ],
+  old: [
+    { text: "8.5", saved: 8, shown: "8.5", error: null },
+    { text: "0", saved: 8, shown: "0", error: null },
+    { text: "", saved: 8, shown: "", error: null },
+  ],
+};
+for (const path of ["old", "new"]) {
+  assert.deepEqual(interactions[path].numbers, NUMBERS[path], `${path}: the number field at its edges`);
+  assert.equal(interactions[path].numberSaves, 1, `${path}: one save (${path === "new" ? "the default" : "the whole part of 8.5"})`);
+}
+console.log("PASS: number fields: from 1.13 on a fraction and a value below the minimum show an error and are not saved, an emptied field is the default; before 1.13 an empty or too small value is not saved");

@@ -87,6 +87,16 @@ export class Setting {
   setName(t) { this.nameEl.setText(t); return this; }
   setDesc(t) { this.descEl.setText(t); return this; }
   setHeading() { this.settingEl.addClass("setting-item-heading"); return this; }
+  // As in Obsidian 1.14: div.setting-item-error in the control box, and is-invalid on the row.
+  setErrorMessage(m) {
+    if (m) {
+      this.errorEl ??= this.controlEl.createDiv({ cls: "setting-item-error" });
+      this.errorEl.setText(m);
+      this.errorEl.show();
+    } else this.errorEl?.hide();
+    this.settingEl.toggleClass("is-invalid", !!m);
+    return this;
+  }
   addText(cb) {
     const inputEl = this.controlEl.createEl("input", { type: "text" });
     const c = { inputEl, setPlaceholder: (p) => (inputEl.placeholder = p, c), setValue: (v) => (inputEl.value = v, c), onChange: (f) => (inputEl.addEventListener("input", () => f(inputEl.value)), c) };

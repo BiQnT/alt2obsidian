@@ -79,13 +79,18 @@ const shape = (defs) =>
       const c = d.control;
       assert.ok(CONTROL_TYPES.has(c.type), `${d.name}: control type ${c.type}`);
       assert.deepEqual(
-        Object.keys(c).filter((k) => !["type", "key", "options", "placeholder", "min", "defaultValue"].includes(k)),
+        Object.keys(c).filter((k) => !["type", "key", "options", "placeholder", "min", "defaultValue", "validate"].includes(k)),
         [],
         `${d.name}: only Obsidian's control fields (no getter or setter leaks in)`
       );
       assert.notEqual(at(plugin.data.settings, c.key), undefined, `${d.name}: key ${c.key} is a value in the settings`);
       if (c.type === "dropdown") assert.ok(Object.keys(c.options).includes(at(plugin.data.settings, c.key)), `${d.name}: the current value is an option`);
-      if (c.type === "number") assert.ok(c.defaultValue >= c.min, `${d.name}: default at least the minimum`);
+      if (c.type === "number") {
+        assert.ok(c.defaultValue >= c.min, `${d.name}: default at least the minimum`);
+        // Obsidian reads the field with parseFloat: a fraction is refused, not saved without its decimals.
+        assert.equal(c.validate(c.defaultValue), undefined, `${d.name}: a whole number passes`);
+        assert.equal(c.validate(8.5), "정수로 입력하세요", `${d.name}: a fraction is refused`);
+      } else assert.equal(c.validate, undefined, `${d.name}: no validate`);
     }
   }
   for (const label of Object.values(TASK_LABELS)) assert.equal(typeof rows(defs).find((d) => d.name === label)?.render, "function", `task row ${label}`);
@@ -164,7 +169,7 @@ const shape = (defs) =>
   await refused("preset", 3);
   await refused("no.such.key", 1);
   assert.equal(tab.getControlValue("no.such.key"), undefined);
-  // Whole numbers: the old text field's "12.7" and 1.13's number field's 9.9.
+  // Whole numbers: the old text field's "12.7", and a fraction that reaches setControlValue anyway (1.13's validate() refuses it first).
   await write("generation.batchSize", "12.7");
   assert.equal(settings().generation.batchSize, 12);
   await write("cliTimeoutSec", 99.9);

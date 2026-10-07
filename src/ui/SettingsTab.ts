@@ -10,6 +10,7 @@ import {
   isCliProvider,
   isSafeModelName,
   LEGACY_KEY_FIELDS,
+  ModelCatalog,
   modelChoices,
   modelName,
   PRESET_LABELS,
@@ -110,7 +111,8 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
         break;
       case "number": {
         // A whole number, at least the minimum: a text field below 1.13
-        // gives "8.5" and 1.13's number field 8.5, both kept as 8.
+        // gives "8.5", kept as 8 (1.13's number field refuses a fraction
+        // before this, see obsidianControl).
         const n = typeof value === "number" ? Math.trunc(value) : typeof value === "string" ? parseInt(value, 10) : NaN;
         if (!Number.isFinite(n) || n < control.min) return;
         control.set(n);
@@ -377,6 +379,16 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
       alignment: "정렬은 스크립트로 항상 합니다. 프로바이더를 고르면 불확실한 구간만 한 번 더 확인합니다 (기본 끔).",
       verification: "사이드바 '노트 검증' 탭에서 씁니다. 주장 20개씩 판정합니다.",
     };
+    // The model list, read once for the task rows drawn together and again
+    // for the next drawing (Obsidian 1.13 may draw kept definitions again).
+    let catalog: ModelCatalog | null = null;
+    const modelCatalog = (): ModelCatalog => {
+      if (!catalog) {
+        catalog = this.plugin.modelCatalog();
+        queueMicrotask(() => (catalog = null));
+      }
+      return catalog;
+    };
     return [
       {
         name: "프리셋",
@@ -399,7 +411,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
           name: TASK_LABELS[id],
           desc: notes[id],
           aliases: ["model", "effort", "provider", "Claude", "Codex", TASK_ALIASES[id]],
-          setting: (setting) => this.renderTaskRow(setting, id, notes[id]),
+          setting: (setting) => this.renderTaskRow(setting, id, notes[id], modelCatalog()),
         })
       ),
       {
@@ -434,8 +446,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
    * the CLI's known models, "CLI 기본값" and "직접 입력" (a text field for
    * any other id). Changing the provider loads that provider's task defaults.
    */
-  private renderTaskRow(setting: Setting, id: TaskId, note: string | undefined): void {
-    const catalog = this.plugin.modelCatalog();
+  private renderTaskRow(setting: Setting, id: TaskId, note: string | undefined, catalog: ModelCatalog): void {
     const task = this.settings.tasks[id];
     const recommended = describeDefault(isCliProvider(task.provider) ? task.provider : "claude-cli", id);
     let lastText = "";
@@ -704,7 +715,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
       {
         name: "Alt 데이터 폴더",
         desc:
-          "Alt 노트 목록을 읽을 Alt 앱 데이터 폴더. 비우면 기본 위치(macOS: ~/Library/Application Support/alt, Windows: %APPDATA%\\alt, Linux: ~/.config/alt). " +
+          "Alt 노트 목록을 읽을 Alt 앱 데이터 폴더. 비우면 기본 위치(macOS: ~/Library/Application Support/alt, Windows: %APPDATA%\\alt, Linux: $XDG_CONFIG_HOME/alt 또는 ~/.config/alt). " +
           "플러그인은 이 폴더를 읽기만 합니다. Alt가 실행 중이면 로컬 API(토큰 파일)로 읽고, API를 쓸 수 없으면(Alt가 꺼져 있거나, Alt 설정에서 로컬 서버를 껐거나, " +
           "그 포트의 프로그램이 Alt인지 확인하지 못한 경우) 데이터베이스를 임시 폴더에 복사해 읽습니다. Alt가 실행 중이어도 동기화된 슬라이드 파일의 위치를 찾을 때는 " +
           "사본을 만듭니다. 사본은 다시 연결하거나 플러그인을 끌 때 지웁니다.",
@@ -788,6 +799,14 @@ function obsidianControl(control: Control): SettingControl {
     case "text":
       return { type: "text", key: control.key, placeholder: control.placeholder };
     case "number":
-      return { type: "number", key: control.key, min: control.min, defaultValue: control.defaultValue };
+      // Every number here is a whole number. Obsidian reads the field with
+      // parseFloat, so 8.5 would be saved as 8 while the field shows 8.5.
+      return {
+        type: "number",
+        key: control.key,
+        min: control.min,
+        defaultValue: control.defaultValue,
+        validate: (n) => (Number.isInteger(n) ? undefined : "정수로 입력하세요"),
+      };
   }
 }
