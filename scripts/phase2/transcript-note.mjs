@@ -338,6 +338,8 @@ function sectionGistLines(gists, plan) {
 
 // src/utils/helpers.ts
 function jsonValueText(v) {
+  if (Array.isArray(v))
+    return v.map(jsonValueText).join(",");
   return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
 }
 function sanitizeFilename(name) {

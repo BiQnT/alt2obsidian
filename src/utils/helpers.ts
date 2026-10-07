@@ -1,8 +1,10 @@
 /**
  * A value from parsed JSON as text: a string as it is, a number or boolean
- * written out, anything else (null, an object) empty.
+ * written out, an array joined with "," (as String() does), anything else
+ * (null, an object) empty.
  */
 export function jsonValueText(v: unknown): string {
+  if (Array.isArray(v)) return v.map(jsonValueText).join(",");
   return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
 }
 

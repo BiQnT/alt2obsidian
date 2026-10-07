@@ -260,10 +260,10 @@ export default class Alt2ObsPlugin extends Plugin {
       callback: () => new MigrationModal(this.app, this.planVaultMigration(), (plan) => this.applyVaultMigration(plan)).open(),
     });
 
-    // Offered while a note or a PDF is open; the command says when it is not a lecture's.
+    // Offered while a note or a PDF is open (the same test as the commands'); they say when it is not a lecture's.
     const noteOrPdfOpen = () => {
-      const ext = this.app.workspace.getActiveFile()?.extension.toLowerCase();
-      return ext === "md" || ext === "pdf";
+      const ext = this.app.workspace.getActiveFile()?.extension;
+      return ext === "md" || ext?.toLowerCase() === "pdf";
     };
     this.addCommand({
       id: "open-synced-viewer",
@@ -2563,7 +2563,8 @@ export default class Alt2ObsPlugin extends Plugin {
     if (this.data.pendingRenameNotice) {
       new Notice(
         "Alt2Obs: 이전 Alt2Obsidian 플러그인의 설정과 기록을 가져왔습니다. 노트와 폴더는 그대로입니다. " +
-          "설정 → 커뮤니티 플러그인에서 Alt2Obsidian을 끄고 삭제하세요. 두 플러그인을 함께 켜 두면 강의 PDF 열기 같은 동작이 겹칩니다.",
+          "설정 → 커뮤니티 플러그인에서 Alt2Obsidian을 끄고 삭제하세요. 두 플러그인을 함께 켜 두면 강의 PDF 열기 같은 동작이 겹칩니다. " +
+          "이전 명령에 단축키를 지정했다면 Alt2Obs 명령에 다시 지정하세요.",
         0
       );
       delete this.data.pendingRenameNotice;
