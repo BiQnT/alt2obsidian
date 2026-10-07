@@ -3,7 +3,7 @@
 // with esbuild (dev dependency) and runs it. See scripts/bench/README.md.
 //
 //   node scripts/bench/bench.mjs --pdf deck.pdf --provider claude-cli \
-//     [--transcript t.txt] [--summary s.md] [--title T] [--subject S] \
+//     [--transcript t.txt|cache.json] [--summary s.md] [--title T] [--subject S] \
 //     [--model M] [--effort low|medium|high|xhigh|max] \
 //     [--concept-model haiku] [--concept-effort low] [--batch 8] [--cap 600] \
 //     [--image-rule auto|text-only] [--fewer-images] [--bin /path/to/cli] \
@@ -50,9 +50,22 @@ if (!["claude-cli", "codex-cli"].includes(provider)) throw new Error(`unknown pr
 const read = (f) => (f ? readFileSync(f, "utf8") : null);
 if (!existsSync(args.pdf)) throw new Error(`no such PDF: ${args.pdf}`);
 
+// The plugin's transcript cache ({v, id, segments: [[startMs, endMs, text]]})
+// keeps the timestamps the plugin aligns slides with; plain text is split evenly.
+function readTranscript(file) {
+  const raw = read(file);
+  if (raw === null || !raw.trimStart().startsWith("{")) return { transcript: raw, segments: null };
+  const json = JSON.parse(raw);
+  if (!Array.isArray(json?.segments)) throw new Error(`${file}: no segments array`);
+  const segments = json.segments.map(([startMs, endMs, text]) => ({ startMs, endMs, text: String(text ?? ""), speaker: "" }));
+  return { transcript: segments.map((s) => s.text).join("\n"), segments };
+}
+const { transcript, segments } = readTranscript(args.transcript);
+
 const options = {
   pdf: resolve(args.pdf),
-  transcript: read(args.transcript),
+  transcript,
+  segments,
   summary: read(args.summary) ?? "",
   title: args.title ?? basename(args.pdf, ".pdf"),
   subject: args.subject ?? "BENCH",

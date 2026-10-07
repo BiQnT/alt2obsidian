@@ -30,6 +30,25 @@ try {
   assert.equal(s.calls().length, 0, "dry run makes no CLI call");
   console.log("PASS: bench dry run prints the plan and estimate without calling a CLI");
 
+  // The plugin's transcript cache: timestamps align the transcript to the slides.
+  const cache = join(s.dir, "t.json");
+  const plain = join(s.dir, "t-plain.txt");
+  const talk = [
+    ["alpha introduction to caches", "today we start caches"],
+    ["beta cache coherence", "the MESI protocol keeps cache coherence", "cache coherence with MESI"],
+    ["a picture of the bus"],
+    ["gamma summary and questions", "summary of caches and questions"],
+  ].flatMap((group) => [0, 1, 2, 3].flatMap(() => group));
+  writeFileSync(cache, JSON.stringify({ v: 1, id: "bench", segments: talk.map((t, i) => [i * 15000, (i + 1) * 15000, t]) }));
+  writeFileSync(plain, talk.join("\n"));
+  const aligned = JSON.parse(bench(["--provider", "claude-cli", "--transcript", cache, "--dry-run", "--json"]));
+  const even = JSON.parse(bench(["--provider", "claude-cli", "--transcript", plain, "--dry-run", "--json"]));
+  assert.equal(aligned.transcriptAligned, true, "cache JSON is aligned by its timestamps");
+  assert.equal(even.transcriptAligned, false, "the same text as plain text is split evenly");
+  assert.ok(aligned.transcriptChars.before > 0 && aligned.transcriptChars.before !== even.transcriptChars.before, "the slides get the aligned spans");
+  assert.match(bench(["--provider", "claude-cli", "--transcript", cache, "--dry-run"]), /\| transcript per slide +\| aligned by timestamps/);
+  console.log("PASS: bench reads the plugin's transcript cache JSON and aligns it by its timestamps; plain text is split evenly");
+
   for (const [provider, bin] of [["claude-cli", FAKE_CLAUDE], ["codex-cli", FAKE_CODEX]]) {
     const before = s.calls().length;
     const out = join(s.dir, `${provider}.md`);

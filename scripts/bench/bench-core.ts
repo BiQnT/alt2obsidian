@@ -13,7 +13,8 @@ import { join } from "path";
 import { webcrypto } from "crypto";
 import type { GrayImage } from "../../src/core/prep/SlideAnalyzer";
 import { analyzeSlides } from "../../src/core/prep/SlideAnalyzer";
-import { ANALYSIS_LONG_EDGE, extractPageLayouts, parsePgm } from "../../src/core/prep/pageLayout";
+import { ANALYSIS_LONG_EDGE, extractPageLayouts, layoutAlignmentText, parsePgm } from "../../src/core/prep/pageLayout";
+import { alignLecture } from "../../src/pipeline/alignment";
 import { planDeck, planCounts, withFewerImages } from "../../src/pipeline/batchPlan";
 import { estimateLecture, runBatchedLecture } from "../../src/pipeline/lecturePipeline";
 import { ClaudeCliProvider } from "../../src/llm/cli/ClaudeCliProvider";
@@ -23,10 +24,13 @@ import { UsageTracker } from "../../src/llm/usage";
 import { NoteGenerator } from "../../src/generator/NoteGenerator";
 import { batchSizeFor } from "../../src/settings/llmSettings";
 import type { AltNoteData, EffortLevel, ImageInput } from "../../src/types";
+import type { TranscriptSegment } from "../../src/sources/types";
 
 export interface BenchOptions {
   pdf: string;
   transcript: string | null;
+  /** Timestamped segments (the plugin's transcript cache): aligned to the slides like the plugin does. */
+  segments: TranscriptSegment[] | null;
   summary: string;
   title: string;
   subject: string;
@@ -59,6 +63,8 @@ export interface BenchResult {
   costUsd: number;
   estimate: { calls: number; inputTokens: number; outputTokens: number; imagesSent: number } | null;
   transcriptChars: { before: number; after: number } | null;
+  /** The transcript was aligned to the slides by its timestamps (else split evenly). */
+  transcriptAligned: boolean;
   wallTimeMs: number;
   dryRun: boolean;
 }
@@ -130,10 +136,12 @@ async function runCli(o: BenchOptions): Promise<BenchResult> {
   const layouts = await extractPageLayouts(doc);
   await doc.destroy();
   const analysis = await analyzeSlides(layouts, grayRenders(o.pdf, layouts.length), { sourceId: "bench", imageRule: o.imageRule });
+  const alignment = o.segments ? alignLecture(layouts.map(layoutAlignmentText), o.segments, { scanned: analysis.scanned }) : null;
   let plan = planDeck({
     ...analysis,
     layouts,
     transcript: o.transcript,
+    transcriptChunks: alignment?.chunks,
     transcriptCapChars: o.capChars,
     batchSize: batchSizeFor(o.provider, o.batchSize),
     deckTitle: o.title,
@@ -148,6 +156,7 @@ async function runCli(o: BenchOptions): Promise<BenchResult> {
     effort: o.effort || "(CLI default)",
     estimate: { calls: estimate.calls, inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens, imagesSent: estimate.imagesSent },
     transcriptChars: plan.transcriptChars,
+    transcriptAligned: alignment !== null,
     dryRun: o.dryRun,
   };
   const slides = { total: counts.total, generated: counts.llm, templated: counts.templated, deduped: counts.deduped, reused: counts.reused, failed: 0 };
@@ -227,6 +236,7 @@ export function formatTable(r: BenchResult): string {
     ["API-equivalent cost (Claude only)", r.costUsd ? `$${r.costUsd.toFixed(4)}` : "-"],
     ["estimate (calls / in / out / images)", r.estimate ? `${r.estimate.calls} / ${n(r.estimate.inputTokens)} / ${n(r.estimate.outputTokens)} / ${r.estimate.imagesSent}` : "-"],
     ["transcript chars (before -> after)", r.transcriptChars ? `${n(r.transcriptChars.before)} -> ${n(r.transcriptChars.after)}` : "-"],
+    ["transcript per slide", r.transcriptAligned ? "aligned by timestamps" : "even split"],
     ["wall time", `${(r.wallTimeMs / 1000).toFixed(1)} s`],
   ];
   const w = Math.max(...rows.map(([k]) => k.length));
