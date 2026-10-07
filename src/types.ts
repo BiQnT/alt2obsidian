@@ -355,6 +355,12 @@ export interface PluginData {
    */
   pendingAltToObsNotice?: boolean;
   /**
+   * 2.0.0's data.json was there and readable but left out, because this
+   * data.json changed later: the user is told once, with the command that
+   * imports it anyway.
+   */
+  pendingAltToObsKeptNotice?: boolean;
+  /**
    * The check for 2.0.0's data.json (`<configDir>/plugins/alt-to-obs/`).
    * Missing: not made yet (data of 1.x or a beta, or a fresh install not
    * saved yet). "done": made (imported, this data kept, or nothing there).

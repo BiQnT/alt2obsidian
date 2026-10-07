@@ -286,6 +286,13 @@ export default class Alt2ObsPlugin extends Plugin {
       callback: () => new MigrationModal(this.app, this.planVaultMigration(), (plan) => this.applyVaultMigration(plan)).open(),
     });
 
+    // 2.0.0's data (id alt-to-obs) on request, e.g. after it was left out as older (spec D13).
+    this.addCommand({
+      id: "import-alt-to-obs-settings",
+      name: "Import settings from version 2.0.0 (alt-to-obs)",
+      callback: () => this.confirmAltToObsImport(),
+    });
+
     // Offered while a note or a PDF is open (the same test as the commands'); they say when it is not a lecture's.
     const noteOrPdfOpen = () => {
       const ext = this.app.workspace.getActiveFile()?.extension;
@@ -2567,9 +2574,48 @@ export default class Alt2ObsPlugin extends Plugin {
       this.data.altToObsImport = "retry";
     } else {
       this.data.altToObsImport = "done";
+      // 2.0.0's data left out because this data is newer: told once, with the command that imports it anyway.
+      if (found?.state === "ok") this.data.pendingAltToObsKeptNotice = true;
       // Saved now when this decided something: 2.0.0's older data stays out for good, or nothing is left to retry.
       if (found || retry) await this.savePluginData();
     }
+  }
+
+  /**
+   * Command "Import settings from version 2.0.0 (alt-to-obs)": after the
+   * user confirms, 2.0.0's data.json replaces this plugin's settings and
+   * records now.
+   */
+  private async confirmAltToObsImport(): Promise<void> {
+    const answer = await choose(
+      this.app,
+      "2.0.0 설정 가져오기",
+      [
+        `${this.altToObsDir()}/data.json의 설정과 기록(CLI 경로, 사용량, 최근 노트, 첨부 기록)으로 지금 설정과 기록을 바꿉니다. 노트와 폴더는 그대로입니다.`,
+        "예전 API 키는 가져오지 않고, 2.0.0의 폴더는 바꾸지 않습니다.",
+      ],
+      [
+        { id: "import", text: "가져오기", cta: true },
+        { id: "cancel", text: "취소" },
+      ]
+    );
+    if (answer === "import") await this.importAltToObsNow();
+  }
+
+  /**
+   * 2.0.0's data.json replaces this plugin's data now, the way a start
+   * whose import is still to be retried takes it (see loadPluginData):
+   * read only, without old API keys, saved once; the user is told what
+   * happened.
+   */
+  async importAltToObsNow(): Promise<void> {
+    this.data.altToObsImport = "retry";
+    await this.savePluginData();
+    await this.loadPluginData();
+    this.updateBasePath();
+    this.applyCommentHiding();
+    if (this.data.pendingAltToObsNotice || this.altToObsReadError !== null) await this.showAltToObsNotices();
+    else new Notice(`Alt2Obs: ${this.altToObsDir()}/data.json이 없어 가져올 것이 없습니다.`);
   }
 
   /** Why 2.0.0's data.json could not be read on this start (shown once on layout ready); null when it was. */
@@ -2692,6 +2738,16 @@ export default class Alt2ObsPlugin extends Plugin {
       delete this.data.pendingAltToObsNotice;
       await this.savePluginData();
       return;
+    }
+    if (this.data.pendingAltToObsKeptNotice) {
+      new Notice(
+        `Alt2Obs: 이 플러그인의 data.json이 2.0.0의 ${this.altToObsDir()}/data.json보다 나중에 바뀌어, 2.0.0의 설정과 기록은 가져오지 않았습니다. ` +
+          "2.0.0의 것을 쓰려면 명령 팔레트에서 'Import settings from version 2.0.0 (alt-to-obs)'를 실행하세요(지금 설정과 기록을 그것으로 바꿈). " +
+          "필요 없으면 버전이 2.0.0인 Alt2Obs를 끄고 삭제하세요.",
+        0
+      );
+      delete this.data.pendingAltToObsKeptNotice;
+      await this.savePluginData();
     }
     if (await this.altToObsEnabled()) {
       new Notice(

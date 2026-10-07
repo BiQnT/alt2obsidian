@@ -125,6 +125,7 @@ async function makePlugin(saved, setup, dir = ".obsidian/plugins/alt2obsidian") 
   setup?.(config, mtimes);
   const plugin = new Plugin();
   let stored = saved;
+  const commands = [];
   Object.assign(plugin, {
     app,
     manifest: { dir },
@@ -133,12 +134,12 @@ async function makePlugin(saved, setup, dir = ".obsidian/plugins/alt2obsidian") 
     registerView: () => {},
     registerEvent: () => {},
     addRibbonIcon: () => {},
-    addCommand: () => {},
+    addCommand: (c) => void commands.push(c),
     addSettingTab: () => {},
     registerEditorExtension: () => {},
   });
   await plugin.onload();
-  return { plugin, files, config, binaries, trashed, stored: () => stored };
+  return { plugin, files, config, binaries, trashed, commands, stored: () => stored };
 }
 
 // Deck: cover, 6 content slides (one visual), closing slide.
@@ -280,6 +281,16 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   assert.equal(ownOnly.plugin.data.recentImports[0].altLocalId, "b1");
   assert.equal(ownOnly.plugin.data.altToObsImport, "done", "checked, saved with the next save");
   assert.equal(ownOnly.stored(), beta, "nothing saved at load");
+  // 1.1.0 updated in place (1.x data, no 2.0.0 anywhere): nothing to say, and the next save keeps the check as done.
+  const v110 = { settings: { apiKey: "old-key", provider: "gemini", geminiModel: "gemma-3-27b-it", baseFolderPath: "Alt2Obsidian", language: "ko" }, recentImports: [] };
+  const inPlace = await makePlugin(v110);
+  assert.equal(inPlace.stored(), v110, "nothing saved at load");
+  n = notices.length;
+  await inPlace.plugin.showAltToObsNotices();
+  assert.equal(notices.length, n, "nothing to say");
+  await inPlace.plugin.savePluginData();
+  assert.equal(inPlace.stored().altToObsImport, "done", "the next save keeps the check as done");
+  assert.equal(inPlace.stored().settings.apiKey, "old-key", "1.x values stay in its own data (rollback)");
   // 1.x or beta data used after 2.0.0 (its data.json is newer): kept, and 2.0.0's older data stays out for good.
   const ownNewer = await makePlugin(beta, (config, mtimes) => {
     withAltToObs(config);
@@ -290,6 +301,48 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   assert.equal(ownNewer.plugin.data.pendingAltToObsNotice, undefined);
   assert.equal(ownNewer.stored().altToObsImport, "done", "saved right away: the decision holds");
   assert.equal(ownNewer.stored().settings.baseFolderPath, "Beta");
+  // The user is told once which file was left out, and how to import it anyway.
+  assert.equal(ownNewer.stored().pendingAltToObsKeptNotice, true);
+  n = notices.length;
+  await ownNewer.plugin.showAltToObsNotices();
+  assert.equal(notices.length, n + 1);
+  assert.ok(notices[n].includes(".obsidian/plugins/alt-to-obs/data.json") && notices[n].includes("가져오지 않았습니다") && notices[n].includes("'Import settings from version 2.0.0 (alt-to-obs)'"), notices[n]);
+  assert.equal(ownNewer.stored().pendingAltToObsKeptNotice, undefined, "told once");
+  await ownNewer.plugin.showAltToObsNotices();
+  assert.equal(notices.length, n + 1, "not again");
+  const command = ownNewer.commands.find((c) => c.id === "import-alt-to-obs-settings");
+  assert.equal(command?.name, "Import settings from version 2.0.0 (alt-to-obs)", "the command the notice names");
+  // The command (after its confirmation) imports now: the same import as a start, told once, done for good.
+  n = notices.length;
+  await ownNewer.plugin.importAltToObsNow();
+  assert.equal(ownNewer.plugin.data.settings.baseFolderPath, "Lectures", "2.0.0's data replaces this data");
+  assert.equal(ownNewer.plugin.vaultManager.getBasePath(), "Lectures", "the vault manager follows the imported folder");
+  assert.equal(ownNewer.plugin.data.recentImports[0].altLocalId, "n1");
+  assert.equal(ownNewer.stored().altToObsImport, "done");
+  assert.equal(ownNewer.stored().pendingAltToObsNotice, undefined, "told right away");
+  assert.equal(ownNewer.stored().settings.apiKey, undefined, "old API keys are not imported");
+  assert.ok(notices.length === n + 1 && notices[n].includes("가져왔습니다"), notices[n]);
+  assert.equal(ownNewer.config.get(OTHER_DATA), altToObsText, "2.0.0's data.json is not changed");
+  // Nothing there, or unreadable: said so; an unreadable one is retried on the next starts.
+  const nothing = await makePlugin(beta);
+  n = notices.length;
+  await nothing.plugin.importAltToObsNow();
+  assert.ok(notices.length === n + 1 && notices[n].includes("가져올 것이 없습니다"), notices[n]);
+  assert.equal(nothing.plugin.data.settings.baseFolderPath, "Beta");
+  assert.equal(nothing.stored().altToObsImport, "done");
+  const quietWarn = console.warn;
+  console.warn = () => {};
+  const unreadable = await makePlugin(beta, (config, mtimes) => {
+    config.set(OTHER_DATA, "{ not json");
+    mtimes.set(OTHER_DATA, 1000);
+    mtimes.set(OWN_DATA, 2000);
+  });
+  n = notices.length;
+  await unreadable.plugin.importAltToObsNow();
+  console.warn = quietWarn;
+  assert.ok(notices.length === n + 1 && notices[n].includes("읽지 못해"), notices[n]);
+  assert.equal(unreadable.plugin.data.settings.baseFolderPath, "Beta");
+  assert.equal(unreadable.stored().altToObsImport, "retry");
   // A 1.x or beta user who went on in 2.0.0 (its data.json is newer, or the times are unknown): 2.0.0's data comes along.
   const otherNewer = await makePlugin(beta, (config, mtimes) => {
     withAltToObs(config);
@@ -301,6 +354,13 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   assert.equal(otherNewer.stored().pendingAltToObsNotice, true);
   const noTimes = await makePlugin(beta, withAltToObs);
   assert.equal(noTimes.plugin.data.settings.baseFolderPath, "Lectures", "an unknown time counts as newer");
+  const sameTime = await makePlugin(beta, (config, mtimes) => {
+    withAltToObs(config);
+    mtimes.set(OTHER_DATA, 1500);
+    mtimes.set(OWN_DATA, 1500);
+  });
+  assert.equal(sameTime.plugin.data.settings.baseFolderPath, "Lectures", "the same time counts as newer");
+  assert.equal(sameTime.stored().pendingAltToObsKeptNotice, undefined);
   // No data at all: a fresh install.
   const fresh = await makePlugin(undefined);
   assert.equal(fresh.plugin.data.settings.baseFolderPath, "Alt2Obsidian", "default folder unchanged");
@@ -356,7 +416,7 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   n = notices.length;
   await staleBroken.plugin.showAltToObsNotices();
   assert.equal(notices.length, n, "nothing to say about older data that stays out");
-  console.log("PASS: 2.0.1 on the id alt2obsidian: 2.0.0's alt-to-obs data.json is imported once (read only, without old API keys) when it is newer than this folder's 1.x or beta data, which is kept otherwise; the user is told once; an unreadable one is retried on every start; while 2.0.0 is enabled it is warned about and no lecture PDF is redirected; its view tabs are converted once it is off");
+  console.log("PASS: 2.0.1 on the id alt2obsidian: 2.0.0's alt-to-obs data.json is imported once (read only, without old API keys) when it is newer than this folder's 1.x or beta data, which is kept otherwise (told once, with a command that imports it anyway); 1.1.0 in place saves the check with its next save; the user is told once; an unreadable one is retried on every start; while 2.0.0 is enabled it is warned about and no lecture PDF is redirected; its view tabs are converted once it is off");
 }
 
 const s = fakeSession("ok");
