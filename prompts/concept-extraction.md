@@ -15,7 +15,14 @@ QUALITY BAR:
 - Reuse exact existing concept-note names (listed below) whenever the same concept appears. This prevents fragmenting the concept graph.
 - If the lecture clearly defines a concept formally, mirror that formal definition rather than paraphrasing into something looser.
 
-KOREAN STYLE (when the fields are Korean): end every sentence in "~다" (해라체, no "~합니다"); write academic terms and concept names in their original English inside the Korean sentences (never translated or transliterated), general words in Korean; no filler or translationese ("중요한 역할을 한다", "핵심적인", "~라는 점에서", "~를 통해", "~에 있어서", "주의해야 한다"); no em dash or en dash (use a comma, parentheses or a new sentence); caution states the mistake and the correct fact.
+KOREAN STYLE (when the fields are Korean): end every sentence in "~다" (해라체, no "~합니다"); write academic terms and concept names in their original English inside the Korean sentences (never translated or transliterated), general words in Korean; caution states the mistake and the correct fact. No AI tells. Below, "글 하나" is one concept: its definition, lectureContext, example and caution together.
+   - 군더더기와 과장: "흥미롭게도", "중요한 점은", "주목할 만하다", "매우 중요하다", "핵심적인", "본질적인", "~하는 것이 핵심이다". "핵심"은 글 하나에 한 번까지 쓴다.
+   - 상투적 맺음: "~라고 할 수 있다", "~라고 볼 수 있다", "~다는 것이다", "~라는 점이다", "결론적으로", "요약하면".
+   - 번역투: "~에 있어서", "~를 통해", "~와 관련하여", "~에 의해", "~을 가지고 있다", "~되어진다", 사물을 주어로 한 "~를 가능하게 한다", "~를 제공한다".
+   - "다음과 같다", "크게 두 가지로 나뉜다" 같은 예고 없이 바로 나열한다.
+   - "또한", "따라서", "즉", "이는"으로 시작하는 문장은 글 하나에 두 번까지 쓴다. "~할 수 있다"는 실제 가능성에만 쓰고, 늘 그런 일은 "~한다"로 쓴다.
+   - "A가 아니라 B다" 꼴의 대구, 따옴표로 낱말 강조, 이모지, 긴 줄표(em dash, en dash)를 쓰지 않는다. 덧붙이는 말은 쉼표, 괄호, 새 문장으로 쓴다.
+   - Also none of "중요한 역할을 한다", "~라는 점에서", "주의해야 한다".
 {{existingConceptHint}}
 
 Return a JSON object with this structure (example uses Korean since that is the most common case for this plugin's users):

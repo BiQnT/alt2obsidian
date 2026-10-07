@@ -4,8 +4,9 @@
  * and for an even-split URL transcript; and the Skill and the plugin share
  * the same writing rules (the rule block of slide-commentary.system.md and
  * slide-commentary-batch.system.md is identical, and every prompt that writes
- * note text carries one list of AI tells); the Skill's overview prompts keep
- * the short shape and the plugin's lecture-level note prompts the whole note.
+ * note text, concept notes included, carries one list of AI tells); the
+ * Skill's overview prompts keep the short shape and the plugin's
+ * lecture-level note prompts the whole note.
  * Run: node test/test-skill-prompts.mjs            (compare)
  *      node test/test-skill-prompts.mjs --update   (re-record the golden file)
  */
@@ -82,9 +83,12 @@ const tellFiles = [
   "lecture-note-enhance-transcript.md",
   "lecture-note-from-material.md",
   "lecture-note-enhance-material.md",
+  "concept-extraction.md",
+  "concept-extraction-gists.md",
+  "concept-extraction-sections.md",
 ];
 for (const file of tellFiles) assert.equal(tells(file), sharedTells, `${file} carries the shared list of AI tells`);
-console.log(`PASS: the commentary, section, overview, summary and lecture note prompts share one list of AI tells (${tellFiles.length + 1} files)`);
+console.log(`PASS: the commentary, section, overview, summary, lecture note and concept prompts share one list of AI tells (${tellFiles.length + 1} files)`);
 
 // Two roles of the text written from the transcript or the PDF text: the Skill's
 // slide path puts a short overview above its per-slide commentary (summary-*.md,
