@@ -187,19 +187,26 @@ export interface CliImportHooks {
   onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
 }
 
-/** The plugin's id before the rename to Alt2Obs (2.0.0). Its folder is only ever read. */
-const LEGACY_PLUGIN_ID = "alt2obsidian";
+/**
+ * The id 2.0.0 was released under. From 2.0.1 the plugin has its directory
+ * id "alt2obsidian" again (spec D13), so to Obsidian 2.0.0 is another
+ * plugin: its folder is only ever read.
+ */
+const ALT_TO_OBS_ID = "alt-to-obs";
 
-/** View types of the plugin before the rename, and the ones that replace them. */
-const LEGACY_VIEW_TYPES: Record<string, string> = {
-  "alt2obsidian-sidebar": VIEW_TYPE_SIDEBAR,
-  "alt2obsidian-synced-viewer": VIEW_TYPE_SYNCED_VIEWER,
+/** View types of 2.0.0, and the ones that replace them (those of 1.x and the betas). */
+const ALT_TO_OBS_VIEW_TYPES: Record<string, string> = {
+  "alt-to-obs-sidebar": VIEW_TYPE_SIDEBAR,
+  "alt-to-obs-synced-viewer": VIEW_TYPE_SYNCED_VIEWER,
 };
 
-/** The old plugin's data.json: not there, there but unreadable, or its content. */
-type LegacyRead = { state: "missing" } | { state: "unreadable"; error: string } | { state: "ok"; data: Record<string, unknown> };
+/** 2.0.0's data.json: not there, there but unreadable, or its content; with its modification time when known. */
+type AltToObsRead =
+  | { state: "missing" }
+  | { state: "unreadable"; error: string; mtime: number | null }
+  | { state: "ok"; data: Record<string, unknown>; mtime: number | null };
 
-/** Saved data of the old plugin without the API keys of 1.x and 2.0.0-beta.3 (nothing reads them; they are not carried over). */
+/** Saved data without the API keys of 1.x and 2.0.0-beta.3 (nothing reads them; they are not carried over). */
 function withoutLegacyKeys(data: Record<string, unknown>): Record<string, unknown> {
   const settings = data.settings;
   if (!settings || typeof settings !== "object") return data;
@@ -279,6 +286,13 @@ export default class Alt2ObsPlugin extends Plugin {
       callback: () => new MigrationModal(this.app, this.planVaultMigration(), (plan) => this.applyVaultMigration(plan)).open(),
     });
 
+    // 2.0.0's data (id alt-to-obs) on request, e.g. after it was left out as older (spec D13).
+    this.addCommand({
+      id: "import-alt-to-obs-settings",
+      name: "Import settings from version 2.0.0 (alt-to-obs)",
+      callback: () => this.confirmAltToObsImport(),
+    });
+
     // Offered while a note or a PDF is open (the same test as the commands'); they say when it is not a lecture's.
     const noteOrPdfOpen = () => {
       const ext = this.app.workspace.getActiveFile()?.extension;
@@ -309,8 +323,8 @@ export default class Alt2ObsPlugin extends Plugin {
 
     // The login-shell lookup can take a moment: run it after startup.
     this.app.workspace.onLayoutReady(() => {
-      this.showRenameNotices().catch((e) => console.warn("[Alt2Obs] rename notice failed:", e));
-      this.adoptLegacyLeaves().catch((e) => console.warn("[Alt2Obs] old view tabs not converted:", e));
+      this.showAltToObsNotices().catch((e) => console.warn("[Alt2Obs] 2.0.0 notice failed:", e));
+      this.adoptAltToObsLeaves().catch((e) => console.warn("[Alt2Obs] 2.0.0 view tabs not converted:", e));
       this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obs] CLI default check failed:", e));
       this.pruneAttachRecords().catch((e) => console.warn("[Alt2Obs] attach record prune failed:", e));
       // Lecture PDFs opened from now on go to the Synced Viewer (setting
@@ -417,8 +431,9 @@ export default class Alt2ObsPlugin extends Plugin {
    */
   async onPdfOpened(file: TFile): Promise<void> {
     if (!/\.pdf$/i.test(file.path)) return;
-    // The old Alt2Obsidian plugin, still enabled, turns this PDF into its own viewer: two would race on one tab.
-    if (await this.legacyPluginEnabled()) return;
+    // 2.0.0 (id alt-to-obs), still enabled, would turn this PDF into its own viewer: two would race on one tab.
+    // It leaves PDFs alone too while this plugin is enabled, so none is redirected until it is off.
+    if (await this.altToObsEnabled()) return;
     const leaf = this.pdfLeafFor(file.path);
     const notePath = this.data.settings.openPdfInViewer
       ? await lectureNoteForPdf(file.path, {
@@ -2516,11 +2531,15 @@ export default class Alt2ObsPlugin extends Plugin {
   }
 
   async loadPluginData(): Promise<void> {
-    const own = (await this.loadData()) as (Record<string, unknown> & { legacyImportRetry?: unknown }) | null;
-    // The old plugin's data comes along on the first load after the rename to
-    // Alt2Obs (2.0.0), or on a later start when it could not be read before.
-    const legacy = !own || own.legacyImportRetry === true ? await this.readLegacyData() : null;
-    const imported = legacy?.state === "ok" ? withoutLegacyKeys(legacy.data) : null;
+    const own = (await this.loadData()) as (Record<string, unknown> & { altToObsImport?: unknown }) | null;
+    // 2.0.0 ran under the id alt-to-obs (spec D13). Its data comes along once:
+    // on the first start of 2.0.1 or later when it is the data to take (see
+    // altToObsIsNewer), or on a later start when it could not be read before.
+    const retry = own?.altToObsImport === "retry";
+    const altToObs = own?.altToObsImport === "done" ? null : await this.readAltToObsData();
+    const found = altToObs && altToObs.state !== "missing" ? altToObs : null;
+    const take = !!found && (retry || (await this.altToObsIsNewer(own, found.mtime)));
+    const imported = take && found?.state === "ok" ? withoutLegacyKeys(found.data) : null;
     const saved = (imported || own || {}) as Partial<PluginData> & Record<string, unknown>;
     this.data = Object.assign({}, DEFAULT_PLUGIN_DATA, saved);
     // Keep every 1.x value; add the 2.0 per-task settings (spec 4.2).
@@ -2528,6 +2547,9 @@ export default class Alt2ObsPlugin extends Plugin {
     this.data.settings = settings;
     // Removed in 2.0.0-beta.4 with the Gemini/Ollama providers.
     delete (this.data as { cliSwitchOffered?: boolean }).cliSwitchOffered;
+    // 2.0.0's flags for its own import from this folder mean nothing here.
+    delete (this.data as { legacyImportRetry?: boolean }).legacyImportRetry;
+    delete (this.data as { pendingRenameNotice?: boolean }).pendingRenameNotice;
     this.data.recentImports = Array.isArray(saved.recentImports) ? saved.recentImports : [];
     this.data.cliDetection = { ...(saved.cliDetection ?? {}) };
     this.data.usageTotals = {
@@ -2541,54 +2563,130 @@ export default class Alt2ObsPlugin extends Plugin {
     }
     if (removedFrom.length > 0) this.data.removedProviderNotice = removedFrom;
     if (filled.length > 0) this.data.pendingFilledNotice = describeFilled(filled);
-    this.legacyReadError = legacy?.state === "unreadable" ? legacy.error : null;
+    this.altToObsReadError = take && found?.state === "unreadable" ? found.error : null;
     if (imported) {
-      // Saved now, so the import happens once; the old plugin's folder is left as it is.
-      delete this.data.legacyImportRetry;
-      this.data.pendingRenameNotice = true;
+      // Saved now, so the import happens once; 2.0.0's folder is left as it is.
+      this.data.altToObsImport = "done";
+      this.data.pendingAltToObsNotice = true;
       await this.savePluginData();
-    } else if (legacy?.state === "unreadable") {
-      // Not a fresh install: whatever is saved from now on asks for another try next start.
-      this.data.legacyImportRetry = true;
-    } else if (legacy?.state === "missing" && own?.legacyImportRetry === true) {
-      // The old data is gone: nothing left to retry.
-      delete this.data.legacyImportRetry;
-      await this.savePluginData();
+    } else if (take) {
+      // Unreadable. Not a fresh install: whatever is saved from now on asks for another try next start.
+      this.data.altToObsImport = "retry";
+    } else {
+      this.data.altToObsImport = "done";
+      // 2.0.0's data left out because this data is newer: told once, with the command that imports it anyway.
+      if (found?.state === "ok") this.data.pendingAltToObsKeptNotice = true;
+      // Saved now when this decided something: 2.0.0's older data stays out for good, or nothing is left to retry.
+      if (found || retry) await this.savePluginData();
     }
   }
 
-  /** Why the old plugin's data.json could not be read on this start (shown once on layout ready); null when it was. */
-  private legacyReadError: string | null = null;
+  /**
+   * Command "Import settings from version 2.0.0 (alt-to-obs)": after the
+   * user confirms, 2.0.0's data.json replaces this plugin's settings and
+   * records now.
+   */
+  private async confirmAltToObsImport(): Promise<void> {
+    const answer = await choose(
+      this.app,
+      "2.0.0 설정 가져오기",
+      [
+        `${this.altToObsDir()}/data.json의 설정과 기록(CLI 경로, 사용량, 최근 노트, 첨부 기록)으로 지금 설정과 기록을 바꿉니다. 노트와 폴더는 그대로입니다.`,
+        "예전 API 키는 가져오지 않고, 2.0.0의 폴더는 바꾸지 않습니다.",
+      ],
+      [
+        { id: "import", text: "가져오기", cta: true },
+        { id: "cancel", text: "취소" },
+      ]
+    );
+    if (answer === "import") await this.importAltToObsNow();
+  }
 
   /**
-   * data.json of the plugin before the rename (id "alt2obsidian") in this
-   * vault's config folder, or null. Read only: the old folder is never
-   * changed or removed.
+   * 2.0.0's data.json replaces this plugin's data now, the way a start
+   * whose import is still to be retried takes it (see loadPluginData):
+   * read only, without old API keys, saved once; the user is told what
+   * happened.
    */
-  private async readLegacyData(): Promise<LegacyRead> {
-    const path = normalizePath(`${this.app.vault.configDir}/plugins/${LEGACY_PLUGIN_ID}/data.json`);
+  async importAltToObsNow(): Promise<void> {
+    this.data.altToObsImport = "retry";
+    await this.savePluginData();
+    await this.loadPluginData();
+    this.updateBasePath();
+    this.applyCommentHiding();
+    if (this.data.pendingAltToObsNotice || this.altToObsReadError !== null) await this.showAltToObsNotices();
+    else new Notice(`Alt2Obs: ${this.altToObsDir()}/data.json이 없어 가져올 것이 없습니다.`);
+  }
+
+  /** Why 2.0.0's data.json could not be read on this start (shown once on layout ready); null when it was. */
+  private altToObsReadError: string | null = null;
+
+  /** This plugin's folder in the config folder. */
+  private ownDir(): string {
+    return normalizePath(this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`);
+  }
+
+  /** 2.0.0's folder in this vault's config folder. */
+  private altToObsDir(): string {
+    return normalizePath(`${this.app.vault.configDir}/plugins/${ALT_TO_OBS_ID}`);
+  }
+
+  /**
+   * 2.0.0's data.json in this vault's config folder. Read only: that folder
+   * is never changed or removed. When 2.0.1 files were copied into it, it is
+   * this plugin's own folder and there is nothing to import.
+   */
+  private async readAltToObsData(): Promise<AltToObsRead> {
+    const dir = this.altToObsDir();
+    if (dir === this.ownDir()) return { state: "missing" };
+    const path = `${dir}/data.json`;
+    let mtime: number | null = null;
     try {
       if (!(await this.app.vault.adapter.exists(path))) return { state: "missing" };
+      mtime = await this.configMtime(path);
       const data: unknown = JSON.parse(await this.app.vault.adapter.read(path));
       if (data === null) return { state: "missing" };
-      if (typeof data === "object" && !Array.isArray(data)) return { state: "ok", data: data as Record<string, unknown> };
-      return { state: "unreadable", error: "설정 객체가 아님" };
+      if (typeof data === "object" && !Array.isArray(data)) return { state: "ok", data: data as Record<string, unknown>, mtime };
+      return { state: "unreadable", error: "설정 객체가 아님", mtime };
     } catch (e) {
-      console.warn("[Alt2Obs] the old Alt2Obsidian data could not be read:", e);
-      return { state: "unreadable", error: e instanceof Error ? e.message : String(e) };
+      console.warn("[Alt2Obs] the 2.0.0 (alt-to-obs) data could not be read:", e);
+      return { state: "unreadable", error: e instanceof Error ? e.message : String(e), mtime };
+    }
+  }
+
+  /** Modification time of a file in the config folder; null when unknown. */
+  private async configMtime(path: string): Promise<number | null> {
+    try {
+      return (await this.app.vault.adapter.stat(path))?.mtime ?? null;
+    } catch {
+      return null;
     }
   }
 
   /**
-   * Tabs of the old plugin's views that Obsidian kept (the Alt2Obs sidebar
-   * and Synced Viewer under the old view types) become the Alt2Obs views
-   * with the same state. Only when the old plugin is not enabled, so its
-   * own tabs are never taken over.
+   * 2.0.0's data is the one to take: this plugin has no data yet, or 2.0.0's
+   * data.json changed after this plugin's did. 2.0.0 imported the 1.x or
+   * beta data in this folder on its first start and went on from there, so
+   * its data is newer; only a data.json of this folder written later (1.x or
+   * a beta used again after 2.0.0) keeps it out. An unknown time counts as
+   * newer.
    */
-  async adoptLegacyLeaves(): Promise<number> {
-    if (await this.legacyPluginEnabled()) return 0;
+  private async altToObsIsNewer(own: unknown, altToObsMtime: number | null): Promise<boolean> {
+    if (!own) return true;
+    const ownMtime = await this.configMtime(`${this.ownDir()}/data.json`);
+    return altToObsMtime === null || ownMtime === null || altToObsMtime >= ownMtime;
+  }
+
+  /**
+   * Tabs of 2.0.0's views that Obsidian kept (the sidebar and the Synced
+   * Viewer under 2.0.0's view types) become this plugin's views with the
+   * same state. Only when 2.0.0 is not enabled, so its own tabs are never
+   * taken over.
+   */
+  async adoptAltToObsLeaves(): Promise<number> {
+    if (await this.altToObsEnabled()) return 0;
     let converted = 0;
-    for (const [oldType, newType] of Object.entries(LEGACY_VIEW_TYPES)) {
+    for (const [oldType, newType] of Object.entries(ALT_TO_OBS_VIEW_TYPES)) {
       for (const leaf of this.app.workspace.getLeavesOfType(oldType)) {
         await leaf.setViewState({ ...leaf.getViewState(), type: newType, active: false });
         converted++;
@@ -2597,48 +2695,64 @@ export default class Alt2ObsPlugin extends Plugin {
     return converted;
   }
 
-  /** The old Alt2Obsidian plugin is installed and enabled in this vault (read from the config folder). */
-  private async legacyPluginEnabled(): Promise<boolean> {
+  /**
+   * 2.0.0 is installed and enabled in this vault (read from the config
+   * folder): community-plugins.json lists alt-to-obs and that folder's
+   * manifest has that id (not 2.0.1 files copied into it).
+   */
+  private async altToObsEnabled(): Promise<boolean> {
     const { adapter, configDir } = this.app.vault;
     try {
       const enabled: unknown = JSON.parse(await adapter.read(normalizePath(`${configDir}/community-plugins.json`)));
-      if (!Array.isArray(enabled) || !enabled.includes(LEGACY_PLUGIN_ID)) return false;
-      const manifest = JSON.parse(await adapter.read(normalizePath(`${configDir}/plugins/${LEGACY_PLUGIN_ID}/manifest.json`))) as { id?: unknown };
-      return manifest.id === LEGACY_PLUGIN_ID;
+      if (!Array.isArray(enabled) || !enabled.includes(ALT_TO_OBS_ID)) return false;
+      const manifest = JSON.parse(await adapter.read(`${this.altToObsDir()}/manifest.json`)) as { id?: unknown };
+      return manifest.id === ALT_TO_OBS_ID;
     } catch {
       return false;
     }
   }
 
   /**
-   * After the rename to Alt2Obs: once after the old plugin's data was
-   * imported, and on every start while the old plugin is still enabled
-   * (both would turn lecture PDFs into a viewer, hide comments and so on).
+   * After the return to the id alt2obsidian (2.0.1): once after 2.0.0's data
+   * was imported, and on every start while 2.0.0 is still enabled (both
+   * would turn lecture PDFs into a viewer, hide comments and so on).
    */
-  async showRenameNotices(): Promise<void> {
-    if (this.legacyReadError !== null) {
+  async showAltToObsNotices(): Promise<void> {
+    if (this.altToObsReadError !== null) {
       new Notice(
-        `Alt2Obs: 이전 Alt2Obsidian 플러그인의 설정 파일(data.json)을 읽지 못해 가져오지 못했습니다: ${this.legacyReadError}. ` +
-          "Obsidian을 켤 때마다 다시 시도하고, 읽히면 그 설정과 기록으로 바꿉니다. 이전 플러그인의 폴더는 바꾸지 않습니다.",
+        `Alt2Obs: 2.0.0(플러그인 폴더 alt-to-obs)의 설정 파일(data.json)을 읽지 못해 가져오지 못했습니다: ${this.altToObsReadError}. ` +
+          "Obsidian을 켤 때마다 다시 시도하고, 읽히면 그 설정과 기록으로 바꿉니다. 그 폴더는 바꾸지 않습니다.",
         0
       );
-      this.legacyReadError = null;
+      this.altToObsReadError = null;
     }
-    if (this.data.pendingRenameNotice) {
+    // 2.0.0, while enabled, tells the user to remove "Alt2Obsidian": that is this plugin (its folder and id).
+    const notThis = "2.0.0이 Alt2Obsidian을 끄고 삭제하라고 알리면 이 플러그인을 가리키는 것이니 따르지 마세요.";
+    if (this.data.pendingAltToObsNotice) {
       new Notice(
-        "Alt2Obs: 이전 Alt2Obsidian 플러그인의 설정과 기록을 가져왔습니다. 노트와 폴더는 그대로입니다. " +
-          "설정 → 커뮤니티 플러그인에서 Alt2Obsidian을 끄고 삭제하세요. 두 플러그인이 함께 켜져 있는 동안 강의 PDF를 뷰어로 바꾸는 일은 이전 플러그인에 맡깁니다. " +
-          "이전 명령에 단축키를 지정했다면 Alt2Obs 명령에 다시 지정하세요.",
+        "Alt2Obs: 2.0.0(플러그인 폴더 alt-to-obs)의 설정과 기록을 가져왔습니다. 노트와 폴더는 그대로입니다. " +
+          "설정 → 커뮤니티 플러그인에서 버전이 2.0.0인 Alt2Obs를 끄고 삭제하세요. 2.0.0이 켜져 있는 동안은 두 플러그인 모두 강의 PDF를 뷰어로 바꾸지 않습니다. " +
+          `${notThis} 2.0.0 명령에 단축키를 지정했다면 다시 지정하세요.`,
         0
       );
-      delete this.data.pendingRenameNotice;
+      delete this.data.pendingAltToObsNotice;
       await this.savePluginData();
       return;
     }
-    if (await this.legacyPluginEnabled()) {
+    if (this.data.pendingAltToObsKeptNotice) {
       new Notice(
-        "Alt2Obs: 이전 Alt2Obsidian 플러그인이 아직 켜져 있습니다. 그동안 강의 PDF를 뷰어로 바꾸는 일은 이전 플러그인에 맡깁니다. " +
-          "설정 → 커뮤니티 플러그인에서 Alt2Obsidian을 끄고 삭제하세요.",
+        `Alt2Obs: 이 플러그인의 data.json이 2.0.0의 ${this.altToObsDir()}/data.json보다 나중에 바뀌어, 2.0.0의 설정과 기록은 가져오지 않았습니다. ` +
+          "2.0.0의 것을 쓰려면 명령 팔레트에서 'Import settings from version 2.0.0 (alt-to-obs)'를 실행하세요(지금 설정과 기록을 그것으로 바꿈). " +
+          "필요 없으면 버전이 2.0.0인 Alt2Obs를 끄고 삭제하세요.",
+        0
+      );
+      delete this.data.pendingAltToObsKeptNotice;
+      await this.savePluginData();
+    }
+    if (await this.altToObsEnabled()) {
+      new Notice(
+        "Alt2Obs: 2.0.0(플러그인 폴더 alt-to-obs)이 아직 켜져 있습니다. 그동안 두 플러그인 모두 강의 PDF를 뷰어로 바꾸지 않습니다. " +
+          `설정 → 커뮤니티 플러그인에서 버전이 2.0.0인 Alt2Obs를 끄고 삭제하세요. ${notThis}`,
         15000
       );
     }

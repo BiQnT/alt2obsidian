@@ -51,7 +51,7 @@ function mmss(ms: number): string {
   return h > 0 ? `${h}:${m}:${sec}` : `${m}:${sec}`;
 }
 
-export const VIEW_TYPE_SYNCED_VIEWER = "alt-to-obs-synced-viewer";
+export const VIEW_TYPE_SYNCED_VIEWER = "alt2obsidian-synced-viewer";
 
 interface SyncedViewerState {
   mdPath: string | null;
