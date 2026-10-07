@@ -147,7 +147,7 @@ A slide lecture opens in the [Synced Viewer](#synced-viewer) when it is done.
 
 ### Importing again
 
-Importing a lecture again regenerates only what changed. A slide whose text hash and image signal are both unchanged keeps its commentary (setting **바뀐 슬라이드만 다시 생성**, regenerate only changed slides). Before the note is written, **기존 노트 업데이트** (update existing note) lists the added and removed sections and concepts and the slide changes; select **업데이트** (update) or **취소**.
+Importing a lecture again regenerates only what changed. A slide whose text hash and image signal are both unchanged keeps its commentary (setting **바뀐 슬라이드만 다시 생성**, regenerate only changed slides). Kept commentary keeps the style it was written in, so a note made before 2.0.2 mixes the older "~합니다" commentary of unchanged slides with the plain "~다" style of the new ones. To rewrite a whole note in the current style, turn off **바뀐 슬라이드만 다시 생성** in the settings, import the lecture again, then turn the setting back on. Every slide (every section of a summary note) is generated again, so the import costs about as much as the first one; a slide that fails keeps its earlier commentary. Before the note is written, **기존 노트 업데이트** (update existing note) lists the added and removed sections and concepts and the slide changes; select **업데이트** (update) or **취소**.
 
 If more than half of the existing slides do not match the new deck, you may be importing a different lecture onto this note. The dialog then asks you to tick a box before it updates, and the memos of unmatched slides move to `## 🗑️ 삭제된 슬라이드 (orphan)` at the end of the note.
 
@@ -475,7 +475,7 @@ On Obsidian 1.13 and later the tab is drawn from setting definitions, so its set
 | **슬라이드당 전사 상한 (자)** (transcript cap per slide, characters) | Transcript kept per slide after removing fillers and repeats | 1200 |
 | **강의당 토큰 상한** (token cap per lecture) | Stop before starting when the estimate is over it; 0 means no cap | 0 |
 | **CLI 호출 제한 시간 (초)** (CLI timeout, seconds) | A call over this is stopped; a timed-out call with more than one slide is tried once more in two halves. Longer for calls with more than 8 slides or with images (minimum 30) | 300 |
-| **바뀐 슬라이드만 다시 생성** (regenerate only changed slides) | Reuse commentary when a slide's text hash and image signal are unchanged; summary notes reuse unchanged sections | on |
+| **바뀐 슬라이드만 다시 생성** (regenerate only changed slides) | Reuse commentary when a slide's text hash and image signal are unchanged; summary notes reuse unchanged sections. Turn it off for one import to rewrite a note in the current style | on |
 | **핵심 다이어그램 이미지 저장** (save key diagram images) | Save up to 8 diagram-heavy slides per lecture to `Attachments/` and embed them | on |
 | **누적 사용량** (total usage) | Lectures, calls, tokens and images so far; **초기화** (reset) clears it | |
 | **관리 주석 숨기기** (hide managed comments) | Hide `<!-- alt2obs:... -->` lines in Live Preview and the viewer | on |
