@@ -350,17 +350,18 @@ export interface PluginData {
   /** Lines of the once-only Notice about empty model/effort filled with the task defaults. */
   pendingFilledNotice?: string[];
   /**
-   * This data was imported from the plugin before the rename (Alt2Obsidian,
-   * id "alt2obsidian") on the first load of Alt2Obs: the user is told once
-   * and asked to disable and remove the old plugin.
+   * This data was imported from 2.0.0, released under the id "alt-to-obs"
+   * (spec D13): the user is told once and asked to disable and remove it.
    */
-  pendingRenameNotice?: boolean;
+  pendingAltToObsNotice?: boolean;
   /**
-   * The old plugin's data.json was there but could not be read when this
-   * data started: every start tries again, and data it can read replaces
-   * this data (then the flag goes).
+   * The check for 2.0.0's data.json (`<configDir>/plugins/alt-to-obs/`).
+   * Missing: not made yet (data of 1.x or a beta, or a fresh install not
+   * saved yet). "done": made (imported, this data kept, or nothing there).
+   * "retry": 2.0.0's data was the one to take but could not be read; every
+   * start tries again, and data it can read replaces this data.
    */
-  legacyImportRetry?: boolean;
+  altToObsImport?: "done" | "retry";
   /**
    * The model id each requested model resolved to on its last real run
    * (Claude: the modelUsage key of the CLI result), keyed by

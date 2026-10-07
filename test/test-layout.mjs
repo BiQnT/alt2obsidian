@@ -89,7 +89,9 @@ function makeVault(initial) {
       getMarkdownFiles: () => [...store.keys()].filter((p) => p.endsWith(".md")).map(tfile),
       getAbstractFileByPath: (p) => (store.has(p) ? tfile(p) : null),
       createFolder: async () => {},
-      adapter: {},
+      configDir: ".obsidian",
+      // No 2.0.0 (alt-to-obs) data in this vault's config folder.
+      adapter: { exists: async () => false },
     },
     metadataCache: {
       on: () => ({}),
@@ -129,7 +131,7 @@ const plugin = new Plugin();
 let saved = { recentImports: [{ url: "", title: "x", subject: "CSED311", path: "Alt2Obsidian/CSED311/Lec1.md", pdfPath: "Alt2Obsidian/CSED311/Lec1.pdf", date: "2026-09-01", parseQuality: "full" }] };
 Object.assign(plugin, {
   app,
-  manifest: { dir: ".obsidian/plugins/alt-to-obs" },
+  manifest: { dir: ".obsidian/plugins/alt2obsidian" },
   loadData: async () => saved,
   saveData: async (d) => void (saved = JSON.parse(JSON.stringify(d))),
   registerView: () => {},

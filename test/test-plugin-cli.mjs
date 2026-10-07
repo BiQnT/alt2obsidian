@@ -39,6 +39,8 @@ function frontmatterOf(content) {
 function makeApp() {
   const files = new Map();
   const config = new Map();
+  // Modification times of config files by path (adapter.stat).
+  const mtimes = new Map();
   // Binary contents by path (PDFs); a path without one reads as 8 zero bytes.
   const binaries = new Map();
   // Paths moved to the trash.
@@ -80,6 +82,8 @@ function makeApp() {
         mkdir: async () => {},
         write: async (p, c) => void config.set(p, c),
         read: async (p) => config.get(p),
+        // Modification times only for the paths a test gives one.
+        stat: async (p) => (mtimes.has(p) ? { type: "file", ctime: 0, mtime: mtimes.get(p), size: 0 } : null),
       },
     },
     metadataCache: {
@@ -112,18 +116,18 @@ function makeApp() {
     },
     workspace: { onLayoutReady: () => {} },
   };
-  return { app, files, config, binaries, trashed };
+  return { app, files, config, mtimes, binaries, trashed };
 }
 
-/** `setup(config)` runs before onload (files in the vault's config folder). */
-async function makePlugin(saved, setup) {
-  const { app, files, config, binaries, trashed } = makeApp();
-  setup?.(config);
+/** `setup(config, mtimes)` runs before onload (files in the vault's config folder); `dir` is the plugin's folder. */
+async function makePlugin(saved, setup, dir = ".obsidian/plugins/alt2obsidian") {
+  const { app, files, config, mtimes, binaries, trashed } = makeApp();
+  setup?.(config, mtimes);
   const plugin = new Plugin();
   let stored = saved;
   Object.assign(plugin, {
     app,
-    manifest: { dir: ".obsidian/plugins/alt-to-obs" },
+    manifest: { dir },
     loadData: async () => stored,
     saveData: async (d) => void (stored = JSON.parse(JSON.stringify(d))),
     registerView: () => {},
@@ -181,110 +185,178 @@ assert.equal(insertFrontmatterLine('---\nalt_local_id: null\n---\nx', 'alt_local
 assert.equal(insertFrontmatterLine('---\nalt_local_id: ~\n---\nx', 'alt_local_id: "id"'), '---\nalt_local_id: "id"\n---\nx', "~ is empty");
 console.log("PASS: frontmatter line insert keeps the YAML text as it is");
 
-// Rename to Alt2Obs (id alt-to-obs): the old plugin's data.json is imported once, read only.
+// 2.0.1 is back on the directory id alt2obsidian (spec D13): 2.0.0's data (id alt-to-obs) is imported once, read only.
 {
-  const LEGACY_DATA = ".obsidian/plugins/alt2obsidian/data.json";
-  const legacy = {
+  const OTHER_DATA = ".obsidian/plugins/alt-to-obs/data.json";
+  const OWN_DATA = ".obsidian/plugins/alt2obsidian/data.json";
+  const altToObs = {
     // 1.x and beta.3 API keys in the old data are left behind.
     settings: { baseFolderPath: "Lectures", settingsVersion: 3, apiKey: "old-key", geminiApiKey: "g-key", claudeApiKey: "c-key", tasks: { commentary: { provider: "codex-cli", model: "", effort: "high" } } },
     recentImports: [{ url: "", title: "L1", subject: "S", path: "Lectures/S/Lectures/L1.md", date: "2026-10-01", parseQuality: "full", altLocalId: "n1" }],
     cliDetection: { codex: { path: "/opt/codex", version: "0.155.1", detectedAt: "2026-10-01T00:00:00.000Z", featuresOk: true } },
     attachedCopies: [{ path: "Lectures/S/Lectures/L1.pdf", size: 3, sha1: "abc" }],
+    // 2.0.0's own flags for its import from the alt2obsidian folder.
+    pendingRenameNotice: true,
+    legacyImportRetry: true,
   };
-  const legacyText = JSON.stringify(legacy, null, 2);
-  const withLegacy = (config) => config.set(LEGACY_DATA, legacyText);
-  const imported = await makePlugin(undefined, withLegacy);
+  const altToObsText = JSON.stringify(altToObs, null, 2);
+  const withAltToObs = (config) => config.set(OTHER_DATA, altToObsText);
+  // Data of a 1.x or beta install in this plugin's own folder.
+  const beta = { settings: { baseFolderPath: "Beta", settingsVersion: 3 }, recentImports: [{ url: "", title: "B1", subject: "S", path: "Beta/S/Lectures/B1.md", date: "2026-09-01", parseQuality: "full", altLocalId: "b1" }] };
+
+  // A 2.0.0 user without data in this folder (it was removed, or never there): 2.0.0's data comes along.
+  const imported = await makePlugin(undefined, withAltToObs);
   const d = imported.plugin.data;
   assert.equal(d.settings.baseFolderPath, "Lectures", "settings come along");
   assert.deepEqual(d.settings.tasks.commentary, { provider: "codex-cli", model: "", effort: "high" });
   assert.equal(d.recentImports[0].altLocalId, "n1");
   assert.equal(d.cliDetection.codex.path, "/opt/codex");
-  assert.deepEqual(d.attachedCopies, legacy.attachedCopies, "attach records come along (the copies stay recoverable)");
-  assert.equal(imported.stored().settings.baseFolderPath, "Lectures", "saved as Alt2Obs data right away, so the import happens once");
-  assert.equal(imported.stored().pendingRenameNotice, true);
+  assert.deepEqual(d.attachedCopies, altToObs.attachedCopies, "attach records come along (the copies stay recoverable)");
+  assert.equal(imported.stored().settings.baseFolderPath, "Lectures", "saved right away, so the import happens once");
+  assert.equal(imported.stored().pendingAltToObsNotice, true);
+  assert.equal(imported.stored().altToObsImport, "done");
   for (const k of ["apiKey", "geminiApiKey", "claudeApiKey"]) {
     assert.equal(d.settings[k], undefined, `${k} is not imported`);
     assert.equal(imported.stored().settings[k], undefined, `${k} is not saved`);
   }
-  assert.equal(imported.config.get(LEGACY_DATA), legacyText, "the old data.json is not changed");
-  assert.deepEqual([...imported.config.keys()], [LEGACY_DATA], "nothing written to the config folder");
-  // The old plugin is still enabled: one notice that says what came along and to remove it, then a warning per start.
-  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt2obsidian", "alt-to-obs"]));
-  imported.config.set(".obsidian/plugins/alt2obsidian/manifest.json", JSON.stringify({ id: "alt2obsidian", name: "Alt2Obsidian" }));
+  for (const k of ["pendingRenameNotice", "legacyImportRetry"]) assert.equal(imported.stored()[k], undefined, `2.0.0's ${k} is dropped`);
+  assert.equal(imported.config.get(OTHER_DATA), altToObsText, "2.0.0's data.json is not changed");
+  assert.deepEqual([...imported.config.keys()], [OTHER_DATA], "nothing written to the config folder");
+  // Once only: 2.0.0's data changed later (still enabled and used) does not come along again.
+  const again = await makePlugin(imported.stored(), (config, mtimes) => {
+    config.set(OTHER_DATA, JSON.stringify({ settings: { baseFolderPath: "Later" } }));
+    mtimes.set(OTHER_DATA, 9000);
+    mtimes.set(OWN_DATA, 1000);
+  });
+  assert.equal(again.plugin.data.settings.baseFolderPath, "Lectures", "imported once");
+
+  // 2.0.0 still enabled: one notice that says what came along and to remove 2.0.0, then a warning per start.
+  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt-to-obs", "alt2obsidian"]));
+  imported.config.set(".obsidian/plugins/alt-to-obs/manifest.json", JSON.stringify({ id: "alt-to-obs", name: "Alt2Obs", version: "2.0.0" }));
   let n = notices.length;
-  await imported.plugin.showRenameNotices();
+  await imported.plugin.showAltToObsNotices();
   assert.equal(notices.length, n + 1);
-  assert.ok(notices[n].includes("가져왔습니다") && notices[n].includes("Alt2Obsidian을 끄고 삭제하세요"), notices[n]);
-  assert.equal(imported.stored().pendingRenameNotice, undefined, "told once");
+  assert.ok(notices[n].includes("가져왔습니다") && notices[n].includes("버전이 2.0.0인 Alt2Obs를 끄고 삭제하세요") && notices[n].includes("따르지 마세요"), notices[n]);
+  assert.equal(imported.stored().pendingAltToObsNotice, undefined, "told once");
   n = notices.length;
-  await imported.plugin.showRenameNotices();
-  assert.ok(notices.length === n + 1 && notices[n].includes("아직 켜져 있습니다"), "the old plugin enabled: warned on start");
-  // While it is enabled, lecture PDFs are left to the old plugin (no race on one tab) and its tabs are not taken over.
+  await imported.plugin.showAltToObsNotices();
+  assert.ok(notices.length === n + 1 && notices[n].includes("아직 켜져 있습니다") && notices[n].includes("따르지 마세요"), "2.0.0 enabled: warned on start");
+  // While it is enabled, lecture PDFs are not redirected (no race on one tab) and its tabs are not taken over.
   const ws = imported.plugin.app.workspace;
   ws.getMostRecentLeaf = ws.getLeavesOfType = () => {
-    throw new Error("no redirect while the old plugin is enabled");
+    throw new Error("no redirect while 2.0.0 is enabled");
   };
   await imported.plugin.onPdfOpened(Object.assign(new TFile(), { path: "Lectures/S/Lectures/L1.pdf" }));
-  assert.equal(await imported.plugin.adoptLegacyLeaves(), 0);
-  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt-to-obs"]));
+  assert.equal(await imported.plugin.adoptAltToObsLeaves(), 0);
+  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt2obsidian"]));
   n = notices.length;
-  await imported.plugin.showRenameNotices();
+  await imported.plugin.showAltToObsNotices();
   assert.equal(notices.length, n, "disabled: nothing to say");
-  // Disabled: tabs Obsidian kept under the old view types become the Alt2Obs views with the same state.
+  // Disabled: tabs Obsidian kept under 2.0.0's view types become this plugin's views with the same state.
   const viewStates = [];
   const oldLeaf = (type, state) => ({ getViewState: () => ({ type, state, pinned: true }), setViewState: async (vs) => void viewStates.push(vs) });
-  const oldLeaves = { "alt2obsidian-sidebar": [oldLeaf("alt2obsidian-sidebar", {})], "alt2obsidian-synced-viewer": [oldLeaf("alt2obsidian-synced-viewer", { mdPath: "L/a.md", pdfPath: "L/a.pdf" })] };
+  const oldLeaves = { "alt-to-obs-sidebar": [oldLeaf("alt-to-obs-sidebar", {})], "alt-to-obs-synced-viewer": [oldLeaf("alt-to-obs-synced-viewer", { mdPath: "L/a.md", pdfPath: "L/a.pdf" })] };
   ws.getLeavesOfType = (type) => oldLeaves[type] ?? [];
-  assert.equal(await imported.plugin.adoptLegacyLeaves(), 2);
+  assert.equal(await imported.plugin.adoptAltToObsLeaves(), 2);
   assert.deepEqual(viewStates, [
-    { type: "alt-to-obs-sidebar", state: {}, pinned: true, active: false },
-    { type: "alt-to-obs-synced-viewer", state: { mdPath: "L/a.md", pdfPath: "L/a.pdf" }, pinned: true, active: false },
+    { type: "alt2obsidian-sidebar", state: {}, pinned: true, active: false },
+    { type: "alt2obsidian-synced-viewer", state: { mdPath: "L/a.md", pdfPath: "L/a.pdf" }, pinned: true, active: false },
   ]);
-  // New files copied into the old folder: that folder is Alt2Obs now, not the old plugin.
-  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt2obsidian"]));
-  imported.config.set(".obsidian/plugins/alt2obsidian/manifest.json", JSON.stringify({ id: "alt-to-obs", name: "Alt2Obs" }));
-  await imported.plugin.showRenameNotices();
-  assert.equal(notices.length, n, "no warning for a folder that holds Alt2Obs");
+  assert.equal(VIEW_TYPE_SYNCED_VIEWER, "alt2obsidian-synced-viewer", "the view types of 1.x and the betas again");
+  // 2.0.1 files copied into 2.0.0's folder: that folder is not 2.0.0 any more.
+  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt-to-obs"]));
+  imported.config.set(".obsidian/plugins/alt-to-obs/manifest.json", JSON.stringify({ id: "alt2obsidian", name: "Alt2Obs" }));
+  await imported.plugin.showAltToObsNotices();
+  assert.equal(notices.length, n, "no warning for a folder that holds this plugin");
+  // This plugin installed in that folder: its data there is its own, nothing to import or to remove.
+  const inOtherFolder = await makePlugin(altToObs, withAltToObs, ".obsidian/plugins/alt-to-obs");
+  assert.equal(inOtherFolder.plugin.data.settings.baseFolderPath, "Lectures");
+  assert.equal(inOtherFolder.plugin.data.pendingAltToObsNotice, undefined, "never told to remove its own folder");
+  assert.equal(inOtherFolder.stored(), altToObs, "nothing saved at load");
 
-  // Alt2Obs data of its own wins; the old data is not read again.
-  const own = await makePlugin({ settings: { baseFolderPath: "Own", settingsVersion: 3 } }, withLegacy);
-  assert.equal(own.plugin.data.settings.baseFolderPath, "Own");
-  assert.equal(own.plugin.data.pendingRenameNotice, undefined);
-  // No old data, or unreadable: a fresh install.
+  // 1.x or beta data in this folder and no 2.0.0: kept as it is, nothing saved at load.
+  const ownOnly = await makePlugin(beta);
+  assert.equal(ownOnly.plugin.data.settings.baseFolderPath, "Beta");
+  assert.equal(ownOnly.plugin.data.recentImports[0].altLocalId, "b1");
+  assert.equal(ownOnly.plugin.data.altToObsImport, "done", "checked, saved with the next save");
+  assert.equal(ownOnly.stored(), beta, "nothing saved at load");
+  // 1.x or beta data used after 2.0.0 (its data.json is newer): kept, and 2.0.0's older data stays out for good.
+  const ownNewer = await makePlugin(beta, (config, mtimes) => {
+    withAltToObs(config);
+    mtimes.set(OTHER_DATA, 1000);
+    mtimes.set(OWN_DATA, 2000);
+  });
+  assert.equal(ownNewer.plugin.data.settings.baseFolderPath, "Beta", "the newer own data is kept");
+  assert.equal(ownNewer.plugin.data.pendingAltToObsNotice, undefined);
+  assert.equal(ownNewer.stored().altToObsImport, "done", "saved right away: the decision holds");
+  assert.equal(ownNewer.stored().settings.baseFolderPath, "Beta");
+  // A 1.x or beta user who went on in 2.0.0 (its data.json is newer, or the times are unknown): 2.0.0's data comes along.
+  const otherNewer = await makePlugin(beta, (config, mtimes) => {
+    withAltToObs(config);
+    mtimes.set(OTHER_DATA, 2000);
+    mtimes.set(OWN_DATA, 1000);
+  });
+  assert.equal(otherNewer.plugin.data.settings.baseFolderPath, "Lectures", "2.0.0 went on from the beta data");
+  assert.equal(otherNewer.plugin.data.recentImports[0].altLocalId, "n1");
+  assert.equal(otherNewer.stored().pendingAltToObsNotice, true);
+  const noTimes = await makePlugin(beta, withAltToObs);
+  assert.equal(noTimes.plugin.data.settings.baseFolderPath, "Lectures", "an unknown time counts as newer");
+  // No data at all: a fresh install.
   const fresh = await makePlugin(undefined);
-  assert.equal(fresh.plugin.data.settings.baseFolderPath, "Alt2Obsidian", "default folder unchanged by the rename");
+  assert.equal(fresh.plugin.data.settings.baseFolderPath, "Alt2Obsidian", "default folder unchanged");
   assert.equal(fresh.stored(), undefined, "nothing imported, nothing saved at load");
-  // An old data.json that cannot be read: not a fresh install. The user is told, and every
+
+  // A 2.0.0 data.json that cannot be read: not a fresh install. The user is told, and every
   // start tries again until it reads (then its data replaces what was saved meanwhile) or is gone.
   const warn = console.warn;
   const warned = [];
   console.warn = (...args) => warned.push(args.join(" "));
-  const broken = await makePlugin(undefined, (config) => config.set(LEGACY_DATA, "{ not json"));
-  assert.ok(warned.some((w) => w.includes("could not be read")), "an unreadable old data.json is reported in the console");
-  assert.equal(broken.plugin.data.pendingRenameNotice, undefined);
+  const broken = await makePlugin(undefined, (config) => config.set(OTHER_DATA, "{ not json"));
+  assert.ok(warned.some((w) => w.includes("could not be read")), "an unreadable 2.0.0 data.json is reported in the console");
+  assert.equal(broken.plugin.data.pendingAltToObsNotice, undefined);
   assert.deepEqual(broken.plugin.data.recentImports, []);
   assert.equal(broken.stored(), undefined, "nothing saved at load");
-  assert.equal(broken.plugin.data.legacyImportRetry, true);
+  assert.equal(broken.plugin.data.altToObsImport, "retry");
   n = notices.length;
-  await broken.plugin.showRenameNotices();
+  await broken.plugin.showAltToObsNotices();
   assert.ok(notices.length === n + 1 && notices[n].includes("읽지 못해") && notices[n].includes("다시 시도"), notices[n]);
   broken.plugin.data.settings.language = "en";
   await broken.plugin.savePluginData();
-  assert.equal(broken.stored().legacyImportRetry, true, "a later save keeps asking for another try");
-  const stillBroken = await makePlugin(broken.stored(), (config) => config.set(LEGACY_DATA, "{ not json"));
+  assert.equal(broken.stored().altToObsImport, "retry", "a later save keeps asking for another try");
+  const stillBroken = await makePlugin(broken.stored(), (config, mtimes) => {
+    config.set(OTHER_DATA, "{ not json");
+    // Saved after the broken file: the retry still stands.
+    mtimes.set(OTHER_DATA, 1000);
+    mtimes.set(OWN_DATA, 2000);
+  });
   assert.equal(stillBroken.plugin.data.settings.language, "en", "until then the saved data is used");
-  assert.equal(stillBroken.plugin.data.legacyImportRetry, true);
-  const readable = await makePlugin(broken.stored(), withLegacy);
-  console.warn = warn;
+  assert.equal(stillBroken.plugin.data.altToObsImport, "retry");
+  const readable = await makePlugin(broken.stored(), (config, mtimes) => {
+    withAltToObs(config);
+    mtimes.set(OTHER_DATA, 1000);
+    mtimes.set(OWN_DATA, 2000);
+  });
   assert.equal(readable.plugin.data.settings.baseFolderPath, "Lectures", "readable now: imported");
   assert.equal(readable.plugin.data.recentImports[0].altLocalId, "n1");
-  assert.equal(readable.stored().legacyImportRetry, undefined);
-  assert.equal(readable.stored().pendingRenameNotice, true);
+  assert.equal(readable.stored().altToObsImport, "done");
+  assert.equal(readable.stored().pendingAltToObsNotice, true);
   assert.equal(readable.stored().settings.apiKey, undefined);
   const gone = await makePlugin(broken.stored());
   assert.equal(gone.plugin.data.settings.language, "en");
-  assert.equal(gone.stored().legacyImportRetry, undefined, "old data gone: nothing left to retry");
-  console.log("PASS: rename to Alt2Obs: the old Alt2Obsidian data.json is imported once (read only, without old API keys), the user is told once; an unreadable one is retried on every start; while the old plugin is enabled it is warned about and handles lecture PDFs alone; old view tabs are converted once it is off");
+  assert.equal(gone.stored().altToObsImport, "done", "2.0.0 data gone: nothing left to retry");
+  // Unreadable but older than this folder's 1.x or beta data: that data is kept, no retry.
+  const staleBroken = await makePlugin(beta, (config, mtimes) => {
+    config.set(OTHER_DATA, "{ not json");
+    mtimes.set(OTHER_DATA, 1000);
+    mtimes.set(OWN_DATA, 2000);
+  });
+  console.warn = warn;
+  assert.equal(staleBroken.plugin.data.settings.baseFolderPath, "Beta");
+  assert.equal(staleBroken.stored().altToObsImport, "done");
+  n = notices.length;
+  await staleBroken.plugin.showAltToObsNotices();
+  assert.equal(notices.length, n, "nothing to say about older data that stays out");
+  console.log("PASS: 2.0.1 on the id alt2obsidian: 2.0.0's alt-to-obs data.json is imported once (read only, without old API keys) when it is newer than this folder's 1.x or beta data, which is kept otherwise; the user is told once; an unreadable one is retried on every start; while 2.0.0 is enabled it is warned about and no lecture PDF is redirected; its view tabs are converted once it is off");
 }
 
 const s = fakeSession("ok");

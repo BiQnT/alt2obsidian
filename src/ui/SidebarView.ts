@@ -30,7 +30,7 @@ function formatLectureDate(date: string | null): string {
   return m ? `${Number(m[1])}월 ${Number(m[2])}일` : "날짜 없음";
 }
 
-export const VIEW_TYPE_SIDEBAR = "alt-to-obs-sidebar";
+export const VIEW_TYPE_SIDEBAR = "alt2obsidian-sidebar";
 
 export class Alt2ObsSidebarView extends ItemView {
   private plugin: Alt2ObsPlugin;
