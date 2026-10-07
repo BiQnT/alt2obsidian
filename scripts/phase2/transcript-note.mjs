@@ -342,8 +342,15 @@ function jsonValueText(v) {
     return v.map(jsonValueText).join(",");
   return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
 }
+function withoutControlChars(text) {
+  let out = "";
+  for (const ch of text)
+    if (ch.charCodeAt(0) > 31)
+      out += ch;
+  return out;
+}
 function sanitizeFilename(name) {
-  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").trim();
+  return withoutControlChars(name).replace(/[<>:"/\\|?*]/g, "").replace(/\.+$/, "").trim();
 }
 function formatDate(date) {
   const d = date || /* @__PURE__ */ new Date();
@@ -559,7 +566,7 @@ function parseConceptName(name) {
   return HANGUL.test(full) ? { full, english: null, korean: full, aliases: [] } : { full, english: full, korean: null, aliases: [full] };
 }
 function conceptKey(text) {
-  return text.normalize("NFC").toLowerCase().replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").replace(/[\s_-]+/g, "");
+  return withoutControlChars(text.normalize("NFC").toLowerCase()).replace(/[<>:"/\\|?*]/g, "").replace(/\.+$/, "").replace(/[\s_-]+/g, "");
 }
 var MINOR_WORDS = /* @__PURE__ */ new Set(["a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "vs", "with"]);
 function initials(expansion, splitHyphens) {

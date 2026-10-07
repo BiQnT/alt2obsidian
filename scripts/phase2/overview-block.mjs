@@ -67,6 +67,15 @@ var DEFAULT_PLUGIN_DATA = {
 var OVERVIEW_BLOCK_START = "<!-- alt2obs:overview start -->";
 var OVERVIEW_BLOCK_END = "<!-- alt2obs:overview end -->";
 
+// src/utils/helpers.ts
+function withoutControlChars(text) {
+  let out = "";
+  for (const ch of text)
+    if (ch.charCodeAt(0) > 31)
+      out += ch;
+  return out;
+}
+
 // src/core/conceptNames.ts
 var HANGUL = /[\uAC00-\uD7A3\u3131-\u318E]/;
 function isAcronym(text) {
@@ -89,7 +98,7 @@ function parseConceptName(name) {
   return HANGUL.test(full) ? { full, english: null, korean: full, aliases: [] } : { full, english: full, korean: null, aliases: [full] };
 }
 function conceptKey(text) {
-  return text.normalize("NFC").toLowerCase().replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").replace(/[\s_-]+/g, "");
+  return withoutControlChars(text.normalize("NFC").toLowerCase()).replace(/[<>:"/\\|?*]/g, "").replace(/\.+$/, "").replace(/[\s_-]+/g, "");
 }
 var MINOR_WORDS = /* @__PURE__ */ new Set(["a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "vs", "with"]);
 function initials(expansion, splitHyphens) {

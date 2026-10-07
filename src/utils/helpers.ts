@@ -16,10 +16,16 @@ export function slugify(text: string): string {
     .trim();
 }
 
+/** The text without control characters (U+0000 to U+001F), which a file name cannot hold. */
+export function withoutControlChars(text: string): string {
+  let out = "";
+  for (const ch of text) if (ch.charCodeAt(0) > 0x1f) out += ch;
+  return out;
+}
+
 export function sanitizeFilename(name: string): string {
-  return name
-    // eslint-disable-next-line no-control-regex -- control characters are not allowed in file names
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+  return withoutControlChars(name)
+    .replace(/[<>:"/\\|?*]/g, "")
     .replace(/\.+$/, "")
     .trim();
 }

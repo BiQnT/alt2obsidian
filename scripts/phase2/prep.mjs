@@ -1214,8 +1214,15 @@ function makeBatches(slides, batchSize) {
 }
 
 // src/utils/helpers.ts
+function withoutControlChars(text) {
+  let out = "";
+  for (const ch of text)
+    if (ch.charCodeAt(0) > 31)
+      out += ch;
+  return out;
+}
 function sanitizeFilename(name) {
-  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").trim();
+  return withoutControlChars(name).replace(/[<>:"/\\|?*]/g, "").replace(/\.+$/, "").trim();
 }
 
 // src/vault/layout.ts
