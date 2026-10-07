@@ -346,8 +346,7 @@
 .alt-to-obs-settings.alt-to-obs-settings .setting-item {
   flex-direction: row;
   flex-wrap: wrap;
-  column-gap: 12px;
-  row-gap: 6px;
+  gap: 6px 12px;
 }
 
 .alt-to-obs-settings.alt-to-obs-settings .setting-item-info {
