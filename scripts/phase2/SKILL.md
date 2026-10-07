@@ -29,7 +29,7 @@ Parse from the user's message (or ask if missing):
 
 Exam periods are obsolete: 2.0 removed the plugin's exam summary (spec G5), so the Skill no longer asks for a `midterm` / `final` period and adds no period tag. Existing `Exam/` notes and period tags in old notes are left as they are.
 
-**Base folder.** `<base>` below is the plugin's "저장 폴더" setting: `settings.baseFolderPath` in `<vault>/.obsidian/plugins/alt-to-obs/data.json` (read it with `Read`; `.obsidian` is the vault's config folder unless the user renamed it). The plugin was renamed from Alt2Obsidian (id `alt2obsidian`) to Alt2Obs (id `alt-to-obs`) in 2.0.0: when that file is missing, read `<vault>/.obsidian/plugins/alt2obsidian/data.json` instead. Use `Alt2Obsidian` (the default folder, unchanged by the rename) only when neither file has the key. Never assume the default without checking.
+**Base folder.** `<base>` below is the plugin's "저장 폴더" setting: `settings.baseFolderPath` in `<vault>/.obsidian/plugins/alt2obsidian/data.json` (read it with `Read`; `.obsidian` is the vault's config folder unless the user renamed it). The plugin id is `alt2obsidian`; only version 2.0.0 ran under the id `alt-to-obs` (2.0.1 returned to `alt2obsidian` and imports that data on its first start): when that file is missing, read `<vault>/.obsidian/plugins/alt-to-obs/data.json` instead. Use `Alt2Obsidian` (the default folder, unchanged by the rename to Alt2Obs) only when neither file has the key. Never assume the default without checking.
 
 ## Workflow
 
