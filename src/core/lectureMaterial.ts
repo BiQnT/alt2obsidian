@@ -7,6 +7,9 @@
 import type { LectureMaterialContext, LectureMaterialPage } from "../types";
 import type { PdfTextSource } from "./slideHash";
 
+/** Size budget of the excerpt, in characters. */
+export const MATERIAL_MAX_CHARS = 12000;
+
 /**
  * Scores every page against `seedText` (lecture title + Alt summary) and
  * keeps the first pages plus the best-scoring ones within a size budget.
@@ -62,7 +65,7 @@ function buildCompactContext(
   extractedCharCount: number
 ): LectureMaterialContext {
   const maxPages = 14;
-  const maxChars = 12000;
+  const maxChars = MATERIAL_MAX_CHARS;
   const firstPages = pages.filter((page) => page.pageNum <= 3);
   const scoredPages = [...pages]
     .sort((a, b) => b.score - a.score)

@@ -1338,13 +1338,23 @@ try {
       // from the transcript, then the PDF's text added with page ranges, then concepts.
       const prep = await plugin.prepareCliImport("u31", lecturePv("Lec31 Level", "note-31"), "CSED311", undefined, { withoutPdf: "summary" });
       assert.deepEqual([prep.plan, prep.transcriptPlan], [null, null], "the lecture-level flow");
-      assert.equal(prep.estimate.calls, 2, "the note from the transcript and the concepts");
-      const conceptsOnly = await plugin.prepareCliImport("u30", lecturePv("Lec30 Level", "note-30", { transcript: null }), "CSED311", undefined, { withoutPdf: "summary" });
-      assert.equal(prep.estimate.outputTokens - conceptsOnly.estimate.outputTokens, 6000, "the note call expects a whole note (up to 8000 characters), not a 1200-character overview");
+      assert.equal(prep.estimate.calls, 3, "the note from the transcript, the PDF text pass and the concepts");
+      const pdfOnly = await plugin.prepareCliImport("u30", lecturePv("Lec30 Level", "note-30", { transcript: null }), "CSED311", undefined, { withoutPdf: "summary" });
+      assert.equal(pdfOnly.estimate.calls, 2, "the PDF text pass and the concepts");
+      // Each note call expects a whole note (up to 8000 characters, about 5,300 tokens) with reasoning, not a 1200-character overview.
+      assert.equal(prep.estimate.outputTokens - pdfOnly.estimate.outputTokens, 12700);
+      const noPdfPv = (title, noteId, altData) => Object.assign(lecturePv(title, noteId, altData), { pdfData: null });
+      const noPdf = await plugin.prepareCliImport("u29", noPdfPv("Lec29 Level", "note-29"), "CSED311", undefined, { withoutPdf: "summary" });
+      assert.equal(noPdf.estimate.calls, 2, "no PDF: the note from the transcript and the concepts");
+      assert.equal(noPdf.estimate.outputTokens, pdfOnly.estimate.outputTokens, "one note call each");
+      // Without a note call the concepts read Alt's summary as it is: 1000 more Hangul, 900 more tokens.
+      const long3 = await plugin.prepareCliImport("u28", noPdfPv("Lec28 Level", "note-28", { transcript: null, summary: "가".repeat(3000) }), "CSED311", undefined, { withoutPdf: "summary" });
+      const long4 = await plugin.prepareCliImport("u27", noPdfPv("Lec27 Level", "note-27", { transcript: null, summary: "가".repeat(4000) }), "CSED311", undefined, { withoutPdf: "summary" });
+      assert.deepEqual([long3.estimate.calls, long4.estimate.inputTokens - long3.estimate.inputTokens], [1, 900]);
       const n0 = s.calls().length;
       const rec = await plugin.runCliImport(prep);
       const calls = s.calls().slice(n0);
-      assert.equal(calls.length, 3);
+      assert.equal(calls.length, prep.estimate.calls);
       const [fromTranscript, withMaterial, concepts] = calls;
       for (const c of [fromTranscript, withMaterial]) {
         assert.equal(sysOf(c), system);
@@ -1377,6 +1387,7 @@ try {
       const partRec = await plugin.runCliImport(part);
       const partCalls = s.calls().slice(n2);
       assert.equal(partCalls.length, 1, "no concepts for a partial note");
+      assert.deepEqual([part.estimate.calls, part.estimate.outputTokens], [1, 12700], "estimated as one whole note, no concepts");
       assert.equal(sysOf(partCalls[0]), system);
       assert.ok(partCalls[0].stdin.includes("PDF 강의자료 발췌로 이 강의의 노트 본문 전체를") && partCalls[0].stdin.includes("`### 1. 주제 (p.3~5)`") && partCalls[0].stdin.includes("\n[Alt에서 가져온 제한적 내용]\n제목과 설명뿐\n"));
       assert.ok(!partCalls[0].stdin.includes(overviewShape));
@@ -1385,7 +1396,7 @@ try {
     } finally {
       pdfStub.extractLectureMaterialContext = async () => null;
     }
-    console.log("PASS: a lecture-level note (no slides, no transcript sections, or a page read in part) is written with the full-note prompts (개요, 핵심 개념, 상세 노트, 8000 characters), never the overview prompt, and its concepts come from the whole note");
+    console.log("PASS: a lecture-level note (no slides, no transcript sections, or a page read in part) is written with the full-note prompts (개요, 핵심 개념, 상세 노트, 8000 characters), never the overview prompt, and its concepts come from the whole note; the estimate counts each note call it makes (PDF text pass included) as a whole note");
   }
 
   // Model choice for one run (the sidebar's picker): the estimate follows, the settings never change, the note says what ran.

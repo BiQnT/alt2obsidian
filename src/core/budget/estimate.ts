@@ -61,6 +61,28 @@ export const OUTPUT_TOKENS_PER_SLIDE = { content: 1000, visual: 1480 } as const;
 export const OVERVIEW_OUTPUT_TOKENS = 1400;
 export const CONCEPTS_OUTPUT_TOKENS = 3800;
 
+/** Length cap of a lecture-level note (prompts/lecture-note-*.md: "분량은 8000자 이내"). */
+export const LECTURE_NOTE_CHARS = 8000;
+/**
+ * Expected output of one call that writes a whole lecture-level note at
+ * medium effort. The visible note at the 8000-character cap is about 5,300
+ * tokens (the size of Alt's own 7,900-character summary of a one-hour
+ * lecture by estimateTextTokens), and a two-hour lecture fills it. Reasoning
+ * is counted as the per-slide refit above found it: real output 2.4 times
+ * the former visible-text figure. Not measured on this call itself.
+ */
+export const LECTURE_NOTE_OUTPUT_TOKENS = 12700;
+
+/**
+ * Stand-in for text the estimate cannot read yet (a note still to be
+ * written, the PDF excerpt): two Hangul to three ASCII characters, 0.66
+ * tokens a character by estimateTextTokens, so 8000 characters come to
+ * 5,280 tokens, like Alt's own 7,900-character summary.
+ */
+export function textStandIn(chars: number): string {
+  return "가나 a ".repeat(Math.ceil(chars / 5)).slice(0, chars);
+}
+
 export interface CallShape {
   promptText: string;
   images: number;

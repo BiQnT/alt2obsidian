@@ -360,6 +360,10 @@ async function deck(n, visualPages = []) {
   ]) {
     for (const actual of measured) assert.ok(Math.abs(estimated - actual) / actual < 0.1, `${label}: ${estimated} within 10% of the measured ${actual}`);
   }
+  // A lecture-level note at its 8000-character cap: about 5,300 visible tokens, times the 2.4 the slide refit found.
+  assert.equal(m.textStandIn(m.LECTURE_NOTE_CHARS).length, 8000);
+  assert.equal(m.estimateTextTokens(m.textStandIn(m.LECTURE_NOTE_CHARS)), 5280);
+  assert.equal(m.LECTURE_NOTE_OUTPUT_TOKENS, Math.round((5300 * 2.4) / 100) * 100);
 
   const d = await deck(20, [5, 6, 7]);
   const plan = m.planDeck({ ...d, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "T" });

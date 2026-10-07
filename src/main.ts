@@ -67,7 +67,17 @@ import { analyzeSlides, selectKeyDiagrams } from "./core/prep/SlideAnalyzer";
 import { DeckPlan, makeBatches, parseExistingSlides, planDeck, withFewerImages, withTranscriptChunks } from "./pipeline/batchPlan";
 import { estimateLecture, PipelineStep, runBatchedLecture } from "./pipeline/lecturePipeline";
 import type { BatchProgress, LectureContext } from "./generator/BatchCommentaryGenerator";
-import { BudgetEstimate, CallShape, estimateCalls, exceedsCap } from "./core/budget/estimate";
+import {
+  BudgetEstimate,
+  CallShape,
+  CONCEPTS_OUTPUT_TOKENS,
+  estimateCalls,
+  exceedsCap,
+  LECTURE_NOTE_CHARS,
+  LECTURE_NOTE_OUTPUT_TOKENS,
+  textStandIn,
+} from "./core/budget/estimate";
+import { MATERIAL_MAX_CHARS } from "./core/lectureMaterial";
 import conceptExtractionTemplateText from "../prompts/concept-extraction.md";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { insertFrontmatterLine, NoteGenerator, preservedFrontmatterLines, removeFrontmatterLine } from "./generator/NoteGenerator";
@@ -1408,32 +1418,45 @@ export default class Alt2ObsPlugin extends Plugin {
   }
 
   /**
-   * No PDF: the 1.x lecture-level flow (one transcript pass when there is a
-   * transcript, then concepts), estimated from the same prompt templates.
+   * No slide plan: the 1.x lecture-level flow (runLegacyImport), estimated
+   * from the same prompt templates. Each note call writes the whole note:
+   * one from the transcript when Alt's summary is under 2500 characters,
+   * and one that adds the PDF text when the run gets a PDF (the run reads
+   * it again; one without a text layer skips that call, which the estimate
+   * cannot know). The concepts then read the note. A page read in part gets
+   * one note from the PDF text and no concepts (savePartialNote).
    */
   private estimateLectureLevel(preview: ImportPreview, commentaryTask: TaskLLMSetting, conceptTask: TaskLLMSetting): BudgetEstimate {
     const asProvider = (id: ProviderId | "none"): ProviderId => (id === "none" ? "claude-cli" : id);
     const alt = preview.altData;
     const transcript = (alt.transcript ?? "").slice(0, 15000);
+    const material = this.pdfProcessor && (preview.pdfData || preview.pdfUrl) ? textStandIn(MATERIAL_MAX_CHARS) : null;
+    const noteCall = (template: string, input: string): CallShape => ({
+      promptText: lectureNoteSystemTemplate + template + input,
+      images: 0,
+      outputTokens: LECTURE_NOTE_OUTPUT_TOKENS,
+      schema: false,
+    });
     const calls: CallShape[] = [];
-    if (transcript && alt.summary.length < 2500) {
-      // The whole note, up to 8000 characters: a note of that size (Alt's own
-      // 7,900-character summary of a one-hour lecture) is about 5,300 tokens
-      // by estimateTextTokens, plus reasoning.
-      calls.push({
-        promptText: lectureNoteSystemTemplate + lectureNoteEnhanceTranscriptTemplate + alt.summary + transcript,
-        images: 0,
-        outputTokens: 6000,
-        schema: false,
-      });
+    const conceptCalls: CallShape[] = [];
+    if (alt.parseQuality === "partial") {
+      if (material) calls.push(noteCall(lectureNoteFromMaterialTemplate, alt.summary.slice(0, 4000) + material));
+    } else {
+      // What the concepts read: the last note written, else Alt's summary.
+      let note = alt.summary;
+      if (transcript && alt.summary.length < 2500) {
+        calls.push(noteCall(alt.summary.length < 500 ? lectureNoteFromTranscriptTemplate : lectureNoteEnhanceTranscriptTemplate, alt.summary + transcript));
+        note = textStandIn(LECTURE_NOTE_CHARS);
+      }
+      if (material) {
+        calls.push(noteCall(lectureNoteEnhanceMaterialTemplate, note.slice(0, 18000) + material));
+        // The PDF pass writes up to 8000 characters, or keeps a longer note's length.
+        if (note.length < LECTURE_NOTE_CHARS) note = textStandIn(LECTURE_NOTE_CHARS);
+      }
+      conceptCalls.push({ promptText: conceptExtractionTemplateText + note, images: 0, outputTokens: CONCEPTS_OUTPUT_TOKENS, schema: false });
     }
     const main = estimateCalls(calls, asProvider(commentaryTask.provider), this.estimatedEffort(commentaryTask));
-    // Concepts read the (enhanced) summary: assume about 6000 characters.
-    const concept = estimateCalls(
-      [{ promptText: conceptExtractionTemplateText + "가".repeat(Math.max(alt.summary.length, 6000)), images: 0, outputTokens: 3800, schema: false }],
-      asProvider(conceptTask.provider),
-      this.estimatedEffort(conceptTask)
-    );
+    const concept = estimateCalls(conceptCalls, asProvider(conceptTask.provider), this.estimatedEffort(conceptTask));
     return {
       calls: main.calls + concept.calls,
       inputTokens: main.inputTokens + concept.inputTokens,
