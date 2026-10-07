@@ -84,7 +84,7 @@ function run(bin, args, timeoutMs = 3e3) {
   return new Promise((resolve, reject) => {
     execFile(bin, args, { timeout: timeoutMs, windowsHide: true, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       if (err && !stdout)
-        reject(err);
+        reject(new Error(err.message));
       else
         resolve(stdout);
     });
@@ -239,6 +239,13 @@ function systemOwnerVerifier(platform = process.platform) {
   };
 }
 
+// src/utils/helpers.ts
+function jsonValueText(v) {
+  if (Array.isArray(v))
+    return v.map(jsonValueText).join(",");
+  return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
+}
+
 // src/sources/plateToMarkdown.ts
 function isText(n) {
   return typeof n.text === "string";
@@ -285,13 +292,13 @@ function renderInline(nodes) {
       return renderLeaf(n);
     switch (n.type) {
       case "a": {
-        const label = renderInline(n.children) || String(n.url ?? "");
-        return n.url ? `[${label}](${String(n.url)})` : label;
+        const label = renderInline(n.children) || jsonValueText(n.url);
+        return n.url ? `[${label}](${jsonValueText(n.url)})` : label;
       }
       case "inline_equation":
-        return n.texExpression ? `$${String(n.texExpression)}$` : renderInline(n.children);
+        return n.texExpression ? `$${jsonValueText(n.texExpression)}$` : renderInline(n.children);
       case "mention":
-        return n.value ? `@${String(n.value)}` : renderInline(n.children);
+        return n.value ? `@${jsonValueText(n.value)}` : renderInline(n.children);
       case "recording_timestamp":
         return typeof n.ms === "number" ? `[${formatMs(n.ms)}]` : renderInline(n.children);
       default:
@@ -388,7 +395,7 @@ function plateToMarkdown(doc) {
         break;
       case "equation":
         blocks.push(`$$
-${String(node.texExpression ?? renderInline(node.children))}
+${node.texExpression === void 0 || node.texExpression === null ? renderInline(node.children) : jsonValueText(node.texExpression)}
 $$`, "");
         break;
       default: {
@@ -667,7 +674,7 @@ function flattenFolders(tree, out) {
   for (const f of tree) {
     if (!f || typeof f.id !== "string")
       continue;
-    out.set(f.id, { id: f.id, name: String(f.name ?? ""), parent_id: typeof f.parent_id === "string" ? f.parent_id : null });
+    out.set(f.id, { id: f.id, name: jsonValueText(f.name), parent_id: typeof f.parent_id === "string" ? f.parent_id : null });
     flattenFolders(f.children, out);
   }
 }
@@ -676,7 +683,7 @@ function componentFromApi(raw) {
   return {
     id: String(raw.id),
     note_id: String(raw.note_id),
-    component_type: String(raw.component_type ?? ""),
+    component_type: jsonValueText(raw.component_type),
     title: typeof raw.title === "string" ? raw.title : null,
     content_text: typeof raw.content_text === "string" ? raw.content_text : null,
     metadata: typeof raw.metadata === "string" ? raw.metadata : raw.metadata ? JSON.stringify(raw.metadata) : null,
@@ -813,7 +820,7 @@ var AltLocalApiSource = class _AltLocalApiSource {
           this.pathDb ??= this.openPathDb();
           path = (await this.pathDb.noteDetails(id)).pdfPath;
         } catch (e) {
-          console.warn("[Alt2Obsidian] slides path lookup in the database failed:", e);
+          console.warn("[Alt2Obs] slides path lookup in the database failed:", e);
         }
         this.pathMemo.set(id, path);
       }
@@ -873,7 +880,7 @@ function loadSqlite() {
       return mod;
   } catch {
   }
-  const req = globalThis.require;
+  const req = typeof window === "undefined" ? void 0 : window.require;
   if (typeof req === "function") {
     try {
       return req("node:sqlite");
@@ -933,6 +940,8 @@ function activeContentSql(alias, accountId, support) {
   )))`;
 }
 var STALE_COPY_MS = 60 * 60 * 1e3;
+var COPY_PREFIX = "alt-to-obs-altdb-";
+var LEGACY_COPY_PREFIX = "alt2obs-altdb-";
 function sweepStaleCopies(tmpRoot, now = Date.now()) {
   let removed = 0;
   let names = [];
@@ -942,7 +951,7 @@ function sweepStaleCopies(tmpRoot, now = Date.now()) {
     return 0;
   }
   for (const n of names) {
-    if (!n.startsWith("alt2obs-altdb-"))
+    if (!n.startsWith(COPY_PREFIX) && !n.startsWith(LEGACY_COPY_PREFIX))
       continue;
     const p = join3(tmpRoot, n);
     try {
@@ -1034,7 +1043,7 @@ var AltLocalDbSource = class _AltLocalDbSource {
     throw new AltDbError(`Alt \uB370\uC774\uD130\uBCA0\uC774\uC2A4\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
   static openCopy(file, sqlite, tmpRoot) {
-    const dir = mkdtempSync(join3(tmpRoot, "alt2obs-altdb-"));
+    const dir = mkdtempSync(join3(tmpRoot, COPY_PREFIX));
     try {
       const target = join3(dir, basename(file));
       copyFileSync(file, target, constants.COPYFILE_FICLONE);

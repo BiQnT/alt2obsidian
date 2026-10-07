@@ -129,7 +129,7 @@ const plugin = new Plugin();
 let saved = { recentImports: [{ url: "", title: "x", subject: "CSED311", path: "Alt2Obsidian/CSED311/Lec1.md", pdfPath: "Alt2Obsidian/CSED311/Lec1.pdf", date: "2026-09-01", parseQuality: "full" }] };
 Object.assign(plugin, {
   app,
-  manifest: { dir: ".obsidian/plugins/alt2obsidian" },
+  manifest: { dir: ".obsidian/plugins/alt-to-obs" },
   loadData: async () => saved,
   saveData: async (d) => void (saved = JSON.parse(JSON.stringify(d))),
   registerView: () => {},

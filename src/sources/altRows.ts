@@ -76,7 +76,7 @@ export function parseTranscript(contentText: string | null | undefined): Transcr
   if (!contentText) return [];
   let entries: RawEntry[];
   try {
-    const v = JSON.parse(contentText);
+    const v: unknown = JSON.parse(contentText);
     if (!Array.isArray(v)) return [];
     entries = v as RawEntry[];
   } catch {
@@ -157,7 +157,7 @@ export function detailsFromComponents(components: ComponentRow[]): AltNoteDetail
 
 function slideIndexOf(metadata: string | null): number | null {
   try {
-    const v = metadata ? JSON.parse(metadata) : null;
+    const v = (metadata ? JSON.parse(metadata) : null) as { slideIndex?: unknown } | null;
     return typeof v?.slideIndex === "number" ? v.slideIndex : null;
   } catch {
     return null;

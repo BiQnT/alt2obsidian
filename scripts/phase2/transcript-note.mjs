@@ -131,6 +131,8 @@ var CLAUDE_TASK_DEFAULTS = {
   verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification }
 };
 var DEFAULT_SETTINGS = {
+  // The folder name from before the rename to Alt2Obs (2.0.0): existing
+  // vaults and the Skill keep writing to the same place.
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
   settingsVersion: 3,
@@ -334,6 +336,27 @@ function sectionGistLines(gists, plan) {
   }).join("\n");
 }
 
+// src/utils/helpers.ts
+function jsonValueText(v) {
+  if (Array.isArray(v))
+    return v.map(jsonValueText).join(",");
+  return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
+}
+function withoutControlChars(text) {
+  let out = "";
+  for (const ch of text)
+    if (ch.charCodeAt(0) > 31)
+      out += ch;
+  return out;
+}
+function sanitizeFilename(name) {
+  return withoutControlChars(name).replace(/[<>:"/\\|?*]/g, "").replace(/\.+$/, "").trim();
+}
+function formatDate(date) {
+  const d = date || /* @__PURE__ */ new Date();
+  return d.toISOString().slice(0, 10);
+}
+
 // prompts/concept-extraction.md
 var concept_extraction_default = `You are analyzing a lecture note for the course "{{subject}}". Your job is to extract the key academic concepts so the student can build a connected concept network in their Obsidian vault.
 
@@ -496,17 +519,17 @@ function validateConcepts(raw) {
     throw new Error("Expected tags array");
   }
   const concepts = obj.concepts.map((c) => ({
-    name: String(c.name || ""),
-    definition: String(c.definition || ""),
-    example: c.example ? String(c.example) : void 0,
-    caution: c.caution ? String(c.caution) : void 0,
-    lectureContext: c.lectureContext ? String(c.lectureContext) : void 0,
+    name: jsonValueText(c.name || ""),
+    definition: jsonValueText(c.definition || ""),
+    example: c.example ? jsonValueText(c.example) : void 0,
+    caution: c.caution ? jsonValueText(c.caution) : void 0,
+    lectureContext: c.lectureContext ? jsonValueText(c.lectureContext) : void 0,
     relatedConcepts: Array.isArray(c.relatedConcepts) ? c.relatedConcepts.map(String) : []
   }));
   for (const c of concepts) {
     if (c.definition.length < 80) {
       console.warn(
-        `[Alt2Obsidian] concept "${c.name}" has a short definition (${c.definition.length} chars), consider re-running with a stronger model.`
+        `[Alt2Obs] concept "${c.name}" has a short definition (${c.definition.length} chars), consider re-running with a stronger model.`
       );
     }
   }
@@ -514,20 +537,11 @@ function validateConcepts(raw) {
     const orphan = concepts.find((c) => !c.relatedConcepts || c.relatedConcepts.length === 0);
     if (orphan) {
       console.warn(
-        `[Alt2Obsidian] concept "${orphan.name}" has no relatedConcepts despite ${concepts.length} concepts in the lecture, graph linking may be incomplete.`
+        `[Alt2Obs] concept "${orphan.name}" has no relatedConcepts despite ${concepts.length} concepts in the lecture, graph linking may be incomplete.`
       );
     }
   }
   return { concepts, tags: obj.tags.map(String) };
-}
-
-// src/utils/helpers.ts
-function sanitizeFilename(name) {
-  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").trim();
-}
-function formatDate(date) {
-  const d = date || /* @__PURE__ */ new Date();
-  return d.toISOString().slice(0, 10);
 }
 
 // src/core/conceptNames.ts
@@ -552,7 +566,7 @@ function parseConceptName(name) {
   return HANGUL.test(full) ? { full, english: null, korean: full, aliases: [] } : { full, english: full, korean: null, aliases: [full] };
 }
 function conceptKey(text) {
-  return text.normalize("NFC").toLowerCase().replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").replace(/[\s_-]+/g, "");
+  return withoutControlChars(text.normalize("NFC").toLowerCase()).replace(/[<>:"/\\|?*]/g, "").replace(/\.+$/, "").replace(/[\s_-]+/g, "");
 }
 var MINOR_WORDS = /* @__PURE__ */ new Set(["a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "vs", "with"]);
 function initials(expansion, splitHyphens) {

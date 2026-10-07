@@ -186,7 +186,7 @@ function indexSlides(slideTexts: string[], titleWeight: number): SlideIndex {
 }
 
 function bm25(query: Map<string, number>, index: SlideIndex, p: AlignerParams): number[] {
-  const scores = new Array(index.tf.length).fill(0);
+  const scores = new Array<number>(index.tf.length).fill(0);
   for (const [term] of query) {
     const idf = index.idf.get(term);
     if (idf === undefined) continue;

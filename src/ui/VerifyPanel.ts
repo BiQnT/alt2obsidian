@@ -5,7 +5,7 @@
 // and a link to the verification note.
 
 import { App, setIcon } from "obsidian";
-import type Alt2ObsidianPlugin from "../main";
+import type Alt2ObsPlugin from "../main";
 import type { PreparedVerification } from "../main";
 import { compactTokens } from "../llm/usage";
 import { describeEffort, describeModel } from "../settings/llmSettings";
@@ -39,56 +39,56 @@ export class VerifyPanel {
 
   constructor(
     private app: App,
-    private plugin: Alt2ObsidianPlugin,
+    private plugin: Alt2ObsPlugin,
     private root: HTMLElement
   ) {}
 
   render(): void {
     const root = this.root;
     root.empty();
-    root.createDiv({ cls: "alt2obsidian-muted", text: "내 노트를 슬라이드와 전사에 대조합니다. 근거 검색은 스크립트가 하고, 판정만 모델이 합니다. 원본 노트는 바꾸지 않습니다." });
+    root.createDiv({ cls: "alt-to-obs-muted", text: "내 노트를 슬라이드와 전사에 대조합니다. 근거 검색은 스크립트가 하고, 판정만 모델이 합니다. 원본 노트는 바꾸지 않습니다." });
 
-    root.createEl("label", { cls: "alt2obsidian-field-label", text: "입력" });
-    const kinds = root.createDiv({ cls: "alt2obsidian-tabs alt2obsidian-verify-kinds" });
+    root.createEl("label", { cls: "alt-to-obs-field-label", text: "입력" });
+    const kinds = root.createDiv({ cls: "alt-to-obs-tabs alt-to-obs-verify-kinds" });
     for (const k of Object.keys(INPUT_LABELS) as InputKind[]) {
-      const b = kinds.createEl("button", { text: INPUT_LABELS[k], cls: "alt2obsidian-tab" });
+      const b = kinds.createEl("button", { text: INPUT_LABELS[k], cls: "alt-to-obs-tab" });
       b.addEventListener("click", () => this.setKind(k));
       this.kindButtons.set(k, b);
     }
 
     // Vault markdown file (default: a Notion page exported as markdown).
-    const fileBox = root.createDiv({ cls: "alt2obsidian-verify-input" });
-    this.fileInput = fileBox.createEl("input", { type: "text", attr: { list: "alt2obsidian-verify-files", placeholder: "노트 파일 경로 (예: 노션/13강 정리.md)" } });
-    this.fileList = fileBox.createEl("datalist", { attr: { id: "alt2obsidian-verify-files" } });
+    const fileBox = root.createDiv({ cls: "alt-to-obs-verify-input" });
+    this.fileInput = fileBox.createEl("input", { type: "text", attr: { list: "alt-to-obs-verify-files", placeholder: "노트 파일 경로 (예: 노션/13강 정리.md)" } });
+    this.fileList = fileBox.createEl("datalist", { attr: { id: "alt-to-obs-verify-files" } });
     this.fileInput.addEventListener("change", () => this.guessTarget(this.fileInput?.value ?? ""));
     this.inputBoxes.set("file", fileBox);
 
     // Notion MCP.
-    const notionBox = root.createDiv({ cls: "alt2obsidian-verify-input" });
-    const row = notionBox.createDiv({ cls: "alt2obsidian-input-row" });
+    const notionBox = root.createDiv({ cls: "alt-to-obs-verify-input" });
+    const row = notionBox.createDiv({ cls: "alt-to-obs-input-row" });
     this.notionInput = row.createEl("input", { type: "text", placeholder: "https://www.notion.so/..." });
     const fetchBtn = row.createEl("button", { text: "가져오기" });
     fetchBtn.addEventListener("click", () => void this.fetchNotion(fetchBtn));
     const nm = this.plugin.notionFetchModel();
     this.notionStatus = notionBox.createDiv({
-      cls: "alt2obsidian-muted",
+      cls: "alt-to-obs-muted",
       text: `Claude CLI가 Notion 조회 도구 하나만 불러 페이지 원문을 가져옵니다 (호출 1회, 내용은 도구 결과를 그대로 씀). 모델: ${describeModel("claude-cli", nm.model, this.plugin.modelCatalog())} · ${describeEffort(nm.effort)}.`,
     });
     this.inputBoxes.set("notion", notionBox);
 
     // Paste.
-    const pasteBox = root.createDiv({ cls: "alt2obsidian-verify-input" });
+    const pasteBox = root.createDiv({ cls: "alt-to-obs-verify-input" });
     this.pasteInput = pasteBox.createEl("textarea", { attr: { rows: "6", placeholder: "노트 내용을 붙여넣으세요" } });
     this.inputBoxes.set("paste", pasteBox);
 
-    root.createEl("label", { cls: "alt2obsidian-field-label", text: "대상 강의" });
-    this.targetSelect = root.createEl("select", { cls: "dropdown alt2obsidian-verify-target" });
+    root.createEl("label", { cls: "alt-to-obs-field-label", text: "대상 강의" });
+    this.targetSelect = root.createEl("select", { cls: "dropdown alt-to-obs-verify-target" });
     this.refreshLists();
 
-    const actions = root.createDiv({ cls: "alt2obsidian-estimate-actions" });
+    const actions = root.createDiv({ cls: "alt-to-obs-estimate-actions" });
     const estimateBtn = actions.createEl("button", { text: "예상 사용량 보기", cls: "mod-cta" });
     estimateBtn.addEventListener("click", () => void this.prepare(estimateBtn));
-    this.estimateEl = root.createDiv({ cls: "alt2obsidian-cli-panel" });
+    this.estimateEl = root.createDiv({ cls: "alt-to-obs-cli-panel" });
     this.estimateEl.hide();
     this.setKind(this.kind);
   }
@@ -150,7 +150,7 @@ export class VerifyPanel {
           (res.unchanged ? " · 지난번과 같은 페이지" : "") +
           (res.model ? ` · 모델 ${res.model}` : ""),
       });
-      for (const w of res.warnings) this.notionStatus.createDiv({ cls: "alt2obsidian-error", text: w });
+      for (const w of res.warnings) this.notionStatus.createDiv({ cls: "alt-to-obs-error", text: w });
     } catch (e) {
       this.notionMarkdown = null;
       this.notionStatus.empty();
@@ -158,7 +158,7 @@ export class VerifyPanel {
         this.notionStatus.setText("가져오기를 취소했습니다.");
         return;
       }
-      const box = this.notionStatus.createDiv({ cls: e instanceof NotionMcpMissingError ? "alt2obsidian-link-offer" : "alt2obsidian-error" });
+      const box = this.notionStatus.createDiv({ cls: e instanceof NotionMcpMissingError ? "alt-to-obs-link-offer" : "alt-to-obs-error" });
       box.setText(e instanceof Error ? e.message : String(e));
       if (e instanceof NotionMcpMissingError) {
         const fallback = box.createEl("button", { text: "보관함 파일로 검증" });
@@ -190,7 +190,7 @@ export class VerifyPanel {
     btn.disabled = true;
     panel.empty();
     panel.show();
-    panel.createDiv({ cls: "alt2obsidian-progress-text", text: "주장 나누고 근거 찾는 중 (토큰 0)..." });
+    panel.createDiv({ cls: "alt-to-obs-progress-text", text: "주장 나누고 근거 찾는 중 (토큰 0)..." });
     try {
       const src = await this.readSource();
       const targetPath = this.targetSelect?.value ?? "";
@@ -199,7 +199,7 @@ export class VerifyPanel {
       this.showEstimate(prepared);
     } catch (e) {
       panel.empty();
-      panel.createDiv({ cls: "alt2obsidian-error", text: e instanceof Error ? e.message : String(e) });
+      panel.createDiv({ cls: "alt-to-obs-error", text: e instanceof Error ? e.message : String(e) });
     } finally {
       btn.disabled = false;
     }
@@ -218,9 +218,9 @@ export class VerifyPanel {
     panel.empty();
     const e = prepared.estimate;
     const settings = this.plugin.data.settings;
-    panel.createEl("h6", { text: "검증 전 예상 사용량", cls: "alt2obsidian-section-header" });
-    panel.createDiv({ cls: "alt2obsidian-estimate-main", text: `주장 ${e.claims}개 → 판정 ${e.judged}개 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰` });
-    renderModelPicker(panel.createDiv({ cls: "alt2obsidian-pickers" }), {
+    panel.createEl("h6", { text: "검증 전 예상 사용량", cls: "alt-to-obs-section-header" });
+    panel.createDiv({ cls: "alt-to-obs-estimate-main", text: `주장 ${e.claims}개 → 판정 ${e.judged}개 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰` });
+    renderModelPicker(panel.createDiv({ cls: "alt-to-obs-pickers" }), {
       task: "verification",
       label: "판정 모델",
       value: prepared.task,
@@ -230,7 +230,7 @@ export class VerifyPanel {
       onChange: (next) => this.showEstimate(this.plugin.withVerifyChoice(prepared, next)),
       onSaveDefault: (next) => this.plugin.saveTaskDefault("verification", next),
     });
-    const rows = panel.createEl("ul", { cls: "alt2obsidian-estimate-list" });
+    const rows = panel.createEl("ul", { cls: "alt-to-obs-estimate-list" });
     const sections = prepared.plan.unit === "section";
     rows.createEl("li", {
       text: sections
@@ -249,12 +249,12 @@ export class VerifyPanel {
     rows.createEl("li", { text: `결과: ${prepared.outPath}` });
     if (e.unmatchedWarning) {
       panel.createDiv({
-        cls: "alt2obsidian-error",
+        cls: "alt-to-obs-error",
         text: `주장의 ${Math.round((e.unmatched / Math.max(1, e.claims)) * 100)}%가 ${sections ? "전사" : "슬라이드"}와 용어가 맞지 않아 근거를 찾지 못했습니다. 대상 강의가 맞는지, 노트에 영어 용어(괄호 병기)가 있는지 확인하세요.`,
       });
     }
-    if (prepared.overCap) panel.createDiv({ cls: "alt2obsidian-error", text: "강의당 토큰 상한을 넘을 것 같습니다. 한 번 더 누르면 그래도 시작합니다." });
-    const actions = panel.createDiv({ cls: "alt2obsidian-estimate-actions" });
+    if (prepared.overCap) panel.createDiv({ cls: "alt-to-obs-error", text: "강의당 토큰 상한을 넘을 것 같습니다. 한 번 더 누르면 그래도 시작합니다." });
+    const actions = panel.createDiv({ cls: "alt-to-obs-estimate-actions" });
     const run = actions.createEl("button", { text: "검증 실행", cls: "mod-cta" });
     let armed = !prepared.overCap;
     run.disabled = e.calls === 0 && e.claims === 0;
@@ -270,7 +270,7 @@ export class VerifyPanel {
       panel.empty();
       panel.hide();
     });
-    if (focused) (panel.querySelector(`select[aria-label="${CSS.escape(focused)}"]`) as HTMLElement | null)?.focus();
+    if (focused) panel.querySelector<HTMLElement>(`select[aria-label="${CSS.escape(focused)}"]`)?.focus();
   }
 
   private async run(prepared: PreparedVerification): Promise<void> {
@@ -279,15 +279,15 @@ export class VerifyPanel {
     this.busy = true;
     const controller = new AbortController();
     this.controller = controller;
-    panel.createEl("h6", { text: "검증 중", cls: "alt2obsidian-section-header" });
-    const barOuter = panel.createDiv({ cls: "alt2obsidian-progress-bar" });
-    const bar = barOuter.createDiv({ cls: "alt2obsidian-progress-bar-fill" });
-    const detail = panel.createDiv({ cls: "alt2obsidian-progress-text", text: "판정 시작" });
+    panel.createEl("h6", { text: "검증 중", cls: "alt-to-obs-section-header" });
+    const barOuter = panel.createDiv({ cls: "alt-to-obs-progress-bar" });
+    const bar = barOuter.createDiv({ cls: "alt-to-obs-progress-bar-fill" });
+    const detail = panel.createDiv({ cls: "alt-to-obs-progress-text", text: "판정 시작" });
     const t = prepared.task;
     const effort = ` · ${describeEffort(t.effort)}`;
-    const modelLine = panel.createDiv({ cls: "alt2obsidian-usage-line alt2obsidian-model-line", text: `모델: ${describeModel(t.provider, t.model, this.plugin.modelCatalog())}${effort}` });
-    const usage = panel.createDiv({ cls: "alt2obsidian-usage-line", text: "사용량: 아직 호출 없음" });
-    const cancel = panel.createEl("button", { text: "취소", cls: "alt2obsidian-cancel-btn" });
+    const modelLine = panel.createDiv({ cls: "alt-to-obs-usage-line alt-to-obs-model-line", text: `모델: ${describeModel(t.provider, t.model, this.plugin.modelCatalog())}${effort}` });
+    const usage = panel.createDiv({ cls: "alt-to-obs-usage-line", text: "사용량: 아직 호출 없음" });
+    const cancel = panel.createEl("button", { text: "취소", cls: "alt-to-obs-cancel-btn" });
     cancel.addEventListener("click", () => {
       cancel.disabled = true;
       controller.abort();
@@ -306,8 +306,8 @@ export class VerifyPanel {
       });
       panel.empty();
       const c = res.counts;
-      panel.createEl("h6", { text: "검증 결과", cls: "alt2obsidian-section-header" });
-      const counts = panel.createDiv({ cls: "alt2obsidian-verify-counts" });
+      panel.createEl("h6", { text: "검증 결과", cls: "alt-to-obs-section-header" });
+      const counts = panel.createDiv({ cls: "alt-to-obs-verify-counts" });
       for (const [label, n, cls] of [
         ["맞음", c["맞음"], "is-ok"],
         ["틀림", c["틀림"], "is-bad"],
@@ -315,17 +315,17 @@ export class VerifyPanel {
         ["전사 불확실", c["전사 불확실"], "is-unsure"],
         ["누락 후보", c.missing, "is-missing"],
       ] as Array<[string, number, string]>) {
-        const chip = counts.createSpan({ cls: `alt2obsidian-chip ${cls}` });
+        const chip = counts.createSpan({ cls: `alt-to-obs-chip ${cls}` });
         chip.setText(`${label} ${n}`);
       }
-      for (const w of res.warnings) panel.createDiv({ cls: "alt2obsidian-muted", text: w });
+      for (const w of res.warnings) panel.createDiv({ cls: "alt-to-obs-muted", text: w });
       const open = panel.createEl("button", { cls: "mod-cta" });
       setIcon(open.createSpan(), "file-check");
       open.appendText(" 결과 노트 열기");
-      open.addEventListener("click", () => this.app.workspace.openLinkText(res.path, "", false));
+      open.addEventListener("click", () => void this.app.workspace.openLinkText(res.path, "", false));
     } catch (e) {
       panel.empty();
-      panel.createDiv({ cls: "alt2obsidian-error", text: controller.signal.aborted ? "검증을 취소했습니다. 결과 노트는 바뀌지 않았습니다." : e instanceof Error ? e.message : String(e) });
+      panel.createDiv({ cls: "alt-to-obs-error", text: controller.signal.aborted ? "검증을 취소했습니다. 결과 노트는 바뀌지 않았습니다." : e instanceof Error ? e.message : String(e) });
     } finally {
       this.busy = false;
       this.controller = null;

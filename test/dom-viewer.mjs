@@ -14,12 +14,13 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import esbuild from "esbuild";
 import { repo } from "./helpers/bundle-ts.mjs";
+import { inlinePdfWorker } from "../scripts/inline-pdf-worker.mjs";
 import { writeSyntheticPdf } from "./helpers/synthetic-pdf.mjs";
 
 function findChrome() {
@@ -40,7 +41,7 @@ function findChrome() {
 const chrome = findChrome();
 assert.ok(chrome, "no Chromium found: set ALT2OBS_CHROME");
 
-const dir = mkdtempSync(join(tmpdir(), "alt2obs-dom-"));
+const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-dom-"));
 const PAGES = 30;
 writeSyntheticPdf(join(dir, "deck.pdf"), Array.from({ length: PAGES }, (_, i) => `Slide ${i + 1}  Topic ${i + 1}`));
 const para = (n) => `해설 ${n}. ` + "스케줄러는 티켓 비율에 맞춰 CPU를 나눕니다. ".repeat(6);
@@ -81,10 +82,11 @@ const note = [
   ...sections,
 ].join("\n");
 writeFileSync(join(dir, "note.md"), note);
-copyFileSync(join(repo, "pdf.worker.min.mjs"), join(dir, "pdf.worker.min.mjs"));
+// The viewer's layout comes from the plugin's styles.css, as in Obsidian.
+writeFileSync(join(dir, "styles.css"), readFileSync(join(repo, "styles.css")));
 writeFileSync(
   join(dir, "index.html"),
-  '<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;width:1400px}#host{height:800px}</style></head>' +
+  '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="styles.css"><style>body{margin:0;width:1400px}#host{height:800px}</style></head>' +
     '<body><div id="host"></div><pre id="out">pending</pre><script type="module" src="./bundle.js"></script></body></html>'
 );
 await esbuild.build({
@@ -95,10 +97,10 @@ await esbuild.build({
   outfile: join(dir, "bundle.js"),
   loader: { ".md": "text", ".css": "text" },
   logLevel: "error",
-  plugins: [{ name: "obsidian-stub", setup: (b) => b.onResolve({ filter: /^obsidian$/ }, () => ({ path: join(repo, "test/helpers/obsidian-browser-stub.js") })) }],
+  plugins: [inlinePdfWorker, { name: "obsidian-stub", setup: (b) => b.onResolve({ filter: /^obsidian$/ }, () => ({ path: join(repo, "test/helpers/obsidian-browser-stub.js") })) }],
 });
 
-const types = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".md": "text/plain; charset=utf-8", ".pdf": "application/pdf" };
+const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".md": "text/plain; charset=utf-8", ".pdf": "application/pdf" };
 const server = createServer((req, res) => {
   const file = join(dir, decodeURIComponent(new URL(req.url, "http://x").pathname));
   if (!file.startsWith(dir) || !existsSync(file)) return void res.writeHead(404).end();

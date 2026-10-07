@@ -15,7 +15,7 @@ export class AltScraper {
     try {
       const response = await requestUrl({ url });
       html = response.text;
-    } catch (e) {
+    } catch {
       throw new Error("네트워크 연결을 확인해주세요");
     }
 
@@ -23,7 +23,7 @@ export class AltScraper {
     const format = this.parser.detectFormatVersion(html);
     if (!format.hasRscPush) {
       console.warn(
-        "[Alt2Obsidian] RSC push format not detected — Alt may have updated their frontend"
+        "[Alt2Obs] RSC push format not detected: Alt may have updated their frontend"
       );
     }
 
@@ -61,7 +61,7 @@ export class AltScraper {
 
     // Fallback to OG meta tags only
     console.warn(
-      "[Alt2Obsidian] RSC parse incomplete, falling back to OG meta tags"
+      "[Alt2Obs] RSC parse incomplete, falling back to OG meta tags"
     );
 
     if (!metaResult.title && !metaResult.summary) {

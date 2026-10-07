@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { repo } from "./helpers/bundle-ts.mjs";
 
 const GOLDEN = join(repo, "test/fixtures/skill-slide-prompts.json");
-const dir = mkdtempSync(join(tmpdir(), "alt2obs-skill-prompt-"));
+const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-skill-prompt-"));
 const run = (...args) => JSON.parse(execFileSync("node", [join(repo, "scripts/phase2/slide-prompt.mjs"), ...args], { encoding: "utf8" }));
 let recorded;
 try {

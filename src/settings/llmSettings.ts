@@ -2,7 +2,7 @@
 // Pure module (no obsidian import) so it is unit-tested in Node.
 
 import {
-  Alt2ObsidianSettings,
+  Alt2ObsSettings,
   CLAUDE_TASK_DEFAULTS,
   DEFAULT_GENERATION,
   DEFAULT_SETTINGS,
@@ -41,6 +41,9 @@ export const PRESET_LABELS: Record<PresetId, string> = {
 /** "" = the CLI's own default. Both CLIs accept the rest (`claude --help`, Codex models cache). */
 export const EFFORT_LEVELS: EffortLevel[] = ["", "low", "medium", "high", "xhigh", "max"];
 
+/** API key fields of 1.x and 2.0.0-beta.3 settings that nothing reads any more. */
+export const LEGACY_KEY_FIELDS = ["apiKey", "geminiApiKey", "claudeApiKey"];
+
 /** Providers of 2.0.0-beta.3 and earlier that are gone; their tasks move to a CLI. */
 const REMOVED_PROVIDERS = ["gemini", "ollama"];
 
@@ -52,7 +55,7 @@ export function isCliProvider(p: ProviderId | "none"): p is ProviderId {
 
 /** Model names are passed as one argv entry: refuse anything that could read as a flag. */
 export function isSafeModelName(model: string): boolean {
-  return model === "" || /^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,120}$/.test(model);
+  return model === "" || /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,120}$/.test(model);
 }
 
 /** A task's setting with the provider's defaults (spec 4.2 / D5). */
@@ -87,7 +90,7 @@ export interface FilledTask {
 }
 
 export interface MigrationOutcome {
-  settings: Alt2ObsidianSettings;
+  settings: Alt2ObsSettings;
   /** The CLI choice (Claude, else Codex) still has to be made once: see `chooseCli`. */
   needsCliDefault: boolean;
   /**
@@ -114,8 +117,8 @@ export interface MigrationOutcome {
  * Unknown keys (the 1.x Gemini key and model) are kept as they are.
  */
 export function migrateSettings(saved: unknown): MigrationOutcome {
-  const raw = (saved && typeof saved === "object" ? saved : {}) as Partial<Alt2ObsidianSettings> & Record<string, unknown>;
-  const settings: Alt2ObsidianSettings = {
+  const raw = (saved && typeof saved === "object" ? saved : {}) as Partial<Alt2ObsSettings> & Record<string, unknown>;
+  const settings: Alt2ObsSettings = {
     ...DEFAULT_SETTINGS,
     ...raw,
     generation: { ...DEFAULT_GENERATION, ...(raw.generation ?? {}) },
@@ -158,8 +161,8 @@ export function migrateSettings(saved: unknown): MigrationOutcome {
   return { settings, needsCliDefault: movedTasks.length > 0, movedTasks, removedFrom: Array.from(removedFrom), filled };
 }
 
-function pickRecentModels(raw: unknown): Alt2ObsidianSettings["recentModels"] {
-  const out: Alt2ObsidianSettings["recentModels"] = {};
+function pickRecentModels(raw: unknown): Alt2ObsSettings["recentModels"] {
+  const out: Alt2ObsSettings["recentModels"] = {};
   if (!raw || typeof raw !== "object") return out;
   for (const p of TASK_PROVIDERS) {
     const list = (raw as Record<string, unknown>)[p];
@@ -183,7 +186,7 @@ export function chooseCli(claudeUsable: boolean, codexFound: boolean): ProviderI
  * to the Codex CLI with the Codex task defaults. Other tasks, including
  * ones the user set to the Claude CLI, stay.
  */
-export function moveClaudeTasksToCodex(settings: Alt2ObsidianSettings, ids: TaskId[]): void {
+export function moveClaudeTasksToCodex(settings: Alt2ObsSettings, ids: TaskId[]): void {
   for (const id of ids) {
     if (settings.tasks[id].provider === "claude-cli") settings.tasks[id] = defaultTaskSetting("codex-cli", id);
   }
@@ -200,7 +203,7 @@ export function describeFilled(filled: FilledTask[]): string[] {
 /** The once-only Notice after Gemini/Ollama tasks moved to a CLI. */
 export function removedProviderMessage(removedFrom: RemovedProvider[], cli: ProviderId | null): string {
   const names = removedFrom.map((p) => (p === "ollama" ? "Ollama" : "Gemini API")).join("와 ") || "Gemini API와 Ollama";
-  const head = `Alt2Obsidian: ${names} 지원이 끝났습니다. `;
+  const head = `Alt2Obs: ${names} 지원이 끝났습니다. `;
   const where = cli ? `해당 작업을 ${PROVIDER_LABELS[cli]}로 옮겼습니다. 설정의 '작업별 모델'에서 확인하세요.` : "Claude Code나 Codex CLI를 설치하고 로그인한 뒤 설정의 'LLM 연결'에서 '다시 찾기'를 누르세요.";
   const cloud = removedFrom.includes("ollama")
     ? " 이제 슬라이드 텍스트와 전사가 이 컴퓨터의 Ollama 대신 클라우드 모델(Claude 또는 Codex 계정)로 보내집니다. 원하지 않으면 가져오기 전에 설정을 확인하세요."
@@ -219,7 +222,7 @@ const TOP_MODEL: Partial<Record<ProviderId, string>> = { "claude-cli": "opus" };
  *   concepts stay light.
  * - custom: nothing changes (it is what any manual edit switches to).
  */
-export function applyPreset(settings: Alt2ObsidianSettings, preset: PresetId): void {
+export function applyPreset(settings: Alt2ObsSettings, preset: PresetId): void {
   settings.preset = preset;
   if (preset === "custom") return;
   for (const id of TASK_IDS) {
@@ -236,7 +239,7 @@ export function applyPreset(settings: Alt2ObsidianSettings, preset: PresetId): v
   }
 }
 
-export function rememberModel(settings: Alt2ObsidianSettings, provider: ProviderId, model: string): void {
+export function rememberModel(settings: Alt2ObsSettings, provider: ProviderId, model: string): void {
   const m = model.trim();
   if (!m) return;
   const list = (settings.recentModels[provider] ?? []).filter((x) => x !== m);
@@ -316,8 +319,8 @@ export interface ModelCatalog {
 
 function effortList(raw: unknown): EffortLevel[] {
   if (!Array.isArray(raw)) return [];
-  return raw
-    .map((l) => (l && typeof l === "object" ? (l as { effort?: unknown; id?: unknown }).effort ?? (l as { id?: unknown }).id : l))
+  return (raw as unknown[])
+    .map((l): unknown => (l && typeof l === "object" ? (l as { effort?: unknown; id?: unknown }).effort ?? (l as { id?: unknown }).id : l))
     .filter((e): e is EffortLevel => typeof e === "string" && e !== "" && EFFORT_LEVELS.includes(e as EffortLevel));
 }
 
@@ -341,8 +344,8 @@ export function parseClaudeModelCatalog(text: string): ModelInfo[] {
       if (typeof r.description === "string" && r.description) info.description = r.description;
       if (r.thinking?.type === "none") info.efforts = [];
       else if (Array.isArray(r.thinking?.effort_options)) {
-        info.efforts = effortList(r.thinking!.effort_options);
-        const recommended = (r.thinking!.effort_options as Array<{ id?: unknown; badge?: { message?: unknown } }>).find((o) => o?.badge?.message === "Recommended");
+        info.efforts = effortList(r.thinking.effort_options);
+        const recommended = (r.thinking.effort_options as Array<{ id?: unknown; badge?: { message?: unknown } }>).find((o) => o?.badge?.message === "Recommended");
         const level = effortList(recommended ? [recommended] : [])[0];
         if (level) info.defaultEffort = level;
       }
@@ -374,8 +377,8 @@ export function parseCodexModels(text: string): CodexModels {
   try {
     const data = JSON.parse(text) as { models?: unknown };
     if (!Array.isArray(data.models)) return out;
-    const visible = data.models
-      .filter((m): m is { slug: string; display_name?: unknown; description?: unknown; default_reasoning_level?: unknown; visibility?: string; priority?: number; supported_reasoning_levels?: unknown } => !!m && typeof m.slug === "string")
+    const visible = (data.models as unknown[])
+      .filter((m): m is { slug: string; display_name?: unknown; description?: unknown; default_reasoning_level?: unknown; visibility?: string; priority?: number; supported_reasoning_levels?: unknown } => !!m && typeof (m as { slug?: unknown }).slug === "string")
       .filter((m) => m.visibility === undefined || m.visibility === "list")
       .filter((m) => isSafeModelName(m.slug))
       .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));

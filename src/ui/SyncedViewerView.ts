@@ -32,8 +32,10 @@ import {
   MarkdownRenderer,
   Notice,
   Component,
+  ViewStateResult,
 } from "obsidian";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { parseAlignment, segmentInSpan, spansForSlide, StoredSpan } from "../core/prep/TranscriptAligner";
 import { headingForSlide, pickSlideHeadings, PROBE_SHARE, sectionAt } from "./viewerSync";
 import { stripManagedComments } from "../editor/managedComments";
@@ -49,161 +51,16 @@ function mmss(ms: number): string {
   return h > 0 ? `${h}:${m}:${sec}` : `${m}:${sec}`;
 }
 
-export const VIEW_TYPE_SYNCED_VIEWER = "alt2obsidian-synced-viewer";
+export const VIEW_TYPE_SYNCED_VIEWER = "alt-to-obs-synced-viewer";
 
 interface SyncedViewerState {
   mdPath: string | null;
   pdfPath: string | null;
+  /** Opened in place of a lecture PDF tab (see setState). */
+  replacesPdf?: boolean;
 }
 
 type Pane = "pdf" | "md";
-
-const SYNCED_VIEWER_STYLE_ID = "alt2obs-synced-viewer-style";
-
-const SYNCED_VIEWER_CSS = `
-.alt2obs-synced-viewer {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-.alt2obs-synced-toolbar {
-  display: flex;
-  gap: 6px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--background-modifier-border);
-  background: var(--background-secondary);
-  flex-shrink: 0;
-  align-items: center;
-}
-.alt2obs-synced-toolbar button {
-  padding: 4px 10px;
-  font-size: 12px;
-}
-.alt2obs-synced-toolbar .alt2obs-page-info {
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.alt2obs-synced-panes {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-.alt2obs-pdf-pane {
-  flex: 1;
-  overflow-anchor: none;
-  overflow: auto;
-  background: var(--background-primary-alt);
-  position: relative;
-  min-width: 0;
-  padding: 12px;
-}
-.alt2obs-pdf-page-wrapper {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  margin-bottom: 16px;
-}
-.alt2obs-pdf-page-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  background: var(--background-secondary);
-  padding: 2px 10px;
-  border-radius: 4px;
-  margin-bottom: 4px;
-  align-self: flex-start;
-  font-weight: 500;
-}
-.alt2obs-pdf-page-wrapper.is-current .alt2obs-pdf-page-label {
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
-}
-.alt2obs-pdf-page {
-  display: block;
-  margin: 0 auto;
-  max-width: 100%;
-  background: white;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-}
-.alt2obs-pdf-page-loading {
-  text-align: center;
-  color: var(--text-muted);
-  padding: 16px;
-}
-.alt2obs-md-pane {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  overflow-anchor: none;
-  padding: 16px 22px;
-  background: var(--background-primary);
-  border-left: 1px solid var(--background-modifier-border);
-  min-width: 0;
-}
-.alt2obs-md-pane .markdown-rendered {
-  max-width: 100%;
-}
-.alt2obs-md-column {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-left: 1px solid var(--background-modifier-border);
-}
-.alt2obs-md-column .alt2obs-md-pane {
-  border-left: 0;
-}
-.alt2obs-sync-mode {
-  font-size: 12px;
-  color: var(--color-green);
-}
-.alt2obs-transcript-panel {
-  height: 32%;
-  min-height: 120px;
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--background-modifier-border);
-  background: var(--background-secondary);
-}
-.alt2obs-transcript-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 14px;
-  font-size: 12.5px;
-  font-weight: 600;
-  border-bottom: 1px solid var(--background-modifier-border);
-}
-.alt2obs-transcript-range {
-  font-family: var(--font-monospace);
-  font-weight: 400;
-  color: var(--text-muted);
-}
-.alt2obs-transcript-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 6px 8px;
-}
-.alt2obs-seg {
-  display: flex;
-  gap: 10px;
-  padding: 4px 6px;
-  border-radius: 4px;
-  font-size: 13px;
-  line-height: 1.55;
-}
-.alt2obs-seg-time {
-  font-family: var(--font-monospace);
-  font-size: 12px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-.alt2obs-empty-state {
-  padding: 32px;
-  color: var(--text-muted);
-  text-align: center;
-}
-`;
 
 export class SyncedViewerView extends ItemView {
   private mdPath: string | null = null;
@@ -220,7 +77,7 @@ export class SyncedViewerView extends ItemView {
   private prevButtonEl!: HTMLButtonElement;
   private nextButtonEl!: HTMLButtonElement;
 
-  private pdfDocument: any = null;
+  private pdfDocument: PDFDocumentProxy | null = null;
   private pageCanvases: HTMLCanvasElement[] = [];
   private pageWrappers: HTMLElement[] = [];
   private slideHeadings: Map<number, HTMLElement> = new Map();
@@ -274,7 +131,7 @@ export class SyncedViewerView extends ItemView {
   }
 
   getDisplayText(): string {
-    if (!this.mdPath) return "Synced Viewer";
+    if (!this.mdPath) return "Synced viewer";
     const name = this.mdPath.split("/").pop()?.replace(/\.md$/, "") ?? "Synced";
     return `${name} (Synced)`;
   }
@@ -285,10 +142,9 @@ export class SyncedViewerView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.closed = false;
-    this.injectGlobalStyles();
     const root = this.containerEl.children[1] as HTMLElement;
     root.empty();
-    root.addClass("alt2obs-synced-viewer");
+    root.addClass("alt-to-obs-synced-viewer");
     this.buildToolbar(root);
     this.buildPanes(root);
     this.renderEmptyState();
@@ -312,25 +168,25 @@ export class SyncedViewerView extends ItemView {
     for (const pane of ["pdf", "md"] as Pane[]) {
       if (this.scrollFrame[pane]) window.cancelAnimationFrame(this.scrollFrame[pane]);
       this.scrollFrame[pane] = 0;
-      if (this.guardTimer[pane] !== null) window.clearTimeout(this.guardTimer[pane]!);
+      if (this.guardTimer[pane] !== null) window.clearTimeout(this.guardTimer[pane]);
       this.guardTimer[pane] = null;
     }
     this.mdRenderComponent.unload();
     if (this.pdfDocument) {
       try {
         await this.pdfDocument.destroy();
-      } catch (_) {
+      } catch {
         // ignore
       }
       this.pdfDocument = null;
     }
   }
 
-  async setState(state: any, result: any): Promise<void> {
-    const next: SyncedViewerState = state ?? { mdPath: null, pdfPath: null };
+  async setState(state: unknown, result: ViewStateResult): Promise<void> {
+    const next = (state ?? { mdPath: null, pdfPath: null }) as SyncedViewerState;
     // Opened in place of a lecture PDF tab: keep that PDF out of the tab's
     // history, or Back would show it and turn it into this viewer again.
-    if (state?.replacesPdf && result) result.history = false;
+    if (next.replacesPdf && result) result.history = false;
     if (next.mdPath !== this.mdPath || next.pdfPath !== this.pdfPath) {
       this.mdPath = next.mdPath;
       this.pdfPath = next.pdfPath;
@@ -339,7 +195,7 @@ export class SyncedViewerView extends ItemView {
     return super.setState(state, result);
   }
 
-  getState(): any {
+  getState(): Record<string, unknown> {
     return { mdPath: this.mdPath, pdfPath: this.pdfPath };
   }
 
@@ -349,17 +205,8 @@ export class SyncedViewerView extends ItemView {
     await this.loadCurrentPair();
   }
 
-  private injectGlobalStyles(): void {
-    if (!document.getElementById(SYNCED_VIEWER_STYLE_ID)) {
-      const s = document.createElement("style");
-      s.id = SYNCED_VIEWER_STYLE_ID;
-      s.textContent = SYNCED_VIEWER_CSS;
-      document.head.appendChild(s);
-    }
-  }
-
   private buildToolbar(root: HTMLElement): void {
-    this.toolbarEl = root.createDiv({ cls: "alt2obs-synced-toolbar" });
+    this.toolbarEl = root.createDiv({ cls: "alt-to-obs-synced-toolbar" });
 
     this.prevButtonEl = this.toolbarEl.createEl("button", { text: "◀ 이전" });
     this.prevButtonEl.onclick = () => this.gotoPage(this.currentPage - 1);
@@ -382,13 +229,13 @@ export class SyncedViewerView extends ItemView {
     });
     nativeBtn.onclick = () => this.openInNativeView();
 
-    this.syncModeEl = this.toolbarEl.createSpan({ cls: "alt2obs-sync-mode", text: "정렬 기준 동기화 · 전사 매칭" });
+    this.syncModeEl = this.toolbarEl.createSpan({ cls: "alt-to-obs-sync-mode", text: "정렬 기준 동기화 · 전사 매칭" });
     this.syncModeEl.hide();
     this.transcriptBtnEl = this.toolbarEl.createEl("button", { text: "전사 패널" });
     this.transcriptBtnEl.onclick = () => void this.toggleTranscript();
     this.transcriptBtnEl.hide();
 
-    this.pageInfoEl = this.toolbarEl.createDiv({ cls: "alt2obs-page-info" });
+    this.pageInfoEl = this.toolbarEl.createDiv({ cls: "alt-to-obs-page-info" });
     this.updatePageInfo();
   }
 
@@ -411,11 +258,11 @@ export class SyncedViewerView extends ItemView {
   }
 
   private buildPanes(root: HTMLElement): void {
-    this.panesEl = root.createDiv({ cls: "alt2obs-synced-panes" });
-    this.pdfPaneEl = this.panesEl.createDiv({ cls: "alt2obs-pdf-pane" });
-    const column = this.panesEl.createDiv({ cls: "alt2obs-md-column" });
-    this.mdPaneEl = column.createDiv({ cls: "alt2obs-md-pane" });
-    this.transcriptPanelEl = column.createDiv({ cls: "alt2obs-transcript-panel" });
+    this.panesEl = root.createDiv({ cls: "alt-to-obs-synced-panes" });
+    this.pdfPaneEl = this.panesEl.createDiv({ cls: "alt-to-obs-pdf-pane" });
+    const column = this.panesEl.createDiv({ cls: "alt-to-obs-md-column" });
+    this.mdPaneEl = column.createDiv({ cls: "alt-to-obs-md-pane" });
+    this.transcriptPanelEl = column.createDiv({ cls: "alt-to-obs-transcript-panel" });
     this.transcriptPanelEl.hide();
     for (const pane of ["pdf", "md"] as Pane[]) {
       const el = this.paneEl(pane);
@@ -460,7 +307,7 @@ export class SyncedViewerView extends ItemView {
       if (!this.transcriptLoading) {
         this.transcriptTried = this.altLocalId;
         panel.empty();
-        panel.createDiv({ cls: "alt2obs-empty-state", text: "전사를 불러오는 중..." });
+        panel.createDiv({ cls: "alt-to-obs-empty-state", text: "전사를 불러오는 중..." });
         const id = this.altLocalId;
         const load = this.loadTranscript;
         this.transcriptLoading = load(id)
@@ -477,25 +324,25 @@ export class SyncedViewerView extends ItemView {
     panel.empty();
     const slide = this.currentPage;
     const spans = spansForSlide(this.alignment, slide);
-    const head = panel.createDiv({ cls: "alt2obs-transcript-head" });
+    const head = panel.createDiv({ cls: "alt-to-obs-transcript-head" });
     head.createSpan({ text: `전사 · 슬라이드 ${slide} 구간${spans.some((s) => s.low) ? " (정렬 불확실)" : ""}` });
     head.createSpan({
-      cls: "alt2obs-transcript-range",
+      cls: "alt-to-obs-transcript-range",
       text: spans.map((s) => `${mmss(s.startMs)} - ${mmss(s.endMs)}`).join(", "),
     });
-    const body = panel.createDiv({ cls: "alt2obs-transcript-body" });
+    const body = panel.createDiv({ cls: "alt-to-obs-transcript-body" });
     if (!this.transcript) {
-      body.createDiv({ cls: "alt2obs-empty-state", text: "전사를 찾지 못했습니다. Alt를 실행하거나 노트를 다시 가져오세요." });
+      body.createDiv({ cls: "alt-to-obs-empty-state", text: "전사를 찾지 못했습니다. Alt를 실행하거나 노트를 다시 가져오세요." });
       return;
     }
     const segs = this.transcript.filter((seg) => spans.some((s) => segmentInSpan(seg.startMs, s)));
     if (segs.length === 0) {
-      body.createDiv({ cls: "alt2obs-empty-state", text: "이 슬라이드에 정렬된 전사가 없습니다." });
+      body.createDiv({ cls: "alt-to-obs-empty-state", text: "이 슬라이드에 정렬된 전사가 없습니다." });
       return;
     }
     for (const seg of segs) {
-      const row = body.createDiv({ cls: "alt2obs-seg" });
-      row.createSpan({ cls: "alt2obs-seg-time", text: `[${mmss(seg.startMs)}]` });
+      const row = body.createDiv({ cls: "alt-to-obs-seg" });
+      row.createSpan({ cls: "alt-to-obs-seg-time", text: `[${mmss(seg.startMs)}]` });
       row.createSpan({ text: seg.text });
     }
   }
@@ -504,9 +351,9 @@ export class SyncedViewerView extends ItemView {
     this.pdfPaneEl.empty();
     this.mdPaneEl.empty();
     this.mdPaneEl.createDiv({
-      cls: "alt2obs-empty-state",
+      cls: "alt-to-obs-empty-state",
       text:
-        "강의 노트를 선택한 뒤 'Open Synced Viewer' 명령을 실행하시거나 사이드바에서 노트를 여세요.",
+        "강의 노트를 선택한 뒤 'Open synced viewer' 명령을 실행하시거나 사이드바에서 노트를 여세요.",
     });
   }
 
@@ -537,13 +384,13 @@ export class SyncedViewerView extends ItemView {
     try {
       await this.loadMarkdown(this.mdPath, mdTop);
     } catch (e) {
-      console.warn("[Alt2Obsidian] SyncedViewer markdown load failed:", e);
+      console.warn("[Alt2Obs] SyncedViewer markdown load failed:", e);
       new Notice("강의 노트를 불러올 수 없습니다.");
     }
     try {
       await this.loadPdf(this.pdfPath, pdfTop);
     } catch (e) {
-      console.warn("[Alt2Obsidian] SyncedViewer PDF load failed:", e);
+      console.warn("[Alt2Obs] SyncedViewer PDF load failed:", e);
       new Notice("PDF를 불러올 수 없습니다.");
     }
   }
@@ -575,7 +422,7 @@ export class SyncedViewerView extends ItemView {
     if (!(file instanceof TFile)) {
       this.mdPaneEl.empty();
       this.mdPaneEl.createDiv({
-        cls: "alt2obs-empty-state",
+        cls: "alt-to-obs-empty-state",
         text: `노트를 찾을 수 없습니다: ${path}`,
       });
       return;
@@ -611,7 +458,7 @@ export class SyncedViewerView extends ItemView {
       // Keep the reading position after an edit elsewhere.
       await this.loadMarkdown(this.mdPath, this.mdPaneEl.scrollTop);
     } catch (e) {
-      console.warn("[Alt2Obsidian] SyncedViewer markdown refresh failed:", e);
+      console.warn("[Alt2Obs] SyncedViewer markdown refresh failed:", e);
     }
   }
 
@@ -637,7 +484,7 @@ export class SyncedViewerView extends ItemView {
         if (!href) return;
         const newLeaf =
           (event as MouseEvent).metaKey || (event as MouseEvent).ctrlKey;
-        this.app.workspace.openLinkText(href, sourcePath, newLeaf);
+        void this.app.workspace.openLinkText(href, sourcePath, newLeaf);
       });
     });
     target.querySelectorAll("a.tag").forEach((node) => {
@@ -646,13 +493,13 @@ export class SyncedViewerView extends ItemView {
         event.preventDefault();
         const href = a.getAttribute("href") || "";
         if (!href) return;
-        // Tag clicks open the search panel — same as default Obsidian behavior.
-        const search = (this.app as any).internalPlugins?.getPluginById?.(
-          "global-search"
-        );
-        if (search?.instance?.openGlobalSearch) {
-          search.instance.openGlobalSearch(`tag:${href.replace(/^#/, "")}`);
-        }
+        // Tag clicks open the search panel, as in Obsidian's own views
+        // (the core Search plugin; not part of the public API, so optional).
+        const app = this.app as unknown as {
+          internalPlugins?: { getPluginById?: (id: string) => { instance?: { openGlobalSearch?: (query: string) => void } } | null };
+        };
+        const search = app.internalPlugins?.getPluginById?.("global-search");
+        search?.instance?.openGlobalSearch?.(`tag:${href.replace(/^#/, "")}`);
       });
     });
   }
@@ -673,7 +520,7 @@ export class SyncedViewerView extends ItemView {
     if (!(file instanceof TFile)) {
       this.pdfPaneEl.empty();
       this.pdfPaneEl.createDiv({
-        cls: "alt2obs-empty-state",
+        cls: "alt-to-obs-empty-state",
         text: `PDF를 찾을 수 없습니다: ${path}`,
       });
       this.totalPages = 0;
@@ -687,7 +534,7 @@ export class SyncedViewerView extends ItemView {
     if (this.pdfDocument) {
       try {
         await this.pdfDocument.destroy();
-      } catch (_) {
+      } catch {
         // ignore
       }
     }
@@ -695,8 +542,9 @@ export class SyncedViewerView extends ItemView {
     this.pageWrappers = [];
     this.pdfPaneEl.empty();
 
-    this.pdfDocument = await pdfjsLib.getDocument({ data: buffer.slice(0) }).promise;
-    this.totalPages = this.pdfDocument.numPages;
+    const doc = await pdfjsLib.getDocument({ data: buffer.slice(0) }).promise;
+    this.pdfDocument = doc;
+    this.totalPages = doc.numPages;
     this.currentPage = 1;
     this.updatePageInfo();
 
@@ -706,28 +554,28 @@ export class SyncedViewerView extends ItemView {
     this.pageCanvases = [];
     this.pageWrappers = [];
     for (let pageNum = 1; pageNum <= this.totalPages; pageNum++) {
-      const wrapper = this.pdfPaneEl.createDiv({ cls: "alt2obs-pdf-page-wrapper" });
+      const wrapper = this.pdfPaneEl.createDiv({ cls: "alt-to-obs-pdf-page-wrapper" });
       wrapper.dataset.pageNum = String(pageNum);
       // Listed before rendering, so sync works while later pages still render.
       this.pageWrappers.push(wrapper);
       wrapper.createDiv({
-        cls: "alt2obs-pdf-page-label",
+        cls: "alt-to-obs-pdf-page-label",
         text: `슬라이드 ${pageNum} / ${this.totalPages}`,
       });
       const placeholder = wrapper.createDiv({
-        cls: "alt2obs-pdf-page-loading",
+        cls: "alt-to-obs-pdf-page-loading",
         text: `렌더 중…`,
       });
       try {
         const canvas = await this.renderPageToCanvas(pageNum);
-        canvas.classList.add("alt2obs-pdf-page");
+        canvas.classList.add("alt-to-obs-pdf-page");
         canvas.dataset.pageNum = String(pageNum);
         placeholder.replaceWith(canvas);
         this.pageCanvases.push(canvas);
       } catch (renderErr) {
         placeholder.setText(`슬라이드 ${pageNum} 렌더 실패`);
         console.warn(
-          `[Alt2Obsidian] SyncedViewer page ${pageNum} render failed:`,
+          `[Alt2Obs] SyncedViewer page ${pageNum} render failed:`,
           renderErr
         );
       }
@@ -742,9 +590,10 @@ export class SyncedViewerView extends ItemView {
   }
 
   private async renderPageToCanvas(pageNum: number): Promise<HTMLCanvasElement> {
+    if (!this.pdfDocument) throw new Error("no PDF document");
     const page = await this.pdfDocument.getPage(pageNum);
     const viewport = page.getViewport({ scale: this.scale });
-    const canvas = document.createElement("canvas");
+    const canvas = createEl("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
     const ctx = canvas.getContext("2d");
@@ -764,7 +613,7 @@ export class SyncedViewerView extends ItemView {
    */
   private collectSlideHeadings(): void {
     this.slideHeadings.clear();
-    const els = Array.from(this.mdPaneEl.querySelectorAll("h2, h3")) as HTMLElement[];
+    const els = Array.from(this.mdPaneEl.querySelectorAll<HTMLElement>("h2, h3"));
     const picked = pickSlideHeadings(els.map((h) => ({ level: h.tagName === "H2" ? 2 : 3, text: h.textContent || "" })));
     for (const { index, num } of picked) this.slideHeadings.set(num, els[index]);
   }
@@ -826,7 +675,7 @@ export class SyncedViewerView extends ItemView {
     const until = Date.now() + ms;
     if (!shorten && until < this.guardUntil[pane]) return;
     this.guardUntil[pane] = until;
-    if (this.guardTimer[pane] !== null) window.clearTimeout(this.guardTimer[pane]!);
+    if (this.guardTimer[pane] !== null) window.clearTimeout(this.guardTimer[pane]);
     this.guardTimer[pane] = window.setTimeout(() => {
       this.guardTimer[pane] = null;
       if (this.guardUntil[pane] <= Date.now()) this.onPaneScroll(pane);
@@ -894,13 +743,13 @@ export class SyncedViewerView extends ItemView {
       const pageNum = i + 1;
       try {
         const next = await this.renderPageToCanvas(pageNum);
-        next.classList.add("alt2obs-pdf-page");
+        next.classList.add("alt-to-obs-pdf-page");
         next.dataset.pageNum = String(pageNum);
         oldCanvas.replaceWith(next);
         this.pageCanvases[i] = next;
       } catch (e) {
         console.warn(
-          `[Alt2Obsidian] SyncedViewer rescale page ${pageNum} failed:`,
+          `[Alt2Obs] SyncedViewer rescale page ${pageNum} failed:`,
           e
         );
       }

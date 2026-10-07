@@ -33,6 +33,8 @@ var CLAUDE_TASK_DEFAULTS = {
   verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification }
 };
 var DEFAULT_SETTINGS = {
+  // The folder name from before the rename to Alt2Obs (2.0.0): existing
+  // vaults and the Skill keep writing to the same place.
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
   settingsVersion: 3,

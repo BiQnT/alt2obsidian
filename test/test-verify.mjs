@@ -395,7 +395,7 @@ try {
 
   const s2 = fakeSession("ok");
   const job2 = m.createJobDir();
-  const cacheDir = join(mkdtempSync(join(tmpdir(), "alt2obs-notion-test-")), "notion");
+  const cacheDir = join(mkdtempSync(join(tmpdir(), "alt-to-obs-notion-test-")), "notion");
   const url = "https://www.notion.so/me/13-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d";
   try {
     const usage = new m.UsageTracker();
@@ -446,7 +446,7 @@ try {
     delete process.env.FAKE_NOTION_ID;
     // A result Claude Code saved to a file: read in full only from this call's
     // ~/.claude/projects/<job folder>/**/tool-results/, written during the call.
-    const home = mkdtempSync(join(tmpdir(), "alt2obs-home-"));
+    const home = mkdtempSync(join(tmpdir(), "alt-to-obs-home-"));
     const { mkdirSync, writeFileSync, utimesSync, existsSync } = await import("node:fs");
     const ownDir = join(home, ".claude/projects", m.claudeProjectKey(job2), "sub/tool-results");
     mkdirSync(ownDir, { recursive: true });

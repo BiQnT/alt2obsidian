@@ -1,4 +1,4 @@
-import { editorLivePreviewField, Plugin, Notice, WorkspaceLeaf } from "obsidian";
+import { editorLivePreviewField, normalizePath, Plugin, Notice, WorkspaceLeaf } from "obsidian";
 import type { CodexModels, ModelCatalog, ModelInfo } from "./settings/llmSettings";
 import type { Extension } from "@codemirror/state";
 import { managedCommentHider } from "./editor/managedComments";
@@ -19,7 +19,7 @@ import {
   TaskId,
   TaskLLMSetting,
 } from "./types";
-import { AltPublicUrlSource, bundleFromAltData } from "./sources/AltPublicUrlSource";
+import { AltPublicUrlSource } from "./sources/AltPublicUrlSource";
 import { AltLocalSource, altUserDataDir, connectAltLocal, ConnectResult, inferSubject, LectureBundle } from "./sources";
 import { alignLecture, buildAlignmentCheckPrompt, checkAlignmentWithLlm, LectureAlignment } from "./pipeline/alignment";
 import { layoutAlignmentText } from "./core/prep/pageLayout";
@@ -32,6 +32,7 @@ import { parseExistingSections, planTranscript, TranscriptPlan, verifySectionsFr
 import { estimateTranscriptSummary, runTranscriptSummary } from "./pipeline/transcriptPipeline";
 import { choose, pickPdf, PickedPdf } from "./ui/attachPdf";
 import { PdfProcessor } from "./pdf/PdfProcessor";
+import { createPdfWorkerUrl } from "./pdf/pdfWorker";
 import { createTaskProvider } from "./llm/index";
 import {
   cliNotFoundMessage,
@@ -47,6 +48,7 @@ import { UsageTracker, accumulateTotals, formatUsageFrontmatter } from "./llm/us
 import {
   batchSizeFor,
   chooseCli,
+  LEGACY_KEY_FIELDS,
   migrateSettings,
   describeFilled,
   isCliProvider,
@@ -69,9 +71,9 @@ import conceptExtractionTemplateText from "../prompts/concept-extraction.md";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { insertFrontmatterLine, NoteGenerator, preservedFrontmatterLines, removeFrontmatterLine } from "./generator/NoteGenerator";
 import { VaultManager } from "./vault/VaultManager";
-import { Alt2ObsidianSettingsTab } from "./ui/SettingsTab";
+import { Alt2ObsSettingsTab } from "./ui/SettingsTab";
 import {
-  Alt2ObsidianSidebarView,
+  Alt2ObsSidebarView,
   VIEW_TYPE_SIDEBAR,
 } from "./ui/SidebarView";
 import {
@@ -185,7 +187,28 @@ export interface CliImportHooks {
   onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
 }
 
-export default class Alt2ObsidianPlugin extends Plugin {
+/** The plugin's id before the rename to Alt2Obs (2.0.0). Its folder is only ever read. */
+const LEGACY_PLUGIN_ID = "alt2obsidian";
+
+/** View types of the plugin before the rename, and the ones that replace them. */
+const LEGACY_VIEW_TYPES: Record<string, string> = {
+  "alt2obsidian-sidebar": VIEW_TYPE_SIDEBAR,
+  "alt2obsidian-synced-viewer": VIEW_TYPE_SYNCED_VIEWER,
+};
+
+/** The old plugin's data.json: not there, there but unreadable, or its content. */
+type LegacyRead = { state: "missing" } | { state: "unreadable"; error: string } | { state: "ok"; data: Record<string, unknown> };
+
+/** Saved data of the old plugin without the API keys of 1.x and 2.0.0-beta.3 (nothing reads them; they are not carried over). */
+function withoutLegacyKeys(data: Record<string, unknown>): Record<string, unknown> {
+  const settings = data.settings;
+  if (!settings || typeof settings !== "object") return data;
+  const kept = { ...(settings as Record<string, unknown>) };
+  for (const k of LEGACY_KEY_FIELDS) delete kept[k];
+  return { ...data, settings: kept };
+}
+
+export default class Alt2ObsPlugin extends Plugin {
   data: PluginData = DEFAULT_PLUGIN_DATA;
   vaultManager: VaultManager | null = null;
 
@@ -206,18 +229,13 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.data.settings.baseFolderPath
     );
 
-    // Resolve the pdfjs worker via Obsidian's resource-path machinery so it
-    // becomes an `app://local/...` URL the renderer can actually fetch.
-    // Raw filesystem paths get prepended to `app://obsidian.md/` and fail.
-    const workerVaultPath = `${this.manifest.dir}/pdf.worker.min.mjs`;
-    const workerSrc =
-      (this.app.vault.adapter as any).getResourcePath?.(workerVaultPath) ||
-      workerVaultPath;
-    this.pdfProcessor = new PdfProcessor(workerSrc);
+    // The PDF.js worker is inside main.js and runs from a Blob URL (revoked on unload).
+    this.pdfWorkerUrl = createPdfWorkerUrl();
+    this.pdfProcessor = new PdfProcessor(this.pdfWorkerUrl);
 
     // Register sidebar view
     this.registerView(VIEW_TYPE_SIDEBAR, (leaf) => {
-      return new Alt2ObsidianSidebarView(leaf, this);
+      return new Alt2ObsSidebarView(leaf, this);
     });
 
     // Register Synced Viewer (Task 1.5 — A2 default)
@@ -231,27 +249,27 @@ export default class Alt2ObsidianPlugin extends Plugin {
     });
 
     // Attached PDF copies are tracked by path: follow renames and moves (spec 4.10).
-    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => void this.onVaultRename(file, oldPath).catch((e) => console.warn("[Alt2Obsidian] attach record update failed:", e))));
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => void this.onVaultRename(file, oldPath).catch((e) => console.warn("[Alt2Obs] attach record update failed:", e))));
 
     // Live Preview: hide the alt2obs management comment lines (setting "관리 주석 숨기기").
     this.registerEditorExtension(this.editorExtensions);
     this.applyCommentHiding();
 
     // Add ribbon icon
-    this.addRibbonIcon("book-open", "Alt2Obsidian", () => {
-      this.activateSidebarView();
+    this.addRibbonIcon("book-open", "Alt 강의 가져오기", () => {
+      void this.activateSidebarView();
     });
 
     // Add command
     this.addCommand({
       id: "open-sidebar",
-      name: "Open Alt2Obsidian sidebar",
+      name: "Open sidebar",
       callback: () => this.activateSidebarView(),
     });
 
     this.addCommand({
       id: "import-note",
-      name: "Import Alt note (local list or URL)",
+      name: "Import lecture note (local list or URL)",
       callback: () => this.activateSidebarView(),
     });
 
@@ -261,32 +279,47 @@ export default class Alt2ObsidianPlugin extends Plugin {
       callback: () => new MigrationModal(this.app, this.planVaultMigration(), (plan) => this.applyVaultMigration(plan)).open(),
     });
 
+    // Offered while a note or a PDF is open (the same test as the commands'); they say when it is not a lecture's.
+    const noteOrPdfOpen = () => {
+      const ext = this.app.workspace.getActiveFile()?.extension;
+      return ext === "md" || ext?.toLowerCase() === "pdf";
+    };
     this.addCommand({
       id: "open-synced-viewer",
-      name: "Open Synced Viewer (PDF + lecture .md)",
-      callback: () => this.openSyncedViewerForActiveNote(),
+      name: "Open synced viewer (PDF + lecture .md)",
+      checkCallback: (checking) => {
+        if (!noteOrPdfOpen()) return false;
+        if (!checking) void this.openSyncedViewerForActiveNote();
+        return true;
+      },
     });
 
     this.addCommand({
       id: "attach-lecture-pdf",
       name: "Attach lecture PDF to the current lecture note",
-      callback: () => this.attachPdfToActiveNote(),
+      checkCallback: (checking) => {
+        if (!noteOrPdfOpen()) return false;
+        if (!checking) void this.attachPdfToActiveNote();
+        return true;
+      },
     });
 
     // Register settings tab
-    this.addSettingTab(new Alt2ObsidianSettingsTab(this.app, this));
+    this.addSettingTab(new Alt2ObsSettingsTab(this.app, this));
 
     // The login-shell lookup can take a moment: run it after startup.
     this.app.workspace.onLayoutReady(() => {
-      this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obsidian] CLI default check failed:", e));
-      this.pruneAttachRecords().catch((e) => console.warn("[Alt2Obsidian] attach record prune failed:", e));
+      this.showRenameNotices().catch((e) => console.warn("[Alt2Obs] rename notice failed:", e));
+      this.adoptLegacyLeaves().catch((e) => console.warn("[Alt2Obs] old view tabs not converted:", e));
+      this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obs] CLI default check failed:", e));
+      this.pruneAttachRecords().catch((e) => console.warn("[Alt2Obs] attach record prune failed:", e));
       // Lecture PDFs opened from now on go to the Synced Viewer (setting
       // "강의 PDF를 열면 뷰어로 열기"). Registered after the layout is
       // restored, and the PDF tabs it restored are left as plain PDFs.
       if (this.data.settings.openPdfInViewer) this.keepOpenPdfTabsPlain();
       this.registerEvent(
         this.app.workspace.on("file-open", (file) => {
-          if (file instanceof TFile) void this.onPdfOpened(file).catch((e) => console.warn("[Alt2Obsidian] lecture PDF redirect failed:", e));
+          if (file instanceof TFile) void this.onPdfOpened(file).catch((e) => console.warn("[Alt2Obs] lecture PDF redirect failed:", e));
         })
       );
     });
@@ -298,7 +331,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.app.metadataCache.on("resolved", () => {
         if (pruned) return;
         pruned = true;
-        this.pruneTranscriptCache().catch((e) => console.warn("[Alt2Obsidian] transcript cache prune failed:", e));
+        this.pruneTranscriptCache().catch((e) => console.warn("[Alt2Obs] transcript cache prune failed:", e));
       })
     );
   }
@@ -309,8 +342,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
     this.unloaded = true;
     this.localSource?.close?.();
     this.localSource = null;
+    if (this.pdfWorkerUrl) URL.revokeObjectURL(this.pdfWorkerUrl);
+    this.pdfWorkerUrl = null;
   }
   private unloaded = false;
+  /** Blob URL of the bundled PDF.js worker (src/pdf/pdfWorker.ts). */
+  private pdfWorkerUrl: string | null = null;
 
   /**
    * Resolve the active note's sibling PDF and open both in the Synced
@@ -344,7 +381,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const active = this.app.workspace.getActiveFile();
     const mdPath = active?.extension.toLowerCase() === "pdf" ? active.path.replace(/\.pdf$/i, ".md") : active?.extension === "md" ? active.path : null;
     if (!mdPath || !isLectureFrontmatter(this.frontmatterOf(mdPath))) {
-      new Notice("강의 노트(Alt에서 가져온 노트)를 연 뒤 다시 시도하세요.");
+      new Notice("Alt에서 가져온 강의 노트를 연 뒤 다시 시도하세요.");
       return;
     }
     await this.attachPdfInteractive(mdPath);
@@ -380,6 +417,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
    */
   async onPdfOpened(file: TFile): Promise<void> {
     if (!/\.pdf$/i.test(file.path)) return;
+    // The old Alt2Obsidian plugin, still enabled, turns this PDF into its own viewer: two would race on one tab.
+    if (await this.legacyPluginEnabled()) return;
     const leaf = this.pdfLeafFor(file.path);
     const notePath = this.data.settings.openPdfInViewer
       ? await lectureNoteForPdf(file.path, {
@@ -398,7 +437,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const stillShown = !!leaf && (leaf.view as { file?: TFile | null })?.file?.path === file.path;
     const decision = decidePdfOpen({
       enabled: this.data.settings.openPdfInViewer,
-      viewType: stillShown ? leaf!.view.getViewType() : null,
+      viewType: stillShown ? leaf.view.getViewType() : null,
       pdfPath: file.path,
       bypass: !!leaf && this.nativePdfLeaves.get(leaf) === file.path,
       busy: this.redirecting.has(file.path),
@@ -420,7 +459,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         const history = (leaf as unknown as { history?: { backHistory?: unknown[]; back?: () => Promise<void> } }).history;
         if (history?.back && (history.backHistory?.length ?? 0) > 0) await history.back();
         else leaf.detach();
-        this.app.workspace.revealLeaf(same);
+        void this.app.workspace.revealLeaf(same);
         return;
       }
       // replacesPdf: the viewer keeps the PDF step out of the tab's history,
@@ -462,7 +501,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     if (view instanceof SyncedViewerView && view.getState().mdPath === mdPath && view.getState().pdfPath === pdfPath) {
       // Same pair (a re-import): load both again, the PDF may have changed.
       await view.openPair(mdPath, pdfPath);
-      this.app.workspace.revealLeaf(existing);
+      void this.app.workspace.revealLeaf(existing);
       return;
     }
     const leaf = existing ?? this.app.workspace.getLeaf(true);
@@ -471,7 +510,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       active: true,
       state: { mdPath, pdfPath },
     });
-    this.app.workspace.revealLeaf(leaf);
+    void this.app.workspace.revealLeaf(leaf);
   }
 
   /** Editor extensions registered once; emptied or filled when the setting changes. */
@@ -500,7 +539,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       const isLectureNote = !!fm && (!!fm.alt_id || !!fm.alt_local_id || source === "alt2obsidian" || source === "alt2obsidian-cc-skill");
       return { path: file.path, isLectureNote };
     });
-    return planLayoutMigration(this.data.settings.baseFolderPath, files);
+    return planLayoutMigration(normalizePath(this.data.settings.baseFolderPath), files);
   }
 
   /** Moves through app.fileManager.renameFile, so Obsidian rewrites links to the moved files. */
@@ -729,7 +768,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.pageCountCache.set(key, texts.length);
       return texts;
     } catch (e) {
-      console.warn("[Alt2Obsidian] slide text check failed:", e);
+      console.warn("[Alt2Obs] slide text check failed:", e);
       return null;
     }
   }
@@ -758,9 +797,8 @@ export default class Alt2ObsidianPlugin extends Plugin {
   async linkLocalNote(path: string, localId: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) throw new Error(`노트를 찾지 못했습니다: ${path}`);
-    // One line inserted as text (processFrontMatter would reformat the YAML).
-    const content = await this.app.vault.read(file);
-    await this.app.vault.modify(file, insertFrontmatterLine(content, `alt_local_id: ${JSON.stringify(localId)}`));
+    // One line inserted as text (processFrontMatter would reformat the YAML), atomically.
+    await this.app.vault.process(file, (content) => insertFrontmatterLine(content, `alt_local_id: ${JSON.stringify(localId)}`));
   }
 
   /**
@@ -779,7 +817,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       const own = alt.metadata.noteId ? this.vaultLectureNotes().find((v) => v.altId === alt.metadata.noteId) : undefined;
       if (own) return own.path;
       // The 1.x path only for this lecture's own note: the same alt_id, or an
-      // Alt2Obsidian note with no id at all (never another lecture's note).
+      // Alt2Obs (Alt2Obsidian) note with no id at all (never another lecture's note).
       const legacy = `${vm.getBasePath()}/${sanitizeFilename(subject)}/${sanitizeFilename(alt.title)}.md`;
       const file = this.app.vault.getAbstractFileByPath(legacy);
       if (file instanceof TFile) {
@@ -878,12 +916,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
   /** Timestamped transcript of a local note for the Synced Viewer panel; null when unknown. */
   async loadTranscript(localId: string): Promise<Array<{ startMs: number; endMs: number; text: string }> | null> {
     try {
-      const json = JSON.parse(await fsp.readFile(this.transcriptCachePath(localId), "utf8"));
+      const json = JSON.parse(await fsp.readFile(this.transcriptCachePath(localId), "utf8")) as { segments?: unknown } | null;
       if (Array.isArray(json?.segments)) {
         return (json.segments as Array<[number, number, string]>).map(([startMs, endMs, text]) => ({ startMs, endMs, text }));
       }
     } catch (e) {
-      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") console.warn("[Alt2Obsidian] transcript cache unreadable:", e);
+      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") console.warn("[Alt2Obs] transcript cache unreadable:", e);
     }
     // Not cached (imported elsewhere, or cache cleared): ask Alt.
     try {
@@ -895,7 +933,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
         .filter((s) => s.startMs !== null && s.endMs !== null)
         .map((s) => ({ startMs: s.startMs as number, endMs: s.endMs as number, text: s.text }));
     } catch (e) {
-      console.warn("[Alt2Obsidian] transcript load failed:", e);
+      console.warn("[Alt2Obs] transcript load failed:", e);
       return null;
     }
   }
@@ -1115,7 +1153,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
     // Same path on every import: an image is replaced, never duplicated.
     for (const a of args.attachments ?? []) await vm.saveRawFile(a.data, a.path);
-    await this.cacheTranscript(args.bundle).catch((e) => console.warn("[Alt2Obsidian] transcript cache write failed:", e));
+    await this.cacheTranscript(args.bundle).catch((e) => console.warn("[Alt2Obs] transcript cache write failed:", e));
     void this.pruneTranscriptCache(args.bundle ? [args.bundle.sourceId] : []).catch(() => undefined);
 
     onProgress?.("완료!", 100);
@@ -1290,7 +1328,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
   /** Parsed frontmatter of a vault note, or null. */
   private frontmatterOf(path: string): Record<string, unknown> | null {
     const f = this.app.vault.getAbstractFileByPath(path);
-    return f instanceof TFile ? ((this.app.metadataCache.getFileCache(f)?.frontmatter as Record<string, unknown> | undefined) ?? null) : null;
+    return f instanceof TFile ? (this.app.metadataCache.getFileCache(f)?.frontmatter ?? null) : null;
   }
 
   /** The setting a task of this run uses: the run's choice, else the saved setting. */
@@ -1505,7 +1543,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.activeJobs.delete(controller);
       removeJobDir(job);
       if (usage.total().calls > 0) {
-        await this.recordUsage(usage).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
+        await this.recordUsage(usage).catch((e) => console.warn("[Alt2Obs] usage record failed:", e));
       }
     }
   }
@@ -1687,8 +1725,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
   private async unmarkAttached(notePath: string): Promise<void> {
     const note = this.app.vault.getAbstractFileByPath(notePath);
     if (!(note instanceof TFile)) return;
-    const content = await this.app.vault.read(note);
-    if (markedAttached(content)) await this.app.vault.modify(note, removeFrontmatterLine(content, "alt_pdf_source"));
+    if (markedAttached(await this.app.vault.read(note))) {
+      await this.app.vault.process(note, (content) => removeFrontmatterLine(content, "alt_pdf_source"));
+    }
   }
 
   /**
@@ -1744,10 +1783,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
     let marked = false;
     const note = this.app.vault.getAbstractFileByPath(notePath);
     if (note instanceof TFile) {
-      const content = await this.app.vault.read(note);
-      if (!markedAttached(content)) {
-        // One line inserted as text (processFrontMatter would reformat the YAML).
-        await this.app.vault.modify(note, insertFrontmatterLine(content, ATTACHED_LINE));
+      if (!markedAttached(await this.app.vault.read(note))) {
+        // One line inserted as text (processFrontMatter would reformat the YAML), atomically.
+        await this.app.vault.process(note, (content) => (markedAttached(content) ? content : insertFrontmatterLine(content, ATTACHED_LINE)));
         marked = true;
       }
     }
@@ -1779,14 +1817,14 @@ export default class Alt2ObsidianPlugin extends Plugin {
           "Alt에 슬라이드가 없으면 강의 PDF를 첨부하세요. 다음 가져오기부터 그 PDF를 슬라이드로 씁니다.",
         ]
       : pending
-        ? ["이 노트는 녹음 전사로 만든 요약 노트입니다. PDF가 첨부되어 있으니 사이드바의 Alt 노트 목록에서 이 강의를 다시 가져오면 슬라이드 노트로 바뀌고 Synced Viewer로 볼 수 있습니다 (내 메모는 '이전 노트 백업'에 보존)."]
+        ? ["이 노트는 녹음 전사로 만든 요약 노트입니다. PDF가 첨부되어 있으니 사이드바의 Alt 노트 목록에서 이 강의를 다시 가져오면 슬라이드 노트로 바뀌고 synced viewer로 볼 수 있습니다 (내 메모는 '이전 노트 백업'에 보존)."]
         : [
-            "이 강의에는 슬라이드 PDF가 없어 녹음 전사로 요약 노트를 만들었습니다. Synced Viewer는 PDF와 슬라이드별 노트를 나란히 보여 주므로 이 노트에는 쓸 수 없습니다.",
-            "강의 PDF를 첨부하면 다음 가져오기에서 슬라이드 노트로 바뀌고(슬라이드별 해설, 전사 정렬, 슬라이드 대조 검증) Synced Viewer로 볼 수 있습니다. 지금 노트의 내용과 내 메모는 '이전 노트 백업'에 그대로 남습니다.",
+            "이 강의에는 슬라이드 PDF가 없어 녹음 전사로 요약 노트를 만들었습니다. Synced viewer는 PDF와 슬라이드별 노트를 나란히 보여 주므로 이 노트에는 쓸 수 없습니다.",
+            "강의 PDF를 첨부하면 다음 가져오기에서 슬라이드 노트로 바뀌고(슬라이드별 해설, 전사 정렬, 슬라이드 대조 검증) synced viewer로 볼 수 있습니다. 지금 노트의 내용과 내 메모는 '이전 노트 백업'에 그대로 남습니다.",
           ];
     const choice = await choose(
       this.app,
-      "Synced Viewer를 열 수 없습니다",
+      "Synced viewer를 열 수 없습니다",
       paragraphs,
       pending && summaryNote ? [{ id: "close", text: "닫기", cta: true }] : [{ id: "close", text: "닫기" }, { id: "attach", text: "PDF 첨부", cta: true }]
     );
@@ -1844,7 +1882,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       return {
         page: img.pageNum,
         path: attachmentPathForNote(notePath, img.pageNum),
-        data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+        data: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
       };
     });
   }
@@ -1864,7 +1902,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       return await checkAlignmentWithLlm(llm, title, alignment, slideTexts, signal);
     } catch (e) {
       if (signal?.aborted) throw e;
-      console.warn("[Alt2Obsidian] alignment check failed, keeping the script alignment:", e);
+      console.warn("[Alt2Obs] alignment check failed, keeping the script alignment:", e);
       return alignment;
     }
   }
@@ -1970,7 +2008,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       signal?.removeEventListener("abort", forward);
       this.activeJobs.delete(controller);
       removeJobDir(job);
-      if (usage.total().calls > 0) await this.recordUsage(usage, false).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
+      if (usage.total().calls > 0) await this.recordUsage(usage, false).catch((e) => console.warn("[Alt2Obs] usage record failed:", e));
     }
   }
 
@@ -2096,7 +2134,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.activeJobs.delete(controller);
       removeJobDir(job);
       if (usage.total().calls > 0) {
-        await this.recordUsage(usage, false).catch((e) => console.warn("[Alt2Obsidian] usage record failed:", e));
+        await this.recordUsage(usage, false).catch((e) => console.warn("[Alt2Obs] usage record failed:", e));
       }
     }
   }
@@ -2201,9 +2239,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
           : "";
       new Notice(removedProviderMessage(removedFrom, target) + hint, 15000);
     } else if (cli === "codex-cli" && moved.length > 0) {
-      new Notice("Alt2Obsidian: 로그인된 Claude CLI가 없어 작업을 Codex CLI로 설정했습니다. 설정의 '작업별 모델'에서 확인하세요.");
+      new Notice("Alt2Obs: 로그인된 Claude CLI가 없어 작업을 Codex CLI로 설정했습니다. 설정의 '작업별 모델'에서 확인하세요.");
     } else if (!cli) {
-      new Notice("Alt2Obsidian: Claude Code나 Codex CLI가 필요합니다. 설치하고 로그인한 뒤 설정의 'LLM 연결'에서 '다시 찾기'를 누르세요.");
+      new Notice("Alt2Obs: Claude Code나 Codex CLI가 필요합니다. 설치하고 로그인한 뒤 설정의 'LLM 연결'에서 '다시 찾기'를 누르세요.");
     }
     await this.savePluginData();
   }
@@ -2213,7 +2251,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     const lines = this.data.pendingFilledNotice;
     if (!lines || lines.length === 0) return;
     new Notice(
-      "Alt2Obsidian: 'CLI 기본값'(빈 칸)이던 모델과 effort를 작업 기본값으로 바꿨습니다.\n" +
+      "Alt2Obs: 'CLI 기본값'(빈 칸)이던 모델과 effort를 작업 기본값으로 바꿨습니다.\n" +
         lines.join("\n") +
         "\n설정의 '작업별 모델'에서 다시 'CLI 기본값'으로 돌릴 수 있습니다.",
       15000
@@ -2404,7 +2442,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     try {
       return { data: await this.pdfProcessor.downloadPdf(preview.pdfUrl), error: null };
     } catch (e) {
-      console.warn("[Alt2Obsidian] PDF download failed:", e);
+      console.warn("[Alt2Obs] PDF download failed:", e);
       return { data: null, error: e instanceof Error ? e.message : String(e) };
     }
   }
@@ -2418,7 +2456,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
     try {
       return await this.pdfProcessor.downloadPdf(preview.pdfUrl);
     } catch (e) {
-      console.warn("[Alt2Obsidian] PDF download failed:", e);
+      console.warn("[Alt2Obs] PDF download failed:", e);
       return null;
     }
   }
@@ -2463,7 +2501,7 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.app.workspace.getLeavesOfType(VIEW_TYPE_SIDEBAR);
 
     if (existing.length > 0) {
-      this.app.workspace.revealLeaf(existing[0]);
+      void this.app.workspace.revealLeaf(existing[0]);
       return;
     }
 
@@ -2473,12 +2511,17 @@ export default class Alt2ObsidianPlugin extends Plugin {
         type: VIEW_TYPE_SIDEBAR,
         active: true,
       });
-      this.app.workspace.revealLeaf(leaf);
+      void this.app.workspace.revealLeaf(leaf);
     }
   }
 
   async loadPluginData(): Promise<void> {
-    const saved = (await this.loadData()) || {};
+    const own = (await this.loadData()) as (Record<string, unknown> & { legacyImportRetry?: unknown }) | null;
+    // The old plugin's data comes along on the first load after the rename to
+    // Alt2Obs (2.0.0), or on a later start when it could not be read before.
+    const legacy = !own || own.legacyImportRetry === true ? await this.readLegacyData() : null;
+    const imported = legacy?.state === "ok" ? withoutLegacyKeys(legacy.data) : null;
+    const saved = (imported || own || {}) as Partial<PluginData> & Record<string, unknown>;
     this.data = Object.assign({}, DEFAULT_PLUGIN_DATA, saved);
     // Keep every 1.x value; add the 2.0 per-task settings (spec 4.2).
     const { settings, needsCliDefault, movedTasks, removedFrom, filled } = migrateSettings(saved.settings);
@@ -2498,6 +2541,107 @@ export default class Alt2ObsidianPlugin extends Plugin {
     }
     if (removedFrom.length > 0) this.data.removedProviderNotice = removedFrom;
     if (filled.length > 0) this.data.pendingFilledNotice = describeFilled(filled);
+    this.legacyReadError = legacy?.state === "unreadable" ? legacy.error : null;
+    if (imported) {
+      // Saved now, so the import happens once; the old plugin's folder is left as it is.
+      delete this.data.legacyImportRetry;
+      this.data.pendingRenameNotice = true;
+      await this.savePluginData();
+    } else if (legacy?.state === "unreadable") {
+      // Not a fresh install: whatever is saved from now on asks for another try next start.
+      this.data.legacyImportRetry = true;
+    } else if (legacy?.state === "missing" && own?.legacyImportRetry === true) {
+      // The old data is gone: nothing left to retry.
+      delete this.data.legacyImportRetry;
+      await this.savePluginData();
+    }
+  }
+
+  /** Why the old plugin's data.json could not be read on this start (shown once on layout ready); null when it was. */
+  private legacyReadError: string | null = null;
+
+  /**
+   * data.json of the plugin before the rename (id "alt2obsidian") in this
+   * vault's config folder, or null. Read only: the old folder is never
+   * changed or removed.
+   */
+  private async readLegacyData(): Promise<LegacyRead> {
+    const path = normalizePath(`${this.app.vault.configDir}/plugins/${LEGACY_PLUGIN_ID}/data.json`);
+    try {
+      if (!(await this.app.vault.adapter.exists(path))) return { state: "missing" };
+      const data: unknown = JSON.parse(await this.app.vault.adapter.read(path));
+      if (data === null) return { state: "missing" };
+      if (typeof data === "object" && !Array.isArray(data)) return { state: "ok", data: data as Record<string, unknown> };
+      return { state: "unreadable", error: "설정 객체가 아님" };
+    } catch (e) {
+      console.warn("[Alt2Obs] the old Alt2Obsidian data could not be read:", e);
+      return { state: "unreadable", error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  /**
+   * Tabs of the old plugin's views that Obsidian kept (the Alt2Obs sidebar
+   * and Synced Viewer under the old view types) become the Alt2Obs views
+   * with the same state. Only when the old plugin is not enabled, so its
+   * own tabs are never taken over.
+   */
+  async adoptLegacyLeaves(): Promise<number> {
+    if (await this.legacyPluginEnabled()) return 0;
+    let converted = 0;
+    for (const [oldType, newType] of Object.entries(LEGACY_VIEW_TYPES)) {
+      for (const leaf of this.app.workspace.getLeavesOfType(oldType)) {
+        await leaf.setViewState({ ...leaf.getViewState(), type: newType, active: false });
+        converted++;
+      }
+    }
+    return converted;
+  }
+
+  /** The old Alt2Obsidian plugin is installed and enabled in this vault (read from the config folder). */
+  private async legacyPluginEnabled(): Promise<boolean> {
+    const { adapter, configDir } = this.app.vault;
+    try {
+      const enabled: unknown = JSON.parse(await adapter.read(normalizePath(`${configDir}/community-plugins.json`)));
+      if (!Array.isArray(enabled) || !enabled.includes(LEGACY_PLUGIN_ID)) return false;
+      const manifest = JSON.parse(await adapter.read(normalizePath(`${configDir}/plugins/${LEGACY_PLUGIN_ID}/manifest.json`))) as { id?: unknown };
+      return manifest.id === LEGACY_PLUGIN_ID;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * After the rename to Alt2Obs: once after the old plugin's data was
+   * imported, and on every start while the old plugin is still enabled
+   * (both would turn lecture PDFs into a viewer, hide comments and so on).
+   */
+  async showRenameNotices(): Promise<void> {
+    if (this.legacyReadError !== null) {
+      new Notice(
+        `Alt2Obs: 이전 Alt2Obsidian 플러그인의 설정 파일(data.json)을 읽지 못해 가져오지 못했습니다: ${this.legacyReadError}. ` +
+          "Obsidian을 켤 때마다 다시 시도하고, 읽히면 그 설정과 기록으로 바꿉니다. 이전 플러그인의 폴더는 바꾸지 않습니다.",
+        0
+      );
+      this.legacyReadError = null;
+    }
+    if (this.data.pendingRenameNotice) {
+      new Notice(
+        "Alt2Obs: 이전 Alt2Obsidian 플러그인의 설정과 기록을 가져왔습니다. 노트와 폴더는 그대로입니다. " +
+          "설정 → 커뮤니티 플러그인에서 Alt2Obsidian을 끄고 삭제하세요. 두 플러그인이 함께 켜져 있는 동안 강의 PDF를 뷰어로 바꾸는 일은 이전 플러그인에 맡깁니다. " +
+          "이전 명령에 단축키를 지정했다면 Alt2Obs 명령에 다시 지정하세요.",
+        0
+      );
+      delete this.data.pendingRenameNotice;
+      await this.savePluginData();
+      return;
+    }
+    if (await this.legacyPluginEnabled()) {
+      new Notice(
+        "Alt2Obs: 이전 Alt2Obsidian 플러그인이 아직 켜져 있습니다. 그동안 강의 PDF를 뷰어로 바꾸는 일은 이전 플러그인에 맡깁니다. " +
+          "설정 → 커뮤니티 플러그인에서 Alt2Obsidian을 끄고 삭제하세요.",
+        15000
+      );
+    }
   }
 
   async savePluginData(): Promise<void> {

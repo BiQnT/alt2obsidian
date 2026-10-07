@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { inlinePdfWorker } from "../../scripts/inline-pdf-worker.mjs";
 
 export const repo = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -38,6 +39,7 @@ export async function importTs(entry) {
     loader: { ".md": "text", ".css": "text" },
     logLevel: "error",
     plugins: [
+      inlinePdfWorker,
       {
         name: "obsidian-stub",
         setup(b) {
@@ -47,7 +49,7 @@ export async function importTs(entry) {
       },
     ],
   });
-  const dir = mkdtempSync(join(tmpdir(), "alt2obs-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-test-"));
   const file = join(dir, "bundle.mjs");
   writeFileSync(file, result.outputFiles[0].text);
   try {

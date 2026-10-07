@@ -1,0 +1,69 @@
+// ESLint with the official Obsidian rules (eslint-plugin-obsidianmd, the
+// rules the community directory's automated review runs): `npm run lint`.
+// Linted: the plugin source (src/), package.json and manifest.json. Not
+// linted, as in the directory's scanner: tests, the Skill and build scripts
+// (scripts/), docs, prompts, *.mjs build files and the build output.
+import { defineConfig, globalIgnores } from "eslint/config";
+import obsidianmd from "eslint-plugin-obsidianmd";
+import { DEFAULT_BRANDS } from "eslint-plugin-obsidianmd/dist/lib/rules/ui/brands.js";
+import { DEFAULT_ACRONYMS } from "eslint-plugin-obsidianmd/dist/lib/rules/ui/acronyms.js";
+import tseslint from "typescript-eslint";
+
+export default defineConfig([
+  globalIgnores(["main.js", "node_modules", "test/**", "scripts/**", "docs/**", "prompts/**", "**/*.mjs", "**/*.cjs"]),
+  ...obsidianmd.configs.recommended,
+  {
+    languageOptions: {
+      parserOptions: {
+        projectService: {
+          allowDefaultProject: ["eslint.config.*"],
+        },
+      },
+    },
+    rules: {
+      // Proper nouns in the (mostly Korean) UI text keep their casing: the
+      // Alt app, this plugin under its new and old name, Claude Code, Codex,
+      // and the folder names the plugin writes to (Attachments/ and so on).
+      "obsidianmd/ui/sentence-case": [
+        "warn",
+        {
+          enforceCamelCaseLower: true,
+          brands: [...DEFAULT_BRANDS, "Alt", "Alt2Obs", "Alt2Obsidian", "Claude Code", "Codex", "Attachments", "Lectures", "Concepts", "Verification"],
+          acronyms: [...DEFAULT_ACRONYMS, "MCP"],
+        },
+      ],
+    },
+  },
+  {
+    // "첨부 해제" and "Alt 슬라이드로 바꾸기" move only a PDF the plugin copied
+    // itself (recorded path, size and SHA-1) and always to a recoverable
+    // trash: vault.trash(file, true), the system trash, else the vault's
+    // .trash. FileManager.trashFile would follow a "permanently delete"
+    // setting, and the copy may be the only one left of the user's PDF.
+    files: ["src/main.ts"],
+    rules: { "obsidianmd/prefer-file-manager-trash-file": "off" },
+  },
+  {
+    // These modules also run under plain Node, where there is no window: the
+    // Skill's CLIs bundle lectureMaterial (scripts/phase2), and the CLI
+    // runner's timers are child-process watchdogs exercised by the Node test
+    // suite. Neither has anything to do with a popout window.
+    files: ["src/core/lectureMaterial.ts", "src/llm/cli/CliRunner.ts"],
+    rules: { "obsidianmd/prefer-window-timers": "off" },
+  },
+  {
+    // getSettingDefinitions() is an Obsidian 1.13 API: the typings this
+    // plugin builds against (obsidian 1.12.3) do not have it, and below 1.13
+    // (minAppVersion is 1.7.2) the tab needs display(), as the
+    // settings-tab/require-display rule says.
+    files: ["src/ui/SettingsTab.ts"],
+    rules: { "obsidianmd/settings-tab/prefer-setting-definitions": "off" },
+  },
+  {
+    // The manifest, checked with the directory's rules (name, id and
+    // description wording, no fundingUrl without donations, types).
+    files: ["manifest.json"],
+    languageOptions: { parser: tseslint.parser, parserOptions: { projectService: false, extraFileExtensions: [".json"] } },
+    rules: { "obsidianmd/validate-manifest": "error" },
+  },
+]);

@@ -161,7 +161,7 @@ function spansFrom(segs: Seg[], starts: number[], timed: boolean): SectionSpan[]
       num: k + 1,
       from,
       to,
-      startMs: timed ? (segs[from].startMs as number) : null,
+      startMs: timed ? segs[from].startMs : null,
       endMs: timed ? Math.max(...segs.slice(from, to).map((x) => x.endMs as number)) : null,
     };
   });
@@ -217,7 +217,7 @@ function cleanSegments(segments: TranscriptSegment[] | TimedSegment[]): { segs: 
     last = end;
     return { startMs: start, endMs: end, text: s.text.trim() };
   });
-  segs.sort((a, b) => (a.startMs as number) - (b.startMs as number));
+  segs.sort((a, b) => a.startMs - b.startMs);
   return { segs, timed: true };
 }
 

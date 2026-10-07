@@ -1,6 +1,5 @@
 # Build output
 main.js
-pdf.worker.min.mjs
 
 # Dependencies
 node_modules/

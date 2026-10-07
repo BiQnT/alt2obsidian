@@ -1,3 +1,13 @@
+/**
+ * A value from parsed JSON as text: a string as it is, a number or boolean
+ * written out, an array joined with "," (as String() does), anything else
+ * (null, an object) empty.
+ */
+export function jsonValueText(v: unknown): string {
+  if (Array.isArray(v)) return v.map(jsonValueText).join(",");
+  return typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
+}
+
 export function slugify(text: string): string {
   return text
     .trim()
@@ -6,9 +16,16 @@ export function slugify(text: string): string {
     .trim();
 }
 
+/** The text without control characters (U+0000 to U+001F), which a file name cannot hold. */
+export function withoutControlChars(text: string): string {
+  let out = "";
+  for (const ch of text) if (ch.charCodeAt(0) > 0x1f) out += ch;
+  return out;
+}
+
 export function sanitizeFilename(name: string): string {
-  return name
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+  return withoutControlChars(name)
+    .replace(/[<>:"/\\|?*]/g, "")
     .replace(/\.+$/, "")
     .trim();
 }
@@ -38,8 +55,4 @@ export function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes.buffer;
-}
-
-export function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

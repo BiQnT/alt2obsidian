@@ -69,11 +69,11 @@ class PdfSourceModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.addClass("alt2obsidian-attach-modal");
+    contentEl.addClass("alt-to-obs-attach-modal");
     contentEl.createEl("h2", { text: "강의 PDF 첨부" });
-    contentEl.createEl("p", { text: `"${this.opts.title}"의 슬라이드 PDF를 고르세요. ${this.opts.target}로 복사하고, 이후 가져오기는 이 강의를 슬라이드 강의로 다룹니다 (슬라이드별 해설, 전사 정렬, Synced Viewer, 슬라이드 대조 검증).` });
-    if (this.opts.replacing) contentEl.createEl("p", { cls: "alt2obsidian-error", text: `이미 있는 ${this.opts.target}를 고른 PDF로 바꿉니다.` });
-    const actions = contentEl.createDiv({ cls: "alt2obsidian-update-actions" });
+    contentEl.createEl("p", { text: `"${this.opts.title}"의 슬라이드 PDF를 고르세요. ${this.opts.target}로 복사하고, 이후 가져오기는 이 강의를 슬라이드 강의로 다룹니다 (슬라이드별 해설, 전사 정렬, synced viewer, 슬라이드 대조 검증).` });
+    if (this.opts.replacing) contentEl.createEl("p", { cls: "alt-to-obs-error", text: `이미 있는 ${this.opts.target}를 고른 PDF로 바꿉니다.` });
+    const actions = contentEl.createDiv({ cls: "alt-to-obs-update-actions" });
     actions.createEl("button", { text: "취소" }).addEventListener("click", () => this.close());
     const fromVault = actions.createEl("button", { text: "보관함에서 고르기" });
     fromVault.addEventListener("click", () => {
@@ -84,7 +84,7 @@ class PdfSourceModal extends Modal {
       new VaultPdfSuggestModal(this.app, (file) => onDone(file ? { kind: "vault", path: file.path } : null)).open();
     });
     const input = contentEl.createEl("input", { type: "file", attr: { accept: "application/pdf,.pdf" } });
-    input.style.display = "none";
+    input.hide();
     const fromDisk = actions.createEl("button", { text: "컴퓨터에서 고르기", cls: "mod-cta" });
     fromDisk.addEventListener("click", () => input.click());
     input.addEventListener("change", () => {
@@ -133,7 +133,7 @@ export function choose(app: App, heading: string, paragraphs: string[], buttons:
         contentEl.empty();
         contentEl.createEl("h2", { text: heading });
         for (const p of paragraphs) contentEl.createEl("p", { text: p });
-        const actions = contentEl.createDiv({ cls: "alt2obsidian-update-actions" });
+        const actions = contentEl.createDiv({ cls: "alt-to-obs-update-actions" });
         for (const b of buttons) {
           const el = actions.createEl("button", { text: b.text, cls: b.cta ? "mod-cta" : "" });
           el.addEventListener("click", () => {

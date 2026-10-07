@@ -5,15 +5,11 @@ declare module "*.css" {
   export default content;
 }
 
-// pdfjs-dist 4.10 ships .d.mts type files for the legacy build only. The
-// modern build (`pdfjs-dist/build/pdf.mjs`) is needed by `pdf_viewer.mjs`
-// (the Synced Viewer's PDFViewer uses the modern runtime), so we declare
-// it as ambient `any` to keep tsc happy while letting esbuild bundle it.
-declare module "pdfjs-dist/build/pdf.mjs" {
-  const content: any;
-  export = content;
+// The PDF.js worker as text (scripts/inline-pdf-worker.mjs, src/pdf/pdfWorker.ts).
+// The modern build's pdf.mjs is not imported (the Synced Viewer renders with
+// the legacy build, see the SyncedViewerView header), so it needs no
+// declaration.
+declare module "pdfjs-dist/build/pdf.worker.min.mjs" {
+  const source: string;
+  export default source;
 }
-
-// Note: pdfjs-dist/web/pdf_viewer.mjs is no longer imported (Synced Viewer
-// pivoted from A2 to A4 canvas-only — see SyncedViewerView header). Kept
-// the modern build declaration above in case future code needs it.

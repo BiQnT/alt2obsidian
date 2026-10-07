@@ -29,6 +29,12 @@ P.show = function () { this.style.display = ""; };
 P.toggle = function (on) { this.style.display = on ? "" : "none"; };
 P.addClass = function (c) { this.classList.add(c); };
 P.toggleClass = function (c, on) { this.classList.toggle(c, on); };
+// Obsidian's global createEl: a detached element.
+window.createEl = (tag, o) => {
+  const el = document.createElement("div").createEl(tag, o);
+  el.remove();
+  return el;
+};
 export class TFile { constructor(path) { this.path = path; } }
 export class Notice { constructor(m) { console.log("Notice", m); } }
 export class Component { load() {} unload() {} }
@@ -78,6 +84,7 @@ export class Setting {
   }
   setName(t) { this.nameEl.setText(t); return this; }
   setDesc(t) { this.descEl.setText(t); return this; }
+  setHeading() { this.settingEl.addClass("setting-item-heading"); return this; }
   addText(cb) {
     const inputEl = this.controlEl.createEl("input", { type: "text" });
     const c = { inputEl, setPlaceholder: (p) => (inputEl.placeholder = p, c), setValue: (v) => (inputEl.value = v, c), onChange: () => c };
@@ -114,3 +121,5 @@ export class PluginSettingTab {
 }
 export class Modal { constructor(app) { this.app = app; this.contentEl = document.createElement("div"); } open() {} close() {} }
 export const setIcon = () => {};
+// PdfProcessor imports it for URL imports; the DOM tests read local files.
+export const requestUrl = () => { throw new Error("requestUrl is not available in tests"); };

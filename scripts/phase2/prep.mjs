@@ -347,7 +347,7 @@ async function extractPageLayouts(pdf) {
         lines
       });
     } catch (e) {
-      console.warn(`[Alt2Obsidian] layout extraction failed for page ${pageNum}:`, e);
+      console.warn(`[Alt2Obs] layout extraction failed for page ${pageNum}:`, e);
       out.push({ text: null, boxes: [], lines: [] });
     }
   }
@@ -849,6 +849,8 @@ var CLAUDE_TASK_DEFAULTS = {
   verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification }
 };
 var DEFAULT_SETTINGS = {
+  // The folder name from before the rename to Alt2Obs (2.0.0): existing
+  // vaults and the Skill keep writing to the same place.
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
   settingsVersion: 3,
@@ -1212,8 +1214,15 @@ function makeBatches(slides, batchSize) {
 }
 
 // src/utils/helpers.ts
+function withoutControlChars(text) {
+  let out = "";
+  for (const ch of text)
+    if (ch.charCodeAt(0) > 31)
+      out += ch;
+  return out;
+}
 function sanitizeFilename(name) {
-  return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\.+$/, "").trim();
+  return withoutControlChars(name).replace(/[<>:"/\\|?*]/g, "").replace(/\.+$/, "").trim();
 }
 
 // src/vault/layout.ts

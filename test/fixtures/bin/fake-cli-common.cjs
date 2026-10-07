@@ -45,7 +45,7 @@ function readStdin() {
 }
 
 function checkJobDir(cwd) {
-  if (!path.basename(cwd).startsWith("alt2obs-")) fail(`cwd is not a per-job temp folder: ${cwd}`);
+  if (!path.basename(cwd).startsWith("alt-to-obs-")) fail(`cwd is not a per-job temp folder: ${cwd}`);
 }
 
 /** Answer for the prompt, as an object (structured) or text. */

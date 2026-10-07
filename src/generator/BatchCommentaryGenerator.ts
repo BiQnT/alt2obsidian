@@ -157,9 +157,9 @@ export interface BatchGenerateOptions {
   plan: DeckPlan;
   context: LectureContext;
   /** JPEG render of a page for slides with `sendImage` (null = render failed). */
-  renderImage(page: number): Promise<ImageInput | null>;
+  renderImage: (page: number) => Promise<ImageInput | null>;
   signal?: AbortSignal;
-  onProgress?(p: BatchProgress): void;
+  onProgress?: (p: BatchProgress) => void;
 }
 
 export interface BatchGenerationResult extends PerSlideGenerationResult {

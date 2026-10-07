@@ -293,11 +293,11 @@ export function parseNotionStream(stdout: string, toolName: string, url: string)
     if (!t.startsWith("{")) continue;
     let ev: { type?: string; message?: { content?: unknown; stop_reason?: string }; stop_reason?: string };
     try {
-      ev = JSON.parse(t);
+      ev = JSON.parse(t) as typeof ev;
     } catch {
       continue;
     }
-    const content = Array.isArray(ev.message?.content) ? (ev.message!.content as Array<Record<string, unknown>>) : [];
+    const content = Array.isArray(ev.message?.content) ? (ev.message.content as Array<Record<string, unknown>>) : [];
     if (ev.type === "assistant") {
       for (const c of content) {
         if (c.type !== "tool_use" || c.name !== toolName) continue;
@@ -395,7 +395,7 @@ export function pageFromToolResult(text: string): NotionPage {
   let lastEdited: string | null = null;
   let truncated = false;
   try {
-    const obj = JSON.parse(text);
+    const obj = JSON.parse(text) as Record<string, unknown> | null;
     if (obj && typeof obj === "object") {
       const body = [obj.text, obj.markdown, obj.content].find((v) => typeof v === "string");
       if (typeof body === "string") markdown = body;
@@ -429,7 +429,7 @@ export function notionCachePath(cacheDir: string, url: string): string {
 
 export async function readNotionCache(cacheDir: string, url: string): Promise<NotionCacheEntry | null> {
   try {
-    const entry = JSON.parse(await fsp.readFile(notionCachePath(cacheDir, url), "utf8"));
+    const entry = JSON.parse(await fsp.readFile(notionCachePath(cacheDir, url), "utf8")) as { v?: unknown; markdown?: unknown } | null;
     return entry && entry.v === 1 && typeof entry.markdown === "string" ? (entry as NotionCacheEntry) : null;
   } catch {
     return null;
@@ -550,7 +550,7 @@ function newestFirst<T>(items: T[], versionOf: (t: T) => string): T[] {
 async function serverFromPluginDir(dir: string, server: string): Promise<McpServerDetails | null> {
   for (const f of [join(dir, ".mcp.json"), join(dir, ".claude-plugin", "plugin.json")]) {
     try {
-      const json = JSON.parse(await fsp.readFile(f, "utf8"));
+      const json = JSON.parse(await fsp.readFile(f, "utf8")) as { mcpServers?: unknown } | null;
       const d = detailsFromMcpJson(f.endsWith("plugin.json") ? { mcpServers: json?.mcpServers } : json, server);
       if (d) return d;
     } catch {
@@ -569,7 +569,7 @@ async function serverFromPluginDir(dir: string, server: string): Promise<McpServ
 export async function findPluginMcpServer(home: string, plugin: string, server: string): Promise<McpServerDetails | null> {
   const root = join(home, ".claude", "plugins");
   try {
-    const installed = JSON.parse(await fsp.readFile(join(root, "installed_plugins.json"), "utf8"));
+    const installed = JSON.parse(await fsp.readFile(join(root, "installed_plugins.json"), "utf8")) as { plugins?: unknown } | null;
     const map = (installed?.plugins ?? installed) as Record<string, unknown>;
     const entries: Array<{ installPath: string; version: string }> = [];
     for (const [key, list] of Object.entries(map ?? {})) {

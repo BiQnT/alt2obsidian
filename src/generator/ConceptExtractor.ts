@@ -1,5 +1,6 @@
 import { LLMProvider, ConceptData } from "../types";
 import { renderPrompt } from "../prompts/render";
+import { jsonValueText } from "../utils/helpers";
 import conceptExtractionTemplate from "../../prompts/concept-extraction.md";
 import conceptExtractionSystemKoTemplate from "../../prompts/concept-extraction.system.ko.md";
 import conceptExtractionSystemEnTemplate from "../../prompts/concept-extraction.system.en.md";
@@ -151,11 +152,11 @@ export function validateConcepts(raw: unknown): ConceptResult {
     throw new Error("Expected tags array");
   }
   const concepts: ConceptData[] = obj.concepts.map((c: Record<string, unknown>) => ({
-    name: String(c.name || ""),
-    definition: String(c.definition || ""),
-    example: c.example ? String(c.example) : undefined,
-    caution: c.caution ? String(c.caution) : undefined,
-    lectureContext: c.lectureContext ? String(c.lectureContext) : undefined,
+    name: jsonValueText(c.name || ""),
+    definition: jsonValueText(c.definition || ""),
+    example: c.example ? jsonValueText(c.example) : undefined,
+    caution: c.caution ? jsonValueText(c.caution) : undefined,
+    lectureContext: c.lectureContext ? jsonValueText(c.lectureContext) : undefined,
     relatedConcepts: Array.isArray(c.relatedConcepts) ? c.relatedConcepts.map(String) : [],
   }));
   // Soft quality warnings: do not fail the import, but surface what came
@@ -163,7 +164,7 @@ export function validateConcepts(raw: unknown): ConceptResult {
   for (const c of concepts) {
     if (c.definition.length < 80) {
       console.warn(
-        `[Alt2Obsidian] concept "${c.name}" has a short definition (${c.definition.length} chars), consider re-running with a stronger model.`
+        `[Alt2Obs] concept "${c.name}" has a short definition (${c.definition.length} chars), consider re-running with a stronger model.`
       );
     }
   }
@@ -171,7 +172,7 @@ export function validateConcepts(raw: unknown): ConceptResult {
     const orphan = concepts.find((c) => !c.relatedConcepts || c.relatedConcepts.length === 0);
     if (orphan) {
       console.warn(
-        `[Alt2Obsidian] concept "${orphan.name}" has no relatedConcepts despite ${concepts.length} concepts in the lecture, graph linking may be incomplete.`
+        `[Alt2Obs] concept "${orphan.name}" has no relatedConcepts despite ${concepts.length} concepts in the lecture, graph linking may be incomplete.`
       );
     }
   }

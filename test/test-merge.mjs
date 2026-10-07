@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { importTs, repo } from "./helpers/bundle-ts.mjs";
 
-const { VaultManager, NoteGenerator, computeSlideHash, notices } = await importTs(
+const { VaultManager, NoteGenerator, computeSlideHash, notices, TFile } = await importTs(
   "test/helpers/merge-entry.ts"
 );
 
@@ -22,11 +22,16 @@ function makeVault() {
   const files = new Map();
   const app = {
     vault: {
-      getAbstractFileByPath: (p) => (files.has(p) ? { path: p } : null),
+      getAbstractFileByPath: (p) => (files.has(p) ? Object.assign(new TFile(), { path: p }) : null),
       createFolder: async () => {},
       create: async (p, c) => void files.set(p, c),
       read: async (f) => files.get(f.path),
       modify: async (f, c) => void files.set(f.path, c),
+      process: async (f, fn) => {
+        const next = fn(files.get(f.path));
+        files.set(f.path, next);
+        return next;
+      },
     },
   };
   return { vm: new VaultManager(app, "Alt2Obsidian"), files };

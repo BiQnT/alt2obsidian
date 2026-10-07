@@ -33,6 +33,8 @@ var CLAUDE_TASK_DEFAULTS = {
   verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification }
 };
 var DEFAULT_SETTINGS = {
+  // The folder name from before the rename to Alt2Obs (2.0.0): existing
+  // vaults and the Skill keep writing to the same place.
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
   settingsVersion: 3,
@@ -152,7 +154,7 @@ function mergeManagedLf(currentContent, nextContent) {
   return appendPreviousNoteBackup(currentContent, nextContent, { skipIfBackupExists: true });
 }
 var BACKUP_REASONS = {
-  managed: "\uC774 \uB0B4\uC6A9\uC740 Alt2Obsidian \uAD00\uB9AC \uAD6C\uAC04\uC774 \uB3C4\uC785\uB418\uAE30 \uC804\uC758 \uAE30\uC874 \uB178\uD2B8\uC785\uB2C8\uB2E4.",
+  managed: "\uC774 \uB0B4\uC6A9\uC740 Alt2Obs \uAD00\uB9AC \uAD6C\uAC04\uC774 \uB3C4\uC785\uB418\uAE30 \uC804\uC758 \uAE30\uC874 \uB178\uD2B8\uC785\uB2C8\uB2E4.",
   "to-slides": "\uC774 \uB0B4\uC6A9\uC740 \uC2AC\uB77C\uC774\uB4DC\uBCC4 \uB178\uD2B8\uB85C \uBC14\uB00C\uAE30 \uC804\uC758 \uC804\uC0AC \uAD6C\uAC04 \uC694\uC57D \uB178\uD2B8\uC785\uB2C8\uB2E4. \uB0B4 \uBA54\uBAA8\uB294 \uD544\uC694\uD55C \uC2AC\uB77C\uC774\uB4DC \uC544\uB798\uB85C \uC62E\uAE30\uC138\uC694.",
   "to-sections": "\uC774 \uB0B4\uC6A9\uC740 \uC804\uC0AC \uAD6C\uAC04 \uC694\uC57D \uB178\uD2B8\uB85C \uBC14\uB00C\uAE30 \uC804\uC758 \uAC15\uC758 \uB178\uD2B8\uC785\uB2C8\uB2E4. \uB0B4 \uBA54\uBAA8\uB294 \uD544\uC694\uD55C \uAD6C\uAC04 \uC544\uB798\uB85C \uC62E\uAE30\uC138\uC694."
 };

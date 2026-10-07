@@ -1,6 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
-import type Alt2ObsidianPlugin from "../main";
-import { CliName, EffortLevel, PresetId, ProviderId, TaskId } from "../types";
+import type Alt2ObsPlugin from "../main";
+import { CliName, DEFAULT_SETTINGS, EffortLevel, PresetId, ProviderId, TaskId } from "../types";
 import {
   applyPreset,
   defaultTaskSetting,
@@ -8,6 +8,7 @@ import {
   effortChoices,
   isCliProvider,
   isSafeModelName,
+  LEGACY_KEY_FIELDS,
   ModelCatalog,
   modelChoices,
   modelName,
@@ -21,14 +22,10 @@ import {
 } from "../settings/llmSettings";
 import { compactTokens } from "../llm/usage";
 
+export class Alt2ObsSettingsTab extends PluginSettingTab {
+  plugin: Alt2ObsPlugin;
 
-/** API key fields of 1.x and 2.0.0-beta.3 settings that nothing reads any more. */
-const LEGACY_KEY_FIELDS = ["apiKey", "geminiApiKey", "claudeApiKey"];
-
-export class Alt2ObsidianSettingsTab extends PluginSettingTab {
-  plugin: Alt2ObsidianPlugin;
-
-  constructor(app: App, plugin: Alt2ObsidianPlugin) {
+  constructor(app: App, plugin: Alt2ObsPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
@@ -44,10 +41,9 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.addClass("alt2obsidian-settings");
+    containerEl.addClass("alt-to-obs-settings");
 
-    containerEl.createEl("h2", { text: "Alt2Obsidian 설정" });
-    const notice = containerEl.createDiv({ cls: "alt2obsidian-disclosure" });
+    const notice = containerEl.createDiv({ cls: "alt-to-obs-disclosure" });
     notice.createEl("strong", { text: "외부 프로그램 실행과 구독 사용량 안내" });
     notice.createEl("p", {
       text:
@@ -68,12 +64,12 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   // ---- LLM connections ----
 
   private renderConnections(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "LLM 연결" });
-    const grid = containerEl.createDiv({ cls: "alt2obsidian-cards" });
+    new Setting(containerEl).setName("LLM 연결").setHeading();
+    const grid = containerEl.createDiv({ cls: "alt-to-obs-cards" });
     this.renderCliCard(grid, "claude", "Claude CLI", "claudePath");
     const codexCard = this.renderCliCard(grid, "codex", "Codex CLI", "codexPath");
     codexCard.createDiv({
-      cls: "alt2obsidian-muted",
+      cls: "alt-to-obs-muted",
       text:
         "Codex는 호출마다 자체 지시문과 ~/.codex/AGENTS.md가 함께 실려 고정 비용이 큽니다 (이 플러그인 설정으로 줄인 뒤에도 호출당 약 12k 토큰). " +
         "그래서 Codex는 배치 크기의 두 배로 묶어 보냅니다. 또 읽기 전용 샌드박스라도 Codex는 사용자 계정이 읽을 수 있는 파일을 읽을 수 있습니다. " +
@@ -89,7 +85,10 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
    */
   private renderLegacyKeys(containerEl: HTMLElement): void {
     const stored = this.settings as unknown as Record<string, unknown>;
-    const present = LEGACY_KEY_FIELDS.filter((k) => typeof stored[k] === "string" && (stored[k] as string).trim() !== "");
+    const present = LEGACY_KEY_FIELDS.filter((k) => {
+      const value = stored[k];
+      return typeof value === "string" && value.trim() !== "";
+    });
     if (present.length === 0) return;
     let armed = false;
     new Setting(containerEl)
@@ -127,9 +126,9 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     label: string,
     pathKey: "claudePath" | "codexPath"
   ): HTMLElement {
-    const card = grid.createDiv({ cls: "alt2obsidian-card" });
-    card.createEl("h4", { text: label });
-    const status = card.createDiv({ cls: "alt2obsidian-card-status" });
+    const card = grid.createDiv({ cls: "alt-to-obs-card" });
+    card.createDiv({ cls: "alt-to-obs-card-title", text: label });
+    const status = card.createDiv({ cls: "alt-to-obs-card-status" });
     const renderStatus = () => {
       status.empty();
       const found = this.plugin.data.cliDetection[name];
@@ -137,8 +136,8 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         status.addClass("is-ok");
         status.removeClass("is-missing");
         status.createDiv({ text: `찾음: ${found.version || "버전 확인 실패"}` });
-        status.createDiv({ text: found.path, cls: "alt2obsidian-mono" });
-        if (found.warning) status.createDiv({ text: found.warning, cls: "alt2obsidian-muted" });
+        status.createDiv({ text: found.path, cls: "alt-to-obs-mono" });
+        if (found.warning) status.createDiv({ text: found.warning, cls: "alt-to-obs-muted" });
       } else {
         status.addClass("is-missing");
         status.removeClass("is-ok");
@@ -155,28 +154,26 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     // flex line whose description may shrink to a one-character column next
     // to a control that cannot shrink. Here the description is a block of
     // the card's full width whatever Obsidian's setting-item rules are.
-    const field = card.createDiv({ cls: "alt2obsidian-card-field" });
-    field.createDiv({ cls: "alt2obsidian-card-label", text: "실행 파일 경로" });
-    field.createDiv({ cls: "alt2obsidian-card-desc", text: "비워 두면 자동으로 찾습니다 (로그인 셸의 command -v 결과를 한 번 저장)." });
-    const row = field.createDiv({ cls: "alt2obsidian-card-row" });
+    const field = card.createDiv({ cls: "alt-to-obs-card-field" });
+    field.createDiv({ cls: "alt-to-obs-card-label", text: "실행 파일 경로" });
+    field.createDiv({ cls: "alt-to-obs-card-desc", text: "비워 두면 자동으로 찾습니다 (로그인 셸의 command -v 결과를 한 번 저장)." });
+    const row = field.createDiv({ cls: "alt-to-obs-card-row" });
     const input = row.createEl("input", { type: "text", placeholder: `/.../bin/${name}` });
     input.value = this.settings[pathKey];
     input.setAttr("aria-label", `${label} 실행 파일 경로`);
-    input.addEventListener("input", async () => {
+    input.addEventListener("input", () => {
       this.settings[pathKey] = input.value.trim();
-      await this.save();
+      void this.save();
     });
     const button = row.createEl("button", { text: "다시 찾기" });
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", () => {
       button.disabled = true;
       button.setText("찾는 중...");
-      try {
-        await this.plugin.detectCli(name, true);
-      } finally {
+      void this.plugin.detectCli(name, true).finally(() => {
         button.disabled = false;
         button.setText("다시 찾기");
         renderStatus();
-      }
+      });
     });
     return card;
   }
@@ -184,7 +181,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   // ---- per-task table ----
 
   private renderTasks(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "작업별 모델" });
+    new Setting(containerEl).setName("작업별 모델").setHeading();
     new Setting(containerEl)
       .setName("프리셋")
       .setDesc(
@@ -203,7 +200,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     const catalog = this.plugin.modelCatalog();
     for (const id of TASK_IDS) this.renderTaskRow(containerEl, id, catalog);
     containerEl.createDiv({
-      cls: "alt2obsidian-muted alt2obsidian-settings-note",
+      cls: "alt-to-obs-muted alt-to-obs-settings-note",
       text:
         "모델 목록: 버전이 붙은 항목(예: Opus 5.5)은 그 모델 이름을 그대로 CLI에 넘겨 늘 같은 모델로 실행합니다. sonnet, opus 같은 별칭은 CLI가 그때의 최신 모델로 바꿔 실행하며, " +
         "괄호 안의 '현재'는 마지막 실행에서 CLI가 알려 준 모델입니다. 목록은 Claude Code와 Codex가 저장해 둔 모델 목록에서 읽습니다(모델 호출 없음). " +
@@ -219,7 +216,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       )
       .addText((text) =>
         text
-          .setPlaceholder("자동 (claude mcp list)")
+          .setPlaceholder("자동")
           .setValue(this.settings.notionFetchTool)
           .onChange(async (value) => {
             const v = value.trim();
@@ -251,7 +248,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     }
     const desc = [notes[id], recommended ? `권장: ${recommended}.` : "", lastText].filter(Boolean).join(" ");
     const setting = new Setting(containerEl).setName(TASK_LABELS[id]).setDesc(desc);
-    setting.settingEl.addClass("alt2obsidian-task-setting");
+    setting.settingEl.addClass("alt-to-obs-task-setting");
     const changed = async (rerender: boolean) => {
       this.settings.preset = "custom";
       await this.save();
@@ -292,12 +289,12 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         await changed(true);
       });
       d.selectEl.setAttr("aria-label", `${TASK_LABELS[id]} 모델`);
-      d.selectEl.addClass("alt2obsidian-model-select");
+      d.selectEl.addClass("alt-to-obs-model-select");
     });
     setting.addText((text) => {
       customInput = text.inputEl;
       text.setPlaceholder(provider === "claude-cli" ? "예: claude-opus-5-5" : "예: gpt-6-luna");
-      text.inputEl.addClass("alt2obsidian-model-input");
+      text.inputEl.addClass("alt-to-obs-model-input");
       text.inputEl.hide();
       text.inputEl.addEventListener("input", () => {
         // Checked while typing: a model name is passed as one CLI argument (review N8).
@@ -310,7 +307,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         text.inputEl.removeClass("is-invalid");
         if (modelSelect) modelSelect.value = task.model;
       });
-      text.inputEl.addEventListener("change", async () => {
+      text.inputEl.addEventListener("change", () => {
         const value = text.inputEl.value.trim();
         if (!value) return;
         if (!isSafeModelName(value)) {
@@ -319,7 +316,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
         }
         task.model = value;
         rememberModel(this.settings, provider, value);
-        await changed(true);
+        void changed(true);
       });
     });
 
@@ -336,7 +333,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   // ---- generation options ----
 
   private renderGeneration(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "생성 옵션" });
+    new Setting(containerEl).setName("생성 옵션").setHeading();
     const g = this.settings.generation;
     const numberSetting = (
       name: string,
@@ -385,7 +382,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
       );
     new Setting(containerEl)
       .setName("핵심 다이어그램 이미지 저장")
-      .setDesc("도표·그림 위주 슬라이드(강의당 최대 8장)를 과목 폴더의 Attachments/에 PNG로 저장하고 해당 슬라이드 해설 안에 넣습니다. 스크립트로 고르므로 토큰이 들지 않습니다.")
+      .setDesc("도표·그림 위주 슬라이드(강의당 최대 8장)를 과목 폴더 안 Attachments/<강의>-<쪽>.png 파일로 저장하고 해당 슬라이드 해설 안에 넣습니다. 스크립트로 고르므로 토큰이 들지 않습니다.")
       .addToggle((t) =>
         t.setValue(g.saveKeyDiagrams).onChange(async (value) => {
           g.saveKeyDiagrams = value;
@@ -397,7 +394,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   // ---- usage ----
 
   private renderUsage(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "사용량" });
+    new Setting(containerEl).setName("사용량").setHeading();
     const u = this.plugin.data.usageTotals;
     const desc =
       u.calls === 0
@@ -429,11 +426,11 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   // ---- reading ----
 
   private renderView(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "보기" });
+    new Setting(containerEl).setName("보기").setHeading();
     new Setting(containerEl)
       .setName("관리 주석 숨기기")
       .setDesc(
-        "강의 노트의 <!-- alt2obs:... --> 줄(슬라이드 표시, 해시, 메타데이터, 요약 구간 표시)을 Live Preview와 Synced Viewer에서 감춥니다. " +
+        "강의 노트의 <!-- alt2obs:... --> 줄(슬라이드 표시, 해시, 메타데이터, 요약 구간 표시)을 Live Preview와 synced viewer에서 감춥니다. " +
           "커서가 그 줄이나 바로 위아래 줄에 있으면 보이고, 소스 모드에서는 항상 보입니다. 감춘 줄은 실수로 지워지지 않게 편집을 막습니다. " +
           "직접 쓴 줄이라도 한 줄 전체가 <!-- alt2obs 로 시작하는 주석이면 함께 감춰집니다. 노트 내용은 바뀌지 않으며 이 줄들은 다시 가져올 때 메모를 지키는 데 쓰이니 지우지 마세요."
       )
@@ -447,7 +444,7 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("강의 PDF를 열면 뷰어로 열기")
       .setDesc(
-        "파일 탐색기나 링크로 강의 PDF(같은 폴더에 같은 이름의 강의 노트가 있는 PDF)를 열면 그 탭이 PDF와 노트를 나란히 보여주는 Synced Viewer로 바뀝니다. " +
+        "파일 탐색기나 링크로 강의 PDF(같은 폴더에 같은 이름의 강의 노트가 있는 PDF)를 열면 그 탭이 PDF와 노트를 나란히 보여주는 synced viewer로 바뀝니다. " +
           "같은 강의의 뷰어가 이미 열려 있으면 그 탭을 보여줍니다. 뷰어의 'PDF만 보기'로 연 탭, Obsidian을 켤 때나 이 설정을 켤 때 이미 열려 있던 PDF 탭은 그대로 둡니다. " +
           "강의 노트(.md)를 열 때는 바뀌지 않습니다."
       )
@@ -464,16 +461,16 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   // ---- storage and help ----
 
   private renderStorage(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "저장" });
+    new Setting(containerEl).setName("저장").setHeading();
     new Setting(containerEl)
       .setName("저장 폴더")
       .setDesc("Vault 내에서 노트가 저장될 기본 폴더")
       .addText((text) =>
         text
-          .setPlaceholder("Alt2Obsidian")
+          .setPlaceholder(DEFAULT_SETTINGS.baseFolderPath)
           .setValue(this.settings.baseFolderPath)
           .onChange(async (value) => {
-            this.settings.baseFolderPath = value || "Alt2Obsidian";
+            this.settings.baseFolderPath = value || DEFAULT_SETTINGS.baseFolderPath;
             await this.save();
             this.plugin.updateBasePath();
           })
@@ -508,8 +505,8 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
   }
 
   private renderHelp(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "사용법" });
-    const usageEl = containerEl.createEl("div", { cls: "setting-item-description" });
+    new Setting(containerEl).setName("사용법").setHeading();
+    const usageEl = containerEl.createDiv({ cls: "setting-item-description" });
     usageEl.createEl("p", {
       text:
         "강의 노트는 PDF 슬라이드와 1:1로 대응하는 섹션으로 생성됩니다. " +
@@ -517,8 +514,8 @@ export class Alt2ObsidianSettingsTab extends PluginSettingTab {
     });
     usageEl.createEl("p", {
       text:
-        "강의 PDF를 열면 PDF와 노트가 좌우로 동기 스크롤되는 Synced Viewer가 열립니다('보기' 설정에서 끌 수 있음). " +
-        "강의 노트(.md)에서는 명령 팔레트의 'Open Synced Viewer (PDF + lecture .md)'나 사이드바의 '뷰어로 열기'를 쓰세요.",
+        "강의 PDF를 열면 PDF와 노트가 좌우로 동기 스크롤되는 synced viewer가 열립니다('보기' 설정에서 끌 수 있음). " +
+        "강의 노트(.md)에서는 명령 팔레트의 'Open synced viewer (PDF + lecture .md)'나 사이드바의 '뷰어로 열기'를 쓰세요.",
     });
   }
 }

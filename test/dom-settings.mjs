@@ -43,7 +43,7 @@ const chrome = findChrome();
 assert.ok(chrome, "no Chromium found: set ALT2OBS_CHROME");
 
 const WIDTHS = [360, 460, 620, 760, 1000];
-const dir = mkdtempSync(join(tmpdir(), "alt2obs-dom-settings-"));
+const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-dom-settings-"));
 writeFileSync(
   join(dir, "index.html"),
   '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="obsidian.css"><link rel="stylesheet" href="styles.css"></head>' +

@@ -38,7 +38,7 @@ export function tokenFilePath(userData: string): string {
 
 function readJson(path: string): Record<string, unknown> | null {
   try {
-    const v = JSON.parse(readFileSync(path, "utf8"));
+    const v: unknown = JSON.parse(readFileSync(path, "utf8"));
     return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
   } catch {
     return null;
@@ -111,8 +111,10 @@ function mtime(path: string): number {
 }
 
 /**
- * Alt2Obsidian's own cache folder outside any vault: ~/Library/Caches
+ * The plugin's own cache folder outside any vault: ~/Library/Caches
  * (macOS), %LOCALAPPDATA% (Windows), $XDG_CACHE_HOME or ~/.cache (Linux).
+ * Still named "alt2obsidian" after the rename to Alt2Obs (2.0.0), so the
+ * transcripts and Notion pages cached before stay in use.
  */
 export function pluginCacheDir(
   platform: NodeJS.Platform = process.platform,

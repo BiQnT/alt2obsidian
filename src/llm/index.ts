@@ -1,10 +1,10 @@
-import { Alt2ObsidianSettings, CliName, LLMProvider, TaskLLMSetting } from "../types";
+import { Alt2ObsSettings, CliName, LLMProvider, TaskLLMSetting } from "../types";
 import { ClaudeCliProvider } from "./cli/ClaudeCliProvider";
 import { CodexCliProvider } from "./cli/CodexCliProvider";
 import { UsageTracker } from "./usage";
 
 export interface TaskProviderContext {
-  settings: Alt2ObsidianSettings;
+  settings: Alt2ObsSettings;
   /** Resolves the CLI binary (settings path, cached lookup, login shell). */
   resolveBin(name: CliName): Promise<string>;
   /** Per-job temp folder outside the vault. */

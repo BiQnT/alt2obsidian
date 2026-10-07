@@ -223,7 +223,7 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
       const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
       target = resolveSpawnTarget(req.bin, platform, env[pathKey] ?? "");
     } catch (e) {
-      reject(e);
+      reject(e instanceof Error ? e : new Error(String(e)));
       return;
     }
     let settled = false;
@@ -668,7 +668,7 @@ export async function probeCliLogin(name: CliName, bin: string, timeoutMs = 20_0
   try {
     if (name === "claude") {
       const out = await runCli({ bin, args: ["auth", "status", "--json"], timeoutMs });
-      return JSON.parse(out.stdout).loggedIn === true;
+      return (JSON.parse(out.stdout) as { loggedIn?: unknown } | null)?.loggedIn === true;
     }
     // runCli resolves only on exit code 0; the message must also start a line with "Logged in".
     const out = await runCli({ bin, args: ["login", "status"], timeoutMs });
@@ -685,7 +685,7 @@ export async function probeCliLogin(name: CliName, bin: string, timeoutMs = 20_0
  * project CLAUDE.md / AGENTS.md is picked up. Real path (macOS /var is a
  * symlink) so paths agree with what we pass on the command line.
  */
-export function createJobDir(prefix = "alt2obs-job-"): string {
+export function createJobDir(prefix = "alt-to-obs-job-"): string {
   return realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
 }
 

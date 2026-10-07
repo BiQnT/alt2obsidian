@@ -59,7 +59,7 @@ export interface TranscriptRunInput {
   conceptLlm: LLMProvider;
   signal?: AbortSignal;
   onStep?(step: "commentary" | "overview" | "concepts"): void;
-  onBatch?(p: SectionProgress): void;
+  onBatch?: (p: SectionProgress) => void;
 }
 
 export interface TranscriptRunResult {

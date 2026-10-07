@@ -1,9 +1,9 @@
 {
-	"id": "alt2obsidian",
-	"name": "Alt2Obsidian",
-	"version": "2.0.0-beta.6",
-	"minAppVersion": "0.15.0",
-	"description": "Import Alt (altalt.io) lecture notes into Obsidian as page-anchored markdown, straight from the Alt app on this computer (read only) or from a share URL. Transcripts are aligned to slides by their timestamps. Per-slide commentary from your Claude Code or Codex CLI (a lecture without slides gets a transcript section summary note, or you attach its PDF), hash-augmented markers preserve your callouts across re-imports, a built-in Synced Viewer scrolls the PDF and notes in lockstep, and your own notes (a Notion export, a Notion page through your Notion MCP, or pasted text) can be checked against the slides and transcript.",
+	"id": "alt-to-obs",
+	"name": "Alt2Obs",
+	"version": "2.0.0",
+	"minAppVersion": "1.7.2",
+	"description": "Import Alt lecture recordings, transcripts and slides into your vault as structured notes with per-slide commentary, a synced PDF viewer and note checking, using your own Claude Code or Codex CLI.",
 	"author": "BiQnT",
 	"authorUrl": "https://github.com/BiQnT",
 	"isDesktopOnly": true

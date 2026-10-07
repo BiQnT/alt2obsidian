@@ -6,6 +6,7 @@
 // already has a note keeps that note's name. No obsidian import.
 
 import type { ConceptData } from "../types";
+import { withoutControlChars } from "../utils/helpers";
 
 const HANGUL = /[\uAC00-\uD7A3\u3131-\u318E]/;
 
@@ -57,10 +58,8 @@ export function parseConceptName(name: string): ConceptNameParts {
  * and without trailing dots, like the file name itself (sanitizeFilename).
  */
 export function conceptKey(text: string): string {
-  return text
-    .normalize("NFC")
-    .toLowerCase()
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+  return withoutControlChars(text.normalize("NFC").toLowerCase())
+    .replace(/[<>:"/\\|?*]/g, "")
     .replace(/\.+$/, "")
     .replace(/[\s_-]+/g, "");
 }

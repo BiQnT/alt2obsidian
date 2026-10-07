@@ -1,7 +1,7 @@
 import esbuild from "esbuild";
-import { copy } from "esbuild-plugin-copy";
 import process from "process";
 import { builtinModules } from "module";
+import { inlinePdfWorker } from "./scripts/inline-pdf-worker.mjs";
 
 const prod = process.argv[2] === "production";
 
@@ -20,17 +20,11 @@ esbuild
     outfile: "main.js",
     minify: prod,
     loader: { ".css": "text", ".md": "text" },
-    plugins: [
-      copy({
-        resolveFrom: "cwd",
-        assets: [
-          {
-            from: ["node_modules/pdfjs-dist/build/pdf.worker.min.mjs"],
-            to: ["."],
-          },
-        ],
-      }),
-    ],
+    // The bundled PDF.js keeps its license notice inside main.js; this line names it up front.
+    banner: { js: "/*! Includes PDF.js (pdfjs-dist 4.10.38), Copyright Mozilla Foundation, Apache-2.0 */" },
+    // The PDF.js worker goes into main.js (src/pdf/pdfWorker.ts): a release
+    // is main.js, manifest.json and styles.css only.
+    plugins: [inlinePdfWorker],
   })
   .catch((e) => {
     console.error(e);

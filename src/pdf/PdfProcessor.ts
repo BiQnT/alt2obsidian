@@ -8,11 +8,10 @@ import { ANALYSIS_LONG_EDGE, extractPageLayouts, rgbaToGray } from "../core/prep
 
 export class PdfProcessor {
   /**
-   * Worker URL must be resolved through Obsidian's resource-path machinery
-   * (e.g., `app://local/...`). Raw filesystem paths get incorrectly prepended
-   * to the `app://obsidian.md/` baseURI by pdfjs and fail to load. Caller
-   * (main.ts) is responsible for the conversion via
-   * `app.vault.adapter.getResourcePath(...)`.
+   * `workerSrc`: the URL PDF.js starts a module worker from for each
+   * document. The plugin passes the Blob URL of the worker bundled into
+   * main.js (`createPdfWorkerUrl` in ./pdfWorker); the Synced Viewer's
+   * documents use the same setting.
    */
   constructor(workerSrc: string) {
     pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
@@ -25,7 +24,7 @@ export class PdfProcessor {
         method: "GET",
       });
       return response.arrayBuffer;
-    } catch (e) {
+    } catch {
       throw new Error(
         "PDF 다운로드에 실패했습니다. 서명된 URL이 만료되었을 수 있습니다."
       );
@@ -45,7 +44,7 @@ export class PdfProcessor {
         await pdf.destroy();
       }
     } catch (e) {
-      console.warn("[Alt2Obsidian] PDF text extraction failed:", e);
+      console.warn("[Alt2Obs] PDF text extraction failed:", e);
       return null;
     }
   }
@@ -61,7 +60,7 @@ export class PdfProcessor {
       await pdf.destroy();
       return count;
     } catch (e) {
-      console.warn("[Alt2Obsidian] getPageCount failed:", e);
+      console.warn("[Alt2Obs] getPageCount failed:", e);
       return 0;
     }
   }
@@ -117,7 +116,7 @@ export class PdfProcessor {
           const scale = Math.min(maxWidth / baseViewport.width, 2);
           const viewport = page.getViewport({ scale });
 
-          const canvas = document.createElement("canvas");
+          const canvas = createEl("canvas");
           canvas.width = Math.ceil(viewport.width);
           canvas.height = Math.ceil(viewport.height);
           const ctx = canvas.getContext("2d");
@@ -134,7 +133,7 @@ export class PdfProcessor {
           canvas.height = 0;
         } catch (pageErr) {
           console.warn(
-            `[Alt2Obsidian] PDF page ${pageNum} render failed:`,
+            `[Alt2Obs] PDF page ${pageNum} render failed:`,
             pageErr
           );
         }
@@ -143,7 +142,7 @@ export class PdfProcessor {
       await pdf.destroy();
       return results;
     } catch (e) {
-      console.warn("[Alt2Obsidian] PDF page render setup failed:", e);
+      console.warn("[Alt2Obs] PDF page render setup failed:", e);
       return [];
     }
   }
@@ -166,7 +165,7 @@ export class PdfProcessor {
           const page = await pdf.getPage(pageNum);
           const base = page.getViewport({ scale: 1 });
           const viewport = page.getViewport({ scale: ANALYSIS_LONG_EDGE / Math.max(base.width, base.height) });
-          const canvas = document.createElement("canvas");
+          const canvas = createEl("canvas");
           canvas.width = Math.max(1, Math.round(viewport.width));
           canvas.height = Math.max(1, Math.round(viewport.height));
           const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -182,7 +181,7 @@ export class PdfProcessor {
           canvas.width = 0;
           canvas.height = 0;
         } catch (e) {
-          console.warn(`[Alt2Obsidian] analysis render failed for page ${pageNum}:`, e);
+          console.warn(`[Alt2Obs] analysis render failed for page ${pageNum}:`, e);
           grays.push(null);
         }
       }
@@ -205,7 +204,7 @@ export class PdfProcessor {
         const page = await pdf.getPage(pageNum);
         const base = page.getViewport({ scale: 1 });
         const viewport = page.getViewport({ scale: longEdge / Math.max(base.width, base.height) });
-        const canvas = document.createElement("canvas");
+        const canvas = createEl("canvas");
         canvas.width = Math.round(viewport.width);
         canvas.height = Math.round(viewport.height);
         const ctx = canvas.getContext("2d");
@@ -221,7 +220,7 @@ export class PdfProcessor {
         await pdf.destroy();
       }
     } catch (e) {
-      console.warn(`[Alt2Obsidian] JPEG render failed for page ${pageNum}:`, e);
+      console.warn(`[Alt2Obs] JPEG render failed for page ${pageNum}:`, e);
       return null;
     }
   }

@@ -77,10 +77,10 @@ export interface LectureRunInput {
   altSummary: string;
   commentaryLlm: LLMProvider;
   conceptLlm: LLMProvider;
-  renderImage(page: number): Promise<ImageInput | null>;
+  renderImage: (page: number) => Promise<ImageInput | null>;
   signal?: AbortSignal;
   onStep?(step: PipelineStep): void;
-  onBatch?(p: BatchProgress): void;
+  onBatch?: (p: BatchProgress) => void;
 }
 
 export interface LectureRunResult {
