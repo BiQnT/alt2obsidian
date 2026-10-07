@@ -404,15 +404,53 @@ export function selectKeyDiagrams(slides: SlideInfo[], scanned: boolean, max = M
 
 // ---- template lines for slides that get no LLM call ----
 
-/** Leading item number or bullet of a contents line ("1 ", "2. ", "• "). */
-const TOC_ITEM_MARK = /^(?:\d{1,2}[.)]?|[•◼▪■●◦*-])\s+/;
+/**
+ * Leading bullet of a contents line. ASCII "-" and "*" need a space after
+ * them ("*args" stays); symbols, en and em dashes and font bullets
+ * (Wingdings "§" and "Ø", private-use glyphs) do not.
+ */
+const TOC_ITEM_BULLET = /^(?:[-*]\s+|[\u2013\u2014•◼▪■●◦○►§Ø\uE000-\uF8FF]\s*)/;
+/** Item number with a period or parenthesis ("1. ", "2) "). */
+const TOC_ITEM_NUMBER = /^\d{1,2}[.)]\s+/;
+/** Item number without one ("1 Intro"): taken off only when the items count 1, 2, 3 ... */
+const TOC_BARE_NUMBER = /^(\d{1,2})\s+(?=\S)/;
+/** A page counter ("2 / 40"). */
+const PAGE_COUNTER = /^\d+\s*\/\s*\d+$/;
+
+/** Markdown and Obsidian syntax in text from the PDF, escaped so it reads as text ("*args", "List<T>", "#include"). */
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_[\]<>#|$~=]/g, "\\$&");
+}
+
+/**
+ * Text lines on more than half of the deck's pages (at least 4 pages with
+ * known lines): running headers and footers such as the course name or the
+ * professor, which a contents page does not list as items.
+ */
+export function repeatedLines(layouts: PageLayout[]): Set<string> {
+  const withLines = layouts.filter((l) => l.lines && l.lines.length > 0);
+  const out = new Set<string>();
+  if (withLines.length < 4) return out;
+  const counts = new Map<string, number>();
+  for (const l of withLines) {
+    for (const line of new Set(contentLines(l.text, l.lines))) counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  for (const [line, n] of counts) if (n * 2 > withLines.length) out.add(line);
+  return out;
+}
 
 /**
  * Body of a slide that gets no LLM call. The lines talk about the content,
  * not about the slide; the link label names the target section's heading.
- * A contents page lists its items when its text lines are known.
+ * A contents page lists its items when its text lines are known, without
+ * bullets, item numbers, page counters and the deck's `repeated` lines.
  */
-export function templateCommentary(slide: SlideInfo, deckTitle: string, layout?: PageLayout): string | null {
+export function templateCommentary(
+  slide: SlideInfo,
+  deckTitle: string,
+  layout?: PageLayout,
+  repeated: ReadonlySet<string> = new Set()
+): string | null {
   if (slide.dupOf !== null) {
     return `같은 내용이 뒤에서 이어진다. 해설은 [[#📚 슬라이드 ${slide.dupOf}|슬라이드 ${slide.dupOf}]]에 있다.`;
   }
@@ -420,10 +458,22 @@ export function templateCommentary(slide: SlideInfo, deckTitle: string, layout?:
     case "cover":
       return `표지: **${slide.title || deckTitle}**`;
     case "toc": {
-      const items = contentLines(layout?.text ?? null, layout?.lines)
+      const lines = contentLines(layout?.text ?? null, layout?.lines)
         .slice(1)
-        .map((l) => l.replace(TOC_ITEM_MARK, "").trim())
-        .filter((l) => l.length > 0);
+        .filter((l) => !PAGE_COUNTER.test(l) && !repeated.has(l))
+        .map((l) => l.replace(TOC_ITEM_BULLET, "").replace(TOC_ITEM_NUMBER, "").trim());
+      // "1 Intro", "2 Caches": a bare number that continues the count is an item number.
+      let next = 1;
+      const counted = lines.map((l) => {
+        const n = TOC_BARE_NUMBER.exec(l);
+        if (!n || Number(n[1]) !== next) return false;
+        next++;
+        return true;
+      });
+      const items = lines
+        .map((l, i) => (next > 2 && counted[i] ? l.replace(TOC_BARE_NUMBER, "") : l))
+        .filter((l) => l.length > 0)
+        .map(escapeMarkdown);
       return items.length > 0 ? `다룰 항목: ${items.join(", ")}` : "목차.";
     }
     case "thanks":

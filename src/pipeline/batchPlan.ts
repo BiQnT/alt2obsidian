@@ -5,7 +5,7 @@
 
 import { splitMultiManagedNote } from "../core/merge";
 import { formatSlideMeta, parseSlideMeta, stripDiagramEmbed, stripSlideMeta } from "../core/slideMeta";
-import { PageLayout, SlideInfo, sameImageSignal, templateCommentary } from "../core/prep/SlideAnalyzer";
+import { PageLayout, SlideInfo, repeatedLines, sameImageSignal, templateCommentary } from "../core/prep/SlideAnalyzer";
 import { compressTranscript, splitTranscriptEvenly } from "../core/prep/TranscriptCompressor";
 
 export interface PlannedSlide extends SlideInfo {
@@ -106,6 +106,8 @@ export function planDeck(input: PlanInput): DeckPlan {
   const n = input.slides.length;
   const chunks = input.transcriptChunks ?? splitTranscriptEvenly(input.transcript, n);
   const runChunks = slideChunks(input.slides, chunks);
+  // Running headers and footers, left out of a contents page's items.
+  const repeated = repeatedLines(input.layouts);
 
   // Pair with previous slides by hash in deck order (merge pass 1).
   const pool = new Map<string, ExistingSlide[]>();
@@ -119,7 +121,7 @@ export function planDeck(input: PlanInput): DeckPlan {
   const used = new Set<ExistingSlide>();
   const slides: PlannedSlide[] = input.slides.map((s, i) => {
     const text = input.layouts[i]?.text ?? "";
-    const template = templateCommentary(s, input.deckTitle, input.layouts[i]);
+    const template = templateCommentary(s, input.deckTitle, input.layouts[i], repeated);
     if (template !== null) return { ...s, text, transcript: "", mode: "template", template };
     const candidates = pool.get(s.hash);
     const prev = candidates && candidates.length > 0 ? candidates.shift() : undefined;

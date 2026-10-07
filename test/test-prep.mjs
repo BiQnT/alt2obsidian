@@ -136,6 +136,31 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
   assert.equal(m.templateCommentary(slides[5], "L7"), null);
   const planned = m.planDeck({ slides, layouts, scanned, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "L7" });
   assert.equal(planned.slides[1].template, "다룰 항목: Pipelining, Hazards", "the plan passes the page's lines");
+  // Contents lines from odd PDFs: footers, a page counter, numbers that belong to the item, dash, symbol and
+  // font bullets (Wingdings "§" and "Ø", a private-use glyph), Markdown syntax.
+  const odd = ["Outline", "CSED311 Computer Architecture", "Prof. Gwangsun Kim", "2 / 40", "10 Things", "8 Queens problem", "\u2013 Hazards", "\u2014 Forwarding", "\uF0A7Caches", "\u00A7 Memory", "\u00D8 Pipelining", "○ Branches", "► TLB", "▪ Paging", "*args and **kwargs", "List<T> #include", "1. Intro", "•"];
+  const footers = new Set(["CSED311 Computer Architecture", "Prof. Gwangsun Kim"]);
+  const oddItems = m.templateCommentary(slides[1], "L7", { text: odd.join(""), boxes: [], lines: odd }, footers);
+  assert.equal(oddItems, "다룰 항목: 10 Things, 8 Queens problem, Hazards, Forwarding, Caches, Memory, Pipelining, Branches, TLB, Paging, \\*args and \\*\\*kwargs, List\\<T\\> \\#include, Intro");
+  assert.ok(!/[\u2013\u2014\uE000-\uF8FF]/.test(oddItems), "no dash or private-use bullet reaches the note");
+  assert.equal(m.templateCommentary(slides[1], "L7", { text: "", boxes: [], lines: ["Agenda", "1 Intro", "8 Queens problem", "2 Caches"] }), "다룰 항목: Intro, 8 Queens problem, Caches", "bare numbers that count 1, 2 are item numbers");
+  assert.equal(m.templateCommentary(slides[1], "L7", { text: "", boxes: [], lines: ["Agenda", "2 / 40", "\u2013"] }), "목차.", "nothing left: the neutral line");
+  // The plan finds the running footer: a line on more than half of the pages.
+  const footer = "CSED311 Computer Architecture";
+  const searchLines = [
+    ["Lecture 3 Search", "Prof. Kim", footer],
+    ["Outline", "Uninformed search", "Heuristics", "2 / 5", footer],
+    ["Uninformed search expands nodes in order without knowing the goal", "3 / 5", footer],
+    ["Heuristics estimate the remaining cost from each node to the goal", "4 / 5", footer],
+    ["Thank you", footer],
+  ];
+  const searchLayouts = searchLines.map((ls) => ({ text: ls.join(""), boxes: [], lines: ls }));
+  assert.deepEqual([...m.repeatedLines(searchLayouts)], [footer]);
+  assert.equal(m.repeatedLines(searchLayouts.slice(0, 3)).size, 0, "fewer than 4 pages: no footer guess");
+  const search = await m.analyzeSlides(searchLayouts, searchLayouts.map(() => null), { sourceId: "n3" });
+  assert.deepEqual(search.slides.map((s) => s.kind), ["cover", "toc", "content", "content", "thanks"]);
+  const searchPlan = m.planDeck({ ...search, layouts: searchLayouts, transcript: null, transcriptCapChars: 1200, batchSize: 8, deckTitle: "L3" });
+  assert.equal(searchPlan.slides[1].template, "다룰 항목: Uninformed search, Heuristics", "footer and page counter left out");
   for (const s of planned.slides) if (s.template) assert.ok(!/슬라이드|이번 강의/.test(s.template.replace(/\[\[[^\]]*\]\]/g, "")), `no talk about the slide outside the link: ${s.template}`);
 
   const textOnlyRule = await m.analyzeSlides(layouts, grays, { sourceId: "n1", imageRule: "text-only" });
@@ -156,7 +181,7 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
     { sourceId: "v" }
   );
   assert.deepEqual(vis.slides.map((x) => [x.kind, x.dupOf]), [["cover", null], ["visual", null], ["visual", null]]);
-  console.log("PASS: analyzeSlides kinds, near-duplicate runs, image rule, scanned PDF, visual steps need the same picture");
+  console.log("PASS: analyzeSlides kinds, near-duplicate runs, image rule, scanned PDF, visual steps need the same picture; contents items without footers, page counters, bullets or Markdown syntax");
 }
 
 // ---- TranscriptCompressor ----

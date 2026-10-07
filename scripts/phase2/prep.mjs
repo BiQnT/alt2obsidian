@@ -290,8 +290,29 @@ function selectKeyDiagrams(slides, scanned, max = MAX_KEY_DIAGRAMS) {
     return [];
   return slides.filter((s) => s.kind === "visual" && s.dupOf === null && s.imageRatio !== null && s.imageRatio >= VISUAL_RATIO).sort((a, b) => (b.imageRatio ?? 0) - (a.imageRatio ?? 0) || a.page - b.page).slice(0, max).map((s) => s.page).sort((a, b) => a - b);
 }
-var TOC_ITEM_MARK = /^(?:\d{1,2}[.)]?|[•◼▪■●◦*-])\s+/;
-function templateCommentary(slide, deckTitle, layout) {
+var TOC_ITEM_BULLET = /^(?:[-*]\s+|[\u2013\u2014•◼▪■●◦○►§Ø\uE000-\uF8FF]\s*)/;
+var TOC_ITEM_NUMBER = /^\d{1,2}[.)]\s+/;
+var TOC_BARE_NUMBER = /^(\d{1,2})\s+(?=\S)/;
+var PAGE_COUNTER = /^\d+\s*\/\s*\d+$/;
+function escapeMarkdown(text) {
+  return text.replace(/[\\`*_[\]<>#|$~=]/g, "\\$&");
+}
+function repeatedLines(layouts) {
+  const withLines = layouts.filter((l) => l.lines && l.lines.length > 0);
+  const out = /* @__PURE__ */ new Set();
+  if (withLines.length < 4)
+    return out;
+  const counts = /* @__PURE__ */ new Map();
+  for (const l of withLines) {
+    for (const line of new Set(contentLines(l.text, l.lines)))
+      counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  for (const [line, n] of counts)
+    if (n * 2 > withLines.length)
+      out.add(line);
+  return out;
+}
+function templateCommentary(slide, deckTitle, layout, repeated = /* @__PURE__ */ new Set()) {
   if (slide.dupOf !== null) {
     return `\uAC19\uC740 \uB0B4\uC6A9\uC774 \uB4A4\uC5D0\uC11C \uC774\uC5B4\uC9C4\uB2E4. \uD574\uC124\uC740 [[#\u{1F4DA} \uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}|\uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}]]\uC5D0 \uC788\uB2E4.`;
   }
@@ -299,7 +320,16 @@ function templateCommentary(slide, deckTitle, layout) {
     case "cover":
       return `\uD45C\uC9C0: **${slide.title || deckTitle}**`;
     case "toc": {
-      const items = contentLines(layout?.text ?? null, layout?.lines).slice(1).map((l) => l.replace(TOC_ITEM_MARK, "").trim()).filter((l) => l.length > 0);
+      const lines = contentLines(layout?.text ?? null, layout?.lines).slice(1).filter((l) => !PAGE_COUNTER.test(l) && !repeated.has(l)).map((l) => l.replace(TOC_ITEM_BULLET, "").replace(TOC_ITEM_NUMBER, "").trim());
+      let next = 1;
+      const counted = lines.map((l) => {
+        const n = TOC_BARE_NUMBER.exec(l);
+        if (!n || Number(n[1]) !== next)
+          return false;
+        next++;
+        return true;
+      });
+      const items = lines.map((l, i) => next > 2 && counted[i] ? l.replace(TOC_BARE_NUMBER, "") : l).filter((l) => l.length > 0).map(escapeMarkdown);
       return items.length > 0 ? `\uB2E4\uB8F0 \uD56D\uBAA9: ${items.join(", ")}` : "\uBAA9\uCC28.";
     }
     case "thanks":
@@ -1152,6 +1182,7 @@ function planDeck(input) {
   const n = input.slides.length;
   const chunks = input.transcriptChunks ?? splitTranscriptEvenly(input.transcript, n);
   const runChunks = slideChunks(input.slides, chunks);
+  const repeated = repeatedLines(input.layouts);
   const pool = /* @__PURE__ */ new Map();
   for (const e of input.existing ?? []) {
     if (!pool.has(e.hash))
@@ -1163,7 +1194,7 @@ function planDeck(input) {
   const used = /* @__PURE__ */ new Set();
   const slides = input.slides.map((s, i) => {
     const text = input.layouts[i]?.text ?? "";
-    const template = templateCommentary(s, input.deckTitle, input.layouts[i]);
+    const template = templateCommentary(s, input.deckTitle, input.layouts[i], repeated);
     if (template !== null)
       return { ...s, text, transcript: "", mode: "template", template };
     const candidates = pool.get(s.hash);
