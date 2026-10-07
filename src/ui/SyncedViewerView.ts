@@ -51,7 +51,7 @@ function mmss(ms: number): string {
   return h > 0 ? `${h}:${m}:${sec}` : `${m}:${sec}`;
 }
 
-export const VIEW_TYPE_SYNCED_VIEWER = "alt2obs-synced-viewer";
+export const VIEW_TYPE_SYNCED_VIEWER = "alt-to-obs-synced-viewer";
 
 interface SyncedViewerState {
   mdPath: string | null;
@@ -144,7 +144,7 @@ export class SyncedViewerView extends ItemView {
     this.closed = false;
     const root = this.containerEl.children[1] as HTMLElement;
     root.empty();
-    root.addClass("alt2obs-synced-viewer");
+    root.addClass("alt-to-obs-synced-viewer");
     this.buildToolbar(root);
     this.buildPanes(root);
     this.renderEmptyState();
@@ -206,7 +206,7 @@ export class SyncedViewerView extends ItemView {
   }
 
   private buildToolbar(root: HTMLElement): void {
-    this.toolbarEl = root.createDiv({ cls: "alt2obs-synced-toolbar" });
+    this.toolbarEl = root.createDiv({ cls: "alt-to-obs-synced-toolbar" });
 
     this.prevButtonEl = this.toolbarEl.createEl("button", { text: "◀ 이전" });
     this.prevButtonEl.onclick = () => this.gotoPage(this.currentPage - 1);
@@ -229,13 +229,13 @@ export class SyncedViewerView extends ItemView {
     });
     nativeBtn.onclick = () => this.openInNativeView();
 
-    this.syncModeEl = this.toolbarEl.createSpan({ cls: "alt2obs-sync-mode", text: "정렬 기준 동기화 · 전사 매칭" });
+    this.syncModeEl = this.toolbarEl.createSpan({ cls: "alt-to-obs-sync-mode", text: "정렬 기준 동기화 · 전사 매칭" });
     this.syncModeEl.hide();
     this.transcriptBtnEl = this.toolbarEl.createEl("button", { text: "전사 패널" });
     this.transcriptBtnEl.onclick = () => void this.toggleTranscript();
     this.transcriptBtnEl.hide();
 
-    this.pageInfoEl = this.toolbarEl.createDiv({ cls: "alt2obs-page-info" });
+    this.pageInfoEl = this.toolbarEl.createDiv({ cls: "alt-to-obs-page-info" });
     this.updatePageInfo();
   }
 
@@ -258,11 +258,11 @@ export class SyncedViewerView extends ItemView {
   }
 
   private buildPanes(root: HTMLElement): void {
-    this.panesEl = root.createDiv({ cls: "alt2obs-synced-panes" });
-    this.pdfPaneEl = this.panesEl.createDiv({ cls: "alt2obs-pdf-pane" });
-    const column = this.panesEl.createDiv({ cls: "alt2obs-md-column" });
-    this.mdPaneEl = column.createDiv({ cls: "alt2obs-md-pane" });
-    this.transcriptPanelEl = column.createDiv({ cls: "alt2obs-transcript-panel" });
+    this.panesEl = root.createDiv({ cls: "alt-to-obs-synced-panes" });
+    this.pdfPaneEl = this.panesEl.createDiv({ cls: "alt-to-obs-pdf-pane" });
+    const column = this.panesEl.createDiv({ cls: "alt-to-obs-md-column" });
+    this.mdPaneEl = column.createDiv({ cls: "alt-to-obs-md-pane" });
+    this.transcriptPanelEl = column.createDiv({ cls: "alt-to-obs-transcript-panel" });
     this.transcriptPanelEl.hide();
     for (const pane of ["pdf", "md"] as Pane[]) {
       const el = this.paneEl(pane);
@@ -307,7 +307,7 @@ export class SyncedViewerView extends ItemView {
       if (!this.transcriptLoading) {
         this.transcriptTried = this.altLocalId;
         panel.empty();
-        panel.createDiv({ cls: "alt2obs-empty-state", text: "전사를 불러오는 중..." });
+        panel.createDiv({ cls: "alt-to-obs-empty-state", text: "전사를 불러오는 중..." });
         const id = this.altLocalId;
         const load = this.loadTranscript;
         this.transcriptLoading = load(id)
@@ -324,25 +324,25 @@ export class SyncedViewerView extends ItemView {
     panel.empty();
     const slide = this.currentPage;
     const spans = spansForSlide(this.alignment, slide);
-    const head = panel.createDiv({ cls: "alt2obs-transcript-head" });
+    const head = panel.createDiv({ cls: "alt-to-obs-transcript-head" });
     head.createSpan({ text: `전사 · 슬라이드 ${slide} 구간${spans.some((s) => s.low) ? " (정렬 불확실)" : ""}` });
     head.createSpan({
-      cls: "alt2obs-transcript-range",
+      cls: "alt-to-obs-transcript-range",
       text: spans.map((s) => `${mmss(s.startMs)} - ${mmss(s.endMs)}`).join(", "),
     });
-    const body = panel.createDiv({ cls: "alt2obs-transcript-body" });
+    const body = panel.createDiv({ cls: "alt-to-obs-transcript-body" });
     if (!this.transcript) {
-      body.createDiv({ cls: "alt2obs-empty-state", text: "전사를 찾지 못했습니다. Alt를 실행하거나 노트를 다시 가져오세요." });
+      body.createDiv({ cls: "alt-to-obs-empty-state", text: "전사를 찾지 못했습니다. Alt를 실행하거나 노트를 다시 가져오세요." });
       return;
     }
     const segs = this.transcript.filter((seg) => spans.some((s) => segmentInSpan(seg.startMs, s)));
     if (segs.length === 0) {
-      body.createDiv({ cls: "alt2obs-empty-state", text: "이 슬라이드에 정렬된 전사가 없습니다." });
+      body.createDiv({ cls: "alt-to-obs-empty-state", text: "이 슬라이드에 정렬된 전사가 없습니다." });
       return;
     }
     for (const seg of segs) {
-      const row = body.createDiv({ cls: "alt2obs-seg" });
-      row.createSpan({ cls: "alt2obs-seg-time", text: `[${mmss(seg.startMs)}]` });
+      const row = body.createDiv({ cls: "alt-to-obs-seg" });
+      row.createSpan({ cls: "alt-to-obs-seg-time", text: `[${mmss(seg.startMs)}]` });
       row.createSpan({ text: seg.text });
     }
   }
@@ -351,7 +351,7 @@ export class SyncedViewerView extends ItemView {
     this.pdfPaneEl.empty();
     this.mdPaneEl.empty();
     this.mdPaneEl.createDiv({
-      cls: "alt2obs-empty-state",
+      cls: "alt-to-obs-empty-state",
       text:
         "강의 노트를 선택한 뒤 'Open synced viewer' 명령을 실행하시거나 사이드바에서 노트를 여세요.",
     });
@@ -422,7 +422,7 @@ export class SyncedViewerView extends ItemView {
     if (!(file instanceof TFile)) {
       this.mdPaneEl.empty();
       this.mdPaneEl.createDiv({
-        cls: "alt2obs-empty-state",
+        cls: "alt-to-obs-empty-state",
         text: `노트를 찾을 수 없습니다: ${path}`,
       });
       return;
@@ -520,7 +520,7 @@ export class SyncedViewerView extends ItemView {
     if (!(file instanceof TFile)) {
       this.pdfPaneEl.empty();
       this.pdfPaneEl.createDiv({
-        cls: "alt2obs-empty-state",
+        cls: "alt-to-obs-empty-state",
         text: `PDF를 찾을 수 없습니다: ${path}`,
       });
       this.totalPages = 0;
@@ -554,21 +554,21 @@ export class SyncedViewerView extends ItemView {
     this.pageCanvases = [];
     this.pageWrappers = [];
     for (let pageNum = 1; pageNum <= this.totalPages; pageNum++) {
-      const wrapper = this.pdfPaneEl.createDiv({ cls: "alt2obs-pdf-page-wrapper" });
+      const wrapper = this.pdfPaneEl.createDiv({ cls: "alt-to-obs-pdf-page-wrapper" });
       wrapper.dataset.pageNum = String(pageNum);
       // Listed before rendering, so sync works while later pages still render.
       this.pageWrappers.push(wrapper);
       wrapper.createDiv({
-        cls: "alt2obs-pdf-page-label",
+        cls: "alt-to-obs-pdf-page-label",
         text: `슬라이드 ${pageNum} / ${this.totalPages}`,
       });
       const placeholder = wrapper.createDiv({
-        cls: "alt2obs-pdf-page-loading",
+        cls: "alt-to-obs-pdf-page-loading",
         text: `렌더 중…`,
       });
       try {
         const canvas = await this.renderPageToCanvas(pageNum);
-        canvas.classList.add("alt2obs-pdf-page");
+        canvas.classList.add("alt-to-obs-pdf-page");
         canvas.dataset.pageNum = String(pageNum);
         placeholder.replaceWith(canvas);
         this.pageCanvases.push(canvas);
@@ -743,7 +743,7 @@ export class SyncedViewerView extends ItemView {
       const pageNum = i + 1;
       try {
         const next = await this.renderPageToCanvas(pageNum);
-        next.classList.add("alt2obs-pdf-page");
+        next.classList.add("alt-to-obs-pdf-page");
         next.dataset.pageNum = String(pageNum);
         oldCanvas.replaceWith(next);
         this.pageCanvases[i] = next;

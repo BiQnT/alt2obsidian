@@ -21,7 +21,7 @@ import { FIXTURE_PATH } from "./helpers/synthetic-pdf.mjs";
 
 const m = await importTs("test/helpers/sources-entry.ts");
 const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
-const root = mkdtempSync(join(tmpdir(), "alt2obs-sources-"));
+const root = mkdtempSync(join(tmpdir(), "alt-to-obs-sources-"));
 const FAKE_TOKEN = "fake-token-for-tests-0123456789";
 
 // ---- plate-json to markdown ----
@@ -343,14 +343,18 @@ try {
     c3.source?.close();
 
     // Leftover private copies older than an hour are swept on the next open.
-    const stale = join(root, "alt2obs-altdb-stale");
-    mkdirSync(stale);
+    const stale = join(root, "alt-to-obs-altdb-stale");
+    // A leftover of the 2.0.0 betas, under their prefix.
+    const staleBeta = join(root, "alt2obs-altdb-stale");
     const old = (Date.now() - 2 * 3600 * 1000) / 1000;
-    utimesSync(stale, old, old);
-    const fresh = join(root, "alt2obs-altdb-fresh");
+    for (const d of [stale, staleBeta]) {
+      mkdirSync(d);
+      utimesSync(d, old, old);
+    }
+    const fresh = join(root, "alt-to-obs-altdb-fresh");
     mkdirSync(fresh);
     m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root }).close();
-    assert.ok(!existsSync(stale) && existsSync(fresh), "stale copy removed, recent one kept");
+    assert.ok(!existsSync(stale) && !existsSync(staleBeta) && existsSync(fresh), "stale copies removed (also the betas' prefix), recent one kept");
     rmSync(fresh, { recursive: true });
     // A store with channels but a missing membership table: only rows without a channel.
     const { ud: ud4 } = makeUserData("db-partial-scope", { dropTable: "workspace_members" });
@@ -452,7 +456,7 @@ try {
     assert.equal(c.source.mode, "api");
     // A synced slides file (file_ref_id, no file in the API answer): its path comes from a DB copy.
     // One DB copy per connection, however many synced paths are looked up; closed with the source.
-    const copies = () => readdirSync(root).filter((d) => d.startsWith("alt2obs-altdb-")).length;
+    const copies = () => readdirSync(root).filter((d) => d.startsWith("alt-to-obs-altdb-")).length;
     const before0 = copies();
     assert.equal((await c.source.noteDetails("n4")).pdfPath, apiPdf);
     assert.equal((await c.source.noteDetails("n4")).pdfPath, apiPdf);

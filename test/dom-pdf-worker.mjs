@@ -46,7 +46,7 @@ function findChrome() {
 const chrome = findChrome();
 assert.ok(chrome, "no Chromium found: set ALT2OBS_CHROME");
 
-const dir = mkdtempSync(join(tmpdir(), "alt2obs-dom-pdf-"));
+const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-dom-pdf-"));
 writeSyntheticPdf(join(dir, "deck.pdf"), FIXTURE_PAGES);
 writeFileSync(
   join(dir, "index.html"),

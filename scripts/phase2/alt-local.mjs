@@ -940,6 +940,8 @@ function activeContentSql(alias, accountId, support) {
   )))`;
 }
 var STALE_COPY_MS = 60 * 60 * 1e3;
+var COPY_PREFIX = "alt-to-obs-altdb-";
+var LEGACY_COPY_PREFIX = "alt2obs-altdb-";
 function sweepStaleCopies(tmpRoot, now = Date.now()) {
   let removed = 0;
   let names = [];
@@ -949,7 +951,7 @@ function sweepStaleCopies(tmpRoot, now = Date.now()) {
     return 0;
   }
   for (const n of names) {
-    if (!n.startsWith("alt2obs-altdb-"))
+    if (!n.startsWith(COPY_PREFIX) && !n.startsWith(LEGACY_COPY_PREFIX))
       continue;
     const p = join3(tmpRoot, n);
     try {
@@ -1041,7 +1043,7 @@ var AltLocalDbSource = class _AltLocalDbSource {
     throw new AltDbError(`Alt \uB370\uC774\uD130\uBCA0\uC774\uC2A4\uB97C \uC5F4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
   }
   static openCopy(file, sqlite, tmpRoot) {
-    const dir = mkdtempSync(join3(tmpRoot, "alt2obs-altdb-"));
+    const dir = mkdtempSync(join3(tmpRoot, COPY_PREFIX));
     try {
       const target = join3(dir, basename(file));
       copyFileSync(file, target, constants.COPYFILE_FICLONE);

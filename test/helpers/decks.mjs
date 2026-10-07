@@ -17,7 +17,7 @@ export function optionalRealDeck() {
     return null;
   }
   if (!name) return null;
-  const dir = mkdtempSync(join(tmpdir(), "alt2obs-deck-"));
+  const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-deck-"));
   const pdf = join(dir, "deck.pdf");
   copyFileSync(join(ALT_SLIDES, name), pdf);
   return { pdf, label: `Alt deck "${name}"`, cleanup: () => rmSync(dir, { recursive: true, force: true }) };

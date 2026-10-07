@@ -42,7 +42,7 @@ const exitWith = (child, code, out = "") => {
   setImmediate(() => child.emit("close", code));
 };
 
-const dir = mkdtempSync(join(tmpdir(), "alt2obs-win-"));
+const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-win-"));
 try {
   // Windows-looking layout (paths are joined with win32 rules, stored on the real disk).
   const npm = join(dir, "npm");

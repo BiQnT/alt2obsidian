@@ -41,9 +41,9 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.addClass("alt2obs-settings");
+    containerEl.addClass("alt-to-obs-settings");
 
-    const notice = containerEl.createDiv({ cls: "alt2obs-disclosure" });
+    const notice = containerEl.createDiv({ cls: "alt-to-obs-disclosure" });
     notice.createEl("strong", { text: "외부 프로그램 실행과 구독 사용량 안내" });
     notice.createEl("p", {
       text:
@@ -65,11 +65,11 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
 
   private renderConnections(containerEl: HTMLElement): void {
     new Setting(containerEl).setName("LLM 연결").setHeading();
-    const grid = containerEl.createDiv({ cls: "alt2obs-cards" });
+    const grid = containerEl.createDiv({ cls: "alt-to-obs-cards" });
     this.renderCliCard(grid, "claude", "Claude CLI", "claudePath");
     const codexCard = this.renderCliCard(grid, "codex", "Codex CLI", "codexPath");
     codexCard.createDiv({
-      cls: "alt2obs-muted",
+      cls: "alt-to-obs-muted",
       text:
         "Codex는 호출마다 자체 지시문과 ~/.codex/AGENTS.md가 함께 실려 고정 비용이 큽니다 (이 플러그인 설정으로 줄인 뒤에도 호출당 약 12k 토큰). " +
         "그래서 Codex는 배치 크기의 두 배로 묶어 보냅니다. 또 읽기 전용 샌드박스라도 Codex는 사용자 계정이 읽을 수 있는 파일을 읽을 수 있습니다. " +
@@ -126,9 +126,9 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     label: string,
     pathKey: "claudePath" | "codexPath"
   ): HTMLElement {
-    const card = grid.createDiv({ cls: "alt2obs-card" });
-    card.createDiv({ cls: "alt2obs-card-title", text: label });
-    const status = card.createDiv({ cls: "alt2obs-card-status" });
+    const card = grid.createDiv({ cls: "alt-to-obs-card" });
+    card.createDiv({ cls: "alt-to-obs-card-title", text: label });
+    const status = card.createDiv({ cls: "alt-to-obs-card-status" });
     const renderStatus = () => {
       status.empty();
       const found = this.plugin.data.cliDetection[name];
@@ -136,8 +136,8 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
         status.addClass("is-ok");
         status.removeClass("is-missing");
         status.createDiv({ text: `찾음: ${found.version || "버전 확인 실패"}` });
-        status.createDiv({ text: found.path, cls: "alt2obs-mono" });
-        if (found.warning) status.createDiv({ text: found.warning, cls: "alt2obs-muted" });
+        status.createDiv({ text: found.path, cls: "alt-to-obs-mono" });
+        if (found.warning) status.createDiv({ text: found.warning, cls: "alt-to-obs-muted" });
       } else {
         status.addClass("is-missing");
         status.removeClass("is-ok");
@@ -154,10 +154,10 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     // flex line whose description may shrink to a one-character column next
     // to a control that cannot shrink. Here the description is a block of
     // the card's full width whatever Obsidian's setting-item rules are.
-    const field = card.createDiv({ cls: "alt2obs-card-field" });
-    field.createDiv({ cls: "alt2obs-card-label", text: "실행 파일 경로" });
-    field.createDiv({ cls: "alt2obs-card-desc", text: "비워 두면 자동으로 찾습니다 (로그인 셸의 command -v 결과를 한 번 저장)." });
-    const row = field.createDiv({ cls: "alt2obs-card-row" });
+    const field = card.createDiv({ cls: "alt-to-obs-card-field" });
+    field.createDiv({ cls: "alt-to-obs-card-label", text: "실행 파일 경로" });
+    field.createDiv({ cls: "alt-to-obs-card-desc", text: "비워 두면 자동으로 찾습니다 (로그인 셸의 command -v 결과를 한 번 저장)." });
+    const row = field.createDiv({ cls: "alt-to-obs-card-row" });
     const input = row.createEl("input", { type: "text", placeholder: `/.../bin/${name}` });
     input.value = this.settings[pathKey];
     input.setAttr("aria-label", `${label} 실행 파일 경로`);
@@ -200,7 +200,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     const catalog = this.plugin.modelCatalog();
     for (const id of TASK_IDS) this.renderTaskRow(containerEl, id, catalog);
     containerEl.createDiv({
-      cls: "alt2obs-muted alt2obs-settings-note",
+      cls: "alt-to-obs-muted alt-to-obs-settings-note",
       text:
         "모델 목록: 버전이 붙은 항목(예: Opus 5.5)은 그 모델 이름을 그대로 CLI에 넘겨 늘 같은 모델로 실행합니다. sonnet, opus 같은 별칭은 CLI가 그때의 최신 모델로 바꿔 실행하며, " +
         "괄호 안의 '현재'는 마지막 실행에서 CLI가 알려 준 모델입니다. 목록은 Claude Code와 Codex가 저장해 둔 모델 목록에서 읽습니다(모델 호출 없음). " +
@@ -248,7 +248,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     }
     const desc = [notes[id], recommended ? `권장: ${recommended}.` : "", lastText].filter(Boolean).join(" ");
     const setting = new Setting(containerEl).setName(TASK_LABELS[id]).setDesc(desc);
-    setting.settingEl.addClass("alt2obs-task-setting");
+    setting.settingEl.addClass("alt-to-obs-task-setting");
     const changed = async (rerender: boolean) => {
       this.settings.preset = "custom";
       await this.save();
@@ -289,12 +289,12 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
         await changed(true);
       });
       d.selectEl.setAttr("aria-label", `${TASK_LABELS[id]} 모델`);
-      d.selectEl.addClass("alt2obs-model-select");
+      d.selectEl.addClass("alt-to-obs-model-select");
     });
     setting.addText((text) => {
       customInput = text.inputEl;
       text.setPlaceholder(provider === "claude-cli" ? "예: claude-opus-5-5" : "예: gpt-6-luna");
-      text.inputEl.addClass("alt2obs-model-input");
+      text.inputEl.addClass("alt-to-obs-model-input");
       text.inputEl.hide();
       text.inputEl.addEventListener("input", () => {
         // Checked while typing: a model name is passed as one CLI argument (review N8).

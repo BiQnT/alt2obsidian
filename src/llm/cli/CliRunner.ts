@@ -685,7 +685,7 @@ export async function probeCliLogin(name: CliName, bin: string, timeoutMs = 20_0
  * project CLAUDE.md / AGENTS.md is picked up. Real path (macOS /var is a
  * symlink) so paths agree with what we pass on the command line.
  */
-export function createJobDir(prefix = "alt2obs-job-"): string {
+export function createJobDir(prefix = "alt-to-obs-job-"): string {
   return realpathSync(mkdtempSync(path.join(tmpdir(), prefix)));
 }
 

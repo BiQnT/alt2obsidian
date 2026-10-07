@@ -30,7 +30,7 @@ function formatLectureDate(date: string | null): string {
   return m ? `${Number(m[1])}월 ${Number(m[2])}일` : "날짜 없음";
 }
 
-export const VIEW_TYPE_SIDEBAR = "alt2obs-sidebar";
+export const VIEW_TYPE_SIDEBAR = "alt-to-obs-sidebar";
 
 export class Alt2ObsSidebarView extends ItemView {
   private plugin: Alt2ObsPlugin;
@@ -92,18 +92,18 @@ export class Alt2ObsSidebarView extends ItemView {
   async onOpen(): Promise<void> {
     const container = this.containerEl.children[1];
     container.empty();
-    container.addClass("alt2obs-sidebar");
+    container.addClass("alt-to-obs-sidebar");
 
     this.renderHeader(container);
-    this.localPane = container.createDiv({ cls: "alt2obs-local-pane" });
+    this.localPane = container.createDiv({ cls: "alt-to-obs-local-pane" });
     this.renderLocalPane(this.localPane);
-    this.urlPane = container.createDiv({ cls: "alt2obs-url-pane" });
+    this.urlPane = container.createDiv({ cls: "alt-to-obs-url-pane" });
     this.renderInputSection(this.urlPane);
-    this.verifyPane = container.createDiv({ cls: "alt2obs-verify-pane" });
+    this.verifyPane = container.createDiv({ cls: "alt-to-obs-verify-pane" });
     this.verifyPanel = new VerifyPanel(this.app, this.plugin, this.verifyPane);
     this.verifyPanel.render();
     this.renderProgressSection(container);
-    this.cliPanel = container.createDiv({ cls: "alt2obs-cli-panel" });
+    this.cliPanel = container.createDiv({ cls: "alt-to-obs-cli-panel" });
     this.cliPanel.hide();
     this.renderMessageSection(container);
     this.renderRecentSection(container);
@@ -114,17 +114,17 @@ export class Alt2ObsSidebarView extends ItemView {
   // ---- header, tabs, Alt connection ----
 
   private renderHeader(container: Element): void {
-    const head = container.createDiv({ cls: "alt2obs-head" });
-    const row = head.createDiv({ cls: "alt2obs-head-row" });
-    row.createDiv({ cls: "alt2obs-head-title", text: "Alt2Obs" });
-    this.statusChipEl = row.createEl("button", { cls: "alt2obs-status-chip", text: "Alt 확인 중..." });
+    const head = container.createDiv({ cls: "alt-to-obs-head" });
+    const row = head.createDiv({ cls: "alt-to-obs-head-row" });
+    row.createDiv({ cls: "alt-to-obs-head-title", text: "Alt2Obs" });
+    this.statusChipEl = row.createEl("button", { cls: "alt-to-obs-status-chip", text: "Alt 확인 중..." });
     this.statusChipEl.setAttr("aria-label", "Alt 연결 다시 확인");
     this.statusChipEl.addEventListener("click", () => void this.refreshLocal());
-    this.statusDetailEl = head.createDiv({ cls: "alt2obs-muted alt2obs-status-detail" });
+    this.statusDetailEl = head.createDiv({ cls: "alt-to-obs-muted alt-to-obs-status-detail" });
     this.statusDetailEl.hide();
-    const tabs = head.createDiv({ cls: "alt2obs-tabs" });
+    const tabs = head.createDiv({ cls: "alt-to-obs-tabs" });
     for (const [id, label] of [["local", "Alt 노트 목록"], ["url", "URL 붙여넣기"], ["verify", "노트 검증"]] as Array<[Tab, string]>) {
-      const b = tabs.createEl("button", { text: label, cls: "alt2obs-tab" });
+      const b = tabs.createEl("button", { text: label, cls: "alt-to-obs-tab" });
       b.addEventListener("click", () => this.switchTab(id));
       this.tabButtons.set(id, b);
     }
@@ -143,8 +143,8 @@ export class Alt2ObsSidebarView extends ItemView {
   private setConnection(label: string, kind: "api" | "db" | "none" | "busy", detail: string): void {
     if (!this.statusChipEl) return;
     this.statusChipEl.empty();
-    this.statusChipEl.className = `alt2obs-status-chip is-${kind}`;
-    this.statusChipEl.createSpan({ cls: "alt2obs-status-dot" });
+    this.statusChipEl.className = `alt-to-obs-status-chip is-${kind}`;
+    this.statusChipEl.createSpan({ cls: "alt-to-obs-status-dot" });
     this.statusChipEl.appendText(label);
     if (this.statusDetailEl) {
       this.statusDetailEl.setText(detail);
@@ -155,14 +155,14 @@ export class Alt2ObsSidebarView extends ItemView {
   // ---- local notes list ----
 
   private renderLocalPane(pane: HTMLElement): void {
-    const search = pane.createEl("label", { cls: "alt2obs-search" });
-    const icon = search.createSpan({ cls: "alt2obs-search-icon" });
+    const search = pane.createEl("label", { cls: "alt-to-obs-search" });
+    const icon = search.createSpan({ cls: "alt-to-obs-search-icon" });
     setIcon(icon, "search");
     this.searchInput = search.createEl("input", { type: "text", placeholder: "강의 제목 검색" });
     this.searchInput.setAttr("aria-label", "Alt 노트 검색");
     this.searchInput.addEventListener("input", () => this.renderList());
-    this.listEl = pane.createDiv({ cls: "alt2obs-note-list" });
-    this.footerEl = pane.createDiv({ cls: "alt2obs-note-footer" });
+    this.listEl = pane.createDiv({ cls: "alt-to-obs-note-list" });
+    this.footerEl = pane.createDiv({ cls: "alt-to-obs-note-footer" });
     this.footerEl.hide();
   }
 
@@ -213,13 +213,13 @@ export class Alt2ObsSidebarView extends ItemView {
     if (!list) return;
     list.empty();
     if (emptyText) {
-      list.createDiv({ cls: "alt2obs-empty", text: emptyText });
+      list.createDiv({ cls: "alt-to-obs-empty", text: emptyText });
       return;
     }
     const q = (this.searchInput?.value ?? "").trim().toLowerCase();
     const shown = this.items.filter((it) => !q || it.note.title.toLowerCase().includes(q) || this.groupKey(it.note).toLowerCase().includes(q));
     if (shown.length === 0) {
-      list.createDiv({ cls: "alt2obs-empty", text: this.items.length === 0 ? "Alt에 노트가 없습니다" : "검색 결과가 없습니다" });
+      list.createDiv({ cls: "alt-to-obs-empty", text: this.items.length === 0 ? "Alt에 노트가 없습니다" : "검색 결과가 없습니다" });
       return;
     }
     const groups = new Map<string, LocalItem[]>();
@@ -231,11 +231,11 @@ export class Alt2ObsSidebarView extends ItemView {
     const keys = Array.from(groups.keys()).sort((a, b) => (a === "폴더 없음" ? 1 : b === "폴더 없음" ? -1 : a.localeCompare(b, "ko", { numeric: true })));
     for (const key of keys) {
       const open = !!q || this.expanded.has(key);
-      const head = list.createDiv({ cls: "alt2obs-folder" });
-      const caret = head.createSpan({ cls: "alt2obs-folder-caret" });
+      const head = list.createDiv({ cls: "alt-to-obs-folder" });
+      const caret = head.createSpan({ cls: "alt-to-obs-folder-caret" });
       setIcon(caret, open ? "chevron-down" : "chevron-right");
       head.createSpan({ text: key });
-      head.createSpan({ cls: "alt2obs-folder-count", text: String(groups.get(key)!.length) });
+      head.createSpan({ cls: "alt-to-obs-folder-count", text: String(groups.get(key)!.length) });
       head.addEventListener("click", () => {
         if (this.expanded.has(key)) this.expanded.delete(key);
         else this.expanded.add(key);
@@ -249,13 +249,13 @@ export class Alt2ObsSidebarView extends ItemView {
   }
 
   private renderItem(list: HTMLElement, it: LocalItem): void {
-    const el = list.createDiv({ cls: "alt2obs-note-item" });
+    const el = list.createDiv({ cls: "alt-to-obs-note-item" });
     el.toggleClass("is-selected", it.note.id === this.selectedId);
     it.el = el;
     this.fillItem(it);
     el.addEventListener("click", () => {
       this.selectedId = it.note.id;
-      this.listEl?.querySelectorAll(".alt2obs-note-item").forEach((n) => n.removeClass("is-selected"));
+      this.listEl?.querySelectorAll(".alt-to-obs-note-item").forEach((n) => n.removeClass("is-selected"));
       el.addClass("is-selected");
       this.renderFooter();
     });
@@ -265,19 +265,19 @@ export class Alt2ObsSidebarView extends ItemView {
     const el = it.el;
     if (!el) return;
     el.empty();
-    const top = el.createDiv({ cls: "alt2obs-note-row" });
-    top.createSpan({ cls: "alt2obs-note-title", text: it.note.title });
+    const top = el.createDiv({ cls: "alt-to-obs-note-row" });
+    top.createSpan({ cls: "alt-to-obs-note-title", text: it.note.title });
     const chip = statusChip(it.status);
-    top.createSpan({ cls: `alt2obs-chip ${chip.cls}`, text: chip.text });
+    top.createSpan({ cls: `alt-to-obs-chip ${chip.cls}`, text: chip.text });
     const meta: string[] = [formatLectureDate(it.note.lectureDate)];
     if (it.pageCount) meta.push(`슬라이드 ${it.pageCount}장`);
     if (it.details?.transcriptMinutes) meta.push(`전사 ${it.details.transcriptMinutes}분`);
-    const line = el.createDiv({ cls: "alt2obs-note-meta" });
+    const line = el.createDiv({ cls: "alt-to-obs-note-meta" });
     // The lecture kind (spec 4.10): why a lecture has slide commentary or not.
     const kind = this.kindOf(it);
     const label = kind ? LECTURE_KIND_LABELS[kind] : it.note.type === "note" ? "노트" : null;
     if (label) {
-      const chip = line.createSpan({ cls: `alt2obs-kind is-${kind ?? "note"}`, text: label });
+      const chip = line.createSpan({ cls: `alt-to-obs-kind is-${kind ?? "note"}`, text: label });
       chip.setAttr("title", `Alt 노트 종류: ${it.note.type || "알 수 없음"}`);
       line.appendText(" ");
     }
@@ -380,26 +380,26 @@ export class Alt2ObsSidebarView extends ItemView {
       return;
     }
     footer.show();
-    const title = footer.createDiv({ cls: "alt2obs-footer-title", text: it.note.title });
+    const title = footer.createDiv({ cls: "alt-to-obs-footer-title", text: it.note.title });
     // The lecture kind here too (spec 4.10): why the buttons below differ.
     const kindNow = this.kindOf(it);
     if (kindNow) {
       title.appendText(" ");
-      title.createSpan({ cls: `alt2obs-kind is-${kindNow}`, text: LECTURE_KIND_LABELS[kindNow] }).setAttr("title", `Alt 노트 종류: ${it.note.type || "알 수 없음"}`);
+      title.createSpan({ cls: `alt-to-obs-kind is-${kindNow}`, text: LECTURE_KIND_LABELS[kindNow] }).setAttr("title", `Alt 노트 종류: ${it.note.type || "알 수 없음"}`);
     }
 
     if (it.status.kind === "link") {
-      const box = footer.createDiv({ cls: "alt2obs-link-offer" });
+      const box = footer.createDiv({ cls: "alt-to-obs-link-offer" });
       box.createDiv({ text: "이미 가져온 노트와 같은 강의로 보입니다. 연결하면 다시 가져올 때 그 노트를 업데이트하고 메모를 보존합니다." });
       for (const c of it.status.candidates) {
-        const row = box.createDiv({ cls: "alt2obs-link-row" });
-        row.createSpan({ cls: "alt2obs-muted", text: c.path });
+        const row = box.createDiv({ cls: "alt-to-obs-link-row" });
+        row.createSpan({ cls: "alt-to-obs-muted", text: c.path });
         const b = row.createEl("button", { text: "연결" });
         b.addEventListener("click", () => this.confirmLink(it, c));
       }
     }
 
-    const subjectRow = footer.createDiv({ cls: "alt2obs-footer-row" });
+    const subjectRow = footer.createDiv({ cls: "alt-to-obs-footer-row" });
     subjectRow.createEl("label", { text: "과목" });
     this.localSubjectInput = subjectRow.createEl("input", { type: "text" });
     const own = it.status.kind === "imported" ? this.vaultNotes.find((v) => v.path === (it.status as { path: string }).path) : undefined;
@@ -408,9 +408,9 @@ export class Alt2ObsSidebarView extends ItemView {
     this.localSubjectInput.addEventListener("input", () => {
       this.drafts.set(it.note.id, { ...this.drafts.get(it.note.id), subject: this.localSubjectInput?.value ?? "" });
     });
-    subjectRow.createSpan({ cls: "alt2obs-muted", text: own?.subject ? "기존 노트" : it.note.folderPath.length > 0 ? "Alt 폴더에서 추정" : "제목에서 추정" });
+    subjectRow.createSpan({ cls: "alt-to-obs-muted", text: own?.subject ? "기존 노트" : it.note.folderPath.length > 0 ? "Alt 폴더에서 추정" : "제목에서 추정" });
 
-    const align = footer.createDiv({ cls: "alt2obs-align-line" });
+    const align = footer.createDiv({ cls: "alt-to-obs-align-line" });
     const d = it.details;
     const kind = this.kindOf(it);
     const hasTranscript = !!d && d.transcriptMinutes !== null;
@@ -418,7 +418,7 @@ export class Alt2ObsSidebarView extends ItemView {
     // downloaded yet) and no copy next to the note that an import could use.
     const fileMissing = kind === "slides" && !!d && !d.pdfPath && !this.plugin.siblingPdf(this.notePathOf(it));
     const line = (ok: boolean, text: string) => {
-      const icon = align.createSpan({ cls: ok ? "alt2obs-align-ok" : "alt2obs-align-off" });
+      const icon = align.createSpan({ cls: ok ? "alt-to-obs-align-ok" : "alt-to-obs-align-off" });
       setIcon(icon, ok ? "check" : "minus");
       align.appendText(text);
     };
@@ -431,7 +431,7 @@ export class Alt2ObsSidebarView extends ItemView {
       line(d.timestamps, alignmentStatus(d.timestamps, hasTranscript));
     } else if (kind === "attached") {
       line(d.timestamps, `첨부한 PDF 사용 · ${alignmentStatus(d.timestamps, hasTranscript)}`);
-      if (d.hasSlides && d.pdfPath) align.createDiv({ cls: "alt2obs-muted", text: "Alt에도 슬라이드가 있습니다. 지금은 첨부한 PDF를 씁니다." });
+      if (d.hasSlides && d.pdfPath) align.createDiv({ cls: "alt-to-obs-muted", text: "Alt에도 슬라이드가 있습니다. 지금은 첨부한 PDF를 씁니다." });
     } else if (kind === "vault-copy") {
       line(d.timestamps, `Alt에 지금 슬라이드가 없어 노트 옆에 저장된 PDF로 가져옵니다 · ${alignmentStatus(d.timestamps, hasTranscript)}`);
     } else if (kind === "slides-missing") {
@@ -442,10 +442,10 @@ export class Alt2ObsSidebarView extends ItemView {
       line(false, "슬라이드와 전사 없음 · Alt 요약과 메모로 강의 노트를 만듭니다");
     }
 
-    const actions = footer.createDiv({ cls: "alt2obs-footer-actions" });
+    const actions = footer.createDiv({ cls: "alt-to-obs-footer-actions" });
     this.actionButtons = [];
     const button = (text: string, onClick: () => void, opts: { cta?: boolean; work?: boolean; title?: string } = {}) => {
-      const b = actions.createEl("button", { text, cls: opts.cta ? "mod-cta alt2obs-footer-import" : "", attr: opts.title ? { title: opts.title } : {} });
+      const b = actions.createEl("button", { text, cls: opts.cta ? "mod-cta alt-to-obs-footer-import" : "", attr: opts.title ? { title: opts.title } : {} });
       b.addEventListener("click", onClick);
       if (opts.work) {
         b.disabled = this.busy;
@@ -633,10 +633,10 @@ export class Alt2ObsSidebarView extends ItemView {
   }
 
   private renderInputSection(container: Element): void {
-    const section = container.createDiv({ cls: "alt2obs-input-section" });
+    const section = container.createDiv({ cls: "alt-to-obs-input-section" });
 
     // URL input row
-    const urlRow = section.createDiv({ cls: "alt2obs-input-row" });
+    const urlRow = section.createDiv({ cls: "alt-to-obs-input-row" });
     this.urlInput = urlRow.createEl("input", {
       type: "text",
       placeholder: "Alt 노트 URL 붙여넣기...",
@@ -644,27 +644,27 @@ export class Alt2ObsSidebarView extends ItemView {
 
     this.importBtn = urlRow.createEl("button", {
       text: "가져오기",
-      cls: "alt2obs-import-btn mod-cta",
+      cls: "alt-to-obs-import-btn mod-cta",
     });
     this.importBtn.addEventListener("click", () => void this.handleImport());
 
     // Subject section
-    const subjectRow = section.createDiv({ cls: "alt2obs-subject-input" });
+    const subjectRow = section.createDiv({ cls: "alt-to-obs-subject-input" });
     subjectRow.createEl("label", { text: "과목명" });
 
     // Show existing subjects as clickable chips
     const subjects = this.plugin.vaultManager?.getKnownSubjects() || [];
     if (subjects.length > 0) {
-      const chipsContainer = subjectRow.createDiv({ cls: "alt2obs-subject-chips" });
+      const chipsContainer = subjectRow.createDiv({ cls: "alt-to-obs-subject-chips" });
       for (const s of subjects) {
         const chip = chipsContainer.createSpan({
           text: s,
-          cls: "alt2obs-subject-chip",
+          cls: "alt-to-obs-subject-chip",
         });
         chip.addEventListener("click", () => {
           if (this.subjectInput) this.subjectInput.value = s;
           // Toggle active state
-          chipsContainer.querySelectorAll(".alt2obs-subject-chip").forEach(
+          chipsContainer.querySelectorAll(".alt-to-obs-subject-chip").forEach(
             (c) => c.removeClass("is-active")
           );
           chip.addClass("is-active");
@@ -682,18 +682,18 @@ export class Alt2ObsSidebarView extends ItemView {
 
   private renderProgressSection(container: Element): void {
     this.progressContainer = container.createDiv({
-      cls: "alt2obs-progress",
+      cls: "alt-to-obs-progress",
     });
     this.progressContainer.hide();
 
     const barOuter = this.progressContainer.createDiv({
-      cls: "alt2obs-progress-bar",
+      cls: "alt-to-obs-progress-bar",
     });
     this.progressBar = barOuter.createDiv({
-      cls: "alt2obs-progress-bar-fill",
+      cls: "alt-to-obs-progress-bar-fill",
     });
     this.progressText = this.progressContainer.createDiv({
-      cls: "alt2obs-progress-text",
+      cls: "alt-to-obs-progress-text",
     });
   }
 
@@ -704,11 +704,11 @@ export class Alt2ObsSidebarView extends ItemView {
   private renderRecentSection(container: Element): void {
     container.createEl("h6", {
       text: "최근 가져온 노트",
-      cls: "alt2obs-section-header",
+      cls: "alt-to-obs-section-header",
     });
 
     this.recentListContainer = container.createDiv({
-      cls: "alt2obs-recent-list",
+      cls: "alt-to-obs-recent-list",
     });
     this.refreshRecentList();
   }
@@ -731,40 +731,40 @@ export class Alt2ObsSidebarView extends ItemView {
     if (validImports.length === 0) {
       this.recentListContainer.createDiv({
         text: "아직 가져온 노트가 없습니다",
-        cls: "alt2obs-empty",
+        cls: "alt-to-obs-empty",
       });
       return;
     }
 
     for (const record of validImports.slice(0, 20)) {
       const item = this.recentListContainer.createDiv({
-        cls: "alt2obs-recent-item",
+        cls: "alt-to-obs-recent-item",
       });
 
       item.createSpan({
         text: record.title,
-        cls: "alt2obs-recent-item-title",
+        cls: "alt-to-obs-recent-item-title",
       });
       item.createSpan({
         text: record.subject,
-        cls: "alt2obs-recent-item-subject",
+        cls: "alt-to-obs-recent-item-subject",
       });
       item.createSpan({
         text: record.date,
-        cls: "alt2obs-recent-item-date",
+        cls: "alt-to-obs-recent-item-date",
       });
 
       if (record.wasUpdate) {
         item.createSpan({
           text: "업데이트",
-          cls: "alt2obs-recent-item-updated",
+          cls: "alt-to-obs-recent-item-updated",
         });
       }
 
       if (record.parseQuality === "partial") {
         item.createSpan({
           text: "⚠",
-          cls: "alt2obs-recent-item-partial",
+          cls: "alt-to-obs-recent-item-partial",
           attr: { title: "Partial import" },
         });
       }
@@ -891,9 +891,9 @@ export class Alt2ObsSidebarView extends ItemView {
     panel.empty();
     panel.show();
     return new Promise((resolve) => {
-      panel.createEl("h6", { text: `${e.downloadError ? "슬라이드 PDF를 내려받지 못함" : "슬라이드 PDF 없음"}: ${title}`, cls: "alt2obs-section-header" });
-      panel.createDiv({ cls: "alt2obs-muted", text: e.message });
-      const rows = panel.createEl("ul", { cls: "alt2obs-estimate-list" });
+      panel.createEl("h6", { text: `${e.downloadError ? "슬라이드 PDF를 내려받지 못함" : "슬라이드 PDF 없음"}: ${title}`, cls: "alt-to-obs-section-header" });
+      panel.createDiv({ cls: "alt-to-obs-muted", text: e.message });
+      const rows = panel.createEl("ul", { cls: "alt-to-obs-estimate-list" });
       if (e.downloadError) rows.createEl("li", { text: "다시 시도: 네트워크나 공유 설정 문제였다면 다시 내려받아 슬라이드 강의로 가져옵니다." });
       rows.createEl("li", {
         text: e.hasTranscript
@@ -901,7 +901,7 @@ export class Alt2ObsSidebarView extends ItemView {
           : "강의 노트: 전사가 없어 Alt 요약과 메모로 강의 노트를 만듭니다.",
       });
       rows.createEl("li", { text: `PDF 첨부: 보관함이나 컴퓨터의 PDF를 ${e.notePath.replace(/\.md$/, ".pdf")}로 복사하고 슬라이드 강의로 가져옵니다 (슬라이드별 해설, 전사 정렬, synced viewer).` });
-      const actions = panel.createDiv({ cls: "alt2obs-estimate-actions" });
+      const actions = panel.createDiv({ cls: "alt-to-obs-estimate-actions" });
       const summaryText = e.hasTranscript ? "요약 노트 만들기" : "강의 노트 만들기";
       if (e.downloadError) actions.createEl("button", { text: "다시 시도", cls: "mod-cta" }).addEventListener("click", () => resolve("retry"));
       actions.createEl("button", { text: summaryText, cls: e.downloadError ? "" : "mod-cta" }).addEventListener("click", () => resolve("summary"));
@@ -934,12 +934,12 @@ export class Alt2ObsSidebarView extends ItemView {
         const e = prepared.estimate;
         const settings = this.plugin.data.settings;
         const catalog = this.plugin.modelCatalog();
-        panel.createEl("h6", { text: "가져오기 전 예상 사용량", cls: "alt2obs-section-header" });
+        panel.createEl("h6", { text: "가져오기 전 예상 사용량", cls: "alt-to-obs-section-header" });
         panel.createDiv({
-          cls: "alt2obs-estimate-main",
+          cls: "alt-to-obs-estimate-main",
           text: `호출 ${e.calls}회 · 입력 약 ${compactTokens(e.inputTokens)} · 출력 약 ${compactTokens(e.outputTokens)} 토큰 · 이미지 ${e.imagesSent}장`,
         });
-        const models = panel.createDiv({ cls: "alt2obs-pickers" });
+        const models = panel.createDiv({ cls: "alt-to-obs-pickers" });
         const pickers: Array<[TaskId, string]> = prepared.plan
           ? [["commentary", "해설·요약 모델"], ["concepts", "개념 추출 모델"]]
           : prepared.transcriptPlan
@@ -960,7 +960,7 @@ export class Alt2ObsSidebarView extends ItemView {
             onSaveDefault: (next) => this.plugin.saveTaskDefault(task, next),
           });
         }
-        const rows = panel.createEl("ul", { cls: "alt2obs-estimate-list" });
+        const rows = panel.createEl("ul", { cls: "alt-to-obs-estimate-list" });
         if (prepared.plan) {
           const pdfPath = this.plugin.siblingPdf(prepared.notePath)?.path ?? attachedPdfPath(prepared.notePath);
           if (prepared.pdfSource === "attached") rows.createEl("li", { text: `첨부한 PDF를 슬라이드로 씁니다: ${pdfPath}` });
@@ -1003,18 +1003,18 @@ export class Alt2ObsSidebarView extends ItemView {
           rows.createEl("li", { text: "Alt 요약과 메모로 강의 노트를 만듭니다 (PDF와 전사가 없음)." });
         }
         rows.createEl("li", {
-          cls: "alt2obs-muted",
+          cls: "alt-to-obs-muted",
           text: "추정치입니다. 출력 토큰은 effort에 따라 늘려 잡고(medium 기준), 모델에 따라서는 바꾸지 않습니다. 재시도는 포함하지 않습니다.",
         });
 
         const cap = settings.generation.tokenCapPerLecture;
         if (prepared.overCap) {
           panel.createDiv({
-            cls: "alt2obs-error",
+            cls: "alt-to-obs-error",
             text: `강의당 토큰 상한(${compactTokens(cap)})을 넘을 것 같아 시작하지 않았습니다. 이미지를 줄이거나 effort를 낮추거나 설정에서 상한을 올리세요.`,
           });
         }
-        const actions = panel.createDiv({ cls: "alt2obs-estimate-actions" });
+        const actions = panel.createDiv({ cls: "alt-to-obs-estimate-actions" });
         const start = actions.createEl("button", { text: prepared.overCap ? "상한 무시하고 시작" : "시작", cls: prepared.overCap ? "" : "mod-cta" });
         let armed = false;
         start.addEventListener("click", () => {
@@ -1044,8 +1044,8 @@ export class Alt2ObsSidebarView extends ItemView {
     const panel = this.cliPanel!;
     panel.empty();
     panel.show();
-    panel.createEl("h6", { text: `가져오는 중: ${prepared.preview.altData.title}`, cls: "alt2obs-section-header" });
-    const steps = panel.createEl("ol", { cls: "alt2obs-steps" });
+    panel.createEl("h6", { text: `가져오는 중: ${prepared.preview.altData.title}`, cls: "alt-to-obs-section-header" });
+    const steps = panel.createEl("ol", { cls: "alt-to-obs-steps" });
     const sections = !!prepared.transcriptPlan;
     const stepDefs: Array<[string, string]> = [
       ["prep", sections ? "준비 (전사 구간·예산)" : "준비 (분석·예산)"],
@@ -1058,9 +1058,9 @@ export class Alt2ObsSidebarView extends ItemView {
     for (const [id, label] of stepDefs) items.set(id, steps.createEl("li", { text: label }));
     items.get("prep")!.addClass("is-done");
 
-    const barOuter = panel.createDiv({ cls: "alt2obs-progress-bar" });
-    const bar = barOuter.createDiv({ cls: "alt2obs-progress-bar-fill" });
-    const detail = panel.createDiv({ cls: "alt2obs-progress-text" });
+    const barOuter = panel.createDiv({ cls: "alt-to-obs-progress-bar" });
+    const bar = barOuter.createDiv({ cls: "alt-to-obs-progress-bar-fill" });
+    const detail = panel.createDiv({ cls: "alt-to-obs-progress-text" });
     // The models of this run: as chosen, then as the CLI reports them (an alias becomes its full id).
     const catalog = this.plugin.modelCatalog();
     const labels: Partial<Record<string, string>> = { commentary: "해설", concepts: "개념", alignment: "정렬 확인" };
@@ -1071,11 +1071,11 @@ export class Alt2ObsSidebarView extends ItemView {
       const t = this.plugin.runTask(prepared, task);
       used.set(task, `${describeModel(t.provider, t.model, catalog)} · ${describeEffort(t.effort)}`);
     }
-    const modelLine = panel.createDiv({ cls: "alt2obs-usage-line alt2obs-model-line" });
+    const modelLine = panel.createDiv({ cls: "alt-to-obs-usage-line alt-to-obs-model-line" });
     const showModels = () => modelLine.setText(`모델: ${Array.from(used.entries()).map(([t, m]) => `${labels[t] ?? t} ${m}`).join(" / ")}`);
     showModels();
-    const usage = panel.createDiv({ cls: "alt2obs-usage-line", text: "사용량: 아직 호출 없음" });
-    const cancel = panel.createEl("button", { text: "취소", cls: "alt2obs-cancel-btn" });
+    const usage = panel.createDiv({ cls: "alt-to-obs-usage-line", text: "사용량: 아직 호출 없음" });
+    const cancel = panel.createEl("button", { text: "취소", cls: "alt-to-obs-cancel-btn" });
     cancel.addEventListener("click", () => {
       cancel.disabled = true;
       cancel.textContent = "취소하는 중...";
@@ -1123,7 +1123,7 @@ export class Alt2ObsSidebarView extends ItemView {
 
     if (this.urlInput) this.urlInput.value = "";
     if (this.subjectInput) this.subjectInput.value = "";
-    this.containerEl.querySelectorAll(".alt2obs-subject-chip").forEach(
+    this.containerEl.querySelectorAll(".alt-to-obs-subject-chip").forEach(
       (c) => c.removeClass("is-active")
     );
 
@@ -1170,12 +1170,12 @@ export class Alt2ObsSidebarView extends ItemView {
     this.messageContainer.empty();
     this.hideProgress();
 
-    const el = this.messageContainer.createDiv({ cls: "alt2obs-error" });
+    const el = this.messageContainer.createDiv({ cls: "alt-to-obs-error" });
     el.createSpan({ text: msg });
 
     const retry = el.createSpan({
       text: "다시 시도",
-      cls: "alt2obs-error-retry",
+      cls: "alt-to-obs-error-retry",
     });
     retry.addEventListener("click", () => {
       this.clearMessage();
@@ -1188,7 +1188,7 @@ export class Alt2ObsSidebarView extends ItemView {
     this.messageContainer.empty();
     this.messageContainer.createDiv({
       text: msg,
-      cls: "alt2obs-success",
+      cls: "alt-to-obs-success",
     });
   }
 
@@ -1197,7 +1197,7 @@ export class Alt2ObsSidebarView extends ItemView {
   }
 
   private showNotice(msg: string): void {
-    this.messageContainer?.createDiv({ text: msg, cls: "alt2obs-muted" });
+    this.messageContainer?.createDiv({ text: msg, cls: "alt-to-obs-muted" });
   }
 
   private confirmUpdate(summary: ImportUpdateSummary): Promise<boolean> {
@@ -1230,7 +1230,7 @@ class ConfirmModal extends Modal {
     contentEl.empty();
     contentEl.createEl("h2", { text: this.heading });
     contentEl.createEl("p", { text: this.body });
-    const actions = contentEl.createDiv({ cls: "alt2obs-update-actions" });
+    const actions = contentEl.createDiv({ cls: "alt-to-obs-update-actions" });
     actions.createEl("button", { text: "취소" }).addEventListener("click", () => this.close());
     const ok = actions.createEl("button", { text: this.confirmText, cls: "mod-cta" });
     ok.addEventListener("click", () => {
@@ -1254,7 +1254,7 @@ class UpdatePreviewModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.addClass("alt2obs-update-modal");
+    contentEl.addClass("alt-to-obs-update-modal");
 
     contentEl.createEl("h2", { text: "기존 노트 업데이트" });
     contentEl.createEl("p", {
@@ -1270,7 +1270,7 @@ class UpdatePreviewModal extends Modal {
       contentEl.createEl("p", { text: note });
     }
 
-    const actions = contentEl.createDiv({ cls: "alt2obs-update-actions" });
+    const actions = contentEl.createDiv({ cls: "alt-to-obs-update-actions" });
     const cancelBtn = actions.createEl("button", { text: "취소" });
     cancelBtn.addEventListener("click", () => this.finish(false));
 
@@ -1284,7 +1284,7 @@ class UpdatePreviewModal extends Modal {
     // is being imported onto this note. Require an explicit opt-in.
     if (this.summary.confirmDeckReplacement) {
       confirmBtn.disabled = true;
-      const warning = contentEl.createDiv({ cls: "alt2obs-update-section" });
+      const warning = contentEl.createDiv({ cls: "alt-to-obs-update-section" });
       warning.createEl("p", {
         text:
           this.summary.unit === "section"
@@ -1325,14 +1325,14 @@ class UpdatePreviewModal extends Modal {
 
   private renderList(label: string, items: string[]): void {
     const section = this.contentEl.createDiv({
-      cls: "alt2obs-update-section",
+      cls: "alt-to-obs-update-section",
     });
     section.createEl("h3", { text: label });
 
     if (items.length === 0) {
       section.createEl("p", {
         text: "없음",
-        cls: "alt2obs-update-empty",
+        cls: "alt-to-obs-update-empty",
       });
       return;
     }

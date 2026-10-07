@@ -1,5 +1,5 @@
 {
-	"name": "alt2obs",
+	"name": "alt-to-obs",
 	"version": "2.0.0",
 	"description": "Import Alt lecture recordings, transcripts and slides into your vault as structured notes with per-slide commentary, a synced PDF viewer and note checking, using your own Claude Code or Codex CLI.",
 	"main": "main.js",

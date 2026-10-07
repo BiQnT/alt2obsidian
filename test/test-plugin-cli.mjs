@@ -123,7 +123,7 @@ async function makePlugin(saved, setup) {
   let stored = saved;
   Object.assign(plugin, {
     app,
-    manifest: { dir: ".obsidian/plugins/alt2obs" },
+    manifest: { dir: ".obsidian/plugins/alt-to-obs" },
     loadData: async () => stored,
     saveData: async (d) => void (stored = JSON.parse(JSON.stringify(d))),
     registerView: () => {},
@@ -181,7 +181,7 @@ assert.equal(insertFrontmatterLine('---\nalt_local_id: null\n---\nx', 'alt_local
 assert.equal(insertFrontmatterLine('---\nalt_local_id: ~\n---\nx', 'alt_local_id: "id"'), '---\nalt_local_id: "id"\n---\nx', "~ is empty");
 console.log("PASS: frontmatter line insert keeps the YAML text as it is");
 
-// Rename to Alt2Obs (id alt2obs): the old plugin's data.json is imported once, read only.
+// Rename to Alt2Obs (id alt-to-obs): the old plugin's data.json is imported once, read only.
 {
   const LEGACY_DATA = ".obsidian/plugins/alt2obsidian/data.json";
   const legacy = {
@@ -209,7 +209,7 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   assert.equal(imported.config.get(LEGACY_DATA), legacyText, "the old data.json is not changed");
   assert.deepEqual([...imported.config.keys()], [LEGACY_DATA], "nothing written to the config folder");
   // The old plugin is still enabled: one notice that says what came along and to remove it, then a warning per start.
-  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt2obsidian", "alt2obs"]));
+  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt2obsidian", "alt-to-obs"]));
   imported.config.set(".obsidian/plugins/alt2obsidian/manifest.json", JSON.stringify({ id: "alt2obsidian", name: "Alt2Obsidian" }));
   let n = notices.length;
   await imported.plugin.showRenameNotices();
@@ -226,7 +226,7 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   };
   await imported.plugin.onPdfOpened(Object.assign(new TFile(), { path: "Lectures/S/Lectures/L1.pdf" }));
   assert.equal(await imported.plugin.adoptLegacyLeaves(), 0);
-  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt2obs"]));
+  imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt-to-obs"]));
   n = notices.length;
   await imported.plugin.showRenameNotices();
   assert.equal(notices.length, n, "disabled: nothing to say");
@@ -237,12 +237,12 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   ws.getLeavesOfType = (type) => oldLeaves[type] ?? [];
   assert.equal(await imported.plugin.adoptLegacyLeaves(), 2);
   assert.deepEqual(viewStates, [
-    { type: "alt2obs-sidebar", state: {}, pinned: true, active: false },
-    { type: "alt2obs-synced-viewer", state: { mdPath: "L/a.md", pdfPath: "L/a.pdf" }, pinned: true, active: false },
+    { type: "alt-to-obs-sidebar", state: {}, pinned: true, active: false },
+    { type: "alt-to-obs-synced-viewer", state: { mdPath: "L/a.md", pdfPath: "L/a.pdf" }, pinned: true, active: false },
   ]);
   // New files copied into the old folder: that folder is Alt2Obs now, not the old plugin.
   imported.config.set(".obsidian/community-plugins.json", JSON.stringify(["alt2obsidian"]));
-  imported.config.set(".obsidian/plugins/alt2obsidian/manifest.json", JSON.stringify({ id: "alt2obs", name: "Alt2Obs" }));
+  imported.config.set(".obsidian/plugins/alt2obsidian/manifest.json", JSON.stringify({ id: "alt-to-obs", name: "Alt2Obs" }));
   await imported.plugin.showRenameNotices();
   assert.equal(notices.length, n, "no warning for a folder that holds Alt2Obs");
 
@@ -288,7 +288,7 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
 }
 
 const s = fakeSession("ok");
-const cacheRoot = mkdtempSync(join(tmpdir(), "alt2obs-cache-test-"));
+const cacheRoot = mkdtempSync(join(tmpdir(), "alt-to-obs-cache-test-"));
 try {
   // Fresh install: the Claude CLI table stays when Claude is logged in; no notice.
   {
@@ -742,7 +742,7 @@ try {
 
     // Sidebar change count on the linked note: the textless slide was hashed
     // with the public id at the URL import; compared by position, it is unchanged.
-    const pdfDir = mkdtempSync(join(tmpdir(), "alt2obs-pdf-test-"));
+    const pdfDir = mkdtempSync(join(tmpdir(), "alt-to-obs-pdf-test-"));
     const pdfFile = join(pdfDir, "deck.pdf");
     writeFileSync(pdfFile, "%PDF stub");
     assert.equal(await plugin.slideChanges(urlNotePath, pdfFile, "local-2"), 0, "textless slide not counted as changed");
@@ -1157,7 +1157,7 @@ try {
 
   // Claude Code's model catalog: the newest *-cc.json under CLAUDE_CONFIG_DIR, kept once found.
   {
-    const cfg = mkdtempSync(join(tmpdir(), "alt2obs-claude-config-"));
+    const cfg = mkdtempSync(join(tmpdir(), "alt-to-obs-claude-config-"));
     const saved = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = cfg;
     try {

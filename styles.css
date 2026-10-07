@@ -1,6 +1,6 @@
 /* Alt2Obs Sidebar Styles */
 
-.alt2obs-sidebar {
+.alt-to-obs-sidebar {
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -8,57 +8,57 @@
 }
 
 /* URL Input Section */
-.alt2obs-input-section {
+.alt-to-obs-input-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.alt2obs-input-section input[type="text"] {
+.alt-to-obs-input-section input[type="text"] {
   width: 100%;
   padding: 8px;
   border-radius: 4px;
 }
 
-.alt2obs-input-row {
+.alt-to-obs-input-row {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-.alt2obs-input-row input {
+.alt-to-obs-input-row input {
   flex: 1;
 }
 
-.alt2obs-subject-input {
+.alt-to-obs-subject-input {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.alt2obs-subject-input label {
+.alt-to-obs-subject-input label {
   font-size: 0.85em;
   color: var(--text-muted);
 }
 
 /* Import Button */
-.alt2obs-import-btn {
+.alt-to-obs-import-btn {
   cursor: pointer;
 }
 
-.alt2obs-import-btn:disabled {
+.alt-to-obs-import-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 /* Progress */
-.alt2obs-progress {
+.alt-to-obs-progress {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.alt2obs-progress-bar {
+.alt-to-obs-progress-bar {
   width: 100%;
   height: 6px;
   background: var(--background-modifier-border);
@@ -66,19 +66,19 @@
   overflow: hidden;
 }
 
-.alt2obs-progress-bar-fill {
+.alt-to-obs-progress-bar-fill {
   height: 100%;
   background: var(--interactive-accent);
   transition: width 0.3s ease;
 }
 
-.alt2obs-progress-text {
+.alt-to-obs-progress-text {
   font-size: 0.85em;
   color: var(--text-muted);
 }
 
 /* Section Headers */
-.alt2obs-section-header {
+.alt-to-obs-section-header {
   font-size: 0.9em;
   font-weight: 600;
   color: var(--text-muted);
@@ -90,13 +90,13 @@
 }
 
 /* Recent Imports List */
-.alt2obs-recent-list {
+.alt-to-obs-recent-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.alt2obs-recent-item {
+.alt-to-obs-recent-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -106,18 +106,18 @@
   font-size: 0.9em;
 }
 
-.alt2obs-recent-item:hover {
+.alt-to-obs-recent-item:hover {
   background: var(--background-modifier-hover);
 }
 
-.alt2obs-recent-item-title {
+.alt-to-obs-recent-item-title {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.alt2obs-recent-item-subject {
+.alt-to-obs-recent-item-subject {
   font-size: 0.8em;
   color: var(--text-muted);
   background: var(--background-modifier-border);
@@ -125,12 +125,12 @@
   border-radius: 3px;
 }
 
-.alt2obs-recent-item-date {
+.alt-to-obs-recent-item-date {
   font-size: 0.75em;
   color: var(--text-faint);
 }
 
-.alt2obs-recent-item-updated {
+.alt-to-obs-recent-item-updated {
   font-size: 0.75em;
   color: var(--text-accent);
   background: var(--background-modifier-border);
@@ -138,13 +138,13 @@
   border-radius: 3px;
 }
 
-.alt2obs-recent-item-partial {
+.alt-to-obs-recent-item-partial {
   font-size: 0.75em;
   color: var(--text-warning);
 }
 
 /* Error Messages */
-.alt2obs-error {
+.alt-to-obs-error {
   padding: 8px;
   border-radius: 4px;
   background: rgba(220, 53, 69, 0.15);
@@ -156,14 +156,14 @@
   gap: 8px;
 }
 
-.alt2obs-error-retry {
+.alt-to-obs-error-retry {
   cursor: pointer;
   text-decoration: underline;
   margin-left: auto;
 }
 
 /* Success Message */
-.alt2obs-success {
+.alt-to-obs-success {
   padding: 8px;
   border-radius: 4px;
   background: rgba(40, 167, 69, 0.15);
@@ -173,14 +173,14 @@
 }
 
 /* Subject Chips */
-.alt2obs-subject-chips {
+.alt-to-obs-subject-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 4px;
 }
 
-.alt2obs-subject-chip {
+.alt-to-obs-subject-chip {
   padding: 3px 10px;
   border-radius: 12px;
   background: var(--background-modifier-border);
@@ -191,19 +191,19 @@
   transition: all 0.15s ease;
 }
 
-.alt2obs-subject-chip:hover {
+.alt-to-obs-subject-chip:hover {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
 }
 
-.alt2obs-subject-chip.is-active {
+.alt-to-obs-subject-chip.is-active {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
   border-color: var(--interactive-accent);
 }
 
 /* Empty State */
-.alt2obs-empty {
+.alt-to-obs-empty {
   text-align: center;
   color: var(--text-muted);
   font-size: 0.85em;
@@ -211,30 +211,30 @@
 }
 
 
-.alt2obs-update-modal h2 {
+.alt-to-obs-update-modal h2 {
   margin-top: 0;
 }
 
-.alt2obs-update-section {
+.alt-to-obs-update-section {
   margin-top: 12px;
 }
 
-.alt2obs-update-section h3 {
+.alt-to-obs-update-section h3 {
   font-size: 0.9em;
   margin-bottom: 4px;
 }
 
-.alt2obs-update-section ul {
+.alt-to-obs-update-section ul {
   margin: 0;
   padding-left: 18px;
 }
 
-.alt2obs-update-empty {
+.alt-to-obs-update-empty {
   color: var(--text-muted);
   margin: 0;
 }
 
-.alt2obs-update-actions {
+.alt-to-obs-update-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -242,7 +242,7 @@
 }
 
 /* ---- 2.0: CLI estimate and run panels (sidebar) ---- */
-.alt2obs-cli-panel {
+.alt-to-obs-cli-panel {
   margin: 8px 0 12px;
   padding: 10px;
   border: 1px solid var(--background-modifier-border);
@@ -250,61 +250,61 @@
   background: var(--background-secondary);
 }
 
-.alt2obs-estimate-main {
+.alt-to-obs-estimate-main {
   font-weight: 600;
   margin: 4px 0 6px;
 }
 
-.alt2obs-estimate-list {
+.alt-to-obs-estimate-list {
   margin: 0 0 8px;
   padding-left: 18px;
   font-size: var(--font-ui-small);
 }
 
-.alt2obs-estimate-actions {
+.alt-to-obs-estimate-actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   margin-top: 8px;
 }
 
-.alt2obs-steps {
+.alt-to-obs-steps {
   margin: 4px 0 8px;
   padding-left: 20px;
   font-size: var(--font-ui-small);
   color: var(--text-muted);
 }
 
-.alt2obs-steps li.is-active {
+.alt-to-obs-steps li.is-active {
   color: var(--text-normal);
   font-weight: 600;
 }
 
-.alt2obs-steps li.is-done {
+.alt-to-obs-steps li.is-done {
   color: var(--text-faint);
 }
 
-.alt2obs-steps li.is-done::after {
+.alt-to-obs-steps li.is-done::after {
   content: " ✓";
 }
 
-.alt2obs-usage-line {
+.alt-to-obs-usage-line {
   margin: 6px 0;
   font-size: var(--font-ui-smaller);
   font-family: var(--font-monospace);
 }
 
-.alt2obs-cancel-btn {
+.alt-to-obs-cancel-btn {
   margin-top: 4px;
 }
 
-.alt2obs-muted {
+.alt-to-obs-muted {
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
 
 /* ---- 2.0: settings ---- */
-.alt2obs-disclosure {
+.alt-to-obs-disclosure {
   padding: 8px 12px;
   margin-bottom: 12px;
   border-left: 3px solid var(--interactive-accent);
@@ -312,24 +312,24 @@
   font-size: var(--font-ui-small);
 }
 
-.alt2obs-disclosure p {
+.alt-to-obs-disclosure p {
   margin: 4px 0 0;
 }
 
-.alt2obs-cards {
+.alt-to-obs-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 10px;
   margin-bottom: 12px;
 }
 
-.alt2obs-card {
+.alt-to-obs-card {
   padding: 8px 12px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
 }
 
-.alt2obs-card-title {
+.alt-to-obs-card-title {
   margin: 4px 0;
   font-weight: var(--font-semibold);
 }
@@ -343,20 +343,20 @@
  * settings panes (the settings window at its 600px minimum): it turns rows
  * into columns, where the 16em basis would have become a 16em-tall gap.
  */
-.alt2obs-settings.alt2obs-settings .setting-item {
+.alt-to-obs-settings.alt-to-obs-settings .setting-item {
   flex-direction: row;
   flex-wrap: wrap;
   column-gap: 12px;
   row-gap: 6px;
 }
 
-.alt2obs-settings.alt2obs-settings .setting-item-info {
+.alt-to-obs-settings.alt-to-obs-settings .setting-item-info {
   flex: 1 1 16em;
   min-width: min(16em, 100%);
   margin-inline-end: 0;
 }
 
-.alt2obs-settings.alt2obs-settings .setting-item-control {
+.alt-to-obs-settings.alt-to-obs-settings .setting-item-control {
   flex: 0 1 auto;
   flex-wrap: wrap;
   min-width: 0;
@@ -366,79 +366,79 @@
  * CLI cards: plain blocks, not Setting rows (src/ui/SettingsTab.ts), so the
  * description is always as wide as the card.
  */
-.alt2obs-card-field {
+.alt-to-obs-card-field {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-top: 8px;
 }
 
-.alt2obs-card-label {
+.alt-to-obs-card-label {
   font-size: var(--font-ui-small);
   font-weight: var(--font-medium, 500);
 }
 
-.alt2obs-card-desc {
+.alt-to-obs-card-desc {
   display: block;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   line-height: var(--line-height-tight);
 }
 
-.alt2obs-card-row {
+.alt-to-obs-card-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 2px;
 }
 
-.alt2obs-card-row input[type="text"] {
+.alt-to-obs-card-row input[type="text"] {
   flex: 1 1 10em;
   min-width: 0;
 }
 
-.alt2obs-card-status {
+.alt-to-obs-card-status {
   font-size: var(--font-ui-small);
   color: var(--text-muted);
 }
 
-.alt2obs-card-status.is-ok {
+.alt-to-obs-card-status.is-ok {
   color: var(--text-success);
 }
 
-.alt2obs-card-status.is-missing {
+.alt-to-obs-card-status.is-missing {
   color: var(--text-warning);
 }
 
-.alt2obs-mono {
+.alt-to-obs-mono {
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
   word-break: break-all;
 }
 
 /* Task rows: provider, model and effort dropdowns (and the custom model field) wrap as needed. */
-.alt2obs-task-setting .setting-item-control {
+.alt-to-obs-task-setting .setting-item-control {
   justify-content: flex-start;
 }
 
-.alt2obs-settings-note {
+.alt-to-obs-settings-note {
   margin: 4px 0 12px;
 }
 
-.alt2obs-model-select {
+.alt-to-obs-model-select {
   max-width: 16em;
 }
 
-.alt2obs-model-input {
+.alt-to-obs-model-input {
   width: 12em;
 }
 
-.alt2obs-model-input.is-invalid {
+.alt-to-obs-model-input.is-invalid {
   border-color: var(--text-error);
 }
 
 /* ---- 2.0.0-beta.2: Alt local notes (mockup "1. 가져오기 사이드바") ---- */
-.alt2obs-head {
+.alt-to-obs-head {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -446,17 +446,17 @@
   border-bottom: 1px solid var(--background-modifier-border);
   margin-bottom: 10px;
 }
-.alt2obs-head-row {
+.alt-to-obs-head-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
-.alt2obs-head-title {
+.alt-to-obs-head-title {
   font-weight: 700;
   font-size: var(--font-ui-medium);
 }
-.alt2obs-status-chip {
+.alt-to-obs-status-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -470,49 +470,49 @@
   color: var(--text-muted);
   cursor: pointer;
 }
-.alt2obs-status-dot {
+.alt-to-obs-status-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--text-faint);
 }
-.alt2obs-status-chip.is-api {
+.alt-to-obs-status-chip.is-api {
   background: rgba(var(--color-green-rgb), 0.15);
   color: var(--color-green);
 }
-.alt2obs-status-chip.is-api .alt2obs-status-dot {
+.alt-to-obs-status-chip.is-api .alt-to-obs-status-dot {
   background: var(--color-green);
 }
-.alt2obs-status-chip.is-db {
+.alt-to-obs-status-chip.is-db {
   background: rgba(var(--color-yellow-rgb), 0.15);
   color: var(--color-yellow);
 }
-.alt2obs-status-chip.is-db .alt2obs-status-dot {
+.alt-to-obs-status-chip.is-db .alt-to-obs-status-dot {
   background: var(--color-yellow);
 }
-.alt2obs-status-detail {
+.alt-to-obs-status-detail {
   font-size: var(--font-ui-smaller);
 }
-.alt2obs-tabs {
+.alt-to-obs-tabs {
   display: flex;
   gap: 3px;
   padding: 3px;
   border-radius: 7px;
   background: var(--background-primary);
 }
-.alt2obs-tab {
+.alt-to-obs-tab {
   flex: 1;
   height: 28px;
   box-shadow: none;
   background: transparent;
   color: var(--text-muted);
 }
-.alt2obs-tab.is-active {
+.alt-to-obs-tab.is-active {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
   font-weight: 600;
 }
-.alt2obs-search {
+.alt-to-obs-search {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -523,18 +523,18 @@
   background: var(--background-primary);
   margin-bottom: 8px;
 }
-.alt2obs-search input {
+.alt-to-obs-search input {
   flex: 1;
   border: 0;
   background: transparent;
   box-shadow: none;
   padding: 0;
 }
-.alt2obs-search-icon {
+.alt-to-obs-search-icon {
   display: inline-flex;
   color: var(--text-muted);
 }
-.alt2obs-note-list {
+.alt-to-obs-note-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -542,7 +542,7 @@
   overflow-y: auto;
   margin-bottom: 8px;
 }
-.alt2obs-folder {
+.alt-to-obs-folder {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -553,22 +553,22 @@
   cursor: pointer;
   border-radius: 6px;
 }
-.alt2obs-folder:hover {
+.alt-to-obs-folder:hover {
   background: var(--background-modifier-hover);
 }
-.alt2obs-folder-caret {
+.alt-to-obs-folder-caret {
   display: inline-flex;
 }
-.alt2obs-folder-caret svg {
+.alt-to-obs-folder-caret svg {
   width: 12px;
   height: 12px;
 }
-.alt2obs-folder-count {
+.alt-to-obs-folder-count {
   margin-left: auto;
   font-weight: 400;
   color: var(--text-faint);
 }
-.alt2obs-note-item {
+.alt-to-obs-note-item {
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -577,31 +577,31 @@
   border-radius: 6px;
   cursor: pointer;
 }
-.alt2obs-note-item:hover {
+.alt-to-obs-note-item:hover {
   background: var(--background-modifier-hover);
 }
-.alt2obs-note-item.is-selected {
+.alt-to-obs-note-item.is-selected {
   background: var(--background-modifier-active-hover);
 }
-.alt2obs-note-row {
+.alt-to-obs-note-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
-.alt2obs-note-title {
+.alt-to-obs-note-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.alt2obs-note-item.is-selected .alt2obs-note-title {
+.alt-to-obs-note-item.is-selected .alt-to-obs-note-title {
   font-weight: 600;
 }
-.alt2obs-note-meta {
+.alt-to-obs-note-meta {
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
-.alt2obs-chip {
+.alt-to-obs-chip {
   flex-shrink: 0;
   padding: 1px 8px;
   border-radius: 999px;
@@ -610,20 +610,20 @@
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
-.alt2obs-chip.is-new {
+.alt-to-obs-chip.is-new {
   background: rgba(var(--color-blue-rgb), 0.18);
   color: var(--color-blue);
 }
-.alt2obs-chip.is-changed {
+.alt-to-obs-chip.is-changed {
   background: rgba(var(--color-yellow-rgb), 0.18);
   color: var(--color-yellow);
 }
-.alt2obs-chip.is-link {
+.alt-to-obs-chip.is-link {
   background: rgba(var(--color-purple-rgb), 0.18);
   color: var(--color-purple);
 }
 /* Lecture kind in the note list (2.0.0-beta.6): 슬라이드 / 노트(전사만) / 슬라이드(미첨부). */
-.alt2obs-kind {
+.alt-to-obs-kind {
   display: inline-block;
   padding: 0 6px;
   border-radius: var(--radius-s);
@@ -632,22 +632,22 @@
   background: var(--background-modifier-hover);
   color: var(--text-muted);
 }
-.alt2obs-kind.is-slides,
-.alt2obs-kind.is-attached,
-.alt2obs-kind.is-vault-copy {
+.alt-to-obs-kind.is-slides,
+.alt-to-obs-kind.is-attached,
+.alt-to-obs-kind.is-vault-copy {
   background: rgba(var(--color-blue-rgb), 0.15);
   color: var(--color-blue);
 }
-.alt2obs-kind.is-transcript,
-.alt2obs-kind.is-note {
+.alt-to-obs-kind.is-transcript,
+.alt-to-obs-kind.is-note {
   background: rgba(var(--color-green-rgb), 0.15);
   color: var(--color-green);
 }
-.alt2obs-kind.is-slides-missing {
+.alt-to-obs-kind.is-slides-missing {
   background: rgba(var(--color-orange-rgb), 0.18);
   color: var(--color-orange);
 }
-.alt2obs-note-footer {
+.alt-to-obs-note-footer {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -657,54 +657,54 @@
   border-radius: 8px;
   background: var(--background-secondary);
 }
-.alt2obs-footer-title {
+.alt-to-obs-footer-title {
   font-weight: 600;
 }
-.alt2obs-footer-row {
+.alt-to-obs-footer-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.alt2obs-footer-row label {
+.alt-to-obs-footer-row label {
   width: 36px;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
-.alt2obs-footer-row input {
+.alt-to-obs-footer-row input {
   flex: 1;
   min-width: 0;
 }
-.alt2obs-footer-row .alt2obs-muted {
+.alt-to-obs-footer-row .alt-to-obs-muted {
   font-size: 11px;
 }
-.alt2obs-align-line {
+.alt-to-obs-align-line {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
-.alt2obs-align-ok,
-.alt2obs-align-off {
+.alt-to-obs-align-ok,
+.alt-to-obs-align-off {
   display: inline-flex;
 }
-.alt2obs-align-ok {
+.alt-to-obs-align-ok {
   color: var(--color-green);
 }
-.alt2obs-align-ok svg,
-.alt2obs-align-off svg {
+.alt-to-obs-align-ok svg,
+.alt-to-obs-align-off svg {
   width: 14px;
   height: 14px;
 }
-.alt2obs-footer-actions {
+.alt-to-obs-footer-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
-.alt2obs-footer-import {
+.alt-to-obs-footer-import {
   flex: 2;
 }
-.alt2obs-link-offer {
+.alt-to-obs-link-offer {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -713,7 +713,7 @@
   font-size: var(--font-ui-smaller);
   background: rgba(var(--color-purple-rgb), 0.1);
 }
-.alt2obs-link-row {
+.alt-to-obs-link-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -721,104 +721,104 @@
 }
 
 /* Note verification tab (spec 4.6) */
-.alt2obs-verify-pane {
+.alt-to-obs-verify-pane {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-bottom: 10px;
 }
-.alt2obs-field-label {
+.alt-to-obs-field-label {
   font-size: var(--font-ui-smaller);
   font-weight: 600;
   color: var(--text-muted);
 }
-.alt2obs-verify-input input,
-.alt2obs-verify-input textarea,
-.alt2obs-verify-target {
+.alt-to-obs-verify-input input,
+.alt-to-obs-verify-input textarea,
+.alt-to-obs-verify-target {
   width: 100%;
 }
-.alt2obs-verify-input textarea {
+.alt-to-obs-verify-input textarea {
   resize: vertical;
   font-size: var(--font-ui-smaller);
 }
-.alt2obs-verify-counts {
+.alt-to-obs-verify-counts {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 8px;
 }
-.alt2obs-chip.is-ok {
+.alt-to-obs-chip.is-ok {
   background: rgba(var(--color-green-rgb), 0.18);
   color: var(--color-green);
 }
-.alt2obs-chip.is-bad {
+.alt-to-obs-chip.is-bad {
   background: rgba(var(--color-red-rgb), 0.18);
   color: var(--color-red);
 }
-.alt2obs-chip.is-unsure {
+.alt-to-obs-chip.is-unsure {
   background: rgba(var(--color-yellow-rgb), 0.18);
   color: var(--color-yellow);
 }
-.alt2obs-chip.is-missing {
+.alt-to-obs-chip.is-missing {
   background: rgba(var(--color-purple-rgb), 0.18);
   color: var(--color-purple);
 }
 
 /* Model choice for one run (sidebar import estimate, note verification) */
-.alt2obs-pickers {
+.alt-to-obs-pickers {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin: 6px 0 8px;
 }
-.alt2obs-picker {
+.alt-to-obs-picker {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.alt2obs-picker-label {
+.alt-to-obs-picker-label {
   font-size: var(--font-ui-smaller);
   font-weight: 600;
   color: var(--text-muted);
 }
-.alt2obs-picker-controls {
+.alt-to-obs-picker-controls {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
-.alt2obs-picker-select {
+.alt-to-obs-picker-select {
   flex: 1 1 8em;
   min-width: 0;
   max-width: 100%;
   font-size: var(--font-ui-smaller);
 }
-.alt2obs-picker-select.is-model {
+.alt-to-obs-picker-select.is-model {
   order: -1;
   flex-basis: 100%;
 }
-.alt2obs-picker-note {
+.alt-to-obs-picker-note {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
-.alt2obs-picker-save {
+.alt-to-obs-picker-save {
   font-size: var(--font-ui-smaller);
   height: auto;
   padding: 2px 8px;
 }
-.alt2obs-model-line {
+.alt-to-obs-model-line {
   font-family: inherit;
   word-break: break-word;
 }
 
 /* ---- Synced viewer (src/ui/SyncedViewerView.ts) ---- */
-.alt2obs-synced-viewer {
+.alt-to-obs-synced-viewer {
   display: flex;
   flex-direction: column;
   height: 100%;
 }
-.alt2obs-synced-toolbar {
+.alt-to-obs-synced-toolbar {
   display: flex;
   gap: 6px;
   padding: 6px 10px;
@@ -827,21 +827,21 @@
   flex-shrink: 0;
   align-items: center;
 }
-.alt2obs-synced-toolbar button {
+.alt-to-obs-synced-toolbar button {
   padding: 4px 10px;
   font-size: 12px;
 }
-.alt2obs-synced-toolbar .alt2obs-page-info {
+.alt-to-obs-synced-toolbar .alt-to-obs-page-info {
   margin-left: auto;
   color: var(--text-muted);
   font-size: 12px;
 }
-.alt2obs-synced-panes {
+.alt-to-obs-synced-panes {
   display: flex;
   flex: 1;
   min-height: 0;
 }
-.alt2obs-pdf-pane {
+.alt-to-obs-pdf-pane {
   flex: 1;
   overflow-anchor: none;
   overflow: auto;
@@ -850,13 +850,13 @@
   min-width: 0;
   padding: 12px;
 }
-.alt2obs-pdf-page-wrapper {
+.alt-to-obs-pdf-page-wrapper {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   margin-bottom: 16px;
 }
-.alt2obs-pdf-page-label {
+.alt-to-obs-pdf-page-label {
   font-size: 11px;
   color: var(--text-muted);
   background: var(--background-secondary);
@@ -866,23 +866,23 @@
   align-self: flex-start;
   font-weight: 500;
 }
-.alt2obs-pdf-page-wrapper.is-current .alt2obs-pdf-page-label {
+.alt-to-obs-pdf-page-wrapper.is-current .alt-to-obs-pdf-page-label {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
 }
-.alt2obs-pdf-page {
+.alt-to-obs-pdf-page {
   display: block;
   margin: 0 auto;
   max-width: 100%;
   background: white;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
-.alt2obs-pdf-page-loading {
+.alt-to-obs-pdf-page-loading {
   text-align: center;
   color: var(--text-muted);
   padding: 16px;
 }
-.alt2obs-md-pane {
+.alt-to-obs-md-pane {
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -892,24 +892,24 @@
   border-left: 1px solid var(--background-modifier-border);
   min-width: 0;
 }
-.alt2obs-md-pane .markdown-rendered {
+.alt-to-obs-md-pane .markdown-rendered {
   max-width: 100%;
 }
-.alt2obs-md-column {
+.alt-to-obs-md-column {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   border-left: 1px solid var(--background-modifier-border);
 }
-.alt2obs-md-column .alt2obs-md-pane {
+.alt-to-obs-md-column .alt-to-obs-md-pane {
   border-left: 0;
 }
-.alt2obs-sync-mode {
+.alt-to-obs-sync-mode {
   font-size: 12px;
   color: var(--color-green);
 }
-.alt2obs-transcript-panel {
+.alt-to-obs-transcript-panel {
   height: 32%;
   min-height: 120px;
   display: flex;
@@ -917,7 +917,7 @@
   border-top: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
 }
-.alt2obs-transcript-head {
+.alt-to-obs-transcript-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -926,17 +926,17 @@
   font-weight: 600;
   border-bottom: 1px solid var(--background-modifier-border);
 }
-.alt2obs-transcript-range {
+.alt-to-obs-transcript-range {
   font-family: var(--font-monospace);
   font-weight: 400;
   color: var(--text-muted);
 }
-.alt2obs-transcript-body {
+.alt-to-obs-transcript-body {
   flex: 1;
   overflow-y: auto;
   padding: 6px 8px;
 }
-.alt2obs-seg {
+.alt-to-obs-seg {
   display: flex;
   gap: 10px;
   padding: 4px 6px;
@@ -944,13 +944,13 @@
   font-size: 13px;
   line-height: 1.55;
 }
-.alt2obs-seg-time {
+.alt-to-obs-seg-time {
   font-family: var(--font-monospace);
   font-size: 12px;
   color: var(--text-muted);
   flex-shrink: 0;
 }
-.alt2obs-empty-state {
+.alt-to-obs-empty-state {
   padding: 32px;
   color: var(--text-muted);
   text-align: center;

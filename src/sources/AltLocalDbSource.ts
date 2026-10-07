@@ -144,6 +144,11 @@ export function activeContentSql(alias: string, accountId: string | null | undef
 /** Private copies older than this are left over from a crash and removed. */
 const STALE_COPY_MS = 60 * 60 * 1000;
 
+/** Folder name prefix of the private database copies. */
+const COPY_PREFIX = "alt-to-obs-altdb-";
+/** The prefix earlier versions (the 2.0.0 betas, plugin and Skill) used: their leftovers are swept too. */
+const LEGACY_COPY_PREFIX = "alt2obs-altdb-";
+
 export function sweepStaleCopies(tmpRoot: string, now = Date.now()): number {
   let removed = 0;
   let names: string[] = [];
@@ -153,7 +158,7 @@ export function sweepStaleCopies(tmpRoot: string, now = Date.now()): number {
     return 0;
   }
   for (const n of names) {
-    if (!n.startsWith("alt2obs-altdb-")) continue;
+    if (!n.startsWith(COPY_PREFIX) && !n.startsWith(LEGACY_COPY_PREFIX)) continue;
     const p = join(tmpRoot, n);
     try {
       if (now - statSync(p).mtimeMs > STALE_COPY_MS) {
@@ -265,7 +270,7 @@ export class AltLocalDbSource implements AltLocalSource {
   }
 
   private static openCopy(file: string, sqlite: SqliteModule, tmpRoot: string): AltLocalDbSource {
-    const dir = mkdtempSync(join(tmpRoot, "alt2obs-altdb-"));
+    const dir = mkdtempSync(join(tmpRoot, COPY_PREFIX));
     try {
       const target = join(dir, basename(file));
       copyFileSync(file, target, constants.COPYFILE_FICLONE);

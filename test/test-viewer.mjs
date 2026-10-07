@@ -213,7 +213,7 @@ console.log("PASS: Live Preview field hides management lines, reveals the run ne
   assert.deepEqual(po.decidePdfOpen({ ...base, enabled: false }), { action: "none", reason: "off" }, "setting off");
   assert.deepEqual(po.decidePdfOpen({ ...base, bypass: true }), { action: "none", reason: "bypass" }, "a 'PDF만 보기' tab stays a PDF");
   assert.deepEqual(po.decidePdfOpen({ ...base, busy: true }), { action: "none", reason: "busy" }, "no second redirect while one runs");
-  assert.deepEqual(po.decidePdfOpen({ ...base, viewType: "alt2obs-synced-viewer" }), { action: "none", reason: "not-pdf-view" }, "the viewer itself is not redirected (no loop)");
+  assert.deepEqual(po.decidePdfOpen({ ...base, viewType: "alt-to-obs-synced-viewer" }), { action: "none", reason: "not-pdf-view" }, "the viewer itself is not redirected (no loop)");
   assert.deepEqual(po.decidePdfOpen({ ...base, viewType: null }), { action: "none", reason: "not-pdf-view" });
   assert.deepEqual(po.decidePdfOpen({ ...base, notePath: null }), { action: "none", reason: "not-lecture" }, "any other PDF opens as usual");
   console.log("PASS: lecture PDF detection (.pdf/.PDF, frontmatter or slide markers) and the viewer redirect decision (setting off, PDF-only tabs, no loop)");

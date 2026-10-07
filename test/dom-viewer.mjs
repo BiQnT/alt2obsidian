@@ -41,7 +41,7 @@ function findChrome() {
 const chrome = findChrome();
 assert.ok(chrome, "no Chromium found: set ALT2OBS_CHROME");
 
-const dir = mkdtempSync(join(tmpdir(), "alt2obs-dom-"));
+const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-dom-"));
 const PAGES = 30;
 writeSyntheticPdf(join(dir, "deck.pdf"), Array.from({ length: PAGES }, (_, i) => `Slide ${i + 1}  Topic ${i + 1}`));
 const para = (n) => `해설 ${n}. ` + "스케줄러는 티켓 비율에 맞춰 CPU를 나눕니다. ".repeat(6);

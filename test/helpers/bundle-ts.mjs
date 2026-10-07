@@ -49,7 +49,7 @@ export async function importTs(entry) {
       },
     ],
   });
-  const dir = mkdtempSync(join(tmpdir(), "alt2obs-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-test-"));
   const file = join(dir, "bundle.mjs");
   writeFileSync(file, result.outputFiles[0].text);
   try {

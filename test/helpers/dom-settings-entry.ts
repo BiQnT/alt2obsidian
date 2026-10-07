@@ -54,9 +54,9 @@ function main() {
       textH: Math.round((name?.height ?? 0) + (desc?.height ?? 0)),
     };
   });
-  const cards = Array.from(tab.containerEl.querySelectorAll(".alt2obs-card")).map((card: any) => ({
+  const cards = Array.from(tab.containerEl.querySelectorAll(".alt-to-obs-card")).map((card: any) => ({
     cardW: Math.round(card.clientWidth - parseFloat(getComputedStyle(card).paddingLeft) - parseFloat(getComputedStyle(card).paddingRight)),
-    descW: Math.round(box(card.querySelector(".alt2obs-card-desc"))!.width),
+    descW: Math.round(box(card.querySelector(".alt-to-obs-card-desc"))!.width),
     inputW: Math.round(box(card.querySelector("input"))!.width),
   }));
   const controlDescW = Math.round(box(control.querySelector(".setting-item-description"))!.width);
