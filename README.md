@@ -138,7 +138,6 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
    - `main.js`
    - `manifest.json`
    - `styles.css`
-   - `pdf.worker.min.mjs`
 
 2. Obsidian Vault 폴더에서 `.obsidian/plugins/alt2obsidian/` 폴더를 생성합니다:
    ```
@@ -148,11 +147,10 @@ Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니�
            └── alt2obsidian/
                ├── main.js
                ├── manifest.json
-               ├── styles.css
-               └── pdf.worker.min.mjs
+               └── styles.css
    ```
 
-3. 다운로드한 4개 파일을 해당 폴더에 복사합니다.
+3. 다운로드한 3개 파일을 해당 폴더에 복사합니다. PDF.js 워커는 2.0.0부터 `main.js`에 들어 있어 따로 받을 파일이 없습니다.
 
 4. Obsidian을 재시작하거나 `Cmd+R` (Mac) / `Ctrl+R` (Windows)로 리로드합니다.
 

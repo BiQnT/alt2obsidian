@@ -1,7 +1,7 @@
 import esbuild from "esbuild";
-import { copy } from "esbuild-plugin-copy";
 import process from "process";
 import { builtinModules } from "module";
+import { inlinePdfWorker } from "./scripts/inline-pdf-worker.mjs";
 
 const prod = process.argv[2] === "production";
 
@@ -20,17 +20,9 @@ esbuild
     outfile: "main.js",
     minify: prod,
     loader: { ".css": "text", ".md": "text" },
-    plugins: [
-      copy({
-        resolveFrom: "cwd",
-        assets: [
-          {
-            from: ["node_modules/pdfjs-dist/build/pdf.worker.min.mjs"],
-            to: ["."],
-          },
-        ],
-      }),
-    ],
+    // The PDF.js worker goes into main.js (src/pdf/pdfWorker.ts): a release
+    // is main.js, manifest.json and styles.css only.
+    plugins: [inlinePdfWorker],
   })
   .catch((e) => {
     console.error(e);

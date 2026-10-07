@@ -3,10 +3,12 @@
 // re-import). Results go to <pre id="out"> as JSON.
 import { SyncedViewerView } from "../../src/ui/SyncedViewerView";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import { createPdfWorkerUrl } from "../../src/pdf/pdfWorker";
 // @ts-ignore resolved to test/helpers/obsidian-browser-stub.js
 import { TFile } from "obsidian";
 
-(pdfjsLib as any).GlobalWorkerOptions.workerSrc = "./pdf.worker.min.mjs";
+// The worker bundled into main.js, as the plugin sets it (src/main.ts).
+(pdfjsLib as any).GlobalWorkerOptions.workerSrc = createPdfWorkerUrl();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let readDelay = 0;
 

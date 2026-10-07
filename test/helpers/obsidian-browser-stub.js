@@ -114,3 +114,5 @@ export class PluginSettingTab {
 }
 export class Modal { constructor(app) { this.app = app; this.contentEl = document.createElement("div"); } open() {} close() {} }
 export const setIcon = () => {};
+// PdfProcessor imports it for URL imports; the DOM tests read local files.
+export const requestUrl = () => { throw new Error("requestUrl is not available in tests"); };

@@ -32,6 +32,7 @@ import { parseExistingSections, planTranscript, TranscriptPlan, verifySectionsFr
 import { estimateTranscriptSummary, runTranscriptSummary } from "./pipeline/transcriptPipeline";
 import { choose, pickPdf, PickedPdf } from "./ui/attachPdf";
 import { PdfProcessor } from "./pdf/PdfProcessor";
+import { createPdfWorkerUrl } from "./pdf/pdfWorker";
 import { createTaskProvider } from "./llm/index";
 import {
   cliNotFoundMessage,
@@ -206,14 +207,9 @@ export default class Alt2ObsidianPlugin extends Plugin {
       this.data.settings.baseFolderPath
     );
 
-    // Resolve the pdfjs worker via Obsidian's resource-path machinery so it
-    // becomes an `app://local/...` URL the renderer can actually fetch.
-    // Raw filesystem paths get prepended to `app://obsidian.md/` and fail.
-    const workerVaultPath = `${this.manifest.dir}/pdf.worker.min.mjs`;
-    const workerSrc =
-      (this.app.vault.adapter as any).getResourcePath?.(workerVaultPath) ||
-      workerVaultPath;
-    this.pdfProcessor = new PdfProcessor(workerSrc);
+    // The PDF.js worker is inside main.js and runs from a Blob URL (revoked on unload).
+    this.pdfWorkerUrl = createPdfWorkerUrl();
+    this.pdfProcessor = new PdfProcessor(this.pdfWorkerUrl);
 
     // Register sidebar view
     this.registerView(VIEW_TYPE_SIDEBAR, (leaf) => {
@@ -309,8 +305,12 @@ export default class Alt2ObsidianPlugin extends Plugin {
     this.unloaded = true;
     this.localSource?.close?.();
     this.localSource = null;
+    if (this.pdfWorkerUrl) URL.revokeObjectURL(this.pdfWorkerUrl);
+    this.pdfWorkerUrl = null;
   }
   private unloaded = false;
+  /** Blob URL of the bundled PDF.js worker (src/pdf/pdfWorker.ts). */
+  private pdfWorkerUrl: string | null = null;
 
   /**
    * Resolve the active note's sibling PDF and open both in the Synced

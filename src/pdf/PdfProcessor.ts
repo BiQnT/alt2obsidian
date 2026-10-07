@@ -8,11 +8,10 @@ import { ANALYSIS_LONG_EDGE, extractPageLayouts, rgbaToGray } from "../core/prep
 
 export class PdfProcessor {
   /**
-   * Worker URL must be resolved through Obsidian's resource-path machinery
-   * (e.g., `app://local/...`). Raw filesystem paths get incorrectly prepended
-   * to the `app://obsidian.md/` baseURI by pdfjs and fail to load. Caller
-   * (main.ts) is responsible for the conversion via
-   * `app.vault.adapter.getResourcePath(...)`.
+   * `workerSrc`: the URL PDF.js starts a module worker from for each
+   * document. The plugin passes the Blob URL of the worker bundled into
+   * main.js (`createPdfWorkerUrl` in ./pdfWorker); the Synced Viewer's
+   * documents use the same setting.
    */
   constructor(workerSrc: string) {
     pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;

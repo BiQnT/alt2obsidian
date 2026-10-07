@@ -14,6 +14,12 @@ declare module "pdfjs-dist/build/pdf.mjs" {
   export = content;
 }
 
+// The PDF.js worker as text (scripts/inline-pdf-worker.mjs, src/pdf/pdfWorker.ts).
+declare module "pdfjs-dist/build/pdf.worker.min.mjs" {
+  const source: string;
+  export default source;
+}
+
 // Note: pdfjs-dist/web/pdf_viewer.mjs is no longer imported (Synced Viewer
 // pivoted from A2 to A4 canvas-only — see SyncedViewerView header). Kept
 // the modern build declaration above in case future code needs it.
