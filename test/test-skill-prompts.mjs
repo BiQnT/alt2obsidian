@@ -57,3 +57,17 @@ const block = (file) => {
 };
 assert.equal(block("slide-commentary.system.md"), block("slide-commentary-batch.system.md"), "Skill and plugin share the writing rules");
 console.log("PASS: the Skill's per-slide system prompt carries the plugin's writing rules unchanged");
+
+// One list of Korean AI tells for every prompt that writes note text (review L9).
+const tells = (file) => {
+  const t = readFileSync(join(repo, "prompts", file), "utf8");
+  const start = t.indexOf("   - 군더더기와 과장:");
+  assert.ok(start >= 0, `${file} has the list of AI tells`);
+  const end = t.indexOf("덧붙이는 말은 쉼표, 괄호, 새 문장으로 쓴다.\n", start);
+  assert.ok(end > start, `${file}: the list ends with the dash rule`);
+  return t.slice(start, end);
+};
+const sharedTells = tells("slide-commentary-batch.system.md");
+const tellFiles = ["slide-commentary.system.md", "transcript-section-batch.system.md", "overview-from-gists.md", "overview-from-sections.md"];
+for (const file of tellFiles) assert.equal(tells(file), sharedTells, `${file} carries the shared list of AI tells`);
+console.log(`PASS: the commentary, section and overview prompts share one list of AI tells (${tellFiles.length + 1} files)`);
