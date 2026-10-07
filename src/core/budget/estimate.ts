@@ -48,8 +48,16 @@ export const PROVIDER_COSTS: Record<
   "codex-cli": { fixedPerTurn: 11900, schemaTurns: 0, imageTurns: 0, perImage: 1750 },
 };
 
-/** Expected output per generated slide: commentary + gist + JSON keys. */
-export const OUTPUT_TOKENS_PER_SLIDE = { content: 420, visual: 620 } as const;
+/**
+ * Expected output per generated slide at medium effort: commentary + gist +
+ * JSON keys + reasoning. Refitted on real runs with the 2.0.2 prompts
+ * (2026-10-08, Claude CLI sonnet, effort medium, the overview and concept
+ * figures below taken as they are): L5, 27 content and 3 visual slides
+ * generated, 33,940 to 38,624 output tokens over three runs; 6강, 31
+ * content and 2 visual, 36,686. That is about 1,000 per content slide, 2.4
+ * times the former 420; visual slides keep their former ratio (620 / 420).
+ */
+export const OUTPUT_TOKENS_PER_SLIDE = { content: 1000, visual: 1480 } as const;
 export const OVERVIEW_OUTPUT_TOKENS = 1400;
 export const CONCEPTS_OUTPUT_TOKENS = 3800;
 

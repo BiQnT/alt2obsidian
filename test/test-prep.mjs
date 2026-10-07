@@ -306,6 +306,16 @@ async function deck(n, visualPages = []) {
   assert.equal(m.estimateCalls(shape, "claude-cli", "max").inputTokens, m.estimateCalls(shape, "claude-cli", "low").inputTokens);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 1000), true);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 0), false);
+  // Output figures refitted on real runs (Claude CLI sonnet, effort medium, reasoning included).
+  assert.deepEqual({ ...m.OUTPUT_TOKENS_PER_SLIDE }, { content: 1000, visual: 1480 });
+  const outputFor = (contentSlides, visualSlides) =>
+    contentSlides * m.OUTPUT_TOKENS_PER_SLIDE.content + visualSlides * m.OUTPUT_TOKENS_PER_SLIDE.visual + m.OVERVIEW_OUTPUT_TOKENS + m.CONCEPTS_OUTPUT_TOKENS;
+  for (const [label, estimated, measured] of [
+    ["L5", outputFor(27, 3), [37576, 38624, 33940]],
+    ["6강", outputFor(31, 2), [36686]],
+  ]) {
+    for (const actual of measured) assert.ok(Math.abs(estimated - actual) / actual < 0.1, `${label}: ${estimated} within 10% of the measured ${actual}`);
+  }
 
   const d = await deck(20, [5, 6, 7]);
   const plan = m.planDeck({ ...d, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "T" });
