@@ -108,14 +108,14 @@ import { MigrationModal } from "./ui/MigrationModal";
 import { normalizeConcepts } from "./core/conceptNames";
 import { decidePdfOpen, isLectureFrontmatter, lectureNoteForPdf } from "./ui/pdfOpen";
 import { renderPrompt } from "./prompts/render";
-import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
-import summaryFromTranscriptSystemTemplate from "../prompts/summary-from-transcript.system.md";
-import summaryEnhanceTranscriptTemplate from "../prompts/summary-enhance-transcript.md";
-import summaryEnhanceTranscriptSystemTemplate from "../prompts/summary-enhance-transcript.system.md";
-import summaryEnhanceMaterialTemplate from "../prompts/summary-enhance-material.md";
-import summaryEnhanceMaterialSystemTemplate from "../prompts/summary-enhance-material.system.md";
-import summaryFromMaterialTemplate from "../prompts/summary-from-material.md";
-import summaryFromMaterialSystemTemplate from "../prompts/summary-from-material.system.md";
+// The lecture-level note (no slide plan, no transcript sections) is the
+// whole body, so it gets the full-note prompts; the short summary-*.md
+// overviews are for the Skill's slide path only.
+import lectureNoteFromTranscriptTemplate from "../prompts/lecture-note-from-transcript.md";
+import lectureNoteEnhanceTranscriptTemplate from "../prompts/lecture-note-enhance-transcript.md";
+import lectureNoteEnhanceMaterialTemplate from "../prompts/lecture-note-enhance-material.md";
+import lectureNoteFromMaterialTemplate from "../prompts/lecture-note-from-material.md";
+import lectureNoteSystemTemplate from "../prompts/lecture-note.system.md";
 import subjectDetectionTemplate from "../prompts/subject-detection.md";
 
 /** A CLI import after prep and estimate, before any LLM call. */
@@ -1020,25 +1020,25 @@ export default class Alt2ObsPlugin extends Plugin {
           : "";
 
         altData.summary = await llm.generateText(
-          renderPrompt(summaryFromTranscriptTemplate, {
+          renderPrompt(lectureNoteFromTranscriptTemplate, {
             memoContext,
             transcript: transcriptText,
           }),
           {
-            systemPrompt: renderPrompt(summaryFromTranscriptSystemTemplate, {}),
-            maxOutputTokens: 4096,
+            systemPrompt: renderPrompt(lectureNoteSystemTemplate, {}),
+            maxOutputTokens: 8192,
           }
         );
       } else if (!summaryAlreadyDetailed) {
         onProgress?.("트랜스크립트로 요약 보강 중...", 10);
 
         altData.summary = await llm.generateText(
-          renderPrompt(summaryEnhanceTranscriptTemplate, {
+          renderPrompt(lectureNoteEnhanceTranscriptTemplate, {
             summary: altData.summary,
             transcript: transcriptText,
           }),
           {
-            systemPrompt: renderPrompt(summaryEnhanceTranscriptSystemTemplate, {}),
+            systemPrompt: renderPrompt(lectureNoteSystemTemplate, {}),
             maxOutputTokens: 8192,
           }
         );
@@ -1417,10 +1417,13 @@ export default class Alt2ObsPlugin extends Plugin {
     const transcript = (alt.transcript ?? "").slice(0, 15000);
     const calls: CallShape[] = [];
     if (transcript && alt.summary.length < 2500) {
+      // The whole note, up to 8000 characters: a note of that size (Alt's own
+      // 7,900-character summary of a one-hour lecture) is about 5,300 tokens
+      // by estimateTextTokens, plus reasoning.
       calls.push({
-        promptText: summaryEnhanceTranscriptSystemTemplate + summaryEnhanceTranscriptTemplate + alt.summary + transcript,
+        promptText: lectureNoteSystemTemplate + lectureNoteEnhanceTranscriptTemplate + alt.summary + transcript,
         images: 0,
-        outputTokens: 3000,
+        outputTokens: 6000,
         schema: false,
       });
     }
@@ -2387,7 +2390,7 @@ export default class Alt2ObsPlugin extends Plugin {
     summary: string,
     materialContext: LectureMaterialContext
   ): Promise<string> {
-    const prompt = renderPrompt(summaryEnhanceMaterialTemplate, {
+    const prompt = renderPrompt(lectureNoteEnhanceMaterialTemplate, {
       summary: this.truncateForPrompt(summary, 18000),
       pageCount: materialContext.pageCount,
       excerptPageCount: materialContext.pages.length,
@@ -2396,7 +2399,7 @@ export default class Alt2ObsPlugin extends Plugin {
     });
 
     return llm.generateText(prompt, {
-      systemPrompt: renderPrompt(summaryEnhanceMaterialSystemTemplate, {}),
+      systemPrompt: renderPrompt(lectureNoteSystemTemplate, {}),
       maxOutputTokens: 8192,
     });
   }
@@ -2409,7 +2412,7 @@ export default class Alt2ObsPlugin extends Plugin {
     const memoContext = fallbackSummary
       ? `\n[Alt에서 가져온 제한적 내용]\n${this.truncateForPrompt(fallbackSummary, 4000)}\n`
       : "";
-    const prompt = renderPrompt(summaryFromMaterialTemplate, {
+    const prompt = renderPrompt(lectureNoteFromMaterialTemplate, {
       memoContext,
       pageCount: materialContext.pageCount,
       excerptPageCount: materialContext.pages.length,
@@ -2417,7 +2420,7 @@ export default class Alt2ObsPlugin extends Plugin {
     });
 
     return llm.generateText(prompt, {
-      systemPrompt: renderPrompt(summaryFromMaterialSystemTemplate, {}),
+      systemPrompt: renderPrompt(lectureNoteSystemTemplate, {}),
       maxOutputTokens: 8192,
     });
   }

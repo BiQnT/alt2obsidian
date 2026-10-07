@@ -84,7 +84,9 @@ function answer(stdin, schema) {
       sections.push({ section: num, summary, gist: `구간 ${num}의 요지다` });
     }
     result = { sections };
-  } else if (schema && schema.properties && schema.properties.concepts) {
+  } else if ((schema && schema.properties && schema.properties.concepts) || /\nLecture summary:\n/.test(stdin)) {
+    // Concepts: the 2.0 calls carry the schema; the lecture-level note's call
+    // (prompts/concept-extraction.md) asks for the JSON in its own text.
     result = {
       concepts: [
         { name: "캐시", definition: "자주 쓰는 데이터를 가까이 두는 빠른 메모리. ".repeat(4), lectureContext: "p.2에서 소개.", example: "", caution: "", relatedConcepts: ["캐시 일관성"] },

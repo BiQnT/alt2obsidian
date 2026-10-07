@@ -1,5 +1,6 @@
 // Compact lecture-material excerpt of a PDF (the "[PDF 강의자료 발췌]" input
-// of prompts/summary-enhance-material.md and summary-from-material.md).
+// of prompts/lecture-note-enhance-material.md and lecture-note-from-material.md
+// in the plugin, and of summary-enhance-material.md in the Skill).
 // Shared by PdfProcessor and the Skill CLI (scripts/src/lecture-material.ts)
 // so both feed the same excerpt to the prompt. No obsidian import.
 

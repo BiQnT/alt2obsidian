@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { importTs } from "./helpers/bundle-ts.mjs";
+import { importTs, repo } from "./helpers/bundle-ts.mjs";
 import { FAKE_CLAUDE, FAKE_CODEX, fakeSession } from "./helpers/fake-cli.mjs";
 
 // pdfjs (bundled via PdfProcessor) warns about missing canvas polyfills on load.
@@ -1314,6 +1314,78 @@ try {
       plugin.app.metadataCache.getFileCache = realCache;
     }
     console.log("PASS: URL lecture without a PDF: same choice (untimed summary or attach); a PDF from disk is read into memory, copied, and the import marks the note");
+  }
+
+  // The lecture-level note (no slide plan and no transcript sections, or a
+  // page read in part): what the model writes is the whole note body, so it
+  // gets the full-note prompts (lecture-note-*.md), never the short overview
+  // the Skill puts above its slides (summary-*.md), and the concepts are
+  // extracted from that full note.
+  {
+    process.env.FAKE_CLI_MODE = "ok";
+    const overviewShape = "노트 맨 위에 둘 짧은 전체 요약";
+    const system = readFileSync(join(repo, "prompts/lecture-note.system.md"), "utf8").replace(/\n$/, "");
+    const sysOf = (c) => c.argv[c.argv.indexOf("--system-prompt") + 1];
+    const material = { pageCount: 12, pages: [{ pageNum: 2, text: "Flow Control rwnd", score: 1 }], text: "[p.2]\nFlow Control rwnd", extractedCharCount: 17, truncated: false };
+    const lecturePv = (title, noteId, altData = {}) => {
+      const pv = preview();
+      pv.altData = { ...pv.altData, title, ...altData, metadata: { ...pv.altData.metadata, noteId } };
+      return pv;
+    };
+    plugin.pdfProcessor.extractLectureMaterialContext = async () => material;
+    try {
+      // A short Alt summary with a transcript (a preview without its segments): the note
+      // from the transcript, then the PDF's text added with page ranges, then concepts.
+      const prep = await plugin.prepareCliImport("u31", lecturePv("Lec31 Level", "note-31"), "CSED311", undefined, { withoutPdf: "summary" });
+      assert.deepEqual([prep.plan, prep.transcriptPlan], [null, null], "the lecture-level flow");
+      assert.equal(prep.estimate.calls, 2, "the note from the transcript and the concepts");
+      const conceptsOnly = await plugin.prepareCliImport("u30", lecturePv("Lec30 Level", "note-30", { transcript: null }), "CSED311", undefined, { withoutPdf: "summary" });
+      assert.equal(prep.estimate.outputTokens - conceptsOnly.estimate.outputTokens, 6000, "the note call expects a whole note (up to 8000 characters), not a 1200-character overview");
+      const n0 = s.calls().length;
+      const rec = await plugin.runCliImport(prep);
+      const calls = s.calls().slice(n0);
+      assert.equal(calls.length, 3);
+      const [fromTranscript, withMaterial, concepts] = calls;
+      for (const c of [fromTranscript, withMaterial]) {
+        assert.equal(sysOf(c), system);
+        assert.ok(c.stdin.includes("- `## 상세 노트`: 강의 순서대로 주제마다 `### 1. 주제"), "the full-note shape");
+        assert.ok(c.stdin.includes("**혼동하기 쉬운 점:**") && c.stdin.includes("분량은 8000자 이내."), "details and the full-note length cap");
+        assert.ok(!c.stdin.includes(overviewShape) && !c.stdin.includes("1200자"), "not the overview prompt");
+      }
+      assert.ok(fromTranscript.stdin.includes("\n\n[학생 메모]\nAlt 요약입니다.\n\n[강의 전사]\n음 오늘은 캐시를 배웁니다."));
+      assert.ok(fromTranscript.stdin.includes("출처 표시는 달지 않는다"), "no page ranges without the PDF");
+      assert.ok(withMaterial.stdin.includes("`### 1. 주제 (p.3~5)`") && withMaterial.stdin.endsWith("[PDF 강의자료 발췌: 총 12쪽 중 핵심 1쪽, 전체 발췌]\n[p.2]\nFlow Control rwnd"), "page ranges from the excerpt");
+      const firstNote = withMaterial.stdin.match(/\n\[기존 노트\]\n([\s\S]*?)\n\n\[PDF 강의자료 발췌/)[1];
+      assert.match(firstNote, /^## 개요\n- 요약 텍스트 \(호출 \d+\)$/, "the material pass rewrites the note from the transcript");
+      assert.match(concepts.stdin, /\nLecture summary:\n## 개요\n- 요약 텍스트 \(호출 \d+\)$/, "concepts from the whole note");
+      const note = files.get(rec.path);
+      assert.equal(rec.path, "Alt2Obsidian/CSED311/Lectures/Lec31 Level.md");
+      assert.match(note, /\n<!-- alt2obsidian:start -->\n# Lec31 Level\n\n## 개요\n- 요약 텍스트 \(호출 \d+\)\n<!-- alt2obsidian:end -->\n\n## 내 메모\n$/, "the note body is the model's note under the title");
+      // An Alt summary of 500 to 2500 characters: the summary and the transcript together.
+      plugin.pdfProcessor.extractLectureMaterialContext = async () => null;
+      const mid = await plugin.prepareCliImport("u32", lecturePv("Lec32 Level", "note-32", { summary: "Alt가 만든 요약이다. ".repeat(50) }), "CSED311", undefined, { withoutPdf: "summary" });
+      const n1 = s.calls().length;
+      await plugin.runCliImport(mid);
+      const [enhance] = s.calls().slice(n1);
+      assert.equal(sysOf(enhance), system);
+      assert.ok(enhance.stdin.includes("둘을 합쳐 이 강의의 노트 본문 전체를") && enhance.stdin.includes("\n\n[Alt 요약]\nAlt가 만든 요약이다.") && enhance.stdin.includes("분량은 8000자 이내."));
+      assert.ok(!enhance.stdin.includes(overviewShape));
+      // A page read in part, with the PDF's text: the note from the excerpt, under the warning.
+      plugin.pdfProcessor.extractLectureMaterialContext = async () => material;
+      const part = await plugin.prepareCliImport("u33", lecturePv("Lec33 Part", "note-33", { parseQuality: "partial", transcript: null, summary: "제목과 설명뿐" }), "CSED311", undefined, { withoutPdf: "summary" });
+      const n2 = s.calls().length;
+      const partRec = await plugin.runCliImport(part);
+      const partCalls = s.calls().slice(n2);
+      assert.equal(partCalls.length, 1, "no concepts for a partial note");
+      assert.equal(sysOf(partCalls[0]), system);
+      assert.ok(partCalls[0].stdin.includes("PDF 강의자료 발췌로 이 강의의 노트 본문 전체를") && partCalls[0].stdin.includes("`### 1. 주제 (p.3~5)`") && partCalls[0].stdin.includes("\n[Alt에서 가져온 제한적 내용]\n제목과 설명뿐\n"));
+      assert.ok(!partCalls[0].stdin.includes(overviewShape));
+      assert.match(files.get(partRec.path), /^parse_quality: "partial"$/m);
+      assert.match(files.get(partRec.path), /> \[!warning\] Partial import\n> .*\n\n## 개요\n- 요약 텍스트/);
+    } finally {
+      pdfStub.extractLectureMaterialContext = async () => null;
+    }
+    console.log("PASS: a lecture-level note (no slides, no transcript sections, or a page read in part) is written with the full-note prompts (개요, 핵심 개념, 상세 노트, 8000 characters), never the overview prompt, and its concepts come from the whole note");
   }
 
   // Model choice for one run (the sidebar's picker): the estimate follows, the settings never change, the note says what ran.
