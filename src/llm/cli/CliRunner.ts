@@ -21,6 +21,7 @@ import { spawn } from "child_process";
 import { accessSync, constants, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "fs";
 import { homedir, tmpdir } from "os";
 import * as path from "path";
+import * as timers from "timers";
 import type { CliName } from "../../types";
 
 export const DEFAULT_CLI_TIMEOUT_MS = 300_000;
@@ -203,6 +204,21 @@ function killTree(child: { pid?: number; kill(signal?: NodeJS.Signals): boolean 
 }
 
 /**
+ * Runs `fn` after `ms` and returns what cancels it, on the timers a bare
+ * setTimeout would use: window's in Obsidian (the directory's
+ * prefer-window-timers rule), Node's where there is no window (the Node
+ * test suite, the Skill's CLIs in scripts/phase2).
+ */
+function later(fn: () => void, ms: number): () => void {
+  if (typeof window === "undefined") {
+    const t = timers.setTimeout(fn, ms);
+    return () => timers.clearTimeout(t);
+  }
+  const id = window.setTimeout(fn, ms);
+  return () => window.clearTimeout(id);
+}
+
+/**
  * Run a CLI to completion. Resolves on exit code 0; rejects with a
  * `CliRunError` on spawn failure, timeout, cancel, or a non-zero exit (the
  * error carries stdout and stderr so the caller can read a JSON error body).
@@ -239,20 +255,20 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    let killTimer: ReturnType<typeof setTimeout> | null = null;
-    let giveUpTimer: ReturnType<typeof setTimeout> | null = null;
+    let cancelKill: (() => void) | null = null;
+    let cancelGiveUp: (() => void) | null = null;
     const terminate = (err: CliRunError) => {
       if (failure || settled) return;
       failure = err;
       killTree(child, platform, spawnFn, "SIGTERM");
-      if (platform !== "win32") killTimer = setTimeout(() => killTree(child, platform, spawnFn, "SIGKILL"), KILL_GRACE_MS);
+      if (platform !== "win32") cancelKill = later(() => killTree(child, platform, spawnFn, "SIGKILL"), KILL_GRACE_MS);
       // Reject even if the process never reports `close` (a stuck kill).
       // The streams are detached so a process that outlives its kill cannot
       // keep appending to buffers nobody reads. Residual edge case: such a
       // process (for example one stuck in uninterruptible I/O, or a child
       // that left the process group) stays alive as an orphan until the OS
       // reaps it; the plugin cannot do more than SIGKILL / taskkill here.
-      giveUpTimer = setTimeout(() => {
+      cancelGiveUp = later(() => {
         const f = failure!;
         detachStreams();
         finish(() => {
@@ -262,7 +278,7 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
         });
       }, KILL_GRACE_MS * 2);
     };
-    const timer = setTimeout(
+    const cancelTimeout = later(
       () => terminate(new CliRunError("timeout", `${Math.round(timeoutMs / 1000)}초 안에 응답이 없어 중단했습니다`, stderr, stdout)),
       timeoutMs
     );
@@ -272,9 +288,9 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
-      if (giveUpTimer) clearTimeout(giveUpTimer);
+      cancelTimeout();
+      cancelKill?.();
+      cancelGiveUp?.();
       req.signal?.removeEventListener("abort", onAbort);
       fn();
     };

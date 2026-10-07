@@ -1762,13 +1762,13 @@ function cosine(a, b) {
     nb += y * y;
   return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
 }
-function topicShift(segs, i, pos, window) {
+function topicShift(segs, i, pos, window2) {
   const at = pos[i];
   const before = [];
   const after = [];
-  for (let k = i - 1; k >= 0 && pos[k] >= at - window; k--)
+  for (let k = i - 1; k >= 0 && pos[k] >= at - window2; k--)
     before.push(segs[k].text);
-  for (let k = i; k < segs.length && pos[k] < at + window; k++)
+  for (let k = i; k < segs.length && pos[k] < at + window2; k++)
     after.push(segs[k].text);
   const a = termCounts(before.join(" "));
   const b = termCounts(after.join(" "));

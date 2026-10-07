@@ -43,8 +43,10 @@ export async function extractLectureMaterialContext(
 
     onProgress?.(pageNum, pageCount);
 
-    if (pageNum % 10 === 0 && pageNum < pageCount) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Lets Obsidian draw the progress; under plain Node (the Skill's CLI)
+    // there is no window and nothing to draw.
+    if (pageNum % 10 === 0 && pageNum < pageCount && typeof window !== "undefined") {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     }
   }
 

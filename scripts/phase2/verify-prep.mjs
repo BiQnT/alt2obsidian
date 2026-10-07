@@ -609,13 +609,13 @@ function cosine(a, b) {
     nb += y * y;
   return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
 }
-function topicShift(segs, i, pos, window) {
+function topicShift(segs, i, pos, window2) {
   const at = pos[i];
   const before = [];
   const after = [];
-  for (let k = i - 1; k >= 0 && pos[k] >= at - window; k--)
+  for (let k = i - 1; k >= 0 && pos[k] >= at - window2; k--)
     before.push(segs[k].text);
-  for (let k = i; k < segs.length && pos[k] < at + window; k++)
+  for (let k = i; k < segs.length && pos[k] < at + window2; k++)
     after.push(segs[k].text);
   const a = termCounts(before.join(" "));
   const b = termCounts(after.join(" "));
@@ -997,8 +997,8 @@ function capLength(sentence) {
   const parts = [];
   let rest = sentence;
   while (rest.length > MAX_CLAIM_CHARS) {
-    const window = rest.slice(0, MAX_CLAIM_CHARS);
-    const cut = Math.max(window.lastIndexOf("; "), window.lastIndexOf(", "));
+    const window2 = rest.slice(0, MAX_CLAIM_CHARS);
+    const cut = Math.max(window2.lastIndexOf("; "), window2.lastIndexOf(", "));
     const at = cut > MAX_CLAIM_CHARS / 3 ? cut + 1 : MAX_CLAIM_CHARS;
     parts.push(rest.slice(0, at).trim());
     rest = rest.slice(at).trim();

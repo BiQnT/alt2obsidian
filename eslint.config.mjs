@@ -60,14 +60,6 @@ export default defineConfig([
     rules: { "obsidianmd/prefer-file-manager-trash-file": "off" },
   },
   {
-    // These modules also run under plain Node, where there is no window: the
-    // Skill's CLIs bundle lectureMaterial (scripts/phase2), and the CLI
-    // runner's timers are child-process watchdogs exercised by the Node test
-    // suite. Neither has anything to do with a popout window.
-    files: ["src/core/lectureMaterial.ts", "src/llm/cli/CliRunner.ts"],
-    rules: { "obsidianmd/prefer-window-timers": "off" },
-  },
-  {
     // getSettingDefinitions() is an Obsidian 1.13 API: the typings this
     // plugin builds against (obsidian 1.12.3) do not have it, and below 1.13
     // (minAppVersion is 1.7.2) the tab needs display(), as the

@@ -26,8 +26,8 @@ async function extractLectureMaterialContext(pdf, seedText, onProgress) {
       });
     }
     onProgress?.(pageNum, pageCount);
-    if (pageNum % 10 === 0 && pageNum < pageCount) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    if (pageNum % 10 === 0 && pageNum < pageCount && typeof window !== "undefined") {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
   }
   if (pages.length === 0)
