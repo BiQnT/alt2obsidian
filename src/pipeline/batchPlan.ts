@@ -114,7 +114,7 @@ export function planDeck(input: PlanInput): DeckPlan {
   const used = new Set<ExistingSlide>();
   const slides: PlannedSlide[] = input.slides.map((s, i) => {
     const text = input.layouts[i]?.text ?? "";
-    const template = templateCommentary(s, input.deckTitle);
+    const template = templateCommentary(s, input.deckTitle, input.layouts[i]);
     if (template !== null) return { ...s, text, transcript: "", mode: "template", template };
     const candidates = pool.get(s.hash);
     const prev = candidates && candidates.length > 0 ? candidates.shift() : undefined;

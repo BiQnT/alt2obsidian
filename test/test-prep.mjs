@@ -119,9 +119,17 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
   assert.deepEqual(slides.map((s) => s.dupOf), [null, null, 5, 5, null, null, null, null], "animation run keeps only its last page");
   assert.deepEqual(slides.map((s) => s.sendImage), [false, false, false, false, false, false, true, false]);
   assert.equal(slides[2].hash, await m.computeSlideHash(build, 3, "n1"), "same hash rule as slideHash.ts");
-  assert.match(m.templateCommentary(slides[2], "L7"), /\[\[#📚 슬라이드 5\|슬라이드 5\]\]/);
-  assert.equal(m.templateCommentary(slides[0], "L7"), "표지 슬라이드: **Lecture 7 Pipelining**");
+  // Template lines talk about the content, not the slide (review L6).
+  assert.equal(m.templateCommentary(slides[2], "L7"), "같은 내용이 뒤에서 이어진다. 해설은 [[#📚 슬라이드 5|슬라이드 5]]에 있다.", "a build step points ahead to the run's last page");
+  assert.equal(m.templateCommentary(slides[0], "L7"), "표지: **Lecture 7 Pipelining**");
+  assert.equal(m.templateCommentary(slides[1], "L7", layouts[1]), "다룰 항목: Pipelining, Hazards", "contents items without their numbers");
+  assert.equal(m.templateCommentary(slides[1], "L7", { text: "Outline", boxes: [], lines: ["Outline", "• Caches", "2. Coherence", "3"] }), "다룰 항목: Caches, Coherence");
+  assert.equal(m.templateCommentary(slides[1], "L7"), "목차.", "no lines known: a short neutral line");
+  assert.equal(m.templateCommentary(slides[7], "L7"), "강의를 마친다.");
   assert.equal(m.templateCommentary(slides[5], "L7"), null);
+  const planned = m.planDeck({ slides, layouts, scanned, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "L7" });
+  assert.equal(planned.slides[1].template, "다룰 항목: Pipelining, Hazards", "the plan passes the page's lines");
+  for (const s of planned.slides) if (s.template) assert.ok(!/슬라이드|이번 강의/.test(s.template.replace(/\[\[[^\]]*\]\]/g, "")), `no talk about the slide outside the link: ${s.template}`);
 
   const textOnlyRule = await m.analyzeSlides(layouts, grays, { sourceId: "n1", imageRule: "text-only" });
   assert.ok(textOnlyRule.slides.every((s) => !s.sendImage), "text-only rule sends no images");

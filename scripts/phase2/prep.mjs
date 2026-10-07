@@ -290,17 +290,20 @@ function selectKeyDiagrams(slides, scanned, max = MAX_KEY_DIAGRAMS) {
     return [];
   return slides.filter((s) => s.kind === "visual" && s.dupOf === null && s.imageRatio !== null && s.imageRatio >= VISUAL_RATIO).sort((a, b) => (b.imageRatio ?? 0) - (a.imageRatio ?? 0) || a.page - b.page).slice(0, max).map((s) => s.page).sort((a, b) => a - b);
 }
-function templateCommentary(slide, deckTitle) {
+var TOC_ITEM_MARK = /^(?:\d{1,2}[.)]?|[•◼▪■●◦*-])\s+/;
+function templateCommentary(slide, deckTitle, layout) {
   if (slide.dupOf !== null) {
-    return `\uB2E4\uC74C \uC2AC\uB77C\uC774\uB4DC\uC640 \uAC19\uC740 \uB0B4\uC6A9\uC774\uB2E4. \uD574\uC124\uC740 [[#\u{1F4DA} \uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}|\uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}]]\uC5D0 \uC788\uB2E4.`;
+    return `\uAC19\uC740 \uB0B4\uC6A9\uC774 \uB4A4\uC5D0\uC11C \uC774\uC5B4\uC9C4\uB2E4. \uD574\uC124\uC740 [[#\u{1F4DA} \uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}|\uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}]]\uC5D0 \uC788\uB2E4.`;
   }
   switch (slide.kind) {
     case "cover":
-      return `\uD45C\uC9C0 \uC2AC\uB77C\uC774\uB4DC: **${slide.title || deckTitle}**`;
-    case "toc":
-      return "\uBAA9\uCC28 \uC2AC\uB77C\uC774\uB4DC\uB2E4. \uC774\uBC88 \uAC15\uC758\uC5D0\uC11C \uB2E4\uB8F0 \uD56D\uBAA9\uC744 \uB298\uC5B4\uB193\uB294\uB2E4.";
+      return `\uD45C\uC9C0: **${slide.title || deckTitle}**`;
+    case "toc": {
+      const items = contentLines(layout?.text ?? null, layout?.lines).slice(1).map((l) => l.replace(TOC_ITEM_MARK, "").trim()).filter((l) => l.length > 0);
+      return items.length > 0 ? `\uB2E4\uB8F0 \uD56D\uBAA9: ${items.join(", ")}` : "\uBAA9\uCC28.";
+    }
     case "thanks":
-      return "\uB9C8\uBB34\uB9AC \uC2AC\uB77C\uC774\uB4DC\uB2E4.";
+      return "\uAC15\uC758\uB97C \uB9C8\uCE5C\uB2E4.";
     default:
       return null;
   }
@@ -1160,7 +1163,7 @@ function planDeck(input) {
   const used = /* @__PURE__ */ new Set();
   const slides = input.slides.map((s, i) => {
     const text = input.layouts[i]?.text ?? "";
-    const template = templateCommentary(s, input.deckTitle);
+    const template = templateCommentary(s, input.deckTitle, input.layouts[i]);
     if (template !== null)
       return { ...s, text, transcript: "", mode: "template", template };
     const candidates = pool.get(s.hash);

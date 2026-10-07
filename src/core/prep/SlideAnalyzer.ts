@@ -400,17 +400,30 @@ export function selectKeyDiagrams(slides: SlideInfo[], scanned: boolean, max = M
 
 // ---- template lines for slides that get no LLM call ----
 
-export function templateCommentary(slide: SlideInfo, deckTitle: string): string | null {
+/** Leading item number or bullet of a contents line ("1 ", "2. ", "• "). */
+const TOC_ITEM_MARK = /^(?:\d{1,2}[.)]?|[•◼▪■●◦*-])\s+/;
+
+/**
+ * Body of a slide that gets no LLM call. The lines talk about the content,
+ * not about the slide; the link label names the target section's heading.
+ * A contents page lists its items when its text lines are known.
+ */
+export function templateCommentary(slide: SlideInfo, deckTitle: string, layout?: PageLayout): string | null {
   if (slide.dupOf !== null) {
-    return `다음 슬라이드와 같은 내용이다. 해설은 [[#📚 슬라이드 ${slide.dupOf}|슬라이드 ${slide.dupOf}]]에 있다.`;
+    return `같은 내용이 뒤에서 이어진다. 해설은 [[#📚 슬라이드 ${slide.dupOf}|슬라이드 ${slide.dupOf}]]에 있다.`;
   }
   switch (slide.kind) {
     case "cover":
-      return `표지 슬라이드: **${slide.title || deckTitle}**`;
-    case "toc":
-      return "목차 슬라이드다. 이번 강의에서 다룰 항목을 늘어놓는다.";
+      return `표지: **${slide.title || deckTitle}**`;
+    case "toc": {
+      const items = contentLines(layout?.text ?? null, layout?.lines)
+        .slice(1)
+        .map((l) => l.replace(TOC_ITEM_MARK, "").trim())
+        .filter((l) => l.length > 0);
+      return items.length > 0 ? `다룰 항목: ${items.join(", ")}` : "목차.";
+    }
     case "thanks":
-      return "마무리 슬라이드다.";
+      return "강의를 마친다.";
     default:
       return null;
   }
