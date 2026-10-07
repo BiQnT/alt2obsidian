@@ -2,7 +2,7 @@
 
 [한국어](user-guide.ko.md) · [README](../README.md)
 
-This guide covers everything Alt2Obs does, from setup to troubleshooting. The plugin's interface is in Korean, so this guide quotes each label exactly as it appears on screen, followed by an English gloss: **가져오기** (import).
+This guide covers everything Alt2Obs does, from setup to troubleshooting. The plugin's interface is in Korean, so this guide quotes each label exactly as it appears on screen, followed by an English gloss: **가져오기** (import). Commands are in English; the command palette shows them with the plugin's name in front, for example **Alt2Obs: Open sidebar**.
 
 Try the plugin on a copy of your vault first if you have a lot of existing lecture notes.
 
@@ -51,7 +51,7 @@ Under **LLM 연결** (LLM connection) there is a card for **Claude CLI** and one
 - **실행 파일 경로** (executable path): leave it empty to find the CLI automatically, or enter an absolute path.
 - **다시 찾기** (search again) runs the search again.
 
-How the search works: Obsidian started from the Dock or the Start menu does not see your terminal's PATH (nvm and similar tools set it in your shell). So the plugin runs `command -v claude` once in your login shell (`where` on Windows) and also looks in common install folders: nvm, Homebrew, `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, `~/.volta/bin`, `~/.bun/bin`, `/usr/local/bin` (on Windows `%APPDATA%\npm`, `%LOCALAPPDATA%\Programs\claude` and others). Every executable it finds is checked with `--version` and its help text (`claude --help`, `codex exec --help`), with no model call. One that lacks an option the plugin uses is skipped, and the newest one with every option is saved.
+How the search works: Obsidian started from the Dock or the Start menu does not see your terminal's PATH (nvm and similar tools set it in your shell). So the plugin runs `command -v claude` once in your login shell (`where` on Windows) and also looks in common install folders: nvm, Homebrew, `~/.local/bin`, `~/.claude/local`, `~/.npm-global/bin`, `~/.volta/bin`, `~/.bun/bin`, `/usr/local/bin` (on Windows `%APPDATA%\npm`, `%LOCALAPPDATA%\Programs\claude` and others). Every executable it finds is checked with `--version` and its help text (`claude --help`, `codex exec --help`), with no model call. One that lacks an option the plugin uses is skipped, unless it is at least the tested version (then it is used with a warning). The newest usable one is saved.
 
 On the first start the plugin also checks `claude auth status`. If the Claude CLI is logged in, the tasks use it; if not and the Codex CLI is installed, the tasks are set to the Codex CLI and a notice tells you so.
 
@@ -73,12 +73,12 @@ Under **작업별 모델** (models per task) each task has a provider, a model a
 On the Codex CLI the model defaults to Codex's own default model, with the same efforts. Each row shows its recommended setting (권장) and, after a run, the model the CLI actually used (마지막 실행, last run).
 
 - **Model list.** Versioned entries such as `Opus 5.5 (claude-opus-5-5)` pass that exact id to the CLI, so you always get the same model. Aliases such as `sonnet` follow the CLI's latest model; the label shows what it pointed to on the last run, for example `sonnet (최신 Sonnet, 현재 Sonnet 5.5)`. The list comes from the model lists Claude Code and Codex keep on disk (no model call), or from a built-in list. **CLI 기본값** (CLI default) uses the CLI's own default model, and **직접 입력...** (enter manually) takes any other id.
-- **Effort.** The list shows only the levels the chosen model supports (`low`, `medium`, `high`, `xhigh`, `max`, or **effort CLI 기본값**). A model without effort levels, such as Haiku 4.5, offers only the CLI default.
-- **프리셋** (preset): **절약** (saving) puts every task on the light model (Claude: `haiku`) with effort low. **품질** (quality) puts commentary and verification on the top model (Claude: `opus`) with effort high. Presets never change the provider. Any manual change switches to **사용자 지정** (custom).
+- **Effort** (reasoning effort). The list shows only the levels the chosen model supports (`low`, `medium`, `high`, `xhigh`, `max`, or **effort CLI 기본값**), plus the level already saved. A model without effort levels, such as Haiku 4.5, offers the CLI default and the saved level, so the default concepts row still shows `low`.
+- **프리셋** (preset): **절약** (saving) puts every task on the light model (Claude: `haiku`) with effort low. **품질** (quality) puts commentary and verification on the top model (Claude: `opus`) with effort high, and concepts (and the alignment check, if it is on a CLI) on the light model with effort low. Presets never change the provider. Any manual change switches to **사용자 지정** (custom).
 
 These are defaults. Before each import or verification you can change the model for that run only (see [the estimate panel](#the-estimate-panel)).
 
-**Notion MCP 조회 도구** (Notion MCP fetch tool) is described under [Note verification](#notion-mcp-setup). The remaining settings are listed in the [settings reference](#settings-reference).
+**Notion MCP 조회 도구** (Notion MCP fetch tool) is described under [Notion MCP setup](#notion-mcp-setup). The remaining settings are listed in the [settings reference](#settings-reference).
 
 ## Importing a lecture
 
@@ -91,7 +91,7 @@ Select the book icon in the ribbon (**Alt 강의 가져오기**, import an Alt l
 The status chip at the top shows how the plugin reaches Alt:
 
 - `Alt 연결됨 · 로컬 API` (connected, local API): Alt is running and the plugin reads it through Alt's local API.
-- `Alt 꺼짐 · DB 읽기` (Alt closed, reading the database): the plugin reads a private copy of Alt's database.
+- `Alt 꺼짐 · DB 읽기` (Alt closed, reading the database): the plugin reads a private copy of Alt's database. This also shows while Alt runs if its local API cannot be used.
 - `연결 안 됨` (not connected), with the reason below it.
 
 Select the chip to check again. The list groups lectures by Alt folder and has a search box. Each lecture shows its title, a status chip, a kind chip, the date, the slide count and the transcript length.
@@ -110,11 +110,11 @@ Kind chips (hover a chip to see Alt's own note type):
 | `슬라이드` (slides) | Alt has the slide PDF | **가져오기** (import) |
 | `슬라이드(PDF 첨부)` (attached PDF) | you attached a PDF in the plugin | **가져오기**, **Alt 슬라이드로 바꾸기** (switch to Alt slides, when Alt now has slides), **첨부 해제** (detach) |
 | `슬라이드(저장된 PDF)` (saved PDF) | Alt has no slides now, but an earlier import saved the PDF next to the slide note | **가져오기**, with that saved PDF |
-| `슬라이드(미첨부)` (slides not attached) | made as a slide note in Alt, but no slides attached yet | **새로고침** (refresh), **PDF 첨부** (attach PDF), **요약 노트 만들기** (make a summary note) |
-| `노트(전사만)` (note, transcript only) | made as a note in Alt: a recording and its transcript | **요약 노트 만들기** (default), **PDF 첨부** |
+| `슬라이드(미첨부)` (slides not attached) | made as a slide note in Alt, but no slides attached yet | **새로고침** (refresh), **PDF 첨부** (attach PDF), **요약 노트 만들기** (make a summary note; **강의 노트 만들기** when there is no transcript) |
+| `노트(전사만)` (note, transcript only) | made as a note in Alt: a recording and its transcript | **요약 노트 만들기** (default; **요약 노트 다시 만들기**, make the summary note again, once imported), **PDF 첨부** |
 | `노트(전사 없음)` (no transcript) | neither slides nor a transcript | **강의 노트 만들기** (make a lecture note from Alt's summary and memo) |
 
-For `슬라이드(미첨부)`, attach the slides in Alt and select **새로고침** first; the other two buttons are for when you want a note now. If a slide file has not been downloaded to this computer yet, the panel says so: open the slides once in Alt, then select **새로고침**. Imported lectures also get **뷰어로 열기** (open in viewer) and **노트 열기** (open note), and **가져오기** becomes **다시 가져오기** (import again).
+For `슬라이드(미첨부)`, attach the slides in Alt and select **새로고침** first; the other two buttons are for when you want a note now. If a slide file has not been downloaded to this computer yet, the panel says so: open the slides once in Alt, then select **새로고침**. Imported lectures also get **뷰어로 열기** (open in viewer) and **노트 열기** (open note), and **가져오기** becomes **다시 가져오기** (import again). For `노트(전사 없음)`, **강의 노트 만들기** also becomes **다시 가져오기**. Once a lecture has a slide note, the buttons for a note without slides are not shown.
 
 Below the list, **과목** (subject) is the subject folder the note goes to. It is guessed from the Alt folder (`Alt 폴더에서 추정`) or the title (`제목에서 추정`), or taken from the existing note (`기존 노트`); you can change it. The line under it shows whether the transcript will be matched to the slides, for example `전사 타임스탬프 있음 · 슬라이드에 자동 정렬` (transcript has timestamps, aligned to slides automatically). Alignment is a script and always runs when timestamps exist.
 
@@ -141,7 +141,7 @@ If the estimate is over **강의당 토큰 상한** (token cap per lecture), the
 
 ### Progress and cancel
 
-While it runs, the panel shows the steps (준비, 슬라이드 해설, 전체 요약, 개념 추출, 저장: preparing, commentary, overview, concepts, saving), the batch progress and the live usage. **취소** stops the CLI at any point before saving, and the note is left unchanged. Slides whose answer fails the checks are asked for once more, and a call that runs longer than **CLI 호출 제한 시간** (CLI timeout) is stopped and tried once more in two halves. Slides that still fail keep their earlier commentary, if the note had one, and are listed under `## ⚠️ 처리 실패 슬라이드` in the note. The import stops early when the CLI is missing or not logged in, when it reports a usage limit, or when two calls fail in a row.
+While it runs, the panel shows the steps (준비, 슬라이드 해설, 전체 요약, 개념 추출, 저장: preparing, commentary, overview, concepts, saving), the batch progress and the live usage. **취소** stops the CLI at any point before saving, and the note is left unchanged. Slides whose answer fails the checks are requested once more. A call that runs longer than **CLI 호출 제한 시간** (CLI timeout) is stopped; if it covered more than one slide, it is tried once more in two halves. The time limit is longer for calls with more than 8 slides and for calls with images. Slides that still fail keep their earlier commentary, if the note had one, and are listed under `## ⚠️ 처리 실패 슬라이드` in the note. The import stops early when the CLI is missing or not logged in, when it reports a usage limit, or when two calls fail in a row.
 
 A slide lecture opens in the [Synced Viewer](#synced-viewer) when it is done.
 
@@ -153,13 +153,18 @@ If more than half of the existing slides do not match the new deck, you may be i
 
 ### Linking an existing note
 
-A note made by 1.x or from a share link only knows the public Alt id. When a lecture in the Alt list has the same title and date as such a note, it shows `기존 노트와 연결?`. Select **연결** (link) next to the note path and confirm: the plugin adds `alt_local_id` to that note's frontmatter and changes nothing else. Later imports then update that note and keep your memos. Nothing is linked automatically; when another lecture note has the same title, the new note's file name gets the lecture date.
+A note made by 1.x or from a share link only knows the public Alt id. A lecture in the Alt list shows `기존 노트와 연결?` when such a note matches it:
+
+- the note's title equals the lecture's title or its slide file name (case, spaces and punctuation are ignored), and
+- the note's Alt date and the lecture date are at most one day apart, or either date is unknown.
+
+Select **연결** (link) next to the note path and confirm: the plugin adds `alt_local_id` to that note's frontmatter and changes nothing else. Later imports then update that note and keep your memos. Nothing is linked automatically; when another lecture note has the same title, the new note's file name gets the lecture date.
 
 ### Importing from a share link
 
 Use the **URL 붙여넣기** tab for a lecture that is not in the Alt app on this computer (another computer, or a note shared with you).
 
-1. In the Alt app, open the note, select **Share** (공유) and **Copy link** (링크 복사). The link looks like `https://www.altalt.io/en/note/0a471d1c-4ec6-4101-8de2-ccc1781770d4`. The note must be shared with "anyone with the link" or public; private notes cannot be imported.
+1. In the Alt app, open the note and copy its link with Alt's share option. The link looks like `https://www.altalt.io/en/note/0a471d1c-4ec6-4101-8de2-ccc1781770d4`. The note must be shared with "anyone with the link" or public; private notes cannot be imported.
 2. Paste the link, enter **과목명** (subject name) or pick an existing subject chip (empty: guessed), and select **가져오기**.
 3. The [estimate panel](#the-estimate-panel) follows, as for local lectures.
 
@@ -195,11 +200,12 @@ tags: [csed311, pipeline, cpu-architecture, hazard]
 date: "2026-03-25"
 source: "alt2obsidian"
 slide_count: 32
+alt_created: "2026-03-24"
 alt_local_id: "019e8c4f-..."
-alt_alignment: "1:0-95.2 2:95.2-210 ..."
+alt_source: "alt-local"
 alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-4-5-20251001", calls: 14, ...}
+alt_alignment: "1:0-95.2 2:95.2-210 ..."
 ---
-
 # CSED311 Lec7-pipelined-CPU
 
 ## 📋 전체 요약
@@ -217,6 +223,8 @@ alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effor
 > 여러 명령어를 서로 다른 단계에서 동시에 실행해 throughput을 높이는 기법.
 
 [[Pipeline Hazard (파이프라인 해저드)|Pipeline Hazard]]는 다음 슬라이드에서 다룹니다.
+
+<!-- alt2obs:meta img:5d0c9e... gist:"..." -->
 <!-- alt2obs:slide:1 hash:a3f5b2c1 end -->
 
 > [!note] 내 메모
@@ -227,6 +235,8 @@ alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effor
 ```
 
 - `## 📚 슬라이드 N` (slide N) sections match the PDF pages one to one.
+- `alt_local_id` and `alt_source` tie the note to its lecture in Alt; `alt_created` is the lecture's date in Alt.
+- The `<!-- alt2obs:meta ... -->` line at the end of each block keeps the slide's image signal and a one-line gist, so a re-import can skip unchanged slides.
 - `alt_alignment` stores which part of the recording belongs to each slide; the viewer uses it.
 - `alt2obs_usage` records the model and effort the CLI actually used and the tokens spent.
 - Slide commentary is in Korean; academic terms and concept names stay in English (`Context Switch`, `vruntime`).
@@ -245,6 +255,7 @@ date: "2026-10-06"
 source: "alt2obsidian"
 alt_kind: "transcript"
 section_count: 6
+alt_created: "2026-10-05"
 alt_local_id: "01a0cbab-..."
 alt_source: "alt-local"
 alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "low", calls: 3, ...}
@@ -299,7 +310,11 @@ tags: [concept]
 **관련 개념:** [[Data Hazard (데이터 해저드)]], [[Forwarding (포워딩)]]
 ```
 
-Each concept note has a definition (정의), the lecture context (강의 맥락), an example (예시), a pitfall (주의), and links to its lectures and related concepts. New concept notes are named `English (한국어)`. Concept notes from before 2.0.0-beta.5 named `한국어 (English)` keep their names; when the same concept comes up again (same English part, or same Korean part with no clearly different English part), the plugin writes into the existing note instead of making a duplicate. Abbreviations and their spelled-out forms count as the same concept (`PTE (Page Table Entry)` and `PTE (페이지 테이블 엔트리)`), but the same abbreviation with different spelled-out names does not (`PC (Program Counter)` and `PC (Personal Computer)`). Links in the commentary point to the note's full name, for example `[[Lottery Scheduling (로터리 스케줄링)|Lottery Scheduling]]`, once per slide, never inside code, headings or longer words. **개념 노트 언어** (concept note language) switches concept notes to English.
+Each concept note has a definition (정의), the lecture context (강의 맥락), an example (예시), a pitfall (주의), and links to its lectures and related concepts. **개념 노트 언어** (concept note language) switches concept notes to English.
+
+New concept notes are named `English (한국어)`. Concept notes from before 2.0.0-beta.5 named `한국어 (English)` keep their names. When the same concept comes up again (same English part, or same Korean part with no clearly different English part), the plugin writes into the existing note instead of making a duplicate. An abbreviation and its spelled-out form count as the same concept (`PTE (Page Table Entry)` and `PTE (페이지 테이블 엔트리)`). The same abbreviation with different spelled-out names does not (`PC (Program Counter)` and `PC (Personal Computer)`).
+
+Links in the commentary point to the note's full name, for example `[[Lottery Scheduling (로터리 스케줄링)|Lottery Scheduling]]`. A concept is linked once per slide, never inside code or headings, or inside a longer word.
 
 ### Markers and memos
 
@@ -355,7 +370,7 @@ If the lecture already has a summary note, it becomes a slide note, and the whol
 
 An attached PDF is used before Alt's own PDF, and the estimate says so. When Alt gets slides for that lecture later, the panel shows it, and **Alt 슬라이드로 바꾸기** (switch to Alt slides) removes the `alt_pdf_source` line so the next import uses Alt's PDF. **첨부 해제** (detach) removes the mark.
 
-What happens to the attached file: only a copy the plugin made, unchanged since, goes to the system trash (or the vault's `.trash` folder); it is never deleted for good. The plugin recognizes its copy by the size and SHA-1 it recorded, and the record follows renames and moves. Any other file (a vault PDF that was already next to the note, a file you moved there, a copy you changed) is never deleted: detaching leaves it in place, and switching to Alt slides renames it to `<lecture> (첨부한 PDF).pdf` (numbered if that name exists) so Alt's PDF does not overwrite it. The confirmation dialog says which case applies.
+What happens to the attached file: only a copy the plugin made, unchanged since, is deleted. It is deleted the way Obsidian's **Deleted files** setting (under **Settings → Files and links**) says: to the system trash by default, to the vault's `.trash` folder, or for good if you chose that. The plugin recognizes its copy by the size and SHA-1 it recorded, and the record follows renames and moves. Any other file (a vault PDF that was already next to the note, a file you moved there, a copy you changed) is never deleted: detaching leaves it in place, and switching to Alt slides renames it to `<lecture> (첨부한 PDF).pdf` (numbered if that name exists) so Alt's PDF does not overwrite it. The confirmation dialog says which case applies.
 
 ## Note verification
 
@@ -397,9 +412,17 @@ For a summary note the evidence is the transcript sections, and links point to `
 
 2. Run `claude`, type `/mcp`, and log in to Notion.
 
-The plugin finds the server with `claude mcp list` and `claude mcp get` (no model calls). The fetch call is limited to Notion's fetch tool: no built-in tools, every other Notion tool (create or edit pages and so on) blocked by name, and your own settings and hooks turned off. A Notion server you added yourself (http or sse, without headers) is started alone. A server from a Claude Code plugin is started alone when its `.mcp.json` has an http or sse address; otherwise the plugin's user settings are used with hooks off and other MCP servers blocked. Notion connected as a claude.ai connector uses your MCP list with every other server blocked.
+The plugin finds the server with `claude mcp list` and `claude mcp get` (no model calls). `claude mcp list` checks the connection of every MCP server configured in Claude Code, so it can start local servers and contact remote ones.
 
-The page text is the fetch tool's own result, not text the model retyped. It is cached outside the vault with the page's last edit time, and the panel says when the page is the same as last time. If the page is long and the result was cut, you get a warning. When Claude Code saved a large result to a file under `~/.claude/projects/**/tool-results/`, the plugin reads the whole page from there.
+The fetch call is limited to Notion's fetch tool: no built-in tools, every other Notion tool (create or edit pages and so on) blocked by name, and your own settings and hooks turned off. Which servers the call starts depends on how Notion is connected:
+
+- A Notion server you added yourself with an `https` address (http or sse, without headers) is started alone.
+- A server from a Claude Code plugin is started alone when the plugin's `.mcp.json` or `.claude-plugin/plugin.json` gives such an address. Otherwise the call uses your user settings (they turn the plugin on), with hooks off and every other MCP server blocked.
+- A claude.ai connector, or a server you added that cannot be passed alone (a local command, or headers), uses your MCP list with every other server blocked.
+
+When the call uses your MCP list or your user settings, Claude Code still starts your other MCP servers; only their tools are blocked.
+
+The page text is the fetch tool's own result, not text the model retyped; it reaches Anthropic as that call's tool result. It is cached outside the vault with the page's last edit time, and the panel says when the page is the same as last time. If the page is long and the result was cut, you get a warning. When Claude Code saved a large result to a file under `~/.claude/projects/**/tool-results/`, the plugin reads the whole page from there. It does not remove that file.
 
 The fetch uses the concept task's model when that task is on the Claude CLI (otherwise the CLI default), with effort low. If your server has another name, enter the tool in **Notion MCP 조회 도구** (Notion MCP fetch tool) as `mcp__<server>__notion-fetch`. Without a Notion MCP, the panel shows these steps and offers **보관함 파일로 검증** (verify with a vault file).
 
@@ -449,7 +472,7 @@ Details:
 | **이미지 전송 규칙** (image rule) | **자동** (auto): images only for diagram-heavy slides and scanned PDFs, 1024 px JPEG. **텍스트만 (스캔 PDF 제외)** (text only, except scanned PDFs) | 자동 |
 | **슬라이드당 전사 상한 (자)** (transcript cap per slide, characters) | Transcript kept per slide after removing fillers and repeats | 600 |
 | **강의당 토큰 상한** (token cap per lecture) | Stop before starting when the estimate is over it; 0 means no cap | 0 |
-| **CLI 호출 제한 시간 (초)** (CLI timeout, seconds) | A call over this is stopped; a timed-out batch is tried once more in two halves (minimum 30) | 300 |
+| **CLI 호출 제한 시간 (초)** (CLI timeout, seconds) | A call over this is stopped; a timed-out call with more than one slide is tried once more in two halves. Longer for calls with more than 8 slides or with images (minimum 30) | 300 |
 | **바뀐 슬라이드만 다시 생성** (regenerate only changed slides) | Reuse commentary when a slide's text hash and image signal are unchanged; summary notes reuse unchanged sections | on |
 | **핵심 다이어그램 이미지 저장** (save key diagram images) | Save up to 8 diagram-heavy slides per lecture to `Attachments/` and embed them | on |
 | **누적 사용량** (total usage) | Lectures, calls, tokens and images so far; **초기화** (reset) clears it | |
@@ -463,7 +486,7 @@ Details:
 
 **"claude CLI를 찾지 못했습니다" (CLI not found).** Obsidian started from the Dock or the Start menu does not see your terminal's PATH. In a terminal run `command -v claude` (Windows: `where claude`), paste the absolute path into **실행 파일 경로** on the CLI card, or select **다시 찾기**. The same applies to `codex`.
 
-**The CLI is too old.** A CLI older than the tested version (Claude Code 2.1.283, Codex 0.155.1) still works when its help lists every option the plugin uses; the card shows a warning. An executable missing an option is not used: the message lists each executable found, its version and the missing options. Update with `claude update` or `npm i -g`, or enter the path of a newer copy. If a run fails with an unknown option, update the CLI.
+**The CLI is too old.** The plugin's options were checked with Claude Code 2.1.283 and Codex 0.155.1 (the tested version). An older CLI still works when its help lists every option the plugin uses; the card shows a warning. An executable missing an option is not used, unless it is at least the tested version: the message lists each executable found, its version and the missing options. Update with `claude update` or `npm i -g`, or enter the path of a newer copy. If a run fails with an unknown option, update the CLI.
 
 **"Claude Code나 Codex CLI가 필요합니다" (a CLI is needed).** No logged-in Claude CLI and no Codex CLI was found on the first start. Install one, log in, then select **다시 찾기** under **LLM 연결**.
 
@@ -473,11 +496,11 @@ Details:
 - `Alt 설정에서 로컬 HTTP 서버가 꺼져 있습니다`: Alt's local HTTP server is off in Alt's settings.
 - The token file cannot be read, or Alt rejects the token: restart Alt, then refresh.
 - The program on Alt's port could not be confirmed as Alt: the plugin does not send the token and reads the database copy instead.
-- Reading the database while Alt is closed needs the built-in SQLite of Obsidian's Node (`node:sqlite`, Node 22.5 or later). An older Obsidian installer lacks it: install the latest Obsidian or start Alt.
+- Reading the database while Alt is closed needs the built-in SQLite of Obsidian's Node (`node:sqlite`, Node 22.13 or later). To check, open the developer console (Ctrl+Shift+I, or Cmd+Option+I on macOS) and run `process.versions.node`. An older Obsidian installer lacks it: install the latest Obsidian or start Alt.
 - `알 수 없는 Alt 데이터베이스 스키마` (unknown database schema): start Alt so the local API is used.
 - Alt keeps its data somewhere else: set **Alt 데이터 폴더**.
 
-**The slide PDF is not on this computer.** A slide file synced to Alt from elsewhere may not be downloaded to this computer yet. Open the slides once in Alt, then select **새로고침** (refresh).
+**The slide PDF is not on this computer.** A slide file synced to Alt from elsewhere may not be downloaded to this computer yet. Open the slides once in Alt, then select **새로고침** (refresh). Even while Alt runs, the plugin finds synced slide files through a copy of Alt's database, so this also needs `node:sqlite` (see above).
 
 **The import stops at the token cap or a usage limit.** Lower the effort, use **이미지 줄이기**, raise **강의당 토큰 상한**, or wait for your plan's limit to reset.
 
@@ -493,7 +516,7 @@ Details:
 
 **Does it cost money?** The plugin is free. Each call uses your Claude or ChatGPT plan, or your API usage. The estimate panel shows the expected calls and tokens before every run, and the note records what was used.
 
-**Which model should I pick?** Start with the defaults: `sonnet` with medium effort for commentary and verification, `haiku` with low effort for concepts. **절약** moves every task to the light model with low effort; **품질** moves commentary and verification to the top model with high effort, at a higher cost. The estimate panel shows the difference before you start.
+**Which model should I pick?** Start with the defaults: `sonnet` with medium effort for commentary and verification, `haiku` with low effort for concepts. **절약** moves every task to the light model with low effort; **품질** moves commentary and verification to the top model with high effort, at a higher cost, and puts concepts on the light model with low effort. The estimate panel shows the difference before you start.
 
 **Can I edit the generated commentary?** You can, but text inside a managed block is replaced when that slide changes and is generated again. Put your own text in `> [!note] 내 메모` or outside the managed blocks.
 
@@ -513,8 +536,8 @@ Details:
 | Obsidian minimum | 1.7.2 (the newest API the plugin uses) |
 | Obsidian | 1.14.4 app code, 1.12.4 installer |
 | Alt | 0.14.0 (local database), 0.12.0 (local API) |
-| Claude Code CLI | 2.1.291 |
-| Codex CLI | 0.155.1 |
+| Claude Code CLI | 2.1.291 (the card warns below 2.1.283) |
+| Codex CLI | 0.155.1 (the card warns below it) |
 
 Known limitations:
 
