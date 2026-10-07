@@ -125,12 +125,13 @@ async function makePlugin(saved, setup, dir = ".obsidian/plugins/alt2obsidian") 
   setup?.(config, mtimes);
   const plugin = new Plugin();
   let stored = saved;
+  let saves = 0;
   const commands = [];
   Object.assign(plugin, {
     app,
     manifest: { dir },
     loadData: async () => stored,
-    saveData: async (d) => void (stored = JSON.parse(JSON.stringify(d))),
+    saveData: async (d) => void (saves++, (stored = JSON.parse(JSON.stringify(d)))),
     registerView: () => {},
     registerEvent: () => {},
     addRibbonIcon: () => {},
@@ -139,7 +140,7 @@ async function makePlugin(saved, setup, dir = ".obsidian/plugins/alt2obsidian") 
     registerEditorExtension: () => {},
   });
   await plugin.onload();
-  return { plugin, files, config, binaries, trashed, commands, stored: () => stored };
+  return { plugin, files, config, binaries, trashed, commands, stored: () => stored, saves: () => saves };
 }
 
 // Deck: cover, 6 content slides (one visual), closing slide.
@@ -417,6 +418,71 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   await staleBroken.plugin.showAltToObsNotices();
   assert.equal(notices.length, n, "nothing to say about older data that stays out");
   console.log("PASS: 2.0.1 on the id alt2obsidian: 2.0.0's alt-to-obs data.json is imported once (read only, without old API keys) when it is newer than this folder's 1.x or beta data, which is kept otherwise (told once, with a command that imports it anyway); 1.1.0 in place saves the check with its next save; the user is told once; an unreadable one is retried on every start; while 2.0.0 is enabled it is warned about and no lecture PDF is redirected; its view tabs are converted once it is off");
+}
+
+// 2.0.2 raised the per-slide transcript cap default from 600 to 1200: a saved 600 (the old default) moves once.
+{
+  const OTHER_DATA = ".obsidian/plugins/alt-to-obs/data.json";
+  // Settings as 2.0.0 and 2.0.1 save them: every generation option written out.
+  const dataWith = (cap) => ({
+    settings: { baseFolderPath: "Lectures", settingsVersion: 3, generation: { batchSize: 8, imageRule: "auto", transcriptCapChars: cap, tokenCapPerLecture: 0, saveKeyDiagrams: true, onlyChangedSlides: true } },
+    recentImports: [],
+  });
+  const v201 = (cap) => ({ ...dataWith(cap), altToObsImport: "done" });
+  const cap = (p) => p.plugin.data.settings.generation.transcriptCapChars;
+
+  // 2.0.1 data at the old default: 1200, saved once at load, marked as done.
+  const moved = await makePlugin(v201(600));
+  assert.equal(cap(moved), 1200, "the old default moves to the new one");
+  assert.equal(moved.saves(), 1, "saved once at load");
+  assert.equal(moved.stored().settings.generation.transcriptCapChars, 1200);
+  assert.equal(moved.stored().transcriptCapChecked, true);
+  assert.equal(moved.stored().settings.baseFolderPath, "Lectures", "nothing else changes");
+  assert.equal(moved.stored().settings.generation.batchSize, 8);
+  // Once only: a 600 the user sets afterwards stays on every later start.
+  moved.plugin.data.settings.generation.transcriptCapChars = 600;
+  await moved.plugin.savePluginData();
+  const chosen = moved.stored();
+  const later = await makePlugin(chosen);
+  assert.equal(cap(later), 600, "a 600 set after the move is the user's");
+  assert.equal(later.saves(), 0, "nothing saved at load");
+  assert.equal(later.stored(), chosen);
+  // Any other saved value stays; the check is saved with the next save.
+  const own = v201(800);
+  const kept = await makePlugin(own);
+  assert.equal(cap(kept), 800, "any other value stays");
+  assert.equal(kept.saves(), 0, "nothing saved at load");
+  assert.equal(kept.stored(), own);
+  kept.plugin.data.settings.generation.transcriptCapChars = 600;
+  await kept.plugin.savePluginData();
+  assert.equal(kept.stored().transcriptCapChecked, true, "the next save keeps the check as done");
+  assert.equal(cap(await makePlugin(kept.stored())), 600, "so a 600 chosen then stays too");
+  // A fresh install: the new default, nothing saved at load.
+  const fresh = await makePlugin(undefined);
+  assert.equal(cap(fresh), 1200);
+  assert.equal(fresh.stored(), undefined);
+  // 1.x data (no generation options): the default.
+  assert.equal(cap(await makePlugin({ settings: { provider: "gemini", baseFolderPath: "Alt2Obsidian" }, recentImports: [] })), 1200);
+
+  // 2.0.0's data (its default was 600) imported on the first start: moved in the import's one save.
+  const imported = await makePlugin(undefined, (config) => config.set(OTHER_DATA, JSON.stringify(dataWith(600))));
+  assert.equal(cap(imported), 1200, "2.0.0's old default moves too");
+  assert.equal(imported.saves(), 1, "one save at load: the import and the move together");
+  assert.equal(imported.stored().settings.generation.transcriptCapChars, 1200);
+  assert.equal(imported.stored().transcriptCapChecked, true);
+  assert.equal(imported.stored().altToObsImport, "done");
+  const imported800 = await makePlugin(undefined, (config) => config.set(OTHER_DATA, JSON.stringify(dataWith(800))));
+  assert.equal(cap(imported800), 800, "2.0.0's own value stays");
+  // The import command on data already checked (a 600 chosen since): 2.0.0's data replaces it and gets its own check.
+  const command = await makePlugin(chosen, (config) => config.set(OTHER_DATA, JSON.stringify(dataWith(600))));
+  assert.equal(cap(command), 600, "2.0.0 not read: this data was checked for it");
+  const quietNotice = notices.length;
+  await command.plugin.importAltToObsNow();
+  assert.ok(notices.length === quietNotice + 1 && notices[quietNotice].includes("가져왔습니다"), notices[quietNotice]);
+  assert.equal(cap(command), 1200, "2.0.0's 600 is its old default");
+  assert.equal(command.stored().settings.generation.transcriptCapChars, 1200);
+  assert.equal(command.stored().transcriptCapChecked, true);
+  console.log("PASS: 2.0.2 transcript cap: a saved 600 (the old default, also in 2.0.0's imported data) becomes 1200 once and is saved right away; other values, a 600 set later and 1.x data stay; a fresh install gets 1200");
 }
 
 const s = fakeSession("ok");

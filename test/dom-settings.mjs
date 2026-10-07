@@ -201,5 +201,7 @@ const NUMBERS = {
 for (const path of ["old", "new"]) {
   assert.deepEqual(interactions[path].numbers, NUMBERS[path], `${path}: the number field at its edges`);
   assert.equal(interactions[path].numberSaves, 1, `${path}: one save (${path === "new" ? "the default" : "the whole part of 8.5"})`);
+  // The transcript cap after 500 was saved, then emptied: its default 1200 (2.0.2) from 1.13 on, kept at 500 before.
+  assert.deepEqual(interactions[path].transcriptCaps, path === "new" ? [500, 1200] : [500, 500], `${path}: the emptied transcript cap`);
 }
-console.log("PASS: number fields: from 1.13 on a fraction and a value below the minimum show an error and are not saved, an emptied field is the default; before 1.13 an empty or too small value is not saved");
+console.log("PASS: number fields: from 1.13 on a fraction and a value below the minimum show an error and are not saved, an emptied field is the default (the transcript cap's 1200); before 1.13 an empty or too small value is not saved");

@@ -33,7 +33,7 @@ export interface GenerationOptions {
   /** Slides per CLI call (spec 5.3). Batches with images use half. */
   batchSize: number;
   imageRule: ImageRule;
-  /** Per-slide transcript cap after compression (spec 5.1). */
+  /** Per-slide transcript cap after compression (spec 5.1). 1200 since 2.0.2, 600 before. */
   transcriptCapChars: number;
   /** Estimated input + output tokens per lecture. 0 = no cap. */
   tokenCapPerLecture: number;
@@ -84,7 +84,7 @@ export interface Alt2ObsSettings {
 export const DEFAULT_GENERATION: GenerationOptions = {
   batchSize: 8,
   imageRule: "auto",
-  transcriptCapChars: 600,
+  transcriptCapChars: 1200,
   tokenCapPerLecture: 0,
   saveKeyDiagrams: true,
   onlyChangedSlides: true,
@@ -368,6 +368,15 @@ export interface PluginData {
    * start tries again, and data it can read replaces this data.
    */
   altToObsImport?: "done" | "retry";
+  /**
+   * The one-time move of a per-slide transcript cap still at 600, the
+   * default before 2.0.2, to the new default (see moveOldTranscriptCap).
+   * Missing: not made yet (data of 2.0.1 or older, 2.0.0's imported data,
+   * or a fresh install not saved yet). true: made; a 600 saved from then on
+   * is the user's own and stays. A flag of its own, not `settingsVersion`:
+   * that is 3 from beta.4 on and older versions write 3 back.
+   */
+  transcriptCapChecked?: boolean;
   /**
    * The model id each requested model resolved to on its last real run
    * (Claude: the modelUsage key of the CLI result), keyed by

@@ -5,7 +5,7 @@
 //   node scripts/bench/bench.mjs --pdf deck.pdf --provider claude-cli \
 //     [--transcript t.txt|cache.json] [--summary s.md] [--title T] [--subject S] \
 //     [--model M] [--effort low|medium|high|xhigh|max] \
-//     [--concept-model haiku] [--concept-effort low] [--batch 8] [--cap 600] \
+//     [--concept-model haiku] [--concept-effort low] [--batch 8] [--cap 1200] \
 //     [--image-rule auto|text-only] [--fewer-images] [--bin /path/to/cli] \
 //     [--timeout 300] [--out note.md] [--json] [--dry-run]
 
@@ -75,7 +75,7 @@ const options = {
   conceptModel: args["concept-model"] ?? (provider === "claude-cli" ? "haiku" : args.model ?? ""),
   conceptEffort: args["concept-effort"] ?? "low",
   batchSize: parseInt(args.batch ?? "8", 10),
-  capChars: parseInt(args.cap ?? "600", 10),
+  capChars: parseInt(args.cap ?? "1200", 10),
   imageRule: args["image-rule"] === "text-only" ? "text-only" : "auto",
   fewerImages: !!args["fewer-images"],
   bin: args.bin ? resolve(args.bin) : "",

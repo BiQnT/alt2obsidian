@@ -765,7 +765,7 @@ function splitTranscriptSections(segments) {
 var DEFAULT_GENERATION = {
   batchSize: 8,
   imageRule: "auto",
-  transcriptCapChars: 600,
+  transcriptCapChars: 1200,
   tokenCapPerLecture: 0,
   saveKeyDiagrams: true,
   onlyChangedSlides: true

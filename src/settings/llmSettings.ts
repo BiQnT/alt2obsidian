@@ -161,6 +161,23 @@ export function migrateSettings(saved: unknown): MigrationOutcome {
   return { settings, needsCliDefault: movedTasks.length > 0, movedTasks, removedFrom: Array.from(removedFrom), filled };
 }
 
+/** The per-slide transcript cap default before 2.0.2. */
+const OLD_TRANSCRIPT_CAP_DEFAULT = 600;
+
+/**
+ * 2.0.2 raised the per-slide transcript cap default from 600 to 1200 (more
+ * of the professor's explanations and examples for a few percent more
+ * input tokens). A saved 600 is the old default (2.0.x saves every
+ * setting) and becomes the new one; any other value is the user's and
+ * stays. The plugin runs this once per data (`transcriptCapChecked`), so a
+ * 600 set later stays. True when the value changed.
+ */
+export function moveOldTranscriptCap(settings: Alt2ObsSettings): boolean {
+  if (settings.generation.transcriptCapChars !== OLD_TRANSCRIPT_CAP_DEFAULT) return false;
+  settings.generation.transcriptCapChars = DEFAULT_GENERATION.transcriptCapChars;
+  return true;
+}
+
 function pickRecentModels(raw: unknown): Alt2ObsSettings["recentModels"] {
   const out: Alt2ObsSettings["recentModels"] = {};
   if (!raw || typeof raw !== "object") return out;

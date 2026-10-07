@@ -95,6 +95,9 @@ const shape = (defs) =>
   }
   for (const label of Object.values(TASK_LABELS)) assert.equal(typeof rows(defs).find((d) => d.name === label)?.render, "function", `task row ${label}`);
   for (const name of ["실행 파일 경로", "프리셋", "누적 사용량", "저장 폴더", "Alt 데이터 폴더", "CLI 호출 제한 시간 (초)"]) assert.ok(names.has(name), name);
+  // From 1.13 on an emptied number field is its default: the transcript cap goes back to 1200 (2.0.2), and 0 stays allowed.
+  const cap = rows(defs).find((d) => d.control?.key === "generation.transcriptCapChars")?.control;
+  assert.deepEqual([cap?.min, cap?.defaultValue], [0, 1200], "transcript cap: minimum 0, default 1200");
   const aliases = rows(defs).flatMap((d) => d.aliases ?? []);
   for (const word of ["model", "effort", "folder", "Claude", "Codex", "Notion"]) assert.ok(aliases.includes(word), `search alias ${word}`);
 

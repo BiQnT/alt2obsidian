@@ -9,7 +9,7 @@
 //                           aligned to the slides (spec 4.3) instead of the even
 //                           split; output gets "alignment" (frontmatter value
 //                           of alt_alignment, spans, low-confidence count)
-//   --cap <chars>           per-slide transcript cap (default 600)
+//   --cap <chars>           per-slide transcript cap (default 1200)
 //   --batch <K>             slides per batch (default 8, K/2 with images)
 //   --image-rule auto|text-only
 //   --renders <dir>         grayscale PGM renders named <prefix>-<page>.pgm
@@ -100,7 +100,7 @@ async function main(): Promise<void> {
       layouts,
       transcript: transcriptText,
       transcriptChunks: alignment?.chunks,
-      transcriptCapChars: parseInt(option(args, "--cap") ?? "600", 10),
+      transcriptCapChars: parseInt(option(args, "--cap") ?? "1200", 10),
       batchSize: parseInt(option(args, "--batch") ?? "8", 10),
       deckTitle: option(args, "--title") ?? "",
       existing: existingFile ? parseExistingSlides(readFileSync(existingFile, "utf8")) : undefined,

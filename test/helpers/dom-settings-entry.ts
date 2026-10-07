@@ -340,6 +340,17 @@ async function interact() {
   }
   out.numbers = numbers;
   out.numberSaves = plugin.saves - saves;
+
+  // The transcript cap given 500, then emptied: the saved value after each.
+  const caps: number[] = [];
+  for (const text of ["500", ""]) {
+    const input = find(root, "슬라이드당 전사 상한 (자)").querySelector("input") as HTMLInputElement;
+    input.value = text;
+    input.dispatchEvent(path === "new" ? new KeyboardEvent("keydown", { key: "Enter" }) : new Event("input"));
+    await tick();
+    caps.push(plugin.data.settings.generation.transcriptCapChars);
+  }
+  out.transcriptCaps = caps;
   return out;
 }
 

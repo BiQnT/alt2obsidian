@@ -105,7 +105,7 @@ var STDOUT_MAX = 64 * 1024 * 1024;
 var DEFAULT_GENERATION = {
   batchSize: 8,
   imageRule: "auto",
-  transcriptCapChars: 600,
+  transcriptCapChars: 1200,
   tokenCapPerLecture: 0,
   saveKeyDiagrams: true,
   onlyChangedSlides: true

@@ -53,6 +53,7 @@ import {
   describeFilled,
   isCliProvider,
   moveClaudeTasksToCodex,
+  moveOldTranscriptCap,
   parseClaudeModelCatalog,
   parseCodexModels,
   removedProviderMessage,
@@ -2545,6 +2546,9 @@ export default class Alt2ObsPlugin extends Plugin {
     // Keep every 1.x value; add the 2.0 per-task settings (spec 4.2).
     const { settings, needsCliDefault, movedTasks, removedFrom, filled } = migrateSettings(saved.settings);
     this.data.settings = settings;
+    // 2.0.2's transcript cap default: a saved 600 (the old default) becomes 1200 once per data, 2.0.0's imported data included.
+    const capMoved = !saved.transcriptCapChecked && moveOldTranscriptCap(settings);
+    this.data.transcriptCapChecked = true;
     // Removed in 2.0.0-beta.4 with the Gemini/Ollama providers.
     delete (this.data as { cliSwitchOffered?: boolean }).cliSwitchOffered;
     // 2.0.0's flags for its own import from this folder mean nothing here.
@@ -2572,12 +2576,14 @@ export default class Alt2ObsPlugin extends Plugin {
     } else if (take) {
       // Unreadable. Not a fresh install: whatever is saved from now on asks for another try next start.
       this.data.altToObsImport = "retry";
+      // Saved now when the transcript cap moved, so the move happens once.
+      if (capMoved) await this.savePluginData();
     } else {
       this.data.altToObsImport = "done";
       // 2.0.0's data left out because this data is newer: told once, with the command that imports it anyway.
       if (found?.state === "ok") this.data.pendingAltToObsKeptNotice = true;
-      // Saved now when this decided something: 2.0.0's older data stays out for good, or nothing is left to retry.
-      if (found || retry) await this.savePluginData();
+      // Saved now when this decided something: 2.0.0's older data stays out for good, nothing is left to retry, or the transcript cap moved.
+      if (found || retry || capMoved) await this.savePluginData();
     }
   }
 

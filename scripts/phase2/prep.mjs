@@ -823,7 +823,7 @@ function alignLecture(slideTexts, segments, opts = {}) {
 var DEFAULT_GENERATION = {
   batchSize: 8,
   imageRule: "auto",
-  transcriptCapChars: 600,
+  transcriptCapChars: 1200,
   tokenCapPerLecture: 0,
   saveKeyDiagrams: true,
   onlyChangedSlides: true
@@ -1327,7 +1327,7 @@ async function main() {
       layouts,
       transcript: transcriptText,
       transcriptChunks: alignment?.chunks,
-      transcriptCapChars: parseInt(option(args, "--cap") ?? "600", 10),
+      transcriptCapChars: parseInt(option(args, "--cap") ?? "1200", 10),
       batchSize: parseInt(option(args, "--batch") ?? "8", 10),
       deckTitle: option(args, "--title") ?? "",
       existing: existingFile ? parseExistingSlides(readFileSync(existingFile, "utf8")) : void 0

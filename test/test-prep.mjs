@@ -342,6 +342,21 @@ async function deck(n, visualPages = []) {
   const fresh = m.migrateSettings(undefined);
   assert.deepEqual([fresh.needsCliDefault, fresh.removedFrom, fresh.filled], [true, [], []], "fresh install: CLI chosen once, no removal notice");
 
+  // 2.0.2: the per-slide transcript cap defaults to 1200. A saved 600 (the old default) moves; any other value stays.
+  assert.equal(fresh.settings.generation.transcriptCapChars, 1200, "fresh install: 1200");
+  assert.equal(settings.generation.transcriptCapChars, 1200, "1.x data had no cap: the default");
+  const capAt = (n) => m.migrateSettings({ settingsVersion: 3, generation: { batchSize: 8, transcriptCapChars: n } }).settings;
+  const oldCap = capAt(600);
+  assert.equal(oldCap.generation.transcriptCapChars, 600, "migrateSettings keeps the saved value; the move is its own once-only step");
+  assert.equal(m.moveOldTranscriptCap(oldCap), true);
+  assert.equal(oldCap.generation.transcriptCapChars, 1200);
+  assert.equal(oldCap.generation.batchSize, 8, "nothing else changes");
+  for (const n of [800, 1200, 601, 0]) {
+    const own = capAt(n);
+    assert.equal(m.moveOldTranscriptCap(own), false, `${n} is the user's`);
+    assert.equal(own.generation.transcriptCapChars, n);
+  }
+
   // 2.0 beta data with tasks on Gemini/Ollama: those tasks move to the Claude CLI defaults.
   const beta = m.migrateSettings({
     settingsVersion: 2,
@@ -502,7 +517,7 @@ async function deck(n, visualPages = []) {
   assert.equal(m.describeDefault("claude-cli", "concepts"), "haiku · effort low");
   assert.equal(m.describeDefault("codex-cli", "commentary"), "CLI 기본 모델 · effort medium");
   assert.equal(m.describeDefault("none", "alignment"), "");
-  console.log("PASS: settings migration (Gemini/Ollama tasks to a CLI, empty model/effort to task defaults once), presets, recent models, unsafe values dropped");
+  console.log("PASS: settings migration (Gemini/Ollama tasks to a CLI, empty model/effort to task defaults once, a 600 transcript cap to 1200), presets, recent models, unsafe values dropped");
 }
 
 // ---- key diagram selection and embed (spec 4.8) ----
