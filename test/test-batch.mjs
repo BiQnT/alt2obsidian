@@ -111,24 +111,35 @@ assert.ok(res.slides[1].meta && m.parseSlideMeta(res.slides[1].meta).gist === "�
 
 // ---- answer checks: the floor follows how much the slide holds, the upper bounds have slack ----
 {
-  const slide = (page, kind, textChars, transcript) => ({ page, kind, textChars, transcript });
+  const slide = (page, kind, textChars, transcript, sendImage = false) => ({ page, kind, textChars, transcript, sendImage });
   const thin = slide(1, "content", 79, "");
   const content = slide(2, "content", 80, "");
-  const spoken = slide(3, "content", 20, "교수님이 예를 든다");
-  const visual = slide(4, "visual", 300, "");
+  // Rule 8 of the prompt: one sentence for a closing or Q&A slide, also when the even split gave it a transcript chunk.
+  const spoken = slide(3, "content", 20, "교수님이 예를 든다. 질문 있으면 하세요.");
+  const visual = slide(4, "visual", 300, "", true);
+  const diagram = slide(5, "visual", 6, "", true);
   const check = (s, commentary) => m.checkBatchAnswer({ slides: [{ slide: s.page, commentary, gist: "요지다" }] }, [s]);
   const ok = (s, len) => check(s, "가".repeat(len)).ok.has(s.page);
-  assert.deepEqual([ok(thin, 4), ok(thin, 5)], [false, true], "little to say: 5 characters");
+  assert.deepEqual([ok(thin, 7), ok(thin, 8)], [false, true], "little to say: 8 characters");
   assert.ok(check(thin, "6강을 마친다.").ok.has(1), "a closing sentence passes");
+  assert.ok(check(thin, "강의를 마친다.").ok.has(1), "the template's own closing line passes");
   assert.deepEqual([ok(content, 39), ok(content, 40)], [false, true], "80 characters of text: 40");
-  assert.deepEqual([ok(spoken, 39), ok(spoken, 40)], [false, true], "short text with a transcript: 40");
-  assert.equal(check(content, "내용 없음.").failed.get(2), "해설이 너무 짧음 (6자)", "a junk answer is asked for again");
+  assert.deepEqual([ok(spoken, 7), ok(spoken, 8)], [false, true], "short text with a transcript: 8 too");
+  assert.ok(check(spoken, "질의응답으로 강의를 마친다.").ok.has(3), "a Q&A slide with a transcript chunk: one sentence passes");
   assert.equal(check(spoken, "Parsing").failed.get(3), "해설이 너무 짧음 (7자)");
-  assert.equal(m.minCommentaryChars(slide(5, "visual", 0, "  ")), 5, "a blank transcript is none");
+  assert.deepEqual([ok(diagram, 39), ok(diagram, 40)], [false, true], "a diagram sent as an image: 40 however short its text");
+  assert.equal(m.minCommentaryChars(slide(6, "visual", 6, "", false)), 8, "a visual slide sent as text only: 8");
+  // Junk is asked for again at any length.
+  for (const junk of ["내용 없음.", "설명할 내용이 없다.", "(텍스트 레이어 없음)", "해설할 내용이 없습니다.", "N/A"]) {
+    assert.ok(!check(thin, junk).ok.has(1), `junk: ${junk}`);
+  }
+  assert.equal(check(spoken, "설명할 내용이 없다.").failed.get(3), "해설 대신 내용이 없다는 답");
+  assert.equal(check(content, "내용 없음.").failed.get(2), "해설이 너무 짧음 (6자)", "a junk answer is asked for again");
+  assert.ok(check(thin, "다룰 내용은 Paging과 TLB다.").ok.has(1), "a sentence that names its content is not junk");
   assert.deepEqual([ok(content, 1440), ok(content, 1441)], [true, false], "content: 900 x 1.6");
   assert.deepEqual([ok(visual, 1600), ok(visual, 1601)], [true, false], "visual: 1000 x 1.6");
   assert.equal(check(visual, "가".repeat(1601)).failed.get(4), "해설이 너무 김 (1601자)");
-  console.log("PASS: answer checks: 5 characters for a slide with little to say, 40 otherwise; at most 1.6 times the upper bound");
+  console.log("PASS: answer checks: 8 characters for a slide with under 80 characters of text and no image (transcript or not), 40 otherwise; junk answers fail at any length; at most 1.6 times the upper bound");
 }
 
 // ---- usage limit stops the remaining batches ----

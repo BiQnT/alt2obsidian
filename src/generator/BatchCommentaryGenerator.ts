@@ -37,19 +37,23 @@ export interface LectureContext {
 export const COMMENTARY_LIMITS = { content: 900, visual: 1000 } as const;
 export const GIST_LIMIT = 60;
 /**
- * Answers are checked with slack: models count characters loosely. Only a
- * slide with little to say (under 80 characters of text and no transcript,
- * such as a closing slide the analyzer did not template) may get one short
- * sentence ("6강을 마친다."). Any other slide needs at least 40 characters,
- * so a junk answer ("내용 없음.") is asked for again and, failing twice,
- * does not replace the previous commentary.
+ * Answers are checked with slack: models count characters loosely. A slide
+ * whose own text is under 80 characters and that sends no image (a closing,
+ * Q&A, contents or summary slide the analyzer did not template) may get the
+ * one sentence prompt rule 8 asks for, transcript or not: 8 characters, the
+ * length of the template's own "강의를 마친다.". Any other slide needs at
+ * least 40 characters. A junk answer ("내용 없음.", "설명할 내용이 없다.")
+ * fails at any length, so it is asked for again and, failing twice, does not
+ * replace the previous commentary.
  */
-const MIN_COMMENTARY_CHARS = { thin: 5, normal: 40 } as const;
+const MIN_COMMENTARY_CHARS = { thin: 8, normal: 40 } as const;
 const THIN_SLIDE_TEXT_CHARS = 80;
 const MAX_SLACK = 1.6;
+/** An answer that only says there is nothing to explain. */
+const NOTHING_TO_SAY = /^[\s().[\]-]*(?:n\/?a|none|없음|(?:내용|해설|설명|텍스트)[^.]{0,12}(?:없음|없다|없습니다))[\s().[\]]*$/i;
 
 export function minCommentaryChars(s: PlannedSlide): number {
-  return s.textChars < THIN_SLIDE_TEXT_CHARS && !s.transcript.trim() ? MIN_COMMENTARY_CHARS.thin : MIN_COMMENTARY_CHARS.normal;
+  return s.textChars < THIN_SLIDE_TEXT_CHARS && !s.sendImage ? MIN_COMMENTARY_CHARS.thin : MIN_COMMENTARY_CHARS.normal;
 }
 
 export const BATCH_SCHEMA: Record<string, unknown> = {
@@ -141,6 +145,10 @@ export function checkBatchAnswer(
     const limit = s.kind === "visual" ? COMMENTARY_LIMITS.visual : COMMENTARY_LIMITS.content;
     if (commentary.length < minCommentaryChars(s)) {
       failed.set(s.page, `해설이 너무 짧음 (${commentary.length}자)`);
+      continue;
+    }
+    if (NOTHING_TO_SAY.test(commentary)) {
+      failed.set(s.page, "해설 대신 내용이 없다는 답");
       continue;
     }
     if (commentary.length > limit * MAX_SLACK) {
