@@ -462,6 +462,8 @@ Details:
 
 ## Settings reference
 
+On Obsidian 1.13 and later the tab is drawn from setting definitions, so its settings appear in Obsidian's settings search; English words such as model, effort, folder, Claude, Codex and Notion find them too. There a number field saves when you press Enter or leave the field, and Escape puts back the value it had. A value below the minimum, or one with a fraction, shows an error under the setting and is not saved; an emptied field goes back to its default. Below 1.13 the previous screen is shown: a number field saves on every keystroke, and an empty or invalid value (not a number, or below the minimum) is not saved, so the old value stays even though the field shows blank or what you typed. A fraction is saved without its decimals there.
+
 | Setting | What it does | Default |
 |---|---|---|
 | **LLM 연결** → **실행 파일 경로** | Path of the Claude CLI or Codex CLI; empty means automatic search | empty (automatic) |
@@ -533,7 +535,7 @@ Details:
 | Item | Version |
 |---|---|
 | OS | macOS (Windows and Linux: unit tests only) |
-| Obsidian minimum | 1.7.2 (the newest API the plugin uses) |
+| Obsidian minimum | 1.7.2 (Obsidian 1.13 APIs, such as settings search, are used when present) |
 | Obsidian | 1.14.4 app code, 1.12.4 installer |
 | Alt | 0.14.0 (local database), 0.12.0 (local API) |
 | Claude Code CLI | 2.1.291 (the card warns below 2.1.283) |

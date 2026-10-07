@@ -5,10 +5,10 @@ Condensed history of Alt2Obs (named Alt2Obsidian before 2.0.0). Release notes an
 ## 2.0.2 (2026-10-08)
 
 - **Documentation in English.** README.md is now in English, with the Korean version in README.ko.md. A full user guide in both languages (docs/user-guide.md, docs/user-guide.ko.md) covers setup, importing, the notes, the viewer, note checking, settings and troubleshooting. The privacy section lists every network service, account and file outside the vault the plugin uses. New pixel logo and banner.
-- **Settings search on Obsidian 1.13 and later.** The settings tab is drawn from Obsidian's setting definitions, so its settings show up in Obsidian's settings search (also under English words such as model, effort, folder, Claude, Codex and Notion). Older Obsidian keeps the previous screen. On 1.13 and later the number fields save on Enter or when you leave the field, a value below the minimum is refused, and an emptied field goes back to its default.
-- **Detaching a PDF** deletes the plugin's copy the way Obsidian's **Deleted files** setting says (system trash by default) instead of always moving it to the system trash.
-- Timers use the window they run in, for popout windows.
-- In-app texts corrected: what happens when a CLI call times out, and when the plugin copies Alt's database.
+- **Settings search on Obsidian 1.13 and later.** The settings tab is drawn from Obsidian's setting definitions, so its settings show up in Obsidian's settings search (also under English words such as model, effort, folder, Claude, Codex and Notion). Older Obsidian keeps the previous screen. On 1.13 and later the number fields save on Enter or when you leave the field, a value below the minimum or with a fraction is refused, and an emptied field goes back to its default.
+- **Detaching a PDF or switching to Alt slides** deletes the plugin's copy the way Obsidian's **Deleted files** setting says (system trash by default) instead of always moving it to the system trash. The confirmation now warns that this cannot be undone when Obsidian is set to delete files permanently.
+- Timers use `window.setTimeout` in Obsidian and Node's timers under plain Node.
+- In-app texts corrected: what happens when a CLI call times out, when the plugin copies Alt's database, and Alt's default data folder on Linux (`$XDG_CONFIG_HOME/alt`, else `~/.config/alt`).
 - Directory scan: type checking now matches the scanner (TypeScript 6 with Node types), `npm run lint` includes `lint:directory`, a local run of the scanner's source rules, and the settings rows use a CSS `gap` instead of `column-gap`.
 
 ## 2.0.1 (2026-10-07)
