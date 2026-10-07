@@ -19,7 +19,7 @@ Formerly **Alt2Obsidian** (plugin id `alt2obsidian`). Since 2.0.0 the plugin is 
 
 - Generation and note checking run your own CLI (`claude` or `codex`) as a child process. For each call the CLI sends that call's lecture material to **Anthropic** (Claude Code) or **OpenAI** (Codex) under your account: slide text, slide images for diagram slides, transcript excerpts, Alt's summary and memo, concept names, and for note checking the sentences of your note with their evidence. The plugin itself sends nothing to these services.
 - Notion MCP fetch (optional, note checking): one Claude Code call that may use only the fetch tool of your Notion MCP server, so Claude Code contacts **Notion** (and Anthropic for the model turn).
-- Public link import (optional): the plugin downloads the Alt share page from **altalt.io** and the slide PDF from the signed storage link on that page.
+- Public link import (optional): the plugin downloads the Alt share page from **altalt.io**, then the slide PDF from the signed link on that page, which points to Alt's slide storage (**Cloudflare R2**, `*.r2.cloudflarestorage.com`; older notes may point to Alt's earlier **Supabase** storage, `*.supabase.co`).
 - Alt's local API is reached on 127.0.0.1 (this computer only).
 - Nothing else: no telemetry, no analytics, no update checks, no ads.
 
@@ -32,7 +32,7 @@ Formerly **Alt2Obsidian** (plugin id `alt2obsidian`). Since 2.0.0 the plugin is 
 - The CLIs are found through your login shell (`command -v`), `where` (Windows) and common install folders, and checked with `--version`, `--help`, `claude auth status`, `codex login status` and `claude mcp list/get` (no model calls). Each call runs in a temp folder that is removed afterwards; on Windows a cancelled call is ended with `taskkill`.
 - Read for the model lists: `~/.claude/cache/model-catalog/*-cc.json` (or `$CLAUDE_CONFIG_DIR`) and `~/.codex/models_cache.json` (or `$CODEX_HOME`). For the Notion MCP: `~/.claude/plugins/installed_plugins.json`, a Claude Code plugin's `.mcp.json`, and a large fetch result that Claude Code saved under `~/.claude/projects/**/tool-results/`.
 - Written outside the vault: the transcripts the viewer shows and fetched Notion pages, in the OS cache folder (macOS `~/Library/Caches/alt2obsidian`, Windows `%LOCALAPPDATA%\alt2obsidian\Cache`, Linux `~/.cache/alt2obsidian`), one subfolder per vault, readable only by you. The folder keeps its pre-2.0.0 name so these caches stay in use. Lecture text is kept out of the vault so vault sync does not carry it.
-- Inside the vault's config folder the plugin reads, once, the old plugin's `plugins/alt2obsidian/data.json` (see below) and `community-plugins.json`; it never changes them.
+- Inside the vault's config folder the plugin only reads, never changes: the old plugin's `plugins/alt2obsidian/data.json` on the first start (and on later starts while it could not be read, see below), and `community-plugins.json` with the old plugin's `plugins/alt2obsidian/manifest.json` on every start and whenever a PDF is opened, to know whether the old plugin is still enabled.
 
 **Install**
 
@@ -40,7 +40,7 @@ Formerly **Alt2Obsidian** (plugin id `alt2obsidian`). Since 2.0.0 the plugin is 
 2. BRAT: add `BiQnT/alt2obsidian` as a beta plugin.
 3. Manually: download `main.js`, `manifest.json` and `styles.css` from a [release](https://github.com/BiQnT/alt2obsidian/releases) into `<vault>/.obsidian/plugins/alt2obs/`, reload Obsidian and enable **Alt2Obs**.
 
-**Coming from Alt2Obsidian**: Obsidian treats Alt2Obs as a new plugin. On its first start Alt2Obs imports the old plugin's settings and records once (the old folder is left as it is) and asks you to disable and remove "Alt2Obsidian"; while the old plugin is still enabled, every start shows a warning, since both would act on the same notes and PDFs. Notes, note markers and the default folder `Alt2Obsidian/` stay the same.
+**Coming from Alt2Obsidian**: Obsidian treats Alt2Obs as a new plugin. On its first start Alt2Obs imports the old plugin's settings and records once, without the unused API keys of old versions (the old folder is left as it is), and asks you to disable and remove "Alt2Obsidian". If the old data file cannot be read, you are told, and every start tries again until it can be read. While the old plugin is still enabled, every start shows a warning and Alt2Obs leaves lecture PDFs to it, so the two never turn the same PDF tab into a viewer. Once the old plugin is off, tabs it left open are reopened as Alt2Obs views. Notes, note markers and the default folder `Alt2Obsidian/` stay the same; hotkeys of the old commands need to be set again.
 
 Open source under the [MIT License](LICENSE). No ads, no telemetry. `main.js` bundles [PDF.js](https://github.com/mozilla/pdf.js) (pdfjs-dist 4.10.38, Mozilla Foundation, Apache License 2.0, its license notice kept in the bundle) to read and render the slide PDFs.
 
@@ -84,7 +84,7 @@ Obsidian 개발자 정책에 따라 이 플러그인이 쓰는 외부 서비스,
 
 - **Anthropic(Claude Code) 또는 OpenAI(Codex)**: 해설, 요약, 개념 추출, 전사 정렬 확인, 노트 검증은 사용자가 설치한 `claude`나 `codex` 프로그램을 자식 프로세스로 실행해 만듭니다. 호출마다 CLI가 그 호출의 자료(슬라이드 텍스트, 도표 슬라이드의 이미지, 전사 발췌, Alt 요약과 메모, 개념 이름, 노트 검증이면 내 노트의 문장과 근거)를 사용자 계정으로 해당 회사에 보냅니다. 플러그인이 직접 보내는 것은 없습니다.
 - **Notion(선택)**: 노트 검증에 노션 URL을 넣으면 Notion MCP 조회 도구 하나만 쓸 수 있는 Claude Code 호출을 한 번 하고, 이때 Claude Code가 Notion(과 모델 호출을 위해 Anthropic)에 접속합니다.
-- **altalt.io(선택)**: 공개 링크로 가져올 때 Alt 공유 페이지를 내려받고, 그 페이지에 있는 서명된 저장소 링크에서 슬라이드 PDF를 내려받습니다.
+- **altalt.io, Cloudflare R2(선택)**: 공개 링크로 가져올 때 altalt.io에서 Alt 공유 페이지를 내려받고, 그 페이지에 있는 서명된 링크에서 슬라이드 PDF를 내려받습니다. 이 링크는 Alt의 슬라이드 저장소를 가리킵니다(지금은 Cloudflare R2, `*.r2.cloudflarestorage.com`. 오래된 노트는 예전 저장소인 Supabase, `*.supabase.co`일 수 있음).
 - Alt의 로컬 API는 이 컴퓨터 안(127.0.0.1)에서만 씁니다.
 - 그 밖의 네트워크 사용은 없습니다. 텔레메트리, 사용 통계 수집, 업데이트 확인, 광고가 없습니다.
 
@@ -97,17 +97,19 @@ Obsidian 개발자 정책에 따라 이 플러그인이 쓰는 외부 서비스,
 - **CLI**: 로그인 셸의 `command -v`, Windows의 `where`, 흔한 설치 폴더에서 찾고 `--version`, `--help`, `claude auth status`, `codex login status`, `claude mcp list/get`으로 확인합니다(모델 호출 없음). 호출은 vault 밖 임시 폴더에서 실행하고 끝나면 지웁니다. Windows에서 취소하면 `taskkill`로 끝냅니다.
 - **모델 목록**: `~/.claude/cache/model-catalog/*-cc.json`(또는 `$CLAUDE_CONFIG_DIR`), `~/.codex/models_cache.json`(또는 `$CODEX_HOME`)을 읽습니다. **Notion MCP**: `~/.claude/plugins/installed_plugins.json`, Claude Code 플러그인의 `.mcp.json`, Claude Code가 큰 조회 결과를 저장한 `~/.claude/projects/**/tool-results/` 파일을 읽습니다.
 - **vault 밖에 쓰는 파일**: Synced viewer의 전사 패널용 전사와 가져온 Notion 페이지를 OS 캐시 폴더(macOS `~/Library/Caches/alt2obsidian`, Windows `%LOCALAPPDATA%\alt2obsidian\Cache`, Linux `~/.cache/alt2obsidian`)에 vault별로 저장합니다(본인만 읽을 수 있는 권한). 강의 텍스트가 vault 동기화에 실리지 않게 하려는 것이고, 2.0.0의 이름 변경 뒤에도 폴더 이름을 그대로 두어 캐시를 계속 씁니다.
-- vault 설정 폴더에서는 처음 한 번 이전 플러그인의 `plugins/alt2obsidian/data.json`과 `community-plugins.json`을 읽기만 합니다(위 2.0.0 참고).
+- vault 설정 폴더의 파일은 읽기만 하고 바꾸지 않습니다: 이전 플러그인의 `plugins/alt2obsidian/data.json`은 처음 켤 때(읽지 못했다면 읽힐 때까지 켤 때마다), `community-plugins.json`과 이전 플러그인의 `plugins/alt2obsidian/manifest.json`은 이전 플러그인이 켜져 있는지 보려고 켤 때마다와 PDF를 열 때마다 읽습니다(아래 2.0.0 참고).
 
 광고, 텔레메트리가 없고 소스는 [MIT 라이선스](LICENSE)로 공개되어 있습니다.
 
 ## 2.0.0에서 바뀐 점
 
 - **이름 변경: Alt2Obs (id `alt2obs`)**: Obsidian 커뮤니티 플러그인 목록에 올리려고 이름과 id를 바꿨습니다(id에 "obsidian"을 쓸 수 없음). 옵시디언은 새 id를 새 플러그인으로 다룹니다.
-  - Alt2Obs를 처음 켜면, 아직 자기 데이터가 없고 이전 플러그인의 `<설정 폴더>/plugins/alt2obsidian/data.json`이 있을 때 그 설정과 기록(CLI 경로, 사용량, 최근 노트, 첨부 기록)을 한 번 가져와 저장합니다. 이전 폴더는 읽기만 하고 바꾸거나 지우지 않습니다.
-  - 가져온 뒤 한 번, 이전 **Alt2Obsidian**을 끄고 삭제하라는 알림이 뜹니다. 이전 플러그인이 아직 켜져 있으면 켤 때마다 경고합니다(두 플러그인이 같은 강의 PDF를 뷰어로 바꾸는 등 동작이 겹침).
+  - Alt2Obs를 처음 켜면, 아직 자기 데이터가 없고 이전 플러그인의 `<설정 폴더>/plugins/alt2obsidian/data.json`이 있을 때 그 설정과 기록(CLI 경로, 사용량, 최근 노트, 첨부 기록)을 한 번 가져와 저장합니다. 예전 버전의 API 키(`apiKey`, `geminiApiKey`, `claudeApiKey`)는 쓰지 않으므로 가져오지 않습니다. 이전 폴더는 읽기만 하고 바꾸거나 지우지 않습니다.
+  - 그 파일이 있는데 읽지 못하면 알리고, 새로 설치한 것으로 보지 않습니다: 읽힐 때까지 켤 때마다 다시 시도하고, 읽히면 그 사이 저장한 설정 대신 그 내용을 씁니다. 파일이 없어지면 더 시도하지 않습니다.
+  - 가져온 뒤 한 번, 이전 **Alt2Obsidian**을 끄고 삭제하라는 알림이 뜹니다. 이전 플러그인이 아직 켜져 있으면 켤 때마다 경고하고, 그동안 강의 PDF를 뷰어로 바꾸는 일은 이전 플러그인에 맡깁니다(두 플러그인이 같은 PDF 탭을 서로 바꾸지 않게). 리본 아이콘이 두 개 보이는 정도는 그대로 둡니다.
+  - 이전 플러그인이 꺼져 있으면, 옵시디언이 예전 뷰 종류(`alt2obsidian-sidebar`, `alt2obsidian-synced-viewer`)로 남겨 둔 탭을 같은 상태의 Alt2Obs 뷰로 바꿉니다.
   - 그대로인 것: 노트의 관리 주석(`alt2obs:*`, 예전 `alt2obsidian:start/end`), frontmatter의 `source` 값(`alt2obsidian`, `alt2obsidian-cc-skill`, `alt2obsidian-verify`), 기본 저장 폴더 `Alt2Obsidian/`, OS 캐시 폴더 이름 `alt2obsidian`(전사, Notion 페이지 캐시를 그대로 씀). 그래서 기존 노트, 캐시, 스킬이 그대로 동작합니다.
-  - 바뀐 것: 뷰 종류(`alt2obs-sidebar`, `alt2obs-synced-viewer`)와 CSS 클래스(`alt2obs-*`). `alt2obsidian-*` 클래스를 쓰는 CSS 스니펫이 있으면 `alt2obs-*`로 고치세요. 명령 이름 'Open Alt2Obsidian sidebar'는 'Open sidebar'로, 'Open Synced Viewer (PDF + lecture .md)'는 'Open synced viewer (PDF + lecture .md)'로 바뀌었습니다(명령 id는 플러그인 id가 앞에 붙어 `alt2obs:...`가 됨. 단축키를 지정했다면 다시 지정).
+  - 바뀐 것: 뷰 종류(`alt2obs-sidebar`, `alt2obs-synced-viewer`)와 CSS 클래스(`alt2obs-*`). `alt2obsidian-*` 클래스를 쓰는 CSS 스니펫이 있으면 `alt2obs-*`로 고치세요. 명령 이름 'Open Alt2Obsidian sidebar'는 'Open sidebar'로, 'Import Alt note (local list or URL)'은 'Import lecture note (local list or URL)'로, 'Open Synced Viewer (PDF + lecture .md)'는 'Open synced viewer (PDF + lecture .md)'로 바뀌었습니다(명령 id는 플러그인 id가 앞에 붙어 `alt2obs:...`가 됨. 단축키를 지정했다면 다시 지정). 리본 아이콘의 설명은 'Alt 강의 가져오기'입니다.
   - 스킬은 `<vault>/.obsidian/plugins/alt2obs/data.json`을 먼저 읽고, 없으면 이전 `alt2obsidian` 폴더를 읽습니다.
 - **PDF.js 워커를 `main.js`에 넣음**: 커뮤니티 플러그인 설치는 `main.js`, `manifest.json`, `styles.css`만 받으므로, 따로 받던 `pdf.worker.min.mjs`(pdfjs-dist 4.10.38, 같은 파일)를 `main.js` 안에 넣고 Blob URL로 띄웁니다. 문서마다 모듈 워커를 하나씩 쓰는 동작은 같고, 플러그인을 끌 때 URL을 해제합니다. `main.js`는 약 0.85 MB에서 2.2 MB가 되었습니다.
 - **Obsidian 플러그인 지침 반영**: 공식 ESLint 규칙(eslint-plugin-obsidianmd)을 통과합니다(`npm run lint`). 설정 화면 맨 위의 플러그인 이름 제목을 없애고 구역 제목을 옵시디언 방식으로 바꿨고, 영어 UI 문구는 문장형 대소문자(sentence case)로 바꿨습니다. Synced viewer의 CSS는 `styles.css`로 옮겼습니다. 노트를 읽고 고쳐 쓰는 작업(가져오기 병합, 개념 노트 갱신, 연결·첨부 표시 한 줄)은 `Vault.process`로 한 번에 처리해 다른 플러그인의 동시 수정과 섞이지 않습니다. '저장 폴더' 설정은 `normalizePath`로 정리해 씁니다. 'Open synced viewer'와 'Attach lecture PDF' 명령은 노트나 PDF를 연 동안만 명령 팔레트에 보입니다.
