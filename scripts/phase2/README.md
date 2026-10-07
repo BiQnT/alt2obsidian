@@ -1,10 +1,10 @@
-# Phase 2 Stage A — Claude Code Skill MVP
+# Phase 2 Stage A: Claude Code Skill MVP
 
 Skill that imports an Alt lecture into the Obsidian vault using Claude Code Max's session vision instead of the plugin's Gemini call. Output is byte-compatible with the Alt2Obs plugin's page-anchored format (the plugin was named Alt2Obsidian before 2.0.0). The Synced Viewer works on it, regen preserves your `> [!note] 내 메모` callouts.
 
 ## Files
 
-- `alt-scrape.mjs` — pure Node Alt URL scraper. Port of `src/scraper/{AltScraper,RscParser}.ts` with no Obsidian deps. Reads an `https://altalt.io/note/<id>` URL, prints metadata JSON to stdout: `{title, summary, pdfUrl, transcript, noteId, createdAt, parseQuality}`.
+- `alt-scrape.mjs`: pure Node Alt URL scraper. Port of `src/scraper/{AltScraper,RscParser}.ts` with no Obsidian deps. Reads an `https://altalt.io/note/<id>` URL, prints metadata JSON to stdout: `{title, summary, pdfUrl, transcript, noteId, createdAt, parseQuality}`.
 - `slide-hashes.mjs`: per-page slide hashes for a PDF, `node scripts/phase2/slide-hashes.mjs <pdfPath> <sourceId>` prints `{"pages":[{"page":1,"hash":"xxxxxxxx","textChars":123}, ...]}`. Generated from `scripts/src/slide-hashes.ts` by `npm run build:scripts` (also part of `npm run build`); it imports the plugin's `src/core/slideHash.ts`, so hashes are identical to the plugin's. `pdfjs-dist` is loaded from the repo's `node_modules`, so run `npm install` once.
 - `lecture-material.mjs`: the PDF excerpt for `prompts/summary-enhance-material.md`, computed by the plugin's `src/core/lectureMaterial.ts`. `node scripts/phase2/lecture-material.mjs <pdfPath> <seedTextFile>` prints `{"material":{...}}` or `{"material":null}`.
 - `overview-block.mjs`: the `## 📋 전체 요약` section built by the plugin's `src/core/markdown.ts` (headings demoted one level, concept names linked). `node scripts/phase2/overview-block.mjs <summaryFile> [conceptNamesJsonFile]`.
@@ -15,7 +15,7 @@ Skill that imports an Alt lecture into the Obsidian vault using Claude Code Max'
 - `verify-prep.mjs`: the plugin's note verifier (`src/verify`): `prep <pdfPath> <noteFile> --lecture <name> --out <dir> [--bundle bundle.json] [--alignment V]` splits the note into claims, finds the evidence (BM25 over slides and the aligned transcript) and writes the judge prompts the plugin would send (`system.md`, `batch-<n>.md`, `missing.md`, `plan.json`, folder 0700, files 0600); `render <dir> --answers answers.json --source <label> [--missing missing.json] [--existing note.md]` checks the answers like the plugin and prints the verification note.
 - `transcript-note.mjs`: the summary note of a lecture without slides (spec 4.10), with the plugin's `src/pipeline/transcriptPlan.ts`, `src/generator/SectionSummaryGenerator.ts` and `NoteGenerator.generateTranscriptNote`. `prep <bundle.json|transcript.txt> --title T --out DIR [--known names.json] [--tags tags.json] [--existing note.md]` cuts the transcript into sections and writes the section prompts (`system.md`, `batch-<n>.md`, `plan.json`; folder 0700, files 0600); `followup DIR --answers answers.json` checks the answers like the plugin and writes the overview and concept prompts; `render DIR --answers ... --overview ... --concepts ... --subject S --id ID [--local]` prints the note. `verify-prep.mjs prep - <noteFile> ... --bundle B --lecture-note NOTE` verifies against such a note's transcript sections.
 - `carry-frontmatter.mjs`: the frontmatter a re-import keeps, with the plugin's `preservedFrontmatterLines` (a linked note's other identity, `alt_pdf_source: "attached"`), plus the attached PDF to use as the deck. `node scripts/phase2/carry-frontmatter.mjs <target note> --local|--url [--alignment V]` prints `{"lines","attachedPdf"}` (the `alt_pdf_source` line only while the attached PDF is there, like the plugin).
-- `SKILL.md` — orchestration. Drives Claude Code through scrape → download PDF → read each slide via `Read(pages: "N-N")` → write Korean commentary → assemble page-anchored markdown → write to vault.
+- `SKILL.md`: orchestration. Drives Claude Code through scrape → download PDF → read each slide via `Read(pages: "N-N")` → write Korean commentary → assemble page-anchored markdown → write to vault.
 
 ## Install
 
@@ -39,7 +39,7 @@ Vault path is auto-detected from `~/Library/Application Support/obsidian/obsidia
 
 ## Why Phase 2 Stage A only
 
-The full plan (`.omc/plans/alt2obsidian-page-anchored-redesign.md`) calls for `packages/core` + `packages/cli` + npm-publish + `requestUrl` decoupling — multi-week work. Stage A skips the refactor and gets a working Claude-Code import path on disk in one session. Stage B is the real monorepo restructure, scheduled per user when they're ready.
+The full plan (`.omc/plans/alt2obsidian-page-anchored-redesign.md`) calls for `packages/core` + `packages/cli` + npm-publish + `requestUrl` decoupling, multi-week work. Stage A skips the refactor and gets a working Claude-Code import path on disk in one session. Stage B is the real monorepo restructure, scheduled per user when they're ready.
 
 ## Hash compatibility
 

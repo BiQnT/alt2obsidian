@@ -3,7 +3,7 @@ name: alt2obs
 description: Import an Alt (altalt.io) lecture into the user's Obsidian vault as notes compatible with the Alt2Obs 2.0 plugin (named Alt2Obsidian before 2.0.0). A lecture with slides gets page-anchored per-slide Korean commentary from Claude Code's native PDF vision (Read with pages parameter); a lecture without slides gets a transcript section summary note, or the user attaches a PDF and it is imported like a slide lecture. Uses the plugin's prompt files, writing rules and helper scripts, so the notes work in the plugin (Synced Viewer, re-import merge, note verification).
 ---
 
-# alt2obs Skill (Phase 2 Stage A — Claude Code Max import path)
+# alt2obs Skill (Phase 2 Stage A: Claude Code Max import path)
 
 This Skill produces an Obsidian lecture note from an Alt note on this Mac (preferred: Alt's local data, with transcript timestamps) or from a public Alt URL (fallback). The output uses the Alt2Obs 2.0 plugin's storage format (`## 📚 슬라이드 N` sections, `<!-- alt2obs:slide:N hash:H start --> ... <!-- end -->` managed markers, `> [!note] 내 메모` callouts; for a lecture without slides `## ⏱ 구간 N [mm:ss~mm:ss]` sections in `<!-- alt2obs:section:N hash:H start --> ... <!-- end -->` markers), so the plugin's Synced Viewer renders it correctly and re-imports with either tool preserve user free-space through the same merge code.
 
@@ -25,7 +25,7 @@ Parse from the user's message (or ask if missing):
 | `url` | `https://altalt.io/note/b7472c41-…` (fallback, no timestamps) | one of `note` / `url` |
 | `vault` | absolute path of the Obsidian vault | yes: read from `~/Library/Application Support/obsidian/obsidian.json` if a single vault, else ask |
 | `subject` | folder under `<base>/`, e.g. `CSED232` | local notes: the `subject` guessed from the Alt folder (confirm with the user); URL: ask if not in user's message |
-| `title` | filename stem, e.g. `8강` | optional — falls back to scraped Alt note title |
+| `title` | filename stem, e.g. `8강` | optional: falls back to scraped Alt note title |
 
 Exam periods are obsolete: 2.0 removed the plugin's exam summary (spec G5), so the Skill no longer asks for a `midterm` / `final` period and adds no period tag. Existing `Exam/` notes and period tags in old notes are left as they are.
 

@@ -216,7 +216,7 @@ export interface VisionImageRef {
  * Per-slide commentary produced by `BatchCommentaryGenerator`. The hash is
  * the 8-hex SHA-1 of the rendered slide PNG and drives the page-anchored
  * managed-block markers (plan §B Decision B). `commentary` is the LLM's
- * markdown body for that slide — no headers, no markers; the assembler
+ * markdown body for that slide: no headers, no markers; the assembler
  * (Task 1.2) wraps it in `## 📚 슬라이드 N` + `<!-- alt2obs:slide:... -->`.
  */
 export interface SlideSection {
@@ -246,14 +246,14 @@ export interface ImportUpdateSummary {
   changedLineCount: number;
   // Page-anchored (B1 multi-managed-block) merge details. Populated only when
   // both the existing and the next file use B1 markers. The merge algorithm
-  // is the spike-validated 2-pass routine — see
+  // is the spike-validated 2-pass routine, see
   // .omc/research/spike-1.0b-hash-algo.md §3.
   slideReorders?: Array<{ from: number; to: number; hash: string }>;
   slideInsertions?: number[];
   slideDeletions?: Array<{ slideNum: number; hash: string }>;
   slideDrifts?: Array<{ slideNum: number; oldHash: string; newHash: string }>;
   /**
-   * True when more than half of existing sections orphaned — likely the user
+   * True when more than half of existing sections orphaned: likely the user
    * accidentally re-imported a different lecture onto this file. Caller should
    * confirm before write (plan §B v1.1 deck-replacement modal touch-up).
    */

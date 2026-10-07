@@ -786,7 +786,7 @@ export class Alt2ObsSidebarView extends ItemView {
     this.clearMessage();
 
     try {
-      // Phase 1: Preview — scrape Alt note data.
+      // Phase 1 (preview): scrape Alt note data.
       this.updateProgress(0, "Alt 노트 가져오는 중...");
 
       const preview = await this.plugin.previewImport(url, (stage, pct) => {

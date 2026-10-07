@@ -48,7 +48,7 @@ export class VaultManager {
     try {
       await this.app.vault.createFolder(normalized);
     } catch {
-      // Folder may already exist (race condition) — that's fine
+      // Folder may already exist (race condition); that's fine
     }
   }
 

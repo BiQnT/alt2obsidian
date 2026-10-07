@@ -245,7 +245,7 @@ export default class Alt2ObsPlugin extends Plugin {
       return new Alt2ObsSidebarView(leaf, this);
     });
 
-    // Register Synced Viewer (Task 1.5 — A2 default)
+    // Register Synced Viewer (Task 1.5, A2 default)
     this.registerView(VIEW_TYPE_SYNCED_VIEWER, (leaf) => {
       return new SyncedViewerView(
         leaf,
@@ -585,7 +585,7 @@ export default class Alt2ObsPlugin extends Plugin {
   }
 
   /**
-   * Phase 1: Preview — scrape page and defer PDF download until import.
+   * Phase 1 (preview): scrape page and defer PDF download until import.
    */
   async previewImport(
     url: string,
