@@ -160,9 +160,16 @@ export interface SectionGenerationResult {
   keptPrevious: number[];
 }
 
-/** Expected output tokens of one section summary: Korean text at about 0.9 tokens a character, plus the gist and JSON keys. */
+/**
+ * Expected output tokens of one section summary at medium effort. The
+ * visible part (Korean text at about 0.9 tokens a character, plus the gist
+ * and JSON keys) is 150 to 800 tokens; reasoning is counted as the
+ * per-slide refit found it (OUTPUT_TOKENS_PER_SLIDE, real Claude CLI runs
+ * at effort medium, 2026-10-08): real output 2.4 times the former
+ * visible-text figure. Not measured on sections themselves.
+ */
 export function sectionOutputTokens(textChars: number): number {
-  return Math.round(Math.min(800, Math.max(150, 120 + textChars * 0.2)));
+  return Math.round(2.4 * Math.min(800, Math.max(150, 120 + textChars * 0.2)));
 }
 
 export class SectionSummaryGenerator {
@@ -190,8 +197,8 @@ export class SectionSummaryGenerator {
           schema: SECTION_SCHEMA,
           signal: opts.signal,
           attempts: 1,
-          // The per-call timeout is sized for an 8-slide batch (about 3.4k output tokens).
-          timeoutScale: Math.max(1, sections.reduce((n, s) => n + sectionOutputTokens(s.text.length), 0) / 3400),
+          // The per-call timeout is sized for an 8-slide batch (about 8k output tokens with reasoning).
+          timeoutScale: Math.max(1, sections.reduce((n, s) => n + sectionOutputTokens(s.text.length), 0) / 8000),
         }),
       check: checkSectionAnswer,
       onProgress: (p) => opts.onProgress?.({ batch: p.batch, batches: p.batches, done: p.done, total: llmTotal, retry: p.retry }),

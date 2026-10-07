@@ -289,7 +289,7 @@ function checkSectionAnswer(raw, requested) {
   return { ok, failed };
 }
 function sectionOutputTokens(textChars) {
-  return Math.round(Math.min(800, Math.max(150, 120 + textChars * 0.2)));
+  return Math.round(2.4 * Math.min(800, Math.max(150, 120 + textChars * 0.2)));
 }
 function assembleSections(plan, done, failures) {
   const sections = [];
