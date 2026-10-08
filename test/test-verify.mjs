@@ -388,6 +388,27 @@ try {
   assert.equal(m.fetchInputMatches({ url: pageUrl }, pageUrl), true);
   assert.equal(m.fetchInputMatches({ id: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d" }, pageUrl), true);
   assert.equal(m.fetchInputMatches({ id: "notion://docs/enhanced-markdown-spec" }, pageUrl), false);
+  // Notion links: the old and the notion.com forms.
+  const nid = "0123456789abcdef0123456789abcdef";
+  for (const ok of [`https://app.notion.com/p/Some-Page-Title-${nid}`, `https://www.notion.com/${nid}`, `https://www.notion.so/work/Some-Title-${nid}`, `https://team.notion.site/Some-Title-${nid}`, `https://app.notion.com/p/Some-Title-${nid}?pvs=4`, `https://app.notion.com/p/Some-Title-${nid}?source=copy_link#blk`]) {
+    assert.equal(m.isNotionUrl(ok), true, ok);
+    assert.equal(m.notionPageId(ok), nid, ok);
+  }
+  assert.equal(m.notionPageId("https://www.notion.so/01234567-89ab-cdef-0123-456789abcdef"), nid);
+  for (const bad of [`http://app.notion.com/p/x-${nid}`, `https://notion.com.evil.example/p/x-${nid}`, `https://evilnotion.so/x-${nid}`, `https://evilnotion.com/x-${nid}`, `https://notion.so.evil.example/${nid}`, "not a url"]) assert.equal(m.isNotionUrl(bad), false, bad);
+  assert.equal(m.notionFetchUrl(`https://app.notion.com/p/Some-Page-Title-${nid}?pvs=4`), `https://www.notion.so/${nid}`);
+  assert.equal(m.notionFetchUrl(`https://www.notion.com/Some-${nid}`), `https://www.notion.so/${nid}`);
+  assert.equal(m.notionFetchUrl(`https://www.notion.so/work/Some-Title-${nid}?pvs=4`), `https://www.notion.so/work/Some-Title-${nid}?pvs=4`);
+  assert.equal(m.notionFetchUrl(`https://team.notion.site/Some-Title-${nid}`), `https://team.notion.site/Some-Title-${nid}`);
+  assert.throws(() => m.notionFetchUrl("https://www.notion.com/product"), /페이지 ID/);
+  const comUrl = `https://app.notion.com/p/Some-Page-Title-${nid}`;
+  for (const given of [{ id: nid }, { id: "01234567-89ab-cdef-0123-456789abcdef" }, { url: comUrl }, { url: `https://www.notion.so/${nid}` }, { id: `https://www.notion.so/work/Some-Title-${nid}` }]) {
+    assert.equal(m.fetchInputMatches(given, comUrl), true, JSON.stringify(given));
+    assert.equal(m.fetchInputMatches(given, `https://www.notion.so/work/Other-${nid}`), true);
+  }
+  assert.equal(m.fetchInputMatches({ id: "ffffffffffffffffffffffffffffffff" }, comUrl), false);
+  assert.match(m.notionCachePath("/c", comUrl), new RegExp(`${nid}\\.json$`));
+  assert.equal(m.notionCachePath("/c", comUrl), m.notionCachePath("/c", `https://www.notion.so/${nid}`));
   // A plugin's .mcp.json entry.
   assert.deepEqual(m.detailsFromMcpJson({ mcpServers: { notion: { type: "http", url: "https://mcp.notion.com/mcp" } } }, "notion"), { scope: "plugin", type: "http", url: "https://mcp.notion.com/mcp", hasHeaders: false });
   assert.equal(m.detailsFromMcpJson({ notion: { url: "https://x", headers: { Authorization: "Bearer y" } } }, "notion").hasHeaders, true);
@@ -427,6 +448,11 @@ try {
     const edited = await fetch();
     assert.equal(edited.unchanged, false);
     assert.match(edited.markdown, /새 내용/);
+    // A notion.com link is fetched as www.notion.so/<id> (the fake echoes the prompt's URL as the tool input) and shares the cache of the id.
+    const viaCom = await fetch({ url: "https://app.notion.com/p/Lec-Title-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d?pvs=4" });
+    assert.match(viaCom.markdown, /새 내용/);
+    assert.equal(viaCom.unchanged, true, "same page id, same cache");
+    await assert.rejects(fetch({ url: "https://www.notion.com/product" }), /페이지 ID/);
     // A claude.ai connector: no strict config, every other server denied (checked by the fake).
     process.env.FAKE_NOTION_MCP = "connector";
     const viaConnector = await fetch();

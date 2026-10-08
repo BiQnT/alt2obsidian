@@ -236,10 +236,19 @@ export function notionPageId(url: string): string | null {
 export function isNotionUrl(url: string): boolean {
   try {
     const u = new URL(url.trim());
-    return u.protocol === "https:" && /(^|\.)notion\.(so|site)$/.test(u.hostname);
+    return u.protocol === "https:" && /(^|\.)notion\.(so|site|com)$/.test(u.hostname);
   } catch {
     return false;
   }
+}
+
+/** What the fetch tool is given: notion.so and notion.site links as they are, a notion.com link as https://www.notion.so/<id>. */
+export function notionFetchUrl(url: string): string {
+  const u = url.trim();
+  if (!/(^|\.)notion\.com$/.test(new URL(u).hostname)) return u;
+  const id = notionPageId(u);
+  if (!id) throw new Error("노션 링크에서 페이지 ID를 찾지 못했습니다. 페이지의 '링크 복사'로 얻은 링크를 넣어 주세요.");
+  return `https://www.notion.so/${id}`;
 }
 
 export function buildNotionFetchPrompt(url: string): string {
@@ -619,7 +628,8 @@ export async function fetchNotionPage(
   provider: NotionFetchProvider,
   opts: { bin: string; url: string; cacheDir: string; workDir: string; toolName?: string; signal?: AbortSignal; home?: string }
 ): Promise<NotionFetchResult> {
-  if (!isNotionUrl(opts.url)) throw new Error("노션 페이지 URL(https://www.notion.so/...)을 넣어 주세요.");
+  if (!isNotionUrl(opts.url)) throw new Error("노션 페이지 URL(https://www.notion.so/... 또는 https://app.notion.com/p/...)을 넣어 주세요.");
+  const fetchUrl = notionFetchUrl(opts.url);
   const home = opts.home ?? homedir();
   const { server, all } = await detectNotionServer(opts.bin, opts.workDir, opts.signal);
   const toolName = opts.toolName?.trim() || mcpToolName(server.name);
@@ -642,10 +652,10 @@ export async function fetchNotionPage(
   // A plugin's server without a strict config loads only with the user settings (they enable the plugin).
   const settingSources: "" | "user" = pluginParts && !strictConfig ? "user" : "";
   provider.plan = { toolName, settingSources, strictConfig, deny: notionDenyList(toolName, others, !!strictConfig) };
-  provider.pageUrl = opts.url;
+  provider.pageUrl = fetchUrl;
 
   const callStart = Date.now();
-  const res = await provider.call({ prompt: buildNotionFetchPrompt(opts.url), signal: opts.signal });
+  const res = await provider.call({ prompt: buildNotionFetchPrompt(fetchUrl), signal: opts.signal });
   const tool = res.structured as NotionToolOutput;
   if (!tool.toolUsed) throw new Error(`Notion 조회 도구(${toolName})가 이번 호출에서 쓰이지 않았습니다. 서버: ${server.name}. 모델 답: ${res.text.slice(0, 200)}`);
   if (!tool.matched) throw new Error(`Notion 조회 도구가 요청한 페이지가 아닌 다른 페이지만 조회했습니다 (서버: ${server.name}).`);

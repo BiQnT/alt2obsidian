@@ -383,7 +383,7 @@ The **노트 검증** (note verification) tab compares notes you wrote with the 
 Under **입력** (input), choose one:
 
 - **보관함 파일** (vault file): a note in the vault, for example a Notion page exported to Markdown.
-- **Notion MCP**: a Notion page URL, fetched with **가져오기** (fetch) through the Notion MCP in your Claude Code (one call; select the button again to cancel). See [Notion MCP setup](#notion-mcp-setup).
+- **Notion MCP**: a Notion page link (either form works: `https://www.notion.so/...` or the newer `https://app.notion.com/p/...` from Notion's copy link), fetched with **가져오기** (fetch) through the Notion MCP in your Claude Code (one call; select the button again to cancel). See [Notion MCP setup](#notion-mcp-setup).
 - **붙여넣기** (paste).
 
 Then choose **대상 강의** (target lecture): any imported lecture note. Summary notes are marked `(전사 요약)` (transcript summary).
