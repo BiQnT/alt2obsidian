@@ -7,3 +7,5 @@ export { createJobDir, removeJobDir } from "../../src/llm/cli/CliRunner";
 export { UsageTracker, formatUsageFrontmatter } from "../../src/llm/usage";
 export * from "../../src/verify/notionFetch";
 export { englishHints } from "../../src/verify/glossary";
+export { VerifyPanel } from "../../src/ui/VerifyPanel";
+export { parseClaudeModelCatalog } from "../../src/settings/llmSettings";

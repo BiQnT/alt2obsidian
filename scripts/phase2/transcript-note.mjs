@@ -172,7 +172,7 @@ var CLAUDE_ALIASES = [
   { alias: "fable", family: "Fable", knownId: "claude-fable-5-1" },
   { alias: "opus", family: "Opus", knownId: "claude-opus-5-5" },
   { alias: "sonnet", family: "Sonnet", knownId: "claude-sonnet-5-5" },
-  { alias: "haiku", family: "Haiku", knownId: "claude-haiku-4-5-20251001" }
+  { alias: "haiku", family: "Haiku", knownId: "claude-haiku-5-5" }
 ];
 var CLAUDE_MODEL_ALIASES = CLAUDE_ALIASES.map((a) => a.alias);
 var EFFORT_OUTPUT_FACTOR = {

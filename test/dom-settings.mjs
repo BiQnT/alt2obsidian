@@ -18,8 +18,9 @@
  * definitions draw exactly the same, every row display() draws has a
  * definition, changes made through either path's controls save and draw
  * the tab again, a number field at its edges behaves as each Obsidian's
- * does (an empty, fractional or too small value), and the model list is
- * read once per drawing of the task rows.
+ * does (an empty, fractional or too small value), the model list is read
+ * once per drawing of the task rows, and the concepts row names Claude
+ * Haiku 5.5 for the haiku alias and its last run.
  *
  * Needs a Chromium binary, so it is not part of `npm test`:
  *   npm run test:dom                 (finds Playwright's headless shell or Google Chrome)
@@ -162,6 +163,20 @@ for (const scenario of ["default", "full"]) {
   assert.deepEqual(missing, [], `${scenario}: every heading and row display() draws has a definition`);
 }
 console.log("PASS: display() draws the tab as before (fixture), the definitions draw the same rows, texts, controls and values, and every row display() draws has a definition");
+
+// Claude Haiku 5.5: the haiku alias names it from the built-in table before
+// any run and from the id a run recorded after one (scenario full), the last
+// run names it too, and the concepts row offers every effort level.
+for (const r of results) {
+  const at = `${r.path}, ${r.scenario}, ${r.w}px`;
+  const row = r.outline.find((x) => x.name === "개념 추출");
+  const ran = r.scenario === "full";
+  assert.equal(row.desc, ran ? "권장: haiku · effort low. 마지막 실행: claude-haiku-5-5 (Haiku 5.5), 2026-10-08." : "권장: haiku · effort low.", `${at}: last run`);
+  assert.ok(row.controls[1].includes("|claude-haiku-5-5=Haiku 5.5 (claude-haiku-5-5)|"), `${at}: Haiku 5.5 is listed`);
+  assert.ok(row.controls[1].includes(ran ? "|haiku=haiku (최신 Haiku, 현재 Haiku 5.5)|" : "|haiku=haiku (최신 Haiku, Haiku 5.5, 기준일 2026-10)|"), `${at}: the haiku alias`);
+  assert.equal(row.controls[3], "select(low)[=effort CLI 기본값|low=effort low|medium=effort medium|high=effort high|xhigh=effort xhigh|max=effort max]", `${at}: effort levels`);
+}
+console.log("PASS: the haiku alias and the last run show Haiku 5.5 by name, and its effort list has every level");
 
 for (const path of ["old", "new"]) {
   const r = interactions[path];

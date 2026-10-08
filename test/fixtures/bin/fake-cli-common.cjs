@@ -304,7 +304,7 @@ function runClaude() {
   if (ms.includes("hang") || hangsForBatch(stdin)) return hang();
   const emit = (ev) => process.stdout.write(JSON.stringify(ev) + "\n");
   // Like the real CLI, an alias runs as the full id it stands for and the result says which.
-  const ALIASES = { fable: "claude-fable-5-1", opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5-20251001" };
+  const ALIASES = { fable: "claude-fable-5-1", opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5" };
   const modelName = ALIASES[flags["--model"]] ?? flags["--model"] ?? "claude-default";
   emit({ type: "system", subtype: "init", model: modelName });
   if (ms.includes("limit")) {

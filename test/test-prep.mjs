@@ -520,12 +520,15 @@ async function deck(n, visualPages = []) {
   // Claude model dropdown: versioned models with names and ids, then the aliases with what they stand for now, then older models.
   const noCatalog = { claude: [], codex: { models: [], efforts: {} }, resolved: {} };
   const claudeValues = m.modelChoices("claude-cli", "sonnet", [], noCatalog).map((c) => c.value);
-  assert.deepEqual(claudeValues, ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001", "fable", "opus", "sonnet", "haiku", "claude-sonnet-5", ""], "built-in list without Claude Code's catalog");
+  assert.deepEqual(claudeValues, ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "fable", "opus", "sonnet", "haiku", "claude-haiku-4-5-20251001", "claude-sonnet-5", ""], "built-in list without Claude Code's catalog");
   const labels = Object.fromEntries(m.modelChoices("claude-cli", "", [], noCatalog).map((c) => [c.value, c.label]));
   assert.equal(labels["claude-opus-5-5"], "Opus 5.5 (claude-opus-5-5)");
-  assert.equal(labels["claude-haiku-4-5-20251001"], "Haiku 4.5 (claude-haiku-4-5-20251001)");
+  assert.equal(labels["claude-haiku-5-5"], "Haiku 5.5 (claude-haiku-5-5)");
+  assert.equal(labels["claude-haiku-4-5-20251001"], "Haiku 4.5 (claude-haiku-4-5-20251001)", "Haiku 4.5 stays, as an older model");
   assert.equal(labels.opus, "opus (최신 Opus, Opus 5.5, 기준일 2026-10)", "an alias with the built-in target and when it was checked");
   assert.equal(labels.fable, "fable (최신 Fable, Fable 5.1, 기준일 2026-10)");
+  assert.equal(labels.haiku, "haiku (최신 Haiku, Haiku 5.5, 기준일 2026-10)");
+  assert.equal(m.aliasTarget("haiku", noCatalog), "claude-haiku-5-5");
   assert.match(labels[""], /CLI 기본값/);
   // A run recorded what an alias resolved to: that wins over the checked mapping.
   const seen = { ...noCatalog, resolved: { "claude-cli:opus": { id: "claude-opus-6", at: "2026-11-01" } } };
@@ -548,7 +551,13 @@ async function deck(n, visualPages = []) {
   assert.deepEqual(m.modelChoices("claude-cli", "", [], cat).map((c) => c.value), ["claude-opus-5-5", "claude-haiku-4-5-20251001", "fable", "opus", "sonnet", "haiku", "claude-sonnet-5", ""]);
   assert.equal(m.modelChoices("claude-cli", "", [], cat)[0].title, "For complex work", "the description is the tooltip");
   assert.deepEqual(m.effortChoices("claude-cli", "claude-haiku-4-5-20251001", "low", cat), ["", "low"], "Haiku lists no effort: only the CLI default and the saved value");
-  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "", cat), [""], "an alias uses its target's levels");
+  const haiku45 = { ...cat, resolved: { "claude-cli:haiku": { id: "claude-haiku-4-5-20251001", at: "2026-10-01" } } };
+  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "", haiku45), [""], "an alias uses the levels of what it resolved to");
+  // A catalog read before Claude Code listed Haiku 5.5 (a session started earlier): the built-in entry names it.
+  const haiku55 = { ...cat, resolved: { "claude-cli:haiku": { id: "claude-haiku-5-5", at: "2026-10-08" } } };
+  assert.equal(m.modelLabel("claude-cli", "haiku", haiku55), "haiku (최신 Haiku, 현재 Haiku 5.5)");
+  assert.equal(m.modelName("claude-cli", "claude-haiku-5-5", cat), "Haiku 5.5");
+  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "low", haiku55), m.EFFORT_LEVELS, "every level, like Sonnet 5.5's built-in entry");
   assert.deepEqual(m.effortChoices("claude-cli", "claude-sonnet-5", "", cat), ["", "low", "high"]);
   assert.deepEqual(m.effortChoices("claude-cli", "", "", cat), m.EFFORT_LEVELS, "CLI default model: every level");
   // Codex names and descriptions from its cache.
@@ -569,6 +578,29 @@ async function deck(n, visualPages = []) {
   assert.equal(m.estimateEffort("codex-cli", "gpt-6-luna", "", withDefaults), "medium", "Codex default_reasoning_level");
   assert.equal(m.estimateEffort("claude-cli", "claude-fable-5-1", "low", withDefaults), "low");
   assert.equal(m.estimateEffort("claude-cli", "my-model", "", withDefaults), "", "unknown model and level: factor 1");
+  // Haiku 5.5 as Claude Code's catalog lists it (2026-10-08): effort levels with medium recommended,
+  // Haiku 4.5 an older model without levels. The haiku alias and saved settings follow the catalog.
+  const haikuJson = (levels) => JSON.stringify({ version: 2, catalog: { surface: "cc", config: { models: [
+    { id: "claude-haiku-5-5", name: "Haiku 5.5", description: "Fastest for quick answers", section: "main", thinking: { type: "effort", effort_options: levels } },
+    { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", section: "overflow", thinking: { type: "none" } },
+  ] } } });
+  const allLevels = [{ id: "low" }, { id: "medium", badge: { message: "Recommended" } }, { id: "high" }, { id: "xhigh" }, { id: "max" }];
+  const haikuCat = { claude: m.parseClaudeModelCatalog(haikuJson(allLevels)), codex: { models: [], efforts: {} }, resolved: {} };
+  assert.deepEqual(haikuCat.claude.map((x) => [x.id, x.name, !!x.older, x.efforts, x.defaultEffort]), [
+    ["claude-haiku-5-5", "Haiku 5.5", false, ["low", "medium", "high", "xhigh", "max"], "medium"],
+    ["claude-haiku-4-5-20251001", "Haiku 4.5", true, [], undefined],
+  ]);
+  assert.deepEqual(m.modelChoices("claude-cli", "", [], haikuCat).map((c) => c.value), ["claude-haiku-5-5", "fable", "opus", "sonnet", "haiku", "claude-haiku-4-5-20251001", ""], "Haiku 4.5 after the aliases");
+  assert.deepEqual(m.effortChoices("claude-cli", "claude-haiku-5-5", "", haikuCat), m.EFFORT_LEVELS, "Haiku 5.5: the levels the catalog lists");
+  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "low", haikuCat), m.EFFORT_LEVELS, "the haiku alias: Haiku 5.5's levels, no longer the CLI default only");
+  assert.equal(m.estimateEffort("claude-cli", "haiku", "low", haikuCat), "low", "a saved haiku with low effort counts as low");
+  assert.equal(m.estimateEffort("claude-cli", "haiku", "", haikuCat), "medium", "CLI default: Haiku 5.5's recommended level");
+  assert.deepEqual(m.effortChoices("claude-cli", "claude-haiku-4-5-20251001", "low", haikuCat), ["", "low"], "a saved Haiku 4.5 keeps the CLI default and its saved level");
+  assert.equal(m.estimateEffort("claude-cli", "claude-haiku-4-5-20251001", "low", haikuCat), "", "and still counts no effort");
+  const fewerLevels = { ...haikuCat, claude: m.parseClaudeModelCatalog(haikuJson([{ id: "low" }, { id: "high" }])) };
+  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "", fewerLevels), ["", "low", "high"], "the catalog's list, not a fixed one");
+  assert.equal(m.describeModel("claude-cli", "haiku", haikuCat), "haiku (최신 Haiku, Haiku 5.5, 기준일 2026-10)");
+  assert.equal(m.describeModel("claude-cli", "claude-haiku-5-5", haikuCat), "Haiku 5.5 (claude-haiku-5-5)");
   assert.equal(m.describeEffort(""), "effort CLI 기본값");
   assert.equal(m.describeModel("claude-cli", "", noCatalog), "CLI 기본 모델");
   assert.equal(m.describeModel("claude-cli", "claude-sonnet-5-5", noCatalog), "Sonnet 5.5 (claude-sonnet-5-5)");

@@ -4,7 +4,8 @@
 // at the pane width in ?w=. ?path=old draws it the way Obsidian before 1.13
 // does (display()); ?path=new the way 1.13 and later do, from its setting
 // definitions (renderDefinitions below, after Obsidian 1.14.4's renderer).
-// ?scenario=full adds a stored legacy API key, usage and a CLI not found.
+// ?scenario=full adds a stored legacy API key, usage, a CLI not found and
+// a run that resolved the haiku alias to Claude Haiku 5.5.
 // ?mode=interact changes settings through the drawn controls instead of
 // measuring. Results go to <pre id="out"> as JSON.
 import { Alt2ObsSettingsTab } from "../../src/ui/SettingsTab";
@@ -43,7 +44,9 @@ function makePlugin(): any {
     },
     modelCatalog() {
       this.catalogReads++;
-      return { claude: [], codex: { models: [], efforts: {} }, resolved: { "claude-cli:sonnet": { id: "claude-sonnet-5-5", at: "2026-10-06" } } };
+      const resolved: Record<string, { id: string; at: string }> = { "claude-cli:sonnet": { id: "claude-sonnet-5-5", at: "2026-10-06" } };
+      if (scenario === "full") resolved["claude-cli:haiku"] = { id: "claude-haiku-5-5", at: "2026-10-08" };
+      return { claude: [], codex: { models: [], efforts: {} }, resolved };
     },
     applyCommentHiding: () => {},
     updateBasePath: () => {},

@@ -632,9 +632,9 @@ try {
   assert.equal(record.path, "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.md", "2.0 layout: Lectures/ (spec 4.5)");
   assert.ok(note.startsWith("---\n"));
   // The model the CLI actually ran: the alias "sonnet" comes back as its full id.
-  assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-4-5-20251001", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
+  assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-5-5", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
   assert.deepEqual(plugin.data.resolvedModels["claude-cli:sonnet"].id, "claude-sonnet-5-5", "the resolved id is recorded for the dropdowns");
-  assert.deepEqual(plugin.data.resolvedModels["claude-cli:haiku"].id, "claude-haiku-4-5-20251001");
+  assert.deepEqual(plugin.data.resolvedModels["claude-cli:haiku"].id, "claude-haiku-5-5");
   assert.match(note, /tags: \[csed311, cache, memory\]/, "no exam period tag (spec G5)");
   assert.equal((note.match(/<!-- alt2obs:meta img:/g) ?? []).length, 6);
   assert.ok(files.has("Alt2Obsidian/CSED311/Concepts/캐시.md"));
@@ -1420,8 +1420,8 @@ try {
     const modelOf = (c) => c.argv[c.argv.indexOf("--model") + 1];
     assert.ok(calls.filter((c) => !c.stdin.includes("concept")).every((c) => modelOf(c) === "claude-opus-5-5"), "commentary and overview on the chosen model");
     assert.ok(calls.some((c) => modelOf(c) === "haiku"), "concepts on the saved model");
-    assert.ok(reported.includes("commentary=claude-opus-5-5") && reported.includes("concepts=claude-haiku-4-5-20251001"), reported.join(", "));
-    assert.match(files.get(rec.path), /alt2obs_usage: \{provider: "Claude CLI claude-opus-5-5", model: "claude-opus-5-5", effort: "high", concept_model: "claude-haiku-4-5-20251001", /);
+    assert.ok(reported.includes("commentary=claude-opus-5-5") && reported.includes("concepts=claude-haiku-5-5"), reported.join(", "));
+    assert.match(files.get(rec.path), /alt2obs_usage: \{provider: "Claude CLI claude-opus-5-5", model: "claude-opus-5-5", effort: "high", concept_model: "claude-haiku-5-5", /);
     assert.equal(JSON.stringify(plugin.data.settings.tasks), saved, "still unchanged after the run");
     assert.equal(plugin.data.resolvedModels["claude-cli:claude-opus-5-5"].id, "claude-opus-5-5");
     // "기본값으로 저장" makes it the saved setting, in the same object the settings tab holds.

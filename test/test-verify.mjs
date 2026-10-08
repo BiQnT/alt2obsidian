@@ -3,7 +3,8 @@
  * claim splitting, BM25 evidence (slides top 2, aligned transcript top 2),
  * script-only "근거 없음", likely-true claims last, batches of 20, the
  * estimate from the exact prompts, the shared retry rules, the missing-slide
- * call, the verification note and its re-run merge.
+ * call, the verification note and its re-run merge, and the model the
+ * sidebar's Notion line names.
  * Run: node test/test-verify.mjs
  */
 
@@ -528,4 +529,46 @@ try {
     s2.cleanup();
     rmSync(join(cacheDir, ".."), { recursive: true, force: true });
   }
+}
+
+// ---- the Notion line of the sidebar's 노트 검증 tab names the fetch model ----
+{
+  // Takes any Obsidian DOM call and keeps the texts it was given.
+  const texts = [];
+  const el = () =>
+    new Proxy({}, {
+      get: (_, p) =>
+        p === "value"
+          ? ""
+          : (...args) => {
+              for (const a of args) if (a && typeof a === "object" && typeof a.text === "string") texts.push(a.text);
+              return el();
+            },
+    });
+  const notionLine = (model, resolved = {}, claude = []) => {
+    texts.length = 0;
+    const plugin = {
+      notionFetchModel: () => ({ model, effort: "low" }),
+      modelCatalog: () => ({ claude, codex: { models: [], efforts: {} }, resolved }),
+      verifySourceFiles: () => [],
+      verifyTargets: () => [],
+    };
+    new m.VerifyPanel({}, plugin, el()).render();
+    const line = texts.find((t) => t.startsWith("Claude CLI가 Notion 조회 도구"));
+    assert.ok(line, "the Notion line is drawn");
+    return line.slice(line.indexOf("모델: ") + 4);
+  };
+  assert.equal(notionLine("haiku"), "haiku (최신 Haiku, Haiku 5.5, 기준일 2026-10) · effort low.", "before any run: the built-in target of the haiku alias");
+  const ran = { "claude-cli:haiku": { id: "claude-haiku-5-5", at: "2026-10-08" } };
+  assert.equal(notionLine("haiku", ran), "haiku (최신 Haiku, 현재 Haiku 5.5) · effort low.", "after a run: the id it resolved to, by name");
+  // Claude Code's catalog read before it listed Haiku 5.5: the built-in list still names it.
+  const older = m.parseClaudeModelCatalog(JSON.stringify({ catalog: { config: { models: [
+    { id: "claude-sonnet-5-5", name: "Sonnet 5.5", section: "main" },
+    { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", section: "main", thinking: { type: "none" } },
+  ] } } }));
+  assert.equal(notionLine("haiku", ran, older), "haiku (최신 Haiku, 현재 Haiku 5.5) · effort low.");
+  assert.equal(notionLine("claude-haiku-5-5"), "Haiku 5.5 (claude-haiku-5-5) · effort low.");
+  assert.equal(notionLine("claude-haiku-4-5-20251001", {}, older), "Haiku 4.5 (claude-haiku-4-5-20251001) · effort low.", "a saved Haiku 4.5 keeps its name");
+  assert.equal(notionLine(""), "CLI 기본 모델 · effort low.", "concepts on Codex: the Claude CLI default");
+  console.log("PASS: the Notion line names Haiku 5.5 for the haiku alias (built-in target, then the run's id) and for claude-haiku-5-5");
 }

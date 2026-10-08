@@ -284,15 +284,19 @@ export interface ModelInfo {
  * Claude models when Claude Code's own model catalog cache is missing
  * (it appears once Claude Code has been used interactively). Ids and names
  * as listed by Claude Code 2.1.291 on 2026-10-06 (its catalog and the
- * model table in the CLI); each id is passed to `claude --model` as it is
- * (claude-sonnet-5 and, through its alias, claude-fable-5-1 and
- * claude-sonnet-5-5 were checked with a real call).
+ * model table in the CLI), and Haiku 5.5 as Claude Code 2.1.293's catalog
+ * lists it on 2026-10-08 (every effort level, like Sonnet 5.5; Haiku 4.5,
+ * without effort levels, moved to its older models); each id is passed to
+ * `claude --model` as it is (claude-sonnet-5 and, through its alias,
+ * claude-fable-5-1, claude-sonnet-5-5 and claude-haiku-5-5 were checked
+ * with a real call).
  */
 export const CLAUDE_FALLBACK_MODELS: ModelInfo[] = [
   { id: "claude-fable-5-1", name: "Fable 5.1" },
   { id: "claude-opus-5-5", name: "Opus 5.5" },
   { id: "claude-sonnet-5-5", name: "Sonnet 5.5" },
-  { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", efforts: [] },
+  { id: "claude-haiku-5-5", name: "Haiku 5.5" },
+  { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", efforts: [], older: true },
   { id: "claude-sonnet-5", name: "Sonnet 5", older: true },
 ];
 
@@ -301,15 +305,16 @@ export const CLAUDE_FALLBACK_MODELS: ModelInfo[] = [
  * (`claude --help`: "an alias for the latest model"). `knownId` is what the
  * alias resolved to when checked with Claude Code 2.1.291 on 2026-10-06:
  * fable and sonnet by a real call each (the result's modelUsage key), opus
- * from Claude Code's catalog for an account set to "opus", haiku from an
- * earlier plugin run's modelUsage. After every real call the plugin records
- * the id the CLI actually used, which wins over this table.
+ * from Claude Code's catalog for an account set to "opus"; haiku from a
+ * plugin run's modelUsage on 2026-10-08 (Haiku 4.5 before). After every
+ * real call the plugin records the id the CLI actually used, which wins
+ * over this table.
  */
 export const CLAUDE_ALIASES: Array<{ alias: string; family: string; knownId: string }> = [
   { alias: "fable", family: "Fable", knownId: "claude-fable-5-1" },
   { alias: "opus", family: "Opus", knownId: "claude-opus-5-5" },
   { alias: "sonnet", family: "Sonnet", knownId: "claude-sonnet-5-5" },
-  { alias: "haiku", family: "Haiku", knownId: "claude-haiku-4-5-20251001" },
+  { alias: "haiku", family: "Haiku", knownId: "claude-haiku-5-5" },
 ];
 
 /** The alias names, for code that only needs to know a value is an alias. */
