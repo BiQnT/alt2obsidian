@@ -44,8 +44,14 @@ export class ItemView {
   constructor(leaf) {
     this.leaf = leaf;
     this.containerEl = document.createElement("div");
-    this.containerEl.createDiv();
+    // As Obsidian 1.14 builds an ItemView: the title bar, then the content.
+    const header = this.containerEl.createDiv({ cls: "view-header" });
+    this.titleEl = header.createDiv({ cls: "view-header-title-container" }).createDiv({ cls: "view-header-title" });
     this.containerEl.createDiv({ cls: "view-content" });
+  }
+  // As Obsidian's ItemView.load: the only time it writes the title bar.
+  load() {
+    this.titleEl.setText(this.getDisplayText());
   }
   registerEvent() {}
   registerDomEvent(el, type, cb, opts) { el.addEventListener(type, cb, opts); }

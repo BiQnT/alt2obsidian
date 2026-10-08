@@ -160,6 +160,17 @@ export class SyncedViewerView extends ItemView {
         }
       })
     );
+    // Restored at startup, the view can read the note before Obsidian has
+    // indexed it (no frontmatter in the metadata cache yet): the alignment
+    // label and the transcript button stayed hidden. Read the alignment
+    // again when the note's metadata arrives or changes.
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        if (file.path !== this.mdPath) return;
+        this.readAlignment(file);
+        if (this.transcriptOpen) void this.renderTranscript();
+      })
+    );
   }
 
   async onClose(): Promise<void> {
@@ -371,6 +382,10 @@ export class SyncedViewerView extends ItemView {
   }
 
   private async loadCurrentPair(): Promise<void> {
+    // Obsidian writes an ItemView's title bar once, when the view loads,
+    // before setState names the note (the tab title is redrawn after
+    // setState): name the note there too.
+    this.containerEl.querySelector(":scope > .view-header .view-header-title")?.setText(this.getDisplayText());
     if (!this.mdPath || !this.pdfPath) {
       this.renderEmptyState();
       return;

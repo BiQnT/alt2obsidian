@@ -25,7 +25,7 @@ async function main() {
       readBinary: async () => pdfBytes.slice(0),
       on: () => ({}),
     },
-    metadataCache: { getFileCache: () => ({ frontmatter: {} }) },
+    metadataCache: { getFileCache: () => ({ frontmatter: {} }), on: () => ({}) },
     workspace: {},
   };
   const view: any = new (SyncedViewerView as any)({}, undefined, () => true);
@@ -87,6 +87,50 @@ async function main() {
   await view.onClose();
   await sleep(300);
   log.push({ step: "closed", current: view.currentPage });
+
+  // Restored at startup: Obsidian's WorkspaceLeaf.setViewState makes the
+  // view, opens it (load writes the title bar, then onOpen), awaits setState
+  // and then redraws the tab title. The metadata cache has not indexed the
+  // note yet: no frontmatter until its "changed" event.
+  const changed: Array<(file: unknown) => void> = [];
+  let indexed = false;
+  const fm = { alt_local_id: "L5-id", alt_alignment: "1:0-30 2:30-60" };
+  const restoredApp: any = {
+    ...app,
+    metadataCache: {
+      getFileCache: (f: { path: string }) => (indexed && f.path === "Lec/L5.md" ? { frontmatter: fm } : null),
+      on: (name: string, cb: (file: unknown) => void) => (name === "changed" && changed.push(cb), {}),
+    },
+  };
+  const transcript = [{ startMs: 1000, endMs: 4000, text: "첫 문장" }];
+  const restored: any = new (SyncedViewerView as any)({}, async () => transcript, () => true);
+  restored.app = restoredApp;
+  const tabTitle = document.createElement("div");
+  document.getElementById("host")!.replaceChildren(restored.containerEl);
+  restored.load();
+  await restored.onOpen();
+  await restored.setState({ mdPath: "Lec/L5.md", pdfPath: "deck.pdf" }, { history: false });
+  tabTitle.textContent = restored.getDisplayText();
+  const shown = (el: HTMLElement) => el.isConnected && getComputedStyle(el).display !== "none";
+  const ui = (step: string) => ({
+    step,
+    label: shown(restored.syncModeEl),
+    transcriptButton: shown(restored.transcriptBtnEl),
+    titleBar: restored.containerEl.querySelector(".view-header-title").textContent,
+    tab: tabTitle.textContent,
+  });
+  log.push(ui("restored, not indexed"));
+  // Another note's metadata changes nothing.
+  indexed = true;
+  for (const cb of changed) cb(new (TFile as any)("Lec/other.md"));
+  log.push(ui("other note indexed"));
+  for (const cb of changed) cb(new (TFile as any)("Lec/L5.md"));
+  log.push(ui("note indexed"));
+  restored.gotoPage(1);
+  restored.transcriptBtnEl.click();
+  await sleep(100);
+  log.push({ step: "transcript", text: restored.transcriptPanelEl.textContent });
+  await restored.onClose();
   return log;
 }
 main().then(
