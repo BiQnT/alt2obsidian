@@ -73,7 +73,7 @@ Codex 카드에는 안내가 하나 더 있습니다. Codex는 호출마다 자�
 Codex CLI에서는 모델 기본값이 Codex 자체의 기본 모델이고 effort는 같습니다. 줄마다 권장 설정(권장)이 보이고, 한 번 실행하고 나면 CLI가 실제로 쓴 모델(마지막 실행)도 보입니다.
 
 - **모델 목록.** `Opus 5.5 (claude-opus-5-5)`처럼 버전이 붙은 항목은 그 id를 그대로 CLI에 넘겨 늘 같은 모델로 실행합니다. `sonnet` 같은 별칭은 CLI가 그때의 최신 모델로 바꿔 실행하고, 라벨에는 마지막 실행 때 가리킨 모델이 `sonnet (최신 Sonnet, 현재 Sonnet 5.5)`처럼 보입니다. 목록은 Claude Code와 Codex가 디스크에 저장해 둔 모델 목록에서 읽고(모델 호출 없음), 없으면 플러그인에 넣어 둔 목록을 씁니다. **CLI 기본값**은 CLI 자체의 기본 모델을 쓰고, 목록에 없는 모델은 **직접 입력...**으로 넣습니다.
-- **effort**(추론 강도). 고른 모델이 지원하는 단계와 이미 저장된 단계만 보입니다(`low`, `medium`, `high`, `xhigh`, `max`, 또는 **effort CLI 기본값**). Haiku 4.5처럼 effort가 없는 모델은 CLI 기본값과 저장된 단계만 보이므로, 개념 추출 기본값 줄에는 `low`가 그대로 보입니다.
+- **effort**(추론 강도). 고른 모델이 지원하는 단계와 이미 저장된 단계만 보입니다(`low`, `medium`, `high`, `xhigh`, `max`, 또는 **effort CLI 기본값**). 지금 `haiku`가 가리키는 Haiku 5.5는 모든 단계를 지원합니다. 이전 모델인 Haiku 4.5처럼 effort가 없는 모델은 CLI 기본값과 저장된 단계만 보입니다.
 - **프리셋**: **절약**은 모든 작업에 경량 모델(Claude는 `haiku`)과 effort low를 씁니다. **품질**은 해설과 검증에 상위 모델(Claude는 `opus`)과 effort high를 쓰고, 개념 추출(그리고 CLI로 정해 둔 경우 전사 정렬 확인)에는 경량 모델과 effort low를 씁니다. 프리셋은 프로바이더를 바꾸지 않고, 표를 직접 고치면 **사용자 지정**이 됩니다.
 
 여기 값은 기본값입니다. 가져오기와 노트 검증을 시작하기 직전에 그 실행에만 쓸 모델로 바꿀 수 있습니다([예상 사용량 패널](#예상-사용량-패널) 참고).
@@ -203,7 +203,7 @@ slide_count: 32
 alt_created: "2026-03-24"
 alt_local_id: "019e8c4f-..."
 alt_source: "alt-local"
-alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-4-5-20251001", calls: 14, ...}
+alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-5-5", calls: 14, ...}
 alt_alignment: "1:0-95.2 2:95.2-210 ..."
 ---
 # CSED311 Lec7-pipelined-CPU

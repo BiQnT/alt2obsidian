@@ -73,7 +73,7 @@ Under **작업별 모델** (models per task) each task has a provider, a model a
 On the Codex CLI the model defaults to Codex's own default model, with the same efforts. Each row shows its recommended setting (권장) and, after a run, the model the CLI actually used (마지막 실행, last run).
 
 - **Model list.** Versioned entries such as `Opus 5.5 (claude-opus-5-5)` pass that exact id to the CLI, so you always get the same model. Aliases such as `sonnet` follow the CLI's latest model; the label shows what it pointed to on the last run, for example `sonnet (최신 Sonnet, 현재 Sonnet 5.5)`. The list comes from the model lists Claude Code and Codex keep on disk (no model call), or from a built-in list. **CLI 기본값** (CLI default) uses the CLI's own default model, and **직접 입력...** (enter manually) takes any other id.
-- **Effort** (reasoning effort). The list shows only the levels the chosen model supports (`low`, `medium`, `high`, `xhigh`, `max`, or **effort CLI 기본값**), plus the level already saved. A model without effort levels, such as Haiku 4.5, offers the CLI default and the saved level, so the default concepts row still shows `low`.
+- **Effort** (reasoning effort). The list shows only the levels the chosen model supports (`low`, `medium`, `high`, `xhigh`, `max`, or **effort CLI 기본값**), plus the level already saved. Haiku 5.5, what `haiku` stands for now, lists every level. A model without effort levels, such as the older Haiku 4.5, offers only the CLI default and the saved level.
 - **프리셋** (preset): **절약** (saving) puts every task on the light model (Claude: `haiku`) with effort low. **품질** (quality) puts commentary and verification on the top model (Claude: `opus`) with effort high, and concepts (and the alignment check, if it is on a CLI) on the light model with effort low. Presets never change the provider. Any manual change switches to **사용자 지정** (custom).
 
 These are defaults. Before each import or verification you can change the model for that run only (see [the estimate panel](#the-estimate-panel)).
@@ -203,7 +203,7 @@ slide_count: 32
 alt_created: "2026-03-24"
 alt_local_id: "019e8c4f-..."
 alt_source: "alt-local"
-alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-4-5-20251001", calls: 14, ...}
+alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-5-5", calls: 14, ...}
 alt_alignment: "1:0-95.2 2:95.2-210 ..."
 ---
 # CSED311 Lec7-pipelined-CPU
