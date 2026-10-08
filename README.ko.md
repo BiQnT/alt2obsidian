@@ -17,7 +17,7 @@ Alt2Obs는 [Alt](https://www.altalt.io) 앱으로 강의를 녹음하는 학생�
 <p align="center">
   <img src="https://raw.githubusercontent.com/BiQnT/alt2obsidian/main/docs/assets/screenshot-viewer.png" alt="Synced Viewer: 왼쪽에 강의 PDF, 오른쪽에 Alt2Obs 노트가 같은 슬라이드에 맞춰진 화면" width="800">
   <br>
-  <em>Synced Viewer: 슬라이드 PDF와 강의 노트를 나란히 놓고 전사 패널을 연 모습.</em>
+  <em>Synced Viewer: 슬라이드 PDF와 강의 노트가 같은 슬라이드에 맞춰 함께 넘어갑니다.</em>
 </p>
 
 ## 주요 기능
@@ -139,9 +139,3 @@ npm run test:dom   # 헤드리스 Chromium에서 뷰어, 사이드바, 설정 �
 
 `main.js`에는 슬라이드 PDF를 읽고 그리는 [PDF.js](https://github.com/mozilla/pdf.js)(pdfjs-dist 4.10.38, Mozilla Foundation, Apache License 2.0)가 들어 있고, 그 라이선스 고지도 함께 들어 있습니다.
 
-<!--
-Images to capture
-- README는 이미지를 main 브랜치의 raw.githubusercontent.com 주소로 불러오므로, 새 이미지는 main에 머지된 뒤에야 보입니다.
-- docs/assets/screenshot-viewer.png: README.md와 같은 이미지. 슬라이드 강의를 연 Synced Viewer, 왼쪽 PDF와 오른쪽 노트가 같은 슬라이드, 툴바에 "정렬 기준 동기화 · 전사 매칭", "전사 패널"을 열어 [mm:ss] 줄이 몇 개 보이는 상태.
-- docs/assets/screenshot-import.png: README.md와 같은 이미지. 사이드바 "Alt 노트 목록" 탭에서 강의 하나를 고른 상태(종류 칩 "슬라이드", 상태 칩, 과목 칸)와 "가져오기 전 예상 사용량" 패널(모델 선택, "시작" 버튼).
--->

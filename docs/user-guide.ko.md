@@ -329,7 +329,7 @@ tags: [concept]
 
 Synced Viewer는 슬라이드 PDF와 강의 노트를 나란히 보여 주고 함께 스크롤합니다.
 
-<p align="center"><img src="assets/screenshot-viewer.png" alt="전사 패널을 연 Synced Viewer" width="800"></p>
+<p align="center"><img src="assets/screenshot-viewer.png" alt="Synced Viewer: 같은 슬라이드에 맞춰진 강의 PDF와 노트" width="800"></p>
 
 여는 방법:
 
@@ -376,7 +376,7 @@ Alt 강의 중에는 녹음과 전사만 있는 것이 많습니다. 전사로 �
 
 **노트 검증** 탭은 내가 쓴 노트를 강의 슬라이드와 전사에 대조합니다. 근거는 스크립트가 찾고, 모델은 판정만 합니다. 내 노트는 바꾸지 않습니다.
 
-<p align="center"><img src="assets/screenshot-verify.png" alt="검증을 마친 노트 검증 탭과 판정별 개수" width="420"></p>
+<p align="center"><img src="assets/screenshot-verify.png" alt="노트 검증 탭: 내 노트(보관함 파일, Notion MCP, 붙여넣기)와 대상 강의를 고르고 예상 사용량을 확인" width="420"></p>
 
 ### 입력
 
@@ -550,10 +550,3 @@ Obsidian 1.13 이상에서는 이 탭을 설정 정의로 그려서, 이 플러�
 - **전사 정렬 정확도**(강의 2개에서 80.4%와 62.9%, 균등 분할은 9.9%와 3.0%)는 초안 라벨 기준이고, 라벨 확인이 남아 있습니다.
 - **토큰**: 141분, 46장 강의 기준 Claude CLI 예상 입력은 약 7.3만 토큰으로, 1.1.0 Gemini 방식 예상치(약 10.8만)의 68%입니다. 실측 벤치마크는 아직입니다.
 
-<!--
-Images to capture
-- docs/assets/screenshot-settings.png: 설정 → Alt2Obs의 "LLM 연결" 구역(두 CLI 카드, 하나는 "찾음: <버전>"과 경로가 보이는 상태)과 "작업별 모델" 표(프로바이더, 모델, effort 드롭다운). 폭 약 1440px.
-- docs/assets/screenshot-import.png: README와 같은 이미지(사이드바 "Alt 노트 목록" 탭, 종류·상태 칩, "가져오기 전 예상 사용량" 패널).
-- docs/assets/screenshot-viewer.png: README와 같은 이미지(전사 패널을 연 Synced Viewer).
-- docs/assets/screenshot-verify.png: 검증을 마친 사이드바 "노트 검증" 탭. 판정별 개수(맞음, 틀림, 근거 없음, 전사 불확실, 누락 후보)와 "결과 노트 열기" 버튼.
--->

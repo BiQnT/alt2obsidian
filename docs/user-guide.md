@@ -329,7 +329,7 @@ Links in the commentary point to the note's full name, for example `[[Lottery Sc
 
 The Synced Viewer shows the slide PDF and its lecture note side by side and scrolls them together.
 
-<p align="center"><img src="assets/screenshot-viewer.png" alt="The Synced Viewer with the transcript panel open" width="800"></p>
+<p align="center"><img src="assets/screenshot-viewer.png" alt="The Synced Viewer: a lecture PDF and its note at the same slide" width="800"></p>
 
 Ways to open it:
 
@@ -376,7 +376,7 @@ What happens to the attached file: only a copy the plugin made, unchanged since,
 
 The **노트 검증** (note verification) tab compares notes you wrote with the lecture's slides and transcript. A script finds the evidence; the model only judges. Your note is never changed.
 
-<p align="center"><img src="assets/screenshot-verify.png" alt="The note verification tab with verdict counts after a run" width="420"></p>
+<p align="center"><img src="assets/screenshot-verify.png" alt="The note verification tab: pick your notes (vault file, Notion MCP or pasted text) and the lecture, then see the estimate" width="420"></p>
 
 ### Inputs
 
@@ -550,10 +550,3 @@ Known limitations:
 - **Alignment accuracy** figures (80.4% and 62.9% on two lectures, against 9.9% and 3.0% for an even split) come from draft labels that are still to be confirmed.
 - **Tokens**: for a 141-minute, 46-slide lecture the Claude CLI estimate is about 73k input tokens, 68% of the 1.1.0 Gemini estimate (about 108k). A measured benchmark is still to come.
 
-<!--
-Images to capture
-- docs/assets/screenshot-settings.png: Settings → Alt2Obs, the "LLM 연결" section with both CLI cards (one found, showing "찾음: <version>" and the path) and the "작업별 모델" table with its provider, model and effort dropdowns. About 1440 px wide.
-- docs/assets/screenshot-import.png: shared with the README (sidebar "Alt 노트 목록" tab with kind and status chips and the "가져오기 전 예상 사용량" panel).
-- docs/assets/screenshot-viewer.png: shared with the README (Synced Viewer with the transcript panel open).
-- docs/assets/screenshot-verify.png: the sidebar "노트 검증" tab after a run, showing the verdict counts (맞음, 틀림, 근거 없음, 전사 불확실, 누락 후보) and the "결과 노트 열기" button. Sidebar width.
--->

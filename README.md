@@ -17,7 +17,7 @@ The interface and the generated notes are in Korean, with academic terms kept in
 <p align="center">
   <img src="https://raw.githubusercontent.com/BiQnT/alt2obsidian/main/docs/assets/screenshot-viewer.png" alt="Synced Viewer: a lecture PDF on the left and its Alt2Obs note on the right, scrolled to the same slide" width="800">
   <br>
-  <em>The Synced Viewer: slide PDF and lecture note side by side, with the transcript panel open.</em>
+  <em>The Synced Viewer: the slide PDF and the lecture note side by side, scrolled to the same slide.</em>
 </p>
 
 ## Features
@@ -139,9 +139,3 @@ A release ships `main.js`, `manifest.json` and `styles.css`; the PDF.js worker i
 
 `main.js` bundles [PDF.js](https://github.com/mozilla/pdf.js) (pdfjs-dist 4.10.38, Mozilla Foundation, Apache License 2.0, its license notice kept in the bundle) to read and render the slide PDFs.
 
-<!--
-Images to capture
-- The README loads its images from raw.githubusercontent.com on the main branch, so a new image shows here only after it is merged to main.
-- docs/assets/screenshot-viewer.png: the Synced Viewer on a slide lecture, PDF on the left and the note on the right at the same slide, toolbar visible with "정렬 기준 동기화 · 전사 매칭", and the transcript panel ("전사 패널") open with a few [mm:ss] lines. About 1600 px wide.
-- docs/assets/screenshot-import.png: the sidebar on the "Alt 노트 목록" tab, a lecture selected with its kind chip ("슬라이드") and status chip, the subject field, and the "가져오기 전 예상 사용량" panel with its model pickers and the "시작" button. Sidebar width, about 840 px tall or more.
--->
