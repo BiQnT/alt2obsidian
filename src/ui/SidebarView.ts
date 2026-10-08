@@ -71,6 +71,8 @@ export class Alt2ObsSidebarView extends ItemView {
   /** Bumped on every refresh so a stale background loop stops. */
   private loadGeneration = 0;
   private busy = false;
+  /** A lecture note's metadata changed since the statuses were read (see onOpen). */
+  private statusesStale = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: Alt2ObsPlugin) {
     super(leaf);
@@ -102,12 +104,31 @@ export class Alt2ObsSidebarView extends ItemView {
     this.verifyPane = container.createDiv({ cls: "alt-to-obs-verify-pane" });
     this.verifyPanel = new VerifyPanel(this.app, this.plugin, this.verifyPane);
     this.verifyPanel.render();
+    // The import's progress, estimate and run panel and messages
+    // (alt-to-obs-import-only) belong to the import tabs: while 노트 검증 is
+    // shown they are hidden as they are, a pending estimate included.
     this.renderProgressSection(container);
-    this.cliPanel = container.createDiv({ cls: "alt-to-obs-cli-panel" });
+    this.cliPanel = container.createDiv({ cls: "alt-to-obs-cli-panel alt-to-obs-import-only" });
     this.cliPanel.hide();
     this.renderMessageSection(container);
     this.renderRecentSection(container);
     this.switchTab(this.tab);
+    // Statuses come from the metadata cache. Restored at startup, the list
+    // can be built before Obsidian has indexed every note (an imported
+    // lecture showed as 새 노트): a lecture note's metadata arriving or
+    // changing marks them stale, and the next "resolved" reads them again
+    // (from the vault only, the list is not fetched from Alt again).
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file, _data, cache) => {
+        const fm = cache.frontmatter;
+        if (fm?.alt_local_id || fm?.alt_id || this.vaultNotes.some((v) => v.path === file.path)) this.statusesStale = true;
+      })
+    );
+    this.registerEvent(
+      this.app.metadataCache.on("resolved", () => {
+        if (this.statusesStale) this.recheckStatuses();
+      })
+    );
     void this.refreshLocal();
   }
 
@@ -136,6 +157,7 @@ export class Alt2ObsSidebarView extends ItemView {
     this.localPane?.toggle(tab === "local");
     this.urlPane?.toggle(tab === "url");
     this.verifyPane?.toggle(tab === "verify");
+    this.containerEl.children[1]?.toggleClass("is-verify-tab", tab === "verify");
     // Lists of notes and lectures may have changed since the tab was built.
     if (tab === "verify") this.verifyPanel?.refreshLists();
   }
@@ -632,6 +654,30 @@ export class Alt2ObsSidebarView extends ItemView {
     void this.loadDetails();
   }
 
+  /**
+   * Statuses read again from the metadata cache once it has caught up (see
+   * onOpen). Only the notes whose status changed are drawn again, so a
+   * subject being typed keeps its field unless that note changed; a note
+   * found imported gets its slide comparison in the details loop.
+   */
+  private recheckStatuses(): void {
+    this.statusesStale = false;
+    if (this.items.length === 0) return;
+    this.vaultNotes = this.plugin.vaultLectureNotes();
+    const key = (s: LocalNoteStatus) => (s.kind === "imported" ? `imported:${s.path}` : s.kind === "link" ? `link:${s.candidates.map((c) => c.path).join("|")}` : s.kind);
+    let changed = false;
+    for (const it of this.items) {
+      const next = this.plugin.localNoteStatus(it.note, this.vaultNotes, it.details?.slidesTitle);
+      if (key(next) === key(it.status)) continue;
+      if (next.kind === "imported" && it.details?.pdfPath) it.details = undefined;
+      it.status = next;
+      changed = true;
+      this.fillItem(it);
+      if (it.note.id === this.selectedId) this.renderFooter();
+    }
+    if (changed) void this.loadDetails();
+  }
+
   private renderInputSection(container: Element): void {
     const section = container.createDiv({ cls: "alt-to-obs-input-section" });
 
@@ -682,7 +728,7 @@ export class Alt2ObsSidebarView extends ItemView {
 
   private renderProgressSection(container: Element): void {
     this.progressContainer = container.createDiv({
-      cls: "alt-to-obs-progress",
+      cls: "alt-to-obs-progress alt-to-obs-import-only",
     });
     this.progressContainer.hide();
 
@@ -698,7 +744,7 @@ export class Alt2ObsSidebarView extends ItemView {
   }
 
   private renderMessageSection(container: Element): void {
-    this.messageContainer = container.createDiv();
+    this.messageContainer = container.createDiv({ cls: "alt-to-obs-import-only" });
   }
 
   private renderRecentSection(container: Element): void {

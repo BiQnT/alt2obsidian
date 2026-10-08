@@ -128,7 +128,7 @@ npm run dev        # development build with an inline source map
 npm run build      # production main.js, plus the Skill's CLI bundles
 npm run lint       # Obsidian's official ESLint rules (eslint-plugin-obsidianmd)
 npm test           # unit tests with fake claude/codex binaries, no tokens spent
-npm run test:dom   # viewer, settings and PDF.js worker in headless Chromium
+npm run test:dom   # viewer, sidebar, settings and PDF.js worker in headless Chromium
 ```
 
 A release ships `main.js`, `manifest.json` and `styles.css`; the PDF.js worker is bundled into `main.js`. `ALT2OBS_SMOKE=1 node test/smoke-cli.mjs` runs each real CLI once (it uses a little of your plan), and [scripts/bench/README.md](https://github.com/BiQnT/alt2obsidian/blob/main/scripts/bench/README.md) describes the token benchmark.

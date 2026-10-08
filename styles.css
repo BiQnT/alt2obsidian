@@ -741,6 +741,10 @@
   gap: 8px;
   margin-bottom: 10px;
 }
+/* The import's progress, estimate and run panel and messages stay with the import tabs. */
+.alt-to-obs-sidebar.is-verify-tab > .alt-to-obs-import-only {
+  display: none;
+}
 .alt-to-obs-field-label {
   font-size: var(--font-ui-smaller);
   font-weight: 600;

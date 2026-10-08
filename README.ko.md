@@ -128,7 +128,7 @@ npm run dev        # 개발 빌드 (인라인 소스 맵)
 npm run build      # 프로덕션 main.js와 스킬용 CLI 번들
 npm run lint       # Obsidian 공식 ESLint 규칙 (eslint-plugin-obsidianmd)
 npm test           # 단위 테스트. 가짜 claude/codex를 써서 토큰을 쓰지 않음
-npm run test:dom   # 헤드리스 Chromium에서 뷰어, 설정 화면, PDF.js 워커 확인
+npm run test:dom   # 헤드리스 Chromium에서 뷰어, 사이드바, 설정 화면, PDF.js 워커 확인
 ```
 
 릴리스 파일은 `main.js`, `manifest.json`, `styles.css` 세 개이고, PDF.js 워커는 `main.js`에 들어 있습니다. `ALT2OBS_SMOKE=1 node test/smoke-cli.mjs`는 실제 CLI를 하나씩 한 번 실행하고(요금제 사용량을 조금 씀), 토큰 벤치마크는 [scripts/bench/README.md](https://github.com/BiQnT/alt2obsidian/blob/main/scripts/bench/README.md)에 설명이 있습니다.

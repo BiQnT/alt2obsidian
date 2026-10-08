@@ -1,5 +1,6 @@
-// Browser stand-in for the parts of the obsidian API the Synced Viewer and
-// the settings tab use (test/dom-viewer.mjs, test/dom-settings.mjs). The
+// Browser stand-in for the parts of the obsidian API the Synced Viewer, the
+// sidebar and the settings tab use (test/dom-viewer.mjs, test/dom-sidebar.mjs,
+// test/dom-settings.mjs). The
 // markdown "renderer" handles what the layout needs: headings, paragraphs,
 // and HTML comment lines (dropped, like Obsidian's reading view). Setting
 // builds the DOM Obsidian 1.14 builds (div.setting-item > div.setting-item-info
@@ -139,6 +140,7 @@ export class PluginSettingTab {
   }
 }
 export class Modal { constructor(app) { this.app = app; this.contentEl = document.createElement("div"); } open() {} close() {} }
+export class FuzzySuggestModal extends Modal { setPlaceholder() {} }
 export const setIcon = () => {};
 export function requireApiVersion(version) {
   const have = (window.obsidianApiVersion ?? "1.12.3").split(".").map(Number);
