@@ -4,7 +4,11 @@
  * layout (overview with a "### 슬라이드 2~3 정리" subheading, alt2obs
  * marker comments). A reader scrolls each pane, edits the note elsewhere
  * (refresh) and re-imports the same pair; neither pane may jump, and the
- * overview subheading must not count as slide 2.
+ * overview subheading must not count as slide 2. Then a viewer is restored
+ * as at startup, before the metadata cache has the note: the alignment
+ * label and the transcript button come once the note's "changed" event
+ * does, and the title bar (written by Obsidian only when the view loads)
+ * names the note like the tab.
  *
  * Needs a Chromium binary, so it is not part of `npm test`:
  *   npm run test:dom                 (finds Playwright's headless shell or Google Chrome)
@@ -166,3 +170,14 @@ assert.equal(during.pdf, 25, "the PDF moved during the load");
 assert.ok(Math.abs(during.mdTop - at("re-import").mdTop) < 5, `the loading note pane was not scrolled (${JSON.stringify(during)})`);
 assert.deepEqual([at("after load").current, at("after load").pdf, at("after load").md], [25, 25, 25], "after the load the note follows the PDF");
 console.log("PASS: Synced Viewer in Chromium: PDF and note follow each other, an edit refresh and a re-import keep both panes, overview subheadings are not slides, close cancels pending work");
+
+// Restored at startup before the metadata cache has the note.
+const ui = (name) => {
+  const { step, ...rest } = at(name);
+  return rest;
+};
+assert.deepEqual(ui("restored, not indexed"), { label: false, transcriptButton: false, titleBar: "L5 (Synced)", tab: "L5 (Synced)" }, "no frontmatter yet: no alignment controls; the title bar names the note too, not just the tab");
+assert.deepEqual(ui("other note indexed"), ui("restored, not indexed"), "another note's metadata is not this note's");
+assert.deepEqual(ui("note indexed"), { label: true, transcriptButton: true, titleBar: "L5 (Synced)", tab: "L5 (Synced)" }, "the note's metadata arrives: alignment label and transcript button");
+assert.match(at("transcript").text, /슬라이드 1 구간.*00:00 - 00:30.*\[00:01\]첫 문장/, "the transcript panel uses the alignment read late");
+console.log("PASS: Synced Viewer restored before the note is indexed: the alignment label and transcript button come with the note's metadata, the title bar and the tab name the note");

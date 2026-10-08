@@ -346,8 +346,7 @@
 .alt-to-obs-settings.alt-to-obs-settings .setting-item {
   flex-direction: row;
   flex-wrap: wrap;
-  column-gap: 12px;
-  row-gap: 6px;
+  gap: 6px 12px;
 }
 
 .alt-to-obs-settings.alt-to-obs-settings .setting-item-info {
@@ -414,6 +413,21 @@
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
   word-break: break-all;
+}
+
+/*
+ * Obsidian 1.13 and later draw the tab from its setting definitions: the
+ * notice, the CLI cards, the model note and the help text are then rows of
+ * a setting group holding a plain block (src/ui/SettingsTab.ts), so the row
+ * is a block box and the group's padding replaces the blocks' own margins.
+ */
+.alt-to-obs-settings.alt-to-obs-settings .setting-item.alt-to-obs-settings-block {
+  display: block;
+}
+
+.setting-item.alt-to-obs-settings-block > * {
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 /* Task rows: provider, model and effort dropdowns (and the custom model field) wrap as needed. */
@@ -726,6 +740,10 @@
   flex-direction: column;
   gap: 8px;
   margin-bottom: 10px;
+}
+/* The import's progress, estimate and run panel and messages stay with the import tabs. */
+.alt-to-obs-sidebar.is-verify-tab > .alt-to-obs-import-only {
+  display: none;
 }
 .alt-to-obs-field-label {
   font-size: var(--font-ui-smaller);

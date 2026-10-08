@@ -27,7 +27,7 @@ var VISUAL_RATIO = 0.3;
 var LOW_TEXT_CHARS = 30;
 var LOW_TEXT_VISUAL_RATIO = 0.08;
 var TOC_LINE = /^(table of contents|contents|목차|차례|outline|agenda)\s*:?$/i;
-var THANKS_LINE = /^(thank you( very much)?|thanks|감사합니다|수고하셨습니다|q\s*&\s*a|questions?|any questions|질문 있나요|the end|끝)\s*[!.?]*$/i;
+var THANKS_LINE = /^(?:(?:thank(?:s| you)(?: (?:very|so) much)?(?: for (?:listening|watching|your attention|your time))?|any questions|questions?(?:\s*(?:&|and)\s*answers?)?|q\s*(?:&|and)\s*a|the end|감사합니다|고맙습니다|수고하셨습니다|(?:경청해|들어)\s*주셔서\s*감사합니다|질문\s*있(?:나요|으신가요|으세요|습니까)|질문(?:과|\s*&)\s*답변|질의\s*응답|질문(?=\s*\?)|끝)[\s!.?,]*)+$/i;
 var COVER_TITLE = /\b(lecture|lec\.?|chapter|week|unit|session)\s*\d+|\b[A-Z]{2,6}\s?-?\d{3,4}[A-Z]?\b|제\s*\d+\s*강|\d+\s*강\b|\d+\s*주차|강의/i;
 var COVER_AFFILIATION = /universit|department|dept\.|school of|college|institute|laborator|\blab\b|professor|prof\.|@[\w.-]+\.[a-z]{2,}|대학|학과|학부|연구실|교수/i;
 var COVER_MAX_CHARS = 1200;
@@ -290,17 +290,50 @@ function selectKeyDiagrams(slides, scanned, max = MAX_KEY_DIAGRAMS) {
     return [];
   return slides.filter((s) => s.kind === "visual" && s.dupOf === null && s.imageRatio !== null && s.imageRatio >= VISUAL_RATIO).sort((a, b) => (b.imageRatio ?? 0) - (a.imageRatio ?? 0) || a.page - b.page).slice(0, max).map((s) => s.page).sort((a, b) => a - b);
 }
-function templateCommentary(slide, deckTitle) {
+var TOC_ITEM_BULLET = /^(?:[-*]\s+|[\u2013\u2014•◼▪■●◦○►§Ø\uE000-\uF8FF]\s*)/;
+var TOC_ITEM_NUMBER = /^\d{1,2}[.)]\s+/;
+var TOC_BARE_NUMBER = /^(\d{1,2})\s+(?=\S)/;
+var PAGE_COUNTER = /^\d+\s*\/\s*\d+$/;
+function escapeMarkdown(text) {
+  return text.replace(/[\\`*_[\]<>#|$~=]/g, "\\$&");
+}
+function repeatedLines(layouts) {
+  const withLines = layouts.filter((l) => l.lines && l.lines.length > 0);
+  const out = /* @__PURE__ */ new Set();
+  if (withLines.length < 4)
+    return out;
+  const counts = /* @__PURE__ */ new Map();
+  for (const l of withLines) {
+    for (const line of new Set(contentLines(l.text, l.lines)))
+      counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  for (const [line, n] of counts)
+    if (n * 2 > withLines.length)
+      out.add(line);
+  return out;
+}
+function templateCommentary(slide, deckTitle, layout, repeated = /* @__PURE__ */ new Set()) {
   if (slide.dupOf !== null) {
-    return `\uB2E4\uC74C \uC2AC\uB77C\uC774\uB4DC\uC640 \uAC19\uC740 \uB0B4\uC6A9\uC785\uB2C8\uB2E4. \uD574\uC124\uC740 [[#\u{1F4DA} \uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}|\uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}]]\uC744 \uBCF4\uC138\uC694.`;
+    return `\uAC19\uC740 \uB0B4\uC6A9\uC774 \uB4A4\uC5D0\uC11C \uC774\uC5B4\uC9C4\uB2E4. \uD574\uC124\uC740 [[#\u{1F4DA} \uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}|\uC2AC\uB77C\uC774\uB4DC ${slide.dupOf}]]\uC5D0 \uC788\uB2E4.`;
   }
   switch (slide.kind) {
     case "cover":
-      return `\uD45C\uC9C0 \uC2AC\uB77C\uC774\uB4DC: **${slide.title || deckTitle}**`;
-    case "toc":
-      return "\uBAA9\uCC28 \uC2AC\uB77C\uC774\uB4DC\uC785\uB2C8\uB2E4. \uC774\uBC88 \uAC15\uC758\uC5D0\uC11C \uB2E4\uB8F0 \uD56D\uBAA9\uC744 \uC18C\uAC1C\uD569\uB2C8\uB2E4.";
+      return `\uD45C\uC9C0: **${slide.title || deckTitle}**`;
+    case "toc": {
+      const lines = contentLines(layout?.text ?? null, layout?.lines).slice(1).filter((l) => !PAGE_COUNTER.test(l) && !repeated.has(l)).map((l) => l.replace(TOC_ITEM_BULLET, "").replace(TOC_ITEM_NUMBER, "").trim());
+      let next = 1;
+      const counted = lines.map((l) => {
+        const n = TOC_BARE_NUMBER.exec(l);
+        if (!n || Number(n[1]) !== next)
+          return false;
+        next++;
+        return true;
+      });
+      const items = lines.map((l, i) => next > 2 && counted[i] ? l.replace(TOC_BARE_NUMBER, "") : l).filter((l) => l.length > 0).map(escapeMarkdown);
+      return items.length > 0 ? `\uB2E4\uB8F0 \uD56D\uBAA9: ${items.join(", ")}` : "\uBAA9\uCC28.";
+    }
     case "thanks":
-      return "\uB9C8\uBB34\uB9AC \uC2AC\uB77C\uC774\uB4DC\uC785\uB2C8\uB2E4.";
+      return "\uAC15\uC758\uB97C \uB9C8\uCE5C\uB2E4.";
     default:
       return null;
   }
@@ -823,7 +856,7 @@ function alignLecture(slideTexts, segments, opts = {}) {
 var DEFAULT_GENERATION = {
   batchSize: 8,
   imageRule: "auto",
-  transcriptCapChars: 600,
+  transcriptCapChars: 1200,
   tokenCapPerLecture: 0,
   saveKeyDiagrams: true,
   onlyChangedSlides: true
@@ -1149,6 +1182,7 @@ function planDeck(input) {
   const n = input.slides.length;
   const chunks = input.transcriptChunks ?? splitTranscriptEvenly(input.transcript, n);
   const runChunks = slideChunks(input.slides, chunks);
+  const repeated = repeatedLines(input.layouts);
   const pool = /* @__PURE__ */ new Map();
   for (const e of input.existing ?? []) {
     if (!pool.has(e.hash))
@@ -1160,14 +1194,14 @@ function planDeck(input) {
   const used = /* @__PURE__ */ new Set();
   const slides = input.slides.map((s, i) => {
     const text = input.layouts[i]?.text ?? "";
-    const template = templateCommentary(s, input.deckTitle);
+    const template = templateCommentary(s, input.deckTitle, input.layouts[i], repeated);
     if (template !== null)
       return { ...s, text, transcript: "", mode: "template", template };
     const candidates = pool.get(s.hash);
     const prev = candidates && candidates.length > 0 ? candidates.shift() : void 0;
     if (prev)
       used.add(prev);
-    if (prev && prev.gist && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal)) {
+    if (prev && prev.gist && s.imageSignal && sameImageSignal(prev.imageSignal, s.imageSignal) && input.reuse !== false) {
       return { ...s, text, transcript: "", mode: "reuse", reused: { commentary: prev.commentary, gist: prev.gist } };
     }
     const compressed = compressTranscript(runChunks[i] || null, text, input.transcriptCapChars);
@@ -1327,7 +1361,7 @@ async function main() {
       layouts,
       transcript: transcriptText,
       transcriptChunks: alignment?.chunks,
-      transcriptCapChars: parseInt(option(args, "--cap") ?? "600", 10),
+      transcriptCapChars: parseInt(option(args, "--cap") ?? "1200", 10),
       batchSize: parseInt(option(args, "--batch") ?? "8", 10),
       deckTitle: option(args, "--title") ?? "",
       existing: existingFile ? parseExistingSlides(readFileSync(existingFile, "utf8")) : void 0

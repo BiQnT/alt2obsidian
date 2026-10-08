@@ -29,7 +29,8 @@
 //                                   features.plugins/apps/multi_agent/memories
 //                                   = false, web_search = "disabled"
 // The global ~/.codex/AGENTS.md has no documented off switch short of moving
-// CODEX_HOME (which would break auth), so it stays; see README.
+// CODEX_HOME (which would break auth), so it stays; see docs/user-guide.md
+// ("LLM connection").
 // Codex has no system prompt flag, so the fixed instructions lead the stdin
 // prompt, which keeps the shared prefix identical across batches.
 
@@ -66,7 +67,7 @@ export const CODEX_TRIM_CONFIG = [
 /**
  * Codex's read-only sandbox still lets the agent read any file the user can
  * read. The first line of every prompt tells it to use only the given
- * content (accepted risk, documented in README and settings).
+ * content (accepted risk, documented in README, docs/user-guide.md and settings).
  */
 export const CODEX_CONTENT_ONLY =
   "Use only the content in this message. Do not run commands, read files, or browse.";

@@ -73,8 +73,12 @@ const LOW_TEXT_VISUAL_RATIO = 0.08;
 
 /** A whole first line that names a table of contents. */
 const TOC_LINE = /^(table of contents|contents|목차|차례|outline|agenda)\s*:?$/i;
-/** A whole line that only says thanks / Q&A / the end. "질문: 왜 ...?" does not match. */
-const THANKS_LINE = /^(thank you( very much)?|thanks|감사합니다|수고하셨습니다|q\s*&\s*a|questions?|any questions|질문 있나요|the end|끝)\s*[!.?]*$/i;
+/**
+ * A whole line of closing and Q&A phrases only, one or several ("Thank you!
+ * Questions?", "감사합니다. 질문?"); a bare "질문" only as "질문?".
+ * "질문: 왜 ...?" and "Thanks to Prof. X" do not match.
+ */
+const THANKS_LINE = /^(?:(?:thank(?:s| you)(?: (?:very|so) much)?(?: for (?:listening|watching|your attention|your time))?|any questions|questions?(?:\s*(?:&|and)\s*answers?)?|q\s*(?:&|and)\s*a|the end|감사합니다|고맙습니다|수고하셨습니다|(?:경청해|들어)\s*주셔서\s*감사합니다|질문\s*있(?:나요|으신가요|으세요|습니까)|질문(?:과|\s*&)\s*답변|질의\s*응답|질문(?=\s*\?)|끝)[\s!.?,]*)+$/i;
 /** Cover: lecture or course title in the first lines ... */
 const COVER_TITLE = /\b(lecture|lec\.?|chapter|week|unit|session)\s*\d+|\b[A-Z]{2,6}\s?-?\d{3,4}[A-Z]?\b|제\s*\d+\s*강|\d+\s*강\b|\d+\s*주차|강의/i;
 /** ... and an author or affiliation line. */
@@ -400,17 +404,80 @@ export function selectKeyDiagrams(slides: SlideInfo[], scanned: boolean, max = M
 
 // ---- template lines for slides that get no LLM call ----
 
-export function templateCommentary(slide: SlideInfo, deckTitle: string): string | null {
+/**
+ * Leading bullet of a contents line. ASCII "-" and "*" need a space after
+ * them ("*args" stays); symbols, en and em dashes and font bullets
+ * (Wingdings "§" and "Ø", private-use glyphs) do not.
+ */
+const TOC_ITEM_BULLET = /^(?:[-*]\s+|[\u2013\u2014•◼▪■●◦○►§Ø\uE000-\uF8FF]\s*)/;
+/** Item number with a period or parenthesis ("1. ", "2) "). */
+const TOC_ITEM_NUMBER = /^\d{1,2}[.)]\s+/;
+/** Item number without one ("1 Intro"): taken off only when the items count 1, 2, 3 ... */
+const TOC_BARE_NUMBER = /^(\d{1,2})\s+(?=\S)/;
+/** A page counter ("2 / 40"). */
+const PAGE_COUNTER = /^\d+\s*\/\s*\d+$/;
+
+/** Markdown and Obsidian syntax in text from the PDF, escaped so it reads as text ("*args", "List<T>", "#include"). */
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_[\]<>#|$~=]/g, "\\$&");
+}
+
+/**
+ * Text lines on more than half of the deck's pages (at least 4 pages with
+ * known lines): running headers and footers such as the course name or the
+ * professor, which a contents page does not list as items.
+ */
+export function repeatedLines(layouts: PageLayout[]): Set<string> {
+  const withLines = layouts.filter((l) => l.lines && l.lines.length > 0);
+  const out = new Set<string>();
+  if (withLines.length < 4) return out;
+  const counts = new Map<string, number>();
+  for (const l of withLines) {
+    for (const line of new Set(contentLines(l.text, l.lines))) counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  for (const [line, n] of counts) if (n * 2 > withLines.length) out.add(line);
+  return out;
+}
+
+/**
+ * Body of a slide that gets no LLM call. The lines talk about the content,
+ * not about the slide; the link label names the target section's heading.
+ * A contents page lists its items when its text lines are known, without
+ * bullets, item numbers, page counters and the deck's `repeated` lines.
+ */
+export function templateCommentary(
+  slide: SlideInfo,
+  deckTitle: string,
+  layout?: PageLayout,
+  repeated: ReadonlySet<string> = new Set()
+): string | null {
   if (slide.dupOf !== null) {
-    return `다음 슬라이드와 같은 내용입니다. 해설은 [[#📚 슬라이드 ${slide.dupOf}|슬라이드 ${slide.dupOf}]]을 보세요.`;
+    return `같은 내용이 뒤에서 이어진다. 해설은 [[#📚 슬라이드 ${slide.dupOf}|슬라이드 ${slide.dupOf}]]에 있다.`;
   }
   switch (slide.kind) {
     case "cover":
-      return `표지 슬라이드: **${slide.title || deckTitle}**`;
-    case "toc":
-      return "목차 슬라이드입니다. 이번 강의에서 다룰 항목을 소개합니다.";
+      return `표지: **${slide.title || deckTitle}**`;
+    case "toc": {
+      const lines = contentLines(layout?.text ?? null, layout?.lines)
+        .slice(1)
+        .filter((l) => !PAGE_COUNTER.test(l) && !repeated.has(l))
+        .map((l) => l.replace(TOC_ITEM_BULLET, "").replace(TOC_ITEM_NUMBER, "").trim());
+      // "1 Intro", "2 Caches": a bare number that continues the count is an item number.
+      let next = 1;
+      const counted = lines.map((l) => {
+        const n = TOC_BARE_NUMBER.exec(l);
+        if (!n || Number(n[1]) !== next) return false;
+        next++;
+        return true;
+      });
+      const items = lines
+        .map((l, i) => (next > 2 && counted[i] ? l.replace(TOC_BARE_NUMBER, "") : l))
+        .filter((l) => l.length > 0)
+        .map(escapeMarkdown);
+      return items.length > 0 ? `다룰 항목: ${items.join(", ")}` : "목차.";
+    }
     case "thanks":
-      return "마무리 슬라이드입니다.";
+      return "강의를 마친다.";
     default:
       return null;
   }

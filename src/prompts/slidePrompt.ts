@@ -29,7 +29,7 @@ export function buildSlidePrompt(
       : "";
   const transcriptBlock =
     transcriptChunk && transcriptChunk.trim()
-      ? `\n\n[해당 구간 음성 전사 (참고용. 그대로 붙여넣지 말고 교수님이 강조한 점만 골라 쓰시오)]\n${transcriptChunk.trim()}`
+      ? `\n\n[해당 구간 음성 전사 (그대로 붙여넣지 말고 교수님이 든 예시, 이유, 비유, 주의점부터 살려 쓰시오)]\n${transcriptChunk.trim()}`
       : "";
   return renderPrompt(slideCommentaryUserTemplate, { slideNum, totalSlides, conceptList, transcriptBlock });
 }

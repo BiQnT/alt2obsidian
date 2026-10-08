@@ -349,6 +349,8 @@ function mergeBoth(existing, next) {
     const plan = await m.planTranscript({ segments: segs2h, sourceId: "note-9" });
     const context = { title: "L9", subjectTags: ["parsing"], knownConcepts: ["캐시"] };
     const est = m.estimateTranscriptSummary(plan, context, "", "claude-cli", "claude-cli", { commentaryEffort: "low", conceptEffort: "low" });
+    // Section output with reasoning: the visible 150 to 800 tokens times 2.4, as the slide refit.
+    assert.deepEqual([m.sectionOutputTokens(0), m.sectionOutputTokens(1000), m.sectionOutputTokens(10000)], [360, 768, 1920]);
     assert.equal(plan.batches.length, 1, "a 2 hour lecture fits one call");
     assert.equal(est.calls, 3);
     assert.equal(est.sectionsGenerated, plan.sections.length);

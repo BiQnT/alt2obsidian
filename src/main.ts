@@ -53,6 +53,7 @@ import {
   describeFilled,
   isCliProvider,
   moveClaudeTasksToCodex,
+  moveOldTranscriptCap,
   parseClaudeModelCatalog,
   parseCodexModels,
   removedProviderMessage,
@@ -66,7 +67,17 @@ import { analyzeSlides, selectKeyDiagrams } from "./core/prep/SlideAnalyzer";
 import { DeckPlan, makeBatches, parseExistingSlides, planDeck, withFewerImages, withTranscriptChunks } from "./pipeline/batchPlan";
 import { estimateLecture, PipelineStep, runBatchedLecture } from "./pipeline/lecturePipeline";
 import type { BatchProgress, LectureContext } from "./generator/BatchCommentaryGenerator";
-import { BudgetEstimate, CallShape, estimateCalls, exceedsCap } from "./core/budget/estimate";
+import {
+  BudgetEstimate,
+  CallShape,
+  CONCEPTS_OUTPUT_TOKENS,
+  estimateCalls,
+  exceedsCap,
+  LECTURE_NOTE_CHARS,
+  LECTURE_NOTE_OUTPUT_TOKENS,
+  textStandIn,
+} from "./core/budget/estimate";
+import { MATERIAL_MAX_CHARS } from "./core/lectureMaterial";
 import conceptExtractionTemplateText from "../prompts/concept-extraction.md";
 import { ConceptExtractor } from "./generator/ConceptExtractor";
 import { insertFrontmatterLine, NoteGenerator, preservedFrontmatterLines, removeFrontmatterLine } from "./generator/NoteGenerator";
@@ -107,14 +118,14 @@ import { MigrationModal } from "./ui/MigrationModal";
 import { normalizeConcepts } from "./core/conceptNames";
 import { decidePdfOpen, isLectureFrontmatter, lectureNoteForPdf } from "./ui/pdfOpen";
 import { renderPrompt } from "./prompts/render";
-import summaryFromTranscriptTemplate from "../prompts/summary-from-transcript.md";
-import summaryFromTranscriptSystemTemplate from "../prompts/summary-from-transcript.system.md";
-import summaryEnhanceTranscriptTemplate from "../prompts/summary-enhance-transcript.md";
-import summaryEnhanceTranscriptSystemTemplate from "../prompts/summary-enhance-transcript.system.md";
-import summaryEnhanceMaterialTemplate from "../prompts/summary-enhance-material.md";
-import summaryEnhanceMaterialSystemTemplate from "../prompts/summary-enhance-material.system.md";
-import summaryFromMaterialTemplate from "../prompts/summary-from-material.md";
-import summaryFromMaterialSystemTemplate from "../prompts/summary-from-material.system.md";
+// The lecture-level note (no slide plan, no transcript sections) is the
+// whole body, so it gets the full-note prompts; the short summary-*.md
+// overviews are for the Skill's slide path only.
+import lectureNoteFromTranscriptTemplate from "../prompts/lecture-note-from-transcript.md";
+import lectureNoteEnhanceTranscriptTemplate from "../prompts/lecture-note-enhance-transcript.md";
+import lectureNoteEnhanceMaterialTemplate from "../prompts/lecture-note-enhance-material.md";
+import lectureNoteFromMaterialTemplate from "../prompts/lecture-note-from-material.md";
+import lectureNoteSystemTemplate from "../prompts/lecture-note.system.md";
 import subjectDetectionTemplate from "../prompts/subject-detection.md";
 
 /** A CLI import after prep and estimate, before any LLM call. */
@@ -245,7 +256,7 @@ export default class Alt2ObsPlugin extends Plugin {
       return new Alt2ObsSidebarView(leaf, this);
     });
 
-    // Register Synced Viewer (Task 1.5 — A2 default)
+    // Register Synced Viewer (Task 1.5, A2 default)
     this.registerView(VIEW_TYPE_SYNCED_VIEWER, (leaf) => {
       return new SyncedViewerView(
         leaf,
@@ -585,7 +596,7 @@ export default class Alt2ObsPlugin extends Plugin {
   }
 
   /**
-   * Phase 1: Preview — scrape page and defer PDF download until import.
+   * Phase 1 (preview): scrape page and defer PDF download until import.
    */
   async previewImport(
     url: string,
@@ -1019,25 +1030,25 @@ export default class Alt2ObsPlugin extends Plugin {
           : "";
 
         altData.summary = await llm.generateText(
-          renderPrompt(summaryFromTranscriptTemplate, {
+          renderPrompt(lectureNoteFromTranscriptTemplate, {
             memoContext,
             transcript: transcriptText,
           }),
           {
-            systemPrompt: renderPrompt(summaryFromTranscriptSystemTemplate, {}),
-            maxOutputTokens: 4096,
+            systemPrompt: renderPrompt(lectureNoteSystemTemplate, {}),
+            maxOutputTokens: 8192,
           }
         );
       } else if (!summaryAlreadyDetailed) {
         onProgress?.("트랜스크립트로 요약 보강 중...", 10);
 
         altData.summary = await llm.generateText(
-          renderPrompt(summaryEnhanceTranscriptTemplate, {
+          renderPrompt(lectureNoteEnhanceTranscriptTemplate, {
             summary: altData.summary,
             transcript: transcriptText,
           }),
           {
-            systemPrompt: renderPrompt(summaryEnhanceTranscriptSystemTemplate, {}),
+            systemPrompt: renderPrompt(lectureNoteSystemTemplate, {}),
             maxOutputTokens: 8192,
           }
         );
@@ -1292,7 +1303,9 @@ export default class Alt2ObsPlugin extends Plugin {
         transcriptCapChars: settings.generation.transcriptCapChars,
         batchSize: batchSizeFor(settings.tasks.commentary.provider, settings.generation.batchSize),
         deckTitle: altData.title,
-        existing: settings.generation.onlyChangedSlides && existingNote ? parseExistingSlides(existingNote) : undefined,
+        // Without reuse the old sections still back up the slides that fail (review H1).
+        existing: existingNote ? parseExistingSlides(existingNote) : undefined,
+        reuse: settings.generation.onlyChangedSlides,
       });
       pdfData = data;
       pdfSource = c.source;
@@ -1405,29 +1418,45 @@ export default class Alt2ObsPlugin extends Plugin {
   }
 
   /**
-   * No PDF: the 1.x lecture-level flow (one transcript pass when there is a
-   * transcript, then concepts), estimated from the same prompt templates.
+   * No slide plan: the 1.x lecture-level flow (runLegacyImport), estimated
+   * from the same prompt templates. Each note call writes the whole note:
+   * one from the transcript when Alt's summary is under 2500 characters,
+   * and one that adds the PDF text when the run gets a PDF (the run reads
+   * it again; one without a text layer skips that call, which the estimate
+   * cannot know). The concepts then read the note. A page read in part gets
+   * one note from the PDF text and no concepts (savePartialNote).
    */
   private estimateLectureLevel(preview: ImportPreview, commentaryTask: TaskLLMSetting, conceptTask: TaskLLMSetting): BudgetEstimate {
     const asProvider = (id: ProviderId | "none"): ProviderId => (id === "none" ? "claude-cli" : id);
     const alt = preview.altData;
     const transcript = (alt.transcript ?? "").slice(0, 15000);
+    const material = this.pdfProcessor && (preview.pdfData || preview.pdfUrl) ? textStandIn(MATERIAL_MAX_CHARS) : null;
+    const noteCall = (template: string, input: string): CallShape => ({
+      promptText: lectureNoteSystemTemplate + template + input,
+      images: 0,
+      outputTokens: LECTURE_NOTE_OUTPUT_TOKENS,
+      schema: false,
+    });
     const calls: CallShape[] = [];
-    if (transcript && alt.summary.length < 2500) {
-      calls.push({
-        promptText: summaryEnhanceTranscriptSystemTemplate + summaryEnhanceTranscriptTemplate + alt.summary + transcript,
-        images: 0,
-        outputTokens: 3000,
-        schema: false,
-      });
+    const conceptCalls: CallShape[] = [];
+    if (alt.parseQuality === "partial") {
+      if (material) calls.push(noteCall(lectureNoteFromMaterialTemplate, alt.summary.slice(0, 4000) + material));
+    } else {
+      // What the concepts read: the last note written, else Alt's summary.
+      let note = alt.summary;
+      if (transcript && alt.summary.length < 2500) {
+        calls.push(noteCall(alt.summary.length < 500 ? lectureNoteFromTranscriptTemplate : lectureNoteEnhanceTranscriptTemplate, alt.summary + transcript));
+        note = textStandIn(LECTURE_NOTE_CHARS);
+      }
+      if (material) {
+        calls.push(noteCall(lectureNoteEnhanceMaterialTemplate, note.slice(0, 18000) + material));
+        // The PDF pass writes up to 8000 characters, or keeps a longer note's length.
+        if (note.length < LECTURE_NOTE_CHARS) note = textStandIn(LECTURE_NOTE_CHARS);
+      }
+      conceptCalls.push({ promptText: conceptExtractionTemplateText + note, images: 0, outputTokens: CONCEPTS_OUTPUT_TOKENS, schema: false });
     }
     const main = estimateCalls(calls, asProvider(commentaryTask.provider), this.estimatedEffort(commentaryTask));
-    // Concepts read the (enhanced) summary: assume about 6000 characters.
-    const concept = estimateCalls(
-      [{ promptText: conceptExtractionTemplateText + "가".repeat(Math.max(alt.summary.length, 6000)), images: 0, outputTokens: 3800, schema: false }],
-      asProvider(conceptTask.provider),
-      this.estimatedEffort(conceptTask)
-    );
+    const concept = estimateCalls(conceptCalls, asProvider(conceptTask.provider), this.estimatedEffort(conceptTask));
     return {
       calls: main.calls + concept.calls,
       inputTokens: main.inputTokens + concept.inputTokens,
@@ -1711,10 +1740,10 @@ export default class Alt2ObsPlugin extends Plugin {
 
   /**
    * The attached PDF next to a note leaves its place: a copy the plugin made
-   * (see `attachedPdfIsCopy`) goes to the trash with the vault's documented
-   * recoverable path (the system trash, else the vault's .trash folder),
-   * never deleted for good; any other file is the user's own and is never
-   * trashed: renamed to a free "<note> (첨부한 PDF).pdf" when `rename` (so an
+   * (see `attachedPdfIsCopy`) is deleted the way the user set Obsidian to
+   * delete files (FileManager.trashFile: the system trash by default, the
+   * vault's .trash folder, or for good); any other file is the user's own
+   * and is never trashed: renamed to a free "<note> (첨부한 PDF).pdf" when `rename` (so an
    * import cannot overwrite it), else left where it is.
    */
   private async releaseAttachedPdf(notePath: string, rename: boolean): Promise<{ pdfPath: string | null; trashed: boolean; keptAt: string | null }> {
@@ -1723,7 +1752,7 @@ export default class Alt2ObsPlugin extends Plugin {
     if (!pdf) return { pdfPath: null, trashed: false, keptAt: null };
     const path = pdf.path;
     if (await this.attachedPdfIsCopy(notePath)) {
-      await this.app.vault.trash(pdf, true);
+      await this.app.fileManager.trashFile(pdf);
       await this.recordCopy(path, null);
       return { pdfPath: path, trashed: true, keptAt: null };
     }
@@ -2384,7 +2413,7 @@ export default class Alt2ObsPlugin extends Plugin {
     summary: string,
     materialContext: LectureMaterialContext
   ): Promise<string> {
-    const prompt = renderPrompt(summaryEnhanceMaterialTemplate, {
+    const prompt = renderPrompt(lectureNoteEnhanceMaterialTemplate, {
       summary: this.truncateForPrompt(summary, 18000),
       pageCount: materialContext.pageCount,
       excerptPageCount: materialContext.pages.length,
@@ -2393,7 +2422,7 @@ export default class Alt2ObsPlugin extends Plugin {
     });
 
     return llm.generateText(prompt, {
-      systemPrompt: renderPrompt(summaryEnhanceMaterialSystemTemplate, {}),
+      systemPrompt: renderPrompt(lectureNoteSystemTemplate, {}),
       maxOutputTokens: 8192,
     });
   }
@@ -2406,7 +2435,7 @@ export default class Alt2ObsPlugin extends Plugin {
     const memoContext = fallbackSummary
       ? `\n[Alt에서 가져온 제한적 내용]\n${this.truncateForPrompt(fallbackSummary, 4000)}\n`
       : "";
-    const prompt = renderPrompt(summaryFromMaterialTemplate, {
+    const prompt = renderPrompt(lectureNoteFromMaterialTemplate, {
       memoContext,
       pageCount: materialContext.pageCount,
       excerptPageCount: materialContext.pages.length,
@@ -2414,7 +2443,7 @@ export default class Alt2ObsPlugin extends Plugin {
     });
 
     return llm.generateText(prompt, {
-      systemPrompt: renderPrompt(summaryFromMaterialSystemTemplate, {}),
+      systemPrompt: renderPrompt(lectureNoteSystemTemplate, {}),
       maxOutputTokens: 8192,
     });
   }
@@ -2545,6 +2574,9 @@ export default class Alt2ObsPlugin extends Plugin {
     // Keep every 1.x value; add the 2.0 per-task settings (spec 4.2).
     const { settings, needsCliDefault, movedTasks, removedFrom, filled } = migrateSettings(saved.settings);
     this.data.settings = settings;
+    // 2.0.2's transcript cap default: a saved 600 (the old default) becomes 1200 once per data, 2.0.0's imported data included.
+    const capMoved = !saved.transcriptCapChecked && moveOldTranscriptCap(settings);
+    this.data.transcriptCapChecked = true;
     // Removed in 2.0.0-beta.4 with the Gemini/Ollama providers.
     delete (this.data as { cliSwitchOffered?: boolean }).cliSwitchOffered;
     // 2.0.0's flags for its own import from this folder mean nothing here.
@@ -2572,12 +2604,14 @@ export default class Alt2ObsPlugin extends Plugin {
     } else if (take) {
       // Unreadable. Not a fresh install: whatever is saved from now on asks for another try next start.
       this.data.altToObsImport = "retry";
+      // Saved now when the transcript cap moved, so the move happens once.
+      if (capMoved) await this.savePluginData();
     } else {
       this.data.altToObsImport = "done";
       // 2.0.0's data left out because this data is newer: told once, with the command that imports it anyway.
       if (found?.state === "ok") this.data.pendingAltToObsKeptNotice = true;
-      // Saved now when this decided something: 2.0.0's older data stays out for good, or nothing is left to retry.
-      if (found || retry) await this.savePluginData();
+      // Saved now when this decided something: 2.0.0's older data stays out for good, nothing is left to retry, or the transcript cap moved.
+      if (found || retry || capMoved) await this.savePluginData();
     }
   }
 

@@ -155,9 +155,20 @@ export class SyncedViewerView extends ItemView {
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (file instanceof TFile && file.path === this.mdPath) {
-          // Don't await — fire-and-forget refresh; observers will rewire.
+          // Don't await: fire-and-forget refresh; observers will rewire.
           void this.refreshMarkdownOnly();
         }
+      })
+    );
+    // Restored at startup, the view can read the note before Obsidian has
+    // indexed it (no frontmatter in the metadata cache yet): the alignment
+    // label and the transcript button stayed hidden. Read the alignment
+    // again when the note's metadata arrives or changes.
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        if (file.path !== this.mdPath) return;
+        this.readAlignment(file);
+        if (this.transcriptOpen) void this.renderTranscript();
       })
     );
   }
@@ -242,7 +253,7 @@ export class SyncedViewerView extends ItemView {
   /**
    * Open the lecture .md in a regular editable Obsidian leaf next to the
    * Synced Viewer. The right markdown pane in this view is a static
-   * `MarkdownRenderer.render` snapshot — read-only by design — so editing
+   * `MarkdownRenderer.render` snapshot (read-only by design), so editing
    * happens in a normal editor leaf and the viewer auto-refreshes via
    * the `vault.on("modify")` listener registered in onOpen.
    */
@@ -360,7 +371,7 @@ export class SyncedViewerView extends ItemView {
   private updatePageInfo(): void {
     if (this.transcriptOpen) void this.renderTranscript();
     if (this.totalPages === 0) {
-      this.pageInfoEl.setText("페이지 —");
+      this.pageInfoEl.setText("페이지 -");
     } else {
       this.pageInfoEl.setText(`페이지 ${this.currentPage} / ${this.totalPages}`);
     }
@@ -371,6 +382,10 @@ export class SyncedViewerView extends ItemView {
   }
 
   private async loadCurrentPair(): Promise<void> {
+    // Obsidian writes an ItemView's title bar once, when the view loads,
+    // before setState names the note (the tab title is redrawn after
+    // setState): name the note there too.
+    this.containerEl.querySelector(":scope > .view-header .view-header-title")?.setText(this.getDisplayText());
     if (!this.mdPath || !this.pdfPath) {
       this.renderEmptyState();
       return;
@@ -465,7 +480,7 @@ export class SyncedViewerView extends ItemView {
   /**
    * Wire click handlers for `.internal-link` (wikilinks) and `.tag` anchors
    * inside the rendered markdown. Without this, links inside a custom
-   * ItemView don't navigate — Obsidian's default link handler only fires
+   * ItemView don't navigate: Obsidian's default link handler only fires
    * on the workspace's own MarkdownView path.
    *
    * Convention: data-href carries the unresolved link text (e.g.

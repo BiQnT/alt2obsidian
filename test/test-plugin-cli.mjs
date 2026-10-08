@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { importTs } from "./helpers/bundle-ts.mjs";
+import { importTs, repo } from "./helpers/bundle-ts.mjs";
 import { FAKE_CLAUDE, FAKE_CODEX, fakeSession } from "./helpers/fake-cli.mjs";
 
 // pdfjs (bundled via PdfProcessor) warns about missing canvas polyfills on load.
@@ -74,8 +74,10 @@ function makeApp() {
       getMarkdownFiles: () => [...files.keys()].filter((p) => p.endsWith(".md")).map(tfile),
       createBinary: async (p, d) => void (files.set(p, "<binary>"), binaries.set(p, d)),
       modifyBinary: async (f, d) => void (files.set(f.path, "<binary>"), binaries.set(f.path, d)),
-      // Obsidian's vault.trash(file, true): the system trash (else .trash), recoverable.
-      trash: async (f, system) => void (assert.equal(system, true, "the system trash"), trashed.push(f.path), files.delete(f.path), binaries.delete(f.path)),
+      // The vault's own trash ignores the user's "Deleted files" setting.
+      trash: async () => {
+        throw new Error("use fileManager.trashFile(file): the user's deletion setting");
+      },
       adapter: {
         getResourcePath: (p) => p,
         exists: async (p) => config.has(p) || [...config.keys()].some((k) => k.startsWith(p + "/")),
@@ -94,10 +96,8 @@ function makeApp() {
       },
     },
     fileManager: {
-      // Obsidian's trash (the user's trash setting): gone from the vault.
-      trashFile: async () => {
-        throw new Error("use vault.trash(file, true): the recoverable trash");
-      },
+      // Obsidian's trash (the user's "Deleted files" setting): gone from the vault.
+      trashFile: async (f) => void (trashed.push(f.path), files.delete(f.path), binaries.delete(f.path)),
       renameFile: async (f, to) => {
         files.set(to, files.get(f.path));
         if (binaries.has(f.path)) binaries.set(to, binaries.get(f.path));
@@ -125,12 +125,13 @@ async function makePlugin(saved, setup, dir = ".obsidian/plugins/alt2obsidian") 
   setup?.(config, mtimes);
   const plugin = new Plugin();
   let stored = saved;
+  let saves = 0;
   const commands = [];
   Object.assign(plugin, {
     app,
     manifest: { dir },
     loadData: async () => stored,
-    saveData: async (d) => void (stored = JSON.parse(JSON.stringify(d))),
+    saveData: async (d) => void (saves++, (stored = JSON.parse(JSON.stringify(d)))),
     registerView: () => {},
     registerEvent: () => {},
     addRibbonIcon: () => {},
@@ -139,7 +140,7 @@ async function makePlugin(saved, setup, dir = ".obsidian/plugins/alt2obsidian") 
     registerEditorExtension: () => {},
   });
   await plugin.onload();
-  return { plugin, files, config, binaries, trashed, commands, stored: () => stored };
+  return { plugin, files, config, binaries, trashed, commands, stored: () => stored, saves: () => saves };
 }
 
 // Deck: cover, 6 content slides (one visual), closing slide.
@@ -419,6 +420,91 @@ console.log("PASS: frontmatter line insert keeps the YAML text as it is");
   console.log("PASS: 2.0.1 on the id alt2obsidian: 2.0.0's alt-to-obs data.json is imported once (read only, without old API keys) when it is newer than this folder's 1.x or beta data, which is kept otherwise (told once, with a command that imports it anyway); 1.1.0 in place saves the check with its next save; the user is told once; an unreadable one is retried on every start; while 2.0.0 is enabled it is warned about and no lecture PDF is redirected; its view tabs are converted once it is off");
 }
 
+// 2.0.2 raised the per-slide transcript cap default from 600 to 1200: a saved 600 (the old default) moves once.
+{
+  const OTHER_DATA = ".obsidian/plugins/alt-to-obs/data.json";
+  // Settings as 2.0.0 and 2.0.1 save them: every generation option written out.
+  const dataWith = (cap) => ({
+    settings: { baseFolderPath: "Lectures", settingsVersion: 3, generation: { batchSize: 8, imageRule: "auto", transcriptCapChars: cap, tokenCapPerLecture: 0, saveKeyDiagrams: true, onlyChangedSlides: true } },
+    recentImports: [],
+  });
+  const v201 = (cap) => ({ ...dataWith(cap), altToObsImport: "done" });
+  const cap = (p) => p.plugin.data.settings.generation.transcriptCapChars;
+
+  // 2.0.1 data at the old default: 1200, saved once at load, marked as done.
+  const moved = await makePlugin(v201(600));
+  assert.equal(cap(moved), 1200, "the old default moves to the new one");
+  assert.equal(moved.saves(), 1, "saved once at load");
+  assert.equal(moved.stored().settings.generation.transcriptCapChars, 1200);
+  assert.equal(moved.stored().transcriptCapChecked, true);
+  assert.equal(moved.stored().settings.baseFolderPath, "Lectures", "nothing else changes");
+  assert.equal(moved.stored().settings.generation.batchSize, 8);
+  // Once only: a 600 the user sets afterwards stays on every later start.
+  moved.plugin.data.settings.generation.transcriptCapChars = 600;
+  await moved.plugin.savePluginData();
+  const chosen = moved.stored();
+  const later = await makePlugin(chosen);
+  assert.equal(cap(later), 600, "a 600 set after the move is the user's");
+  assert.equal(later.saves(), 0, "nothing saved at load");
+  assert.equal(later.stored(), chosen);
+  // Any other saved value stays; the check is saved with the next save.
+  const own = v201(800);
+  const kept = await makePlugin(own);
+  assert.equal(cap(kept), 800, "any other value stays");
+  assert.equal(kept.saves(), 0, "nothing saved at load");
+  assert.equal(kept.stored(), own);
+  kept.plugin.data.settings.generation.transcriptCapChars = 600;
+  await kept.plugin.savePluginData();
+  assert.equal(kept.stored().transcriptCapChecked, true, "the next save keeps the check as done");
+  assert.equal(cap(await makePlugin(kept.stored())), 600, "so a 600 chosen then stays too");
+  // A fresh install: the new default, nothing saved at load.
+  const fresh = await makePlugin(undefined);
+  assert.equal(cap(fresh), 1200);
+  assert.equal(fresh.stored(), undefined);
+  // 1.x data (no generation options): the default.
+  assert.equal(cap(await makePlugin({ settings: { provider: "gemini", baseFolderPath: "Alt2Obsidian" }, recentImports: [] })), 1200);
+
+  // 2.0.0's data (its default was 600) imported on the first start: moved in the import's one save.
+  const imported = await makePlugin(undefined, (config) => config.set(OTHER_DATA, JSON.stringify(dataWith(600))));
+  assert.equal(cap(imported), 1200, "2.0.0's old default moves too");
+  assert.equal(imported.saves(), 1, "one save at load: the import and the move together");
+  assert.equal(imported.stored().settings.generation.transcriptCapChars, 1200);
+  assert.equal(imported.stored().transcriptCapChecked, true);
+  assert.equal(imported.stored().altToObsImport, "done");
+  const imported800 = await makePlugin(undefined, (config) => config.set(OTHER_DATA, JSON.stringify(dataWith(800))));
+  assert.equal(cap(imported800), 800, "2.0.0's own value stays");
+  // 2.0.0's data.json unreadable (retried on every start) and this data at 600: the move is saved at load, the retry stands.
+  const quietWarn = console.warn;
+  console.warn = () => {};
+  const unreadableOther = (config) => config.set(OTHER_DATA, "{ not json");
+  const unreadable = await makePlugin(dataWith(600), unreadableOther);
+  assert.equal(cap(unreadable), 1200);
+  assert.equal(unreadable.saves(), 1, "saved at load, so the move happens once");
+  assert.equal(unreadable.stored().settings.generation.transcriptCapChars, 1200);
+  assert.equal(unreadable.stored().transcriptCapChecked, true);
+  assert.equal(unreadable.stored().altToObsImport, "retry", "2.0.0's data is still tried on the next start");
+  unreadable.plugin.data.settings.generation.transcriptCapChars = 600;
+  await unreadable.plugin.savePluginData();
+  const stillUnreadable = await makePlugin(unreadable.stored(), unreadableOther);
+  assert.equal(cap(stillUnreadable), 600, "a 600 set after the move stays on the next start");
+  assert.equal(stillUnreadable.saves(), 0, "nothing saved at load");
+  assert.equal(stillUnreadable.plugin.data.altToObsImport, "retry");
+  const unreadable800 = await makePlugin(dataWith(800), unreadableOther);
+  assert.equal(cap(unreadable800), 800);
+  assert.equal(unreadable800.saves(), 0, "nothing moved, nothing saved at load");
+  console.warn = quietWarn;
+  // The import command on data already checked (a 600 chosen since): 2.0.0's data replaces it and gets its own check.
+  const command = await makePlugin(chosen, (config) => config.set(OTHER_DATA, JSON.stringify(dataWith(600))));
+  assert.equal(cap(command), 600, "2.0.0 not read: this data was checked for it");
+  const quietNotice = notices.length;
+  await command.plugin.importAltToObsNow();
+  assert.ok(notices.length === quietNotice + 1 && notices[quietNotice].includes("가져왔습니다"), notices[quietNotice]);
+  assert.equal(cap(command), 1200, "2.0.0's 600 is its old default");
+  assert.equal(command.stored().settings.generation.transcriptCapChars, 1200);
+  assert.equal(command.stored().transcriptCapChecked, true);
+  console.log("PASS: 2.0.2 transcript cap: a saved 600 (the old default, also in 2.0.0's imported data) becomes 1200 once and is saved right away; other values, a 600 set later and 1.x data stay; a fresh install gets 1200");
+}
+
 const s = fakeSession("ok");
 const cacheRoot = mkdtempSync(join(tmpdir(), "alt-to-obs-cache-test-"));
 try {
@@ -546,9 +632,9 @@ try {
   assert.equal(record.path, "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.md", "2.0 layout: Lectures/ (spec 4.5)");
   assert.ok(note.startsWith("---\n"));
   // The model the CLI actually ran: the alias "sonnet" comes back as its full id.
-  assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-4-5-20251001", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
+  assert.match(note, /alt2obs_usage: \{provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-5-5", calls: \d+, input: \d+, cached: \d+, output: \d+, images: 1\}/);
   assert.deepEqual(plugin.data.resolvedModels["claude-cli:sonnet"].id, "claude-sonnet-5-5", "the resolved id is recorded for the dropdowns");
-  assert.deepEqual(plugin.data.resolvedModels["claude-cli:haiku"].id, "claude-haiku-4-5-20251001");
+  assert.deepEqual(plugin.data.resolvedModels["claude-cli:haiku"].id, "claude-haiku-5-5");
   assert.match(note, /tags: \[csed311, cache, memory\]/, "no exam period tag (spec G5)");
   assert.equal((note.match(/<!-- alt2obs:meta img:/g) ?? []).length, 6);
   assert.ok(files.has("Alt2Obsidian/CSED311/Concepts/캐시.md"));
@@ -622,6 +708,23 @@ try {
     assert.ok(plugin.data.usageTotals.calls > before2);
     assert.equal(files.get(record.path), snap);
     console.log("PASS: a run with no generated slide writes nothing; usage is recorded even when the update is declined");
+  }
+
+  // "바뀐 슬라이드만 다시 생성" off (restyling a note): every slide is generated again, and one that fails keeps its old commentary (review H1).
+  {
+    plugin.data.settings.generation.onlyChangedSlides = false;
+    files.set(record.path, files.get(record.path).replace("슬라이드 3 해설.", "예전 해설 3."));
+    process.env.FAKE_CLI_MODE = "dropalways:3";
+    const regen = await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311");
+    assert.equal(regen.estimate.slidesReused, 0, "nothing reused");
+    assert.equal(regen.estimate.slidesGenerated, 6);
+    await plugin.runCliImport(regen, { onConfirmUpdate: async () => true });
+    process.env.FAKE_CLI_MODE = "ok";
+    const after = files.get(record.path);
+    assert.ok(after.includes("예전 해설 3."), "the failed slide keeps its old commentary");
+    assert.ok(after.includes("이전 해설을 유지했습니다"), "and is listed as failed");
+    assert.ok(!after.includes("삭제된 슬라이드 (orphan)"), "nothing orphaned");
+    console.log("PASS: with reuse off every slide is generated again; a slide that fails keeps its old commentary");
   }
 
   // Alt local note (spec 4.1, 4.3): timestamped transcript aligned to the
@@ -1033,7 +1136,7 @@ try {
     await plugin.attachPdf(notePath, { kind: "disk", name: "again.pdf", data: pdfBytes });
     assert.match(files.get(notePath).slice(0, files.get(notePath).indexOf("\n---\n", 4)), /\nalt_pdf_source: "attached"(\n|$)/);
     await plugin.detachPdf(notePath);
-    assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf") && trashed.filter((p) => p.endsWith("/L9.pdf")).length === 2, "the attached copy is in the (system) trash");
+    assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf") && trashed.filter((p) => p.endsWith("/L9.pdf")).length === 2, "the attached copy is trashed");
     const fmText = (t) => t.slice(0, t.indexOf("\n---\n", 4));
     assert.ok(!/alt_pdf_source/.test(fmText(files.get(notePath))), "the mark is gone from the frontmatter (the backed-up old note may still mention it)");
     assert.equal(plugin.lectureKindFor({ altType: "note", hasSlides: false, hasTranscript: true, notePath }), "transcript");
@@ -1213,6 +1316,89 @@ try {
     console.log("PASS: URL lecture without a PDF: same choice (untimed summary or attach); a PDF from disk is read into memory, copied, and the import marks the note");
   }
 
+  // The lecture-level note (no slide plan and no transcript sections, or a
+  // page read in part): what the model writes is the whole note body, so it
+  // gets the full-note prompts (lecture-note-*.md), never the short overview
+  // the Skill puts above its slides (summary-*.md), and the concepts are
+  // extracted from that full note.
+  {
+    process.env.FAKE_CLI_MODE = "ok";
+    const overviewShape = "노트 맨 위에 둘 짧은 전체 요약";
+    const system = readFileSync(join(repo, "prompts/lecture-note.system.md"), "utf8").replace(/\n$/, "");
+    const sysOf = (c) => c.argv[c.argv.indexOf("--system-prompt") + 1];
+    const material = { pageCount: 12, pages: [{ pageNum: 2, text: "Flow Control rwnd", score: 1 }], text: "[p.2]\nFlow Control rwnd", extractedCharCount: 17, truncated: false };
+    const lecturePv = (title, noteId, altData = {}) => {
+      const pv = preview();
+      pv.altData = { ...pv.altData, title, ...altData, metadata: { ...pv.altData.metadata, noteId } };
+      return pv;
+    };
+    plugin.pdfProcessor.extractLectureMaterialContext = async () => material;
+    try {
+      // A short Alt summary with a transcript (a preview without its segments): the note
+      // from the transcript, then the PDF's text added with page ranges, then concepts.
+      const prep = await plugin.prepareCliImport("u31", lecturePv("Lec31 Level", "note-31"), "CSED311", undefined, { withoutPdf: "summary" });
+      assert.deepEqual([prep.plan, prep.transcriptPlan], [null, null], "the lecture-level flow");
+      assert.equal(prep.estimate.calls, 3, "the note from the transcript, the PDF text pass and the concepts");
+      const pdfOnly = await plugin.prepareCliImport("u30", lecturePv("Lec30 Level", "note-30", { transcript: null }), "CSED311", undefined, { withoutPdf: "summary" });
+      assert.equal(pdfOnly.estimate.calls, 2, "the PDF text pass and the concepts");
+      // Each note call expects a whole note (up to 8000 characters, about 5,300 tokens) with reasoning, not a 1200-character overview.
+      assert.equal(prep.estimate.outputTokens - pdfOnly.estimate.outputTokens, 12700);
+      const noPdfPv = (title, noteId, altData) => Object.assign(lecturePv(title, noteId, altData), { pdfData: null });
+      const noPdf = await plugin.prepareCliImport("u29", noPdfPv("Lec29 Level", "note-29"), "CSED311", undefined, { withoutPdf: "summary" });
+      assert.equal(noPdf.estimate.calls, 2, "no PDF: the note from the transcript and the concepts");
+      assert.equal(noPdf.estimate.outputTokens, pdfOnly.estimate.outputTokens, "one note call each");
+      // Without a note call the concepts read Alt's summary as it is: 1000 more Hangul, 900 more tokens.
+      const long3 = await plugin.prepareCliImport("u28", noPdfPv("Lec28 Level", "note-28", { transcript: null, summary: "가".repeat(3000) }), "CSED311", undefined, { withoutPdf: "summary" });
+      const long4 = await plugin.prepareCliImport("u27", noPdfPv("Lec27 Level", "note-27", { transcript: null, summary: "가".repeat(4000) }), "CSED311", undefined, { withoutPdf: "summary" });
+      assert.deepEqual([long3.estimate.calls, long4.estimate.inputTokens - long3.estimate.inputTokens], [1, 900]);
+      const n0 = s.calls().length;
+      const rec = await plugin.runCliImport(prep);
+      const calls = s.calls().slice(n0);
+      assert.equal(calls.length, prep.estimate.calls);
+      const [fromTranscript, withMaterial, concepts] = calls;
+      for (const c of [fromTranscript, withMaterial]) {
+        assert.equal(sysOf(c), system);
+        assert.ok(c.stdin.includes("- `## 상세 노트`: 강의 순서대로 주제마다 `### 1. 주제"), "the full-note shape");
+        assert.ok(c.stdin.includes("**혼동하기 쉬운 점:**") && c.stdin.includes("분량은 8000자 이내."), "details and the full-note length cap");
+        assert.ok(!c.stdin.includes(overviewShape) && !c.stdin.includes("1200자"), "not the overview prompt");
+      }
+      assert.ok(fromTranscript.stdin.includes("\n\n[학생 메모]\nAlt 요약입니다.\n\n[강의 전사]\n음 오늘은 캐시를 배웁니다."));
+      assert.ok(fromTranscript.stdin.includes("출처 표시는 달지 않는다"), "no page ranges without the PDF");
+      assert.ok(withMaterial.stdin.includes("`### 1. 주제 (p.3~5)`") && withMaterial.stdin.endsWith("[PDF 강의자료 발췌: 총 12쪽 중 핵심 1쪽, 전체 발췌]\n[p.2]\nFlow Control rwnd"), "page ranges from the excerpt");
+      const firstNote = withMaterial.stdin.match(/\n\[기존 노트\]\n([\s\S]*?)\n\n\[PDF 강의자료 발췌/)[1];
+      assert.match(firstNote, /^## 개요\n- 요약 텍스트 \(호출 \d+\)$/, "the material pass rewrites the note from the transcript");
+      assert.match(concepts.stdin, /\nLecture summary:\n## 개요\n- 요약 텍스트 \(호출 \d+\)$/, "concepts from the whole note");
+      const note = files.get(rec.path);
+      assert.equal(rec.path, "Alt2Obsidian/CSED311/Lectures/Lec31 Level.md");
+      assert.match(note, /\n<!-- alt2obsidian:start -->\n# Lec31 Level\n\n## 개요\n- 요약 텍스트 \(호출 \d+\)\n<!-- alt2obsidian:end -->\n\n## 내 메모\n$/, "the note body is the model's note under the title");
+      // An Alt summary of 500 to 2500 characters: the summary and the transcript together.
+      plugin.pdfProcessor.extractLectureMaterialContext = async () => null;
+      const mid = await plugin.prepareCliImport("u32", lecturePv("Lec32 Level", "note-32", { summary: "Alt가 만든 요약이다. ".repeat(50) }), "CSED311", undefined, { withoutPdf: "summary" });
+      const n1 = s.calls().length;
+      await plugin.runCliImport(mid);
+      const [enhance] = s.calls().slice(n1);
+      assert.equal(sysOf(enhance), system);
+      assert.ok(enhance.stdin.includes("둘을 합쳐 이 강의의 노트 본문 전체를") && enhance.stdin.includes("\n\n[Alt 요약]\nAlt가 만든 요약이다.") && enhance.stdin.includes("분량은 8000자 이내."));
+      assert.ok(!enhance.stdin.includes(overviewShape));
+      // A page read in part, with the PDF's text: the note from the excerpt, under the warning.
+      plugin.pdfProcessor.extractLectureMaterialContext = async () => material;
+      const part = await plugin.prepareCliImport("u33", lecturePv("Lec33 Part", "note-33", { parseQuality: "partial", transcript: null, summary: "제목과 설명뿐" }), "CSED311", undefined, { withoutPdf: "summary" });
+      const n2 = s.calls().length;
+      const partRec = await plugin.runCliImport(part);
+      const partCalls = s.calls().slice(n2);
+      assert.equal(partCalls.length, 1, "no concepts for a partial note");
+      assert.deepEqual([part.estimate.calls, part.estimate.outputTokens], [1, 12700], "estimated as one whole note, no concepts");
+      assert.equal(sysOf(partCalls[0]), system);
+      assert.ok(partCalls[0].stdin.includes("PDF 강의자료 발췌로 이 강의의 노트 본문 전체를") && partCalls[0].stdin.includes("`### 1. 주제 (p.3~5)`") && partCalls[0].stdin.includes("\n[Alt에서 가져온 제한적 내용]\n제목과 설명뿐\n"));
+      assert.ok(!partCalls[0].stdin.includes(overviewShape));
+      assert.match(files.get(partRec.path), /^parse_quality: "partial"$/m);
+      assert.match(files.get(partRec.path), /> \[!warning\] Partial import\n> .*\n\n## 개요\n- 요약 텍스트/);
+    } finally {
+      pdfStub.extractLectureMaterialContext = async () => null;
+    }
+    console.log("PASS: a lecture-level note (no slides, no transcript sections, or a page read in part) is written with the full-note prompts (개요, 핵심 개념, 상세 노트, 8000 characters), never the overview prompt, and its concepts come from the whole note; the estimate counts each note call it makes (PDF text pass included) as a whole note");
+  }
+
   // Model choice for one run (the sidebar's picker): the estimate follows, the settings never change, the note says what ran.
   {
     process.env.FAKE_CLI_MODE = "ok";
@@ -1234,8 +1420,8 @@ try {
     const modelOf = (c) => c.argv[c.argv.indexOf("--model") + 1];
     assert.ok(calls.filter((c) => !c.stdin.includes("concept")).every((c) => modelOf(c) === "claude-opus-5-5"), "commentary and overview on the chosen model");
     assert.ok(calls.some((c) => modelOf(c) === "haiku"), "concepts on the saved model");
-    assert.ok(reported.includes("commentary=claude-opus-5-5") && reported.includes("concepts=claude-haiku-4-5-20251001"), reported.join(", "));
-    assert.match(files.get(rec.path), /alt2obs_usage: \{provider: "Claude CLI claude-opus-5-5", model: "claude-opus-5-5", effort: "high", concept_model: "claude-haiku-4-5-20251001", /);
+    assert.ok(reported.includes("commentary=claude-opus-5-5") && reported.includes("concepts=claude-haiku-5-5"), reported.join(", "));
+    assert.match(files.get(rec.path), /alt2obs_usage: \{provider: "Claude CLI claude-opus-5-5", model: "claude-opus-5-5", effort: "high", concept_model: "claude-haiku-5-5", /);
     assert.equal(JSON.stringify(plugin.data.settings.tasks), saved, "still unchanged after the run");
     assert.equal(plugin.data.resolvedModels["claude-cli:claude-opus-5-5"].id, "claude-opus-5-5");
     // "기본값으로 저장" makes it the saved setting, in the same object the settings tab holds.

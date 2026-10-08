@@ -84,7 +84,9 @@ function answer(stdin, schema) {
       sections.push({ section: num, summary, gist: `구간 ${num}의 요지다` });
     }
     result = { sections };
-  } else if (schema && schema.properties && schema.properties.concepts) {
+  } else if ((schema && schema.properties && schema.properties.concepts) || /\nLecture summary:\n/.test(stdin)) {
+    // Concepts: the 2.0 calls carry the schema; the lecture-level note's call
+    // (prompts/concept-extraction.md) asks for the JSON in its own text.
     result = {
       concepts: [
         { name: "캐시", definition: "자주 쓰는 데이터를 가까이 두는 빠른 메모리. ".repeat(4), lectureContext: "p.2에서 소개.", example: "", caution: "", relatedConcepts: ["캐시 일관성"] },
@@ -302,7 +304,7 @@ function runClaude() {
   if (ms.includes("hang") || hangsForBatch(stdin)) return hang();
   const emit = (ev) => process.stdout.write(JSON.stringify(ev) + "\n");
   // Like the real CLI, an alias runs as the full id it stands for and the result says which.
-  const ALIASES = { fable: "claude-fable-5-1", opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-4-5-20251001" };
+  const ALIASES = { fable: "claude-fable-5-1", opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5" };
   const modelName = ALIASES[flags["--model"]] ?? flags["--model"] ?? "claude-default";
   emit({ type: "system", subtype: "init", model: modelName });
   if (ms.includes("limit")) {

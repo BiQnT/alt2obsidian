@@ -33,11 +33,28 @@ export interface LectureContext {
   knownConcepts: string[];
 }
 
-export const COMMENTARY_LIMITS = { content: 500, visual: 700 } as const;
+/** The prompt's upper bounds: richer slides up to 900 characters (visual 1000), simple ones 100 to 300. */
+export const COMMENTARY_LIMITS = { content: 900, visual: 1000 } as const;
 export const GIST_LIMIT = 60;
-/** Answers are checked with slack: models count characters loosely. */
-const MIN_COMMENTARY_CHARS = 80;
+/**
+ * Answers are checked with slack: models count characters loosely. A slide
+ * whose own text is under 80 characters and that sends no image (a closing,
+ * Q&A, contents or summary slide the analyzer did not template) may get the
+ * one sentence prompt rule 8 asks for, transcript or not: 8 characters, the
+ * length of the template's own "강의를 마친다.". Any other slide needs at
+ * least 40 characters. A junk answer ("내용 없음.", "설명할 내용이 없다.")
+ * fails at any length, so it is asked for again and, failing twice, does not
+ * replace the previous commentary.
+ */
+const MIN_COMMENTARY_CHARS = { thin: 8, normal: 40 } as const;
+const THIN_SLIDE_TEXT_CHARS = 80;
 const MAX_SLACK = 1.6;
+/** An answer that only says there is nothing to explain. */
+const NOTHING_TO_SAY = /^[\s().[\]-]*(?:n\/?a|none|없음|(?:내용|해설|설명|텍스트)[^.]{0,12}(?:없음|없다|없습니다))[\s().[\]]*$/i;
+
+export function minCommentaryChars(s: PlannedSlide): number {
+  return s.textChars < THIN_SLIDE_TEXT_CHARS && !s.sendImage ? MIN_COMMENTARY_CHARS.thin : MIN_COMMENTARY_CHARS.normal;
+}
 
 export const BATCH_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -52,7 +69,7 @@ export const BATCH_SCHEMA: Record<string, unknown> = {
         required: ["slide", "commentary", "gist"],
         properties: {
           slide: { type: "integer", description: "슬라이드 번호" },
-          commentary: { type: "string", description: "마크다운 해설. content 200~500자, visual 700자 이내" },
+          commentary: { type: "string", description: "마크다운 해설. content 900자 이내, visual 1000자 이내" },
           gist: { type: "string", description: "60자 이내 한 줄 요지" },
         },
       },
@@ -126,8 +143,12 @@ export function checkBatchAnswer(
     }
     const commentary = typeof it.commentary === "string" ? it.commentary.trim() : "";
     const limit = s.kind === "visual" ? COMMENTARY_LIMITS.visual : COMMENTARY_LIMITS.content;
-    if (commentary.length < MIN_COMMENTARY_CHARS) {
+    if (commentary.length < minCommentaryChars(s)) {
       failed.set(s.page, `해설이 너무 짧음 (${commentary.length}자)`);
+      continue;
+    }
+    if (NOTHING_TO_SAY.test(commentary)) {
+      failed.set(s.page, "해설 대신 내용이 없다는 답");
       continue;
     }
     if (commentary.length > limit * MAX_SLACK) {

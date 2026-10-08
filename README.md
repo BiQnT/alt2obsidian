@@ -1,559 +1,141 @@
-# Alt2Obs
+<div align="center">
+  <img src="https://raw.githubusercontent.com/BiQnT/alt2obsidian/main/docs/assets/banner.png" alt="Alt2Obs: a pixel Alt key turning into a crystal" width="384">
+  <h1>Alt2Obs</h1>
+  <p><strong>Turn Alt lecture recordings and slides into connected Obsidian notes.</strong></p>
+  <p>
+    <a href="https://github.com/BiQnT/alt2obsidian/blob/main/docs/user-guide.md">User guide</a> ·
+    <a href="https://github.com/BiQnT/alt2obsidian/blob/main/README.ko.md">한국어</a> ·
+    <a href="https://github.com/BiQnT/alt2obsidian/releases">Releases</a> ·
+    <a href="https://github.com/BiQnT/alt2obsidian/issues">Report a bug</a>
+  </p>
+</div>
 
-Import Alt (altalt.io) lecture recordings, transcripts and slides into your Obsidian vault as structured notes, with per-slide commentary, a synced PDF viewer and note checking, using your own Claude Code or Codex CLI.
+Alt2Obs is for students who record their lectures with the [Alt](https://www.altalt.io) app. It reads the lectures in the Alt desktop app on your computer and writes one note per lecture into your vault: a section for every slide, with commentary that your own Claude Code or Codex CLI writes from the slide and the part of the recording that covers it, plus concept notes linked with `[[wikilinks]]`. You study in a viewer that scrolls the PDF and the note together, and your own memos survive every re-import.
 
-Formerly named **Alt2Obsidian**; since 2.0.0 the plugin is named Alt2Obs. Its plugin id is `alt2obsidian`, the id the community directory already lists: 2.0.0 alone was released under the id `alt-to-obs`, and 2.0.1 returned to `alt2obsidian` after a directory admin confirmed the existing id can stay. The GitHub repository keeps the name `alt2obsidian`. The interface and the generated notes are in Korean (concept notes can be English, see the settings). A Korean description follows the English summary.
+The interface and the generated notes are in Korean, with academic terms kept in English. Alt2Obs was named **Alt2Obsidian** before 2.0.0. Its plugin id is `alt2obsidian` (only 2.0.0 used `alt-to-obs`).
 
-## English summary
+<p align="center">
+  <img src="https://raw.githubusercontent.com/BiQnT/alt2obsidian/main/docs/assets/screenshot-viewer.png" alt="Synced Viewer: a lecture PDF on the left and its Alt2Obs note on the right, scrolled to the same slide" width="800">
+  <br>
+  <em>The Synced Viewer: the slide PDF and the lecture note side by side, scrolled to the same slide.</em>
+</p>
 
-**What it does**
+## Features
 
-- Lists the lectures of the Alt desktop app on this computer (read only), or takes a public Alt share link, and writes one note per lecture: a section per PDF slide with commentary that your Claude Code or Codex CLI writes from the slide text (and the image, for diagram slides) and the part of the transcript aligned to that slide, plus concept notes linked with `[[wikilinks]]`. A lecture without slides becomes a summary note with a section per part of the transcript.
-- A re-import keeps your own text and your `> [!note] 내 메모` callouts.
-- A synced viewer shows the PDF and the note side by side and scrolls them together.
-- Note checking compares your own notes (a Markdown file, pasted text, or a Notion page through your Notion MCP) with the slides and the transcript.
+- **Import straight from Alt.** The sidebar lists the lectures of the Alt desktop app on this computer by Alt folder, with search and a status for each one (new, imported, slides changed). No share link is needed, and Alt's summary and memo come along. A public Alt share link works as a fallback.
+- **Commentary for every slide.** Your Claude Code or Codex CLI writes a section per slide from the slide text (plus the image, for diagram slides) and that slide's part of the transcript. Cover, contents and closing slides and repeated animation steps need no model call, and key diagrams can be saved as images into the note.
+- **Transcript matched to slides.** For lectures from the Alt app, a script matches the timestamped transcript to the slides, with no tokens spent, so each slide gets what was said while it was on screen.
+- **Synced Viewer.** The slide PDF and the note side by side, scrolling together. A transcript panel shows the current slide's part of the transcript with `[mm:ss]` times. Opening a lecture PDF opens the viewer.
+- **Lectures without slides.** A lecture with only a recording becomes a summary note with a section for about every 12 minutes, each point stamped with its `[mm:ss]` time. Or attach the lecture PDF and import it as a slide lecture.
+- **Check your own notes.** Compare notes you wrote (a file in the vault, pasted text, or a Notion page through your Notion MCP) with the slides and the transcript. Each claim gets a verdict with links to its evidence, and slides your notes left out are listed.
+- **Memo-safe re-import.** Your `> [!note] 내 메모` (my memo) callouts and anything you write outside the managed blocks stay when you import again, and memos follow their slide when slides are added, removed or reordered. Only changed slides are generated again.
+- **Your model, your budget.** Pick the provider, model and effort (reasoning effort) for each task, or use a preset. Before every run you see the estimated calls, tokens and images, and can switch the model for that run. You can cancel at any point before the note is saved. Actual usage is recorded in the note and in the settings.
+- **Concept notes.** Key concepts become notes named `English (한국어)`, such as `Pipeline Hazard (파이프라인 해저드)`, linked from the commentary and reused across the lectures of a subject.
 
-**Requirements**: desktop Obsidian 1.7.2 or later (used on macOS; Windows and Linux are covered by unit tests only), the Alt desktop app for the local lecture list, and the Claude Code CLI or the Codex CLI, installed and logged in.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/BiQnT/alt2obsidian/main/docs/assets/screenshot-import.png" alt="Alt2Obs sidebar: the Alt note list with lecture kinds and the estimated usage before an import" width="420">
+  <br>
+  <em>Pick a lecture from Alt and see the estimated usage before anything runs.</em>
+</p>
 
-**Network use**
+## Requirements
 
-- Generation and note checking run your own CLI (`claude` or `codex`) as a child process. For each call the CLI sends that call's lecture material to **Anthropic** (Claude Code) or **OpenAI** (Codex) under your account: slide text, slide images for diagram slides, transcript excerpts, Alt's summary and memo, concept names, and for note checking the sentences of your note with their evidence. The plugin itself sends nothing to these services.
-- Notion MCP fetch (optional, note checking): one Claude Code call that may use only the fetch tool of your Notion MCP server, so Claude Code contacts **Notion** (and Anthropic for the model turn).
-- Public link import (optional): the plugin downloads the Alt share page from **altalt.io**, then the slide PDF from the signed link on that page, which points to Alt's slide storage (**Cloudflare R2**, `*.r2.cloudflarestorage.com`; older notes may point to Alt's earlier **Supabase** storage, `*.supabase.co`).
-- Alt's local API is reached on 127.0.0.1 (this computer only).
-- Nothing else: no telemetry, no analytics, no update checks, no ads.
+- **Obsidian 1.7.2 or later, desktop.** The plugin is desktop only. Tested on macOS; Windows and Linux are covered by unit tests only.
+- **The Alt desktop app** on the same computer, for the local lecture list. Without it you can still import from a public Alt share link.
+- **Node 22.13 or later inside Obsidian**, for Node's built-in `node:sqlite`. The plugin uses it to read a copy of Alt's database: while Alt is closed, and while Alt runs, to find synced slide files. To check, open the developer console (Ctrl+Shift+I, or Cmd+Option+I on macOS) and run `process.versions.node`. With an older Node, start Alt before importing; synced slide files may then not be found.
+- **Claude Code or Codex CLI**, installed and logged in. Generation runs on your own plan: a Claude account with Claude Code access (a paid Claude plan or Anthropic API credits), or a ChatGPT plan that includes Codex (or an OpenAI API key).
+- Optional: a Notion account and the Notion MCP in Claude Code, to check notes you keep in Notion.
 
-**Accounts and payment**: the plugin is free. Its main features need an LLM CLI login: a Claude account with Claude Code access (a paid Claude plan or Anthropic API credits) or a ChatGPT plan that includes Codex (or an OpenAI API key). Every call uses your plan's limits or your API usage. Optional: a Notion account for the Notion MCP. Your lectures come from the Alt app and your Alt account; the plugin never signs in to Alt.
+## Install
 
-**Files and programs outside the vault**
+**Community plugins.** Open **Settings → Community plugins** and select **Turn on community plugins** if you see it. Select **Browse**, search for "Alt2Obs", then select **Install** and **Enable**. Updates then arrive through Obsidian's normal plugin updates.
 
-- Alt's data folder (macOS `~/Library/Application Support/alt`, Windows `%APPDATA%\alt`), read only: the local API token and server config, the slide PDFs, and, when Alt is not running, a private copy of Alt's database in a temp folder (removed afterwards). Needed to list and import your lectures without a share link.
-- Before it sends the token to Alt's local API, the plugin checks that the program listening there is Alt: `lsof` and `ps` (macOS), `netstat` and `tasklist` (Windows).
-- The CLIs are found through your login shell (`command -v`), `where` (Windows) and common install folders, and checked with `--version`, `--help`, `claude auth status`, `codex login status` and `claude mcp list/get` (no model calls). Each call runs in a temp folder that is removed afterwards; on Windows a cancelled call is ended with `taskkill`.
-- Read for the model lists: `~/.claude/cache/model-catalog/*-cc.json` (or `$CLAUDE_CONFIG_DIR`) and `~/.codex/models_cache.json` (or `$CODEX_HOME`). For the Notion MCP: `~/.claude/plugins/installed_plugins.json`, a Claude Code plugin's `.mcp.json`, and a large fetch result that Claude Code saved under `~/.claude/projects/**/tool-results/`.
-- Written outside the vault: the transcripts the viewer shows and fetched Notion pages, in the OS cache folder (macOS `~/Library/Caches/alt2obsidian`, Windows `%LOCALAPPDATA%\alt2obsidian\Cache`, Linux `~/.cache/alt2obsidian`), one subfolder per vault, readable only by you. The folder keeps its pre-2.0.0 name so these caches stay in use. Lecture text is kept out of the vault so vault sync does not carry it.
-- Inside the vault's config folder the plugin only reads, never changes, the files of version 2.0.0 (released under the id `alt-to-obs`): `plugins/alt-to-obs/data.json` and the modification times of that file and of the plugin's own `data.json` on the first start (and on later starts until the plugin first saves its data, or while that file could not be read, see below), and `community-plugins.json` with `plugins/alt-to-obs/manifest.json` on every start and whenever a PDF is opened, to know whether 2.0.0 is still enabled.
+**Manually.** Download `main.js`, `manifest.json` and `styles.css` from the [latest release](https://github.com/BiQnT/alt2obsidian/releases/latest) into `<vault>/.obsidian/plugins/alt2obsidian/`, reload Obsidian and enable **Alt2Obs** under **Settings → Community plugins**.
 
-**Install**
+**BRAT.** Add `BiQnT/alt2obsidian` as a beta plugin in [BRAT](https://github.com/TfTHacker/obsidian42-brat) to follow new releases.
 
-1. Community plugins: **Settings → Community plugins → Browse**, search for "Alt2Obs" (listed under the id `alt2obsidian`), install and enable. Installs from there update in place like any listed plugin.
-2. BRAT: add `BiQnT/alt2obsidian` as a beta plugin.
-3. Manually: download `main.js`, `manifest.json` and `styles.css` from a [release](https://github.com/BiQnT/alt2obsidian/releases) into `<vault>/.obsidian/plugins/alt2obsidian/`, reload Obsidian and enable **Alt2Obs**.
+### Upgrading from Alt2Obsidian 1.x or 2.0.0
 
-**Updating from 1.x or a 2.0.0 beta**: no migration. 2.0.1 has the same id and folder (`alt2obsidian`), so it updates in place and keeps your settings, records, hotkeys and open tabs. Only CSS snippets written for the old `alt2obsidian-*` classes need the `alt-to-obs-*` classes (changed in 2.0.0).
+- **From 1.x or a 2.0.0 beta**: the update installs in place (same id and folder) and keeps your settings, records and hotkeys. Notes and memos stay as they are. To move 1.x notes into the 2.0 folder layout, run **Migrate 1.x vault layout** from the command palette. Gemini API and Ollama support is gone; if you need it, stay on [1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0). CSS snippets written for the old `alt2obsidian-*` classes need the `alt-to-obs-*` classes.
+- **From 2.0.0 (id `alt-to-obs`)**: Obsidian treats 2.0.0 and later versions as two separate plugins, both named Alt2Obs. Install the new version, disable 2.0.0 without deleting it, then enable the new version: it imports 2.0.0's settings and records once and tells you so. Then delete 2.0.0 and set any hotkeys again. The [user guide](https://github.com/BiQnT/alt2obsidian/blob/main/docs/user-guide.md#coming-from-200-id-alt-to-obs) has the details.
 
-**Coming from 2.0.0 (id `alt-to-obs`)**: Obsidian treats 2.0.0 and 2.0.1 as two plugins, both listed as "Alt2Obs" (tell them apart by the version). On its first start 2.0.1 imports 2.0.0's settings and records once, read only and without the unused API keys of old versions, unless the `data.json` in its own folder changed later (1.x or a beta used again after 2.0.0); then that data is kept, a one-time notice names the file that was left out, and the command **Import settings from version 2.0.0 (alt-to-obs)** imports it anyway (after a confirmation). After an import it asks you to disable and remove Alt2Obs 2.0.0. If 2.0.0's data file cannot be read, you are told, and every start tries again until it can be read. While 2.0.0 is still enabled, every start shows a warning and neither plugin turns lecture PDFs into the viewer; a 2.0.0 notice asking you to remove "Alt2Obsidian" means 2.0.1, so ignore it. Once 2.0.0 is off, its open tabs are reopened as 2.0.1 views. So: disable 2.0.0, enable 2.0.1, and delete 2.0.0 only after the import notice; a deleted 2.0.0 folder cannot be imported. Notes, note markers and the default folder `Alt2Obsidian/` stay the same; hotkeys set on 2.0.0's commands need to be set again.
+## Quick start
 
-Open source under the [MIT License](LICENSE). No ads, no telemetry. `main.js` bundles [PDF.js](https://github.com/mozilla/pdf.js) (pdfjs-dist 4.10.38, Mozilla Foundation, Apache License 2.0, its license notice kept in the bundle) to read and render the slide PDFs.
+1. Install Claude Code or Codex and log in once in a terminal (`claude`, or `codex login`).
+2. Enable Alt2Obs and open **Settings → Alt2Obs**. The **LLM 연결** (LLM connection) cards should show your CLI with its path and version.
+3. Select the book icon in the ribbon (**Alt 강의 가져오기**, import an Alt lecture) to open the sidebar. In the **Alt 노트 목록** (Alt note list) tab, pick a lecture and check its subject.
+4. Select **가져오기** (import), review the estimated usage, then select **시작** (start).
+5. The note opens in the Synced Viewer. Write your own notes in the `> [!note] 내 메모` callout under each slide.
 
----
+The [user guide](https://github.com/BiQnT/alt2obsidian/blob/main/docs/user-guide.md) covers every option, lectures without slides, note checking and troubleshooting.
 
-## 한국어
+## Privacy and disclosures
 
-2.0.0부터 이름이 Alt2Obs입니다(이전 이름 Alt2Obsidian). 플러그인 id는 커뮤니티 플러그인 목록에 이미 있는 `alt2obsidian`입니다. 2.0.0만 id `alt-to-obs`로 나왔고, 목록 관리자가 기존 id를 그대로 써도 된다고 확인해 2.0.1에서 `alt2obsidian`으로 되돌렸습니다. 이름은 목록이 "Obsidian"이 들어간 이름을 받지 않아 바꿨고, GitHub 저장소 이름은 그대로 `alt2obsidian`입니다.
+Alt2Obs has no telemetry, analytics, ads or update checks. This is everything it sends, needs and touches outside your vault.
 
-Alt(altalt.io) 강의 노트를 Obsidian에 자동으로 가져오는 플러그인입니다.
+### Network use
 
-컴퓨터에 설치된 Claude Code CLI나 Codex CLI로 강의 슬라이드 1장당 한국어 해설을 만들고, 슬라이드 없이 녹음 전사만 있는 강의는 전사 구간별 요약 노트로 만들며, 핵심 개념을 `[[Wikilink]]`와 `#태그`로 네트워크화하고, PDF와 노트를 좌우 동기 스크롤로 보여주는 전용 뷰어를 제공합니다.
+- **Anthropic (Claude Code) or OpenAI (Codex).** Commentary, summaries, concept extraction, the optional alignment check and note checking run your own CLI (`claude` or `codex`) as a child process. Each call sends its material to Anthropic or OpenAI under your account. The plugin itself sends nothing to these services. A call can include:
+  - slide text, and slide images for diagram slides;
+  - transcript excerpts, and Alt's summary and memo;
+  - the lecture title and subject, concept names, and the tags already used by notes in that subject folder (including notes you wrote yourself);
+  - for note checking, the sentences of your note with their evidence.
+- **Notion (optional, note checking).** Fetching a Notion page is one Claude Code call that may use only the fetch tool of your Notion MCP server. Claude Code contacts Notion for the page and Anthropic for the model turn. The page URL and the page content reach Anthropic; the content arrives as that call's tool result.
+- **Other MCP servers (Notion only).** Before the fetch, `claude mcp list` checks the connection of every MCP server configured in Claude Code; this can start local servers and contact remote ones. When the Notion server cannot be passed to the call on its own (a claude.ai connector, or a server that is not a plain `https` address without headers), the fetch call also starts your other MCP servers, with their tools blocked.
+- **altalt.io and the slide link (optional, share link import).** The plugin downloads the Alt share page from altalt.io. It then downloads the slide PDF from the slide link on that page, as given. Today that link points to Alt's Cloudflare R2 storage (`*.r2.cloudflarestorage.com`); older Alt notes may point to Alt's earlier Supabase storage (`*.supabase.co`).
+- **Alt's local API** is reached on 127.0.0.1, on this computer only.
+- The plugin makes no other connections. Claude Code and Codex may also contact their own services as their own settings allow.
 
-> **2.0.1**: 기능은 2.0.0과 같고 플러그인 id를 `alt2obsidian`으로 되돌린 버전입니다(아래 2.0.1 참고). 2.0.0은 2.0.0-beta.1부터 beta.6까지의 변경을 모은 정식 버전입니다. 1.x의 Gemini 방식이 필요하면 [v1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0)을 쓰세요. 처음에는 vault 사본에서 써 보길 권합니다.
+### Accounts and payment
 
-### 확인한 환경
+The plugin is free. Its main features need an LLM CLI login: a Claude account with Claude Code access (a paid Claude plan or Anthropic API credits) or a ChatGPT plan that includes Codex (or an OpenAI API key). Every call counts against your plan's limits or your API usage. Optional: a Notion account for the Notion MCP. Your lectures come from the Alt app and your Alt account; the plugin never signs in to Alt.
 
-| 항목 | 버전 |
-|---|---|
-| OS | macOS (Windows, Linux는 단위 테스트만) |
-| Obsidian 최소 버전 | 1.7.2 (쓰는 API의 `@since` 기준. 실제로 확인한 버전은 아래 줄) |
-| Obsidian | 1.14.4 (앱 코드, 설치본은 1.12.4. 설정 화면과 사이드바는 1.14.4의 app.css로 다시 그려 확인) |
-| Alt | 0.14.0 (로컬 데이터베이스 읽기 확인, 2026-10-06) / 0.12.0 (로컬 API 확인) |
-| Claude Code CLI | 2.1.291 (모델 id와 별칭은 2026-10-06 실제 호출로 확인) |
-| Codex CLI | 0.155.1 |
+### Files and programs outside the vault
 
-### 알려진 한계
+- **Alt's data folder**, read only: macOS `~/Library/Application Support/alt`, Windows `%APPDATA%\alt`, Linux `$XDG_CONFIG_HOME/alt` or `~/.config/alt`, or the folder set in the settings. This is needed to list and import your lectures without a share link. The plugin reads:
+  - the local API token and server config (`http-server-token`, `storage-httpServer.json`) and the signed-in account (`storage-desktopSync.json`). The token is kept in memory only.
+  - Alt's database, through a private copy in the OS temp folder. The copy is made when Alt's local API cannot be used (Alt closed, its local server off, or the port check below failed), and while Alt runs, to find the local path of synced slide files. It is kept until the plugin reconnects to Alt or is disabled, then removed. A copy left behind by a crash is removed by a later copy once it is an hour old.
+  - the slide PDF files at the paths Alt records for them (normally inside Alt's data folder).
+- **Alt's port.** Before the token is sent to Alt's local API, the plugin checks that the program listening there is Alt, run by you: `lsof` and `ps` (macOS), `/proc` (Linux), `netstat` and `tasklist` (Windows).
+- **Finding the CLIs.** The plugin runs your login shell as `$SHELL -ilc 'command -v claude'` (or `codex`; `/bin/zsh` when `$SHELL` is unset), which loads your shell startup files such as `.zshrc`. On Windows it runs `where`. It also looks in common install folders.
+- **Checking the CLIs** (no model calls): `--version`, `--help`, `claude auth status`, `codex login status`, and for Notion `claude mcp list` and `claude mcp get`.
+- **Running the CLIs.** Each call runs in a temp folder that is removed afterwards. On Windows an npm-installed CLI is started with `node.exe`, and a cancelled call is ended with `taskkill`.
+- **What the CLIs may do.** Claude Code runs with all its tools turned off; the only exception is the Notion fetch call, which may use the Notion fetch tool and nothing else. Codex runs in its read-only sandbox, which can still read files your account can read. The prompt tells it to use only the material it is given, but choose Codex only if you accept that.
+- **Read for the model lists:** `~/.claude/cache/model-catalog/*-cc.json` (or under `$CLAUDE_CONFIG_DIR`) and `~/.codex/models_cache.json` (or under `$CODEX_HOME`).
+- **Read for the Notion MCP:** `~/.claude/plugins/installed_plugins.json` (or, without it, a walk of `~/.claude/plugins`), and a Claude Code plugin's `.mcp.json` and `.claude-plugin/plugin.json`. Claude Code may keep a large fetch result as a file under `~/.claude/projects/`; the plugin reads it but does not remove it.
+- **Written outside the vault:** the transcripts the viewer shows and fetched Notion pages, in the OS cache folder (macOS `~/Library/Caches/alt2obsidian`, Windows `%LOCALAPPDATA%\alt2obsidian\Cache`, Linux `$XDG_CACHE_HOME/alt2obsidian` or `~/.cache/alt2obsidian`), one subfolder per vault. Lecture text is kept out of the vault so vault sync does not carry it.
+- **Cache permissions.** On macOS and Linux the cache folders and files are created readable only by you (permissions 0700 and 0600). Windows does not apply these permissions; there the files have the usual access of your user profile folder.
 
-- **슬라이드 없는 강의의 요약 노트**: 녹음 전사(음성 인식)만으로 만들어서, 전사가 적거나 잘못 알아들은 구간은 요약도 비거나 틀릴 수 있습니다. URL로 가져온 전사에는 시각이 없어 구간에 시각이 없고 노트 검증을 쓸 수 없습니다. 요약 노트에 PDF를 첨부해 슬라이드 노트로 바꾸면 예전 요약과 내 메모는 '이전 노트 백업'에 남고, 메모는 직접 옮겨야 합니다. 옵시디언 화면(PDF 고르기 창, 사이드바 버튼)은 아직 실제 옵시디언에서 확인하지 않았습니다.
-- **Windows, Linux**: 실제 PC에서는 확인하지 않았습니다. Windows의 CLI 실행 경로(`where`, npm `.cmd` 실행, `taskkill`)와 Alt 소유 확인(`netstat`, `tasklist`)은 단위 테스트로만 확인했습니다.
-- **2.0.1의 id 되돌림과 PDF.js 워커 내장**: 2.0.0(`alt-to-obs`) 데이터 가져오기, 두 플러그인이 함께 켜져 있을 때의 경고, 2.0.0 탭 바꾸기는 가짜 vault 테스트로, `main.js`에 넣은 PDF.js 워커는 헤드리스 Chromium 테스트(텍스트 추출, 렌더)로 확인했습니다. 실제 옵시디언에서의 확인은 아직입니다.
-- **Notion MCP**: 직접 추가한 Notion 서버만 실제 호출로 확인했습니다. claude.ai 커넥터와 플러그인이 제공하는 서버는 가짜 CLI 테스트로만 확인했습니다.
-- **전사 정렬 정확도**: 초안 라벨 기준 수치이며(아래 2.0.0-beta.2 참고), 라벨 확인이 남아 있습니다.
-- **토큰**: 141분, 46장 강의 기준 Claude CLI 예상 입력은 약 7.3만 토큰으로, 1.1.0 Gemini 방식 예상치(약 10.8만)의 68%입니다. 실측 벤치마크는 아직입니다.
+### The vault's config folder
 
-## 네트워크, 계정, vault 밖 파일 (공개 안내)
+The plugin reads, and never changes, the files that version 2.0.0 (released under the id `alt-to-obs`) left in the vault's config folder (`.obsidian` by default):
 
-Obsidian 개발자 정책에 따라 이 플러그인이 쓰는 외부 서비스, 필요한 계정, vault 밖에서 읽고 쓰는 파일을 밝힙니다.
+- **On the first start:** `plugins/alt-to-obs/data.json`, and the modification times of that file and of the plugin's own `data.json`. Later starts read them again until the plugin first saves its data, or while 2.0.0's file cannot be read. The command **Import settings from version 2.0.0 (alt-to-obs)** reads 2.0.0's file again when you run it.
+- **On every start and whenever a PDF is opened:** `community-plugins.json` and `plugins/alt-to-obs/manifest.json`, to know whether 2.0.0 is still enabled.
 
-**네트워크**
+## Documentation
 
-- **Anthropic(Claude Code) 또는 OpenAI(Codex)**: 해설, 요약, 개념 추출, 전사 정렬 확인, 노트 검증은 사용자가 설치한 `claude`나 `codex` 프로그램을 자식 프로세스로 실행해 만듭니다. 호출마다 CLI가 그 호출의 자료(슬라이드 텍스트, 도표 슬라이드의 이미지, 전사 발췌, Alt 요약과 메모, 개념 이름, 노트 검증이면 내 노트의 문장과 근거)를 사용자 계정으로 해당 회사에 보냅니다. 플러그인이 직접 보내는 것은 없습니다.
-- **Notion(선택)**: 노트 검증에 노션 URL을 넣으면 Notion MCP 조회 도구 하나만 쓸 수 있는 Claude Code 호출을 한 번 하고, 이때 Claude Code가 Notion(과 모델 호출을 위해 Anthropic)에 접속합니다.
-- **altalt.io, Cloudflare R2(선택)**: 공개 링크로 가져올 때 altalt.io에서 Alt 공유 페이지를 내려받고, 그 페이지에 있는 서명된 링크에서 슬라이드 PDF를 내려받습니다. 이 링크는 Alt의 슬라이드 저장소를 가리킵니다(지금은 Cloudflare R2, `*.r2.cloudflarestorage.com`. 오래된 노트는 예전 저장소인 Supabase, `*.supabase.co`일 수 있음).
-- Alt의 로컬 API는 이 컴퓨터 안(127.0.0.1)에서만 씁니다.
-- 그 밖의 네트워크 사용은 없습니다. 텔레메트리, 사용 통계 수집, 업데이트 확인, 광고가 없습니다.
+- [User guide](https://github.com/BiQnT/alt2obsidian/blob/main/docs/user-guide.md) ([한국어](https://github.com/BiQnT/alt2obsidian/blob/main/docs/user-guide.ko.md)): setup, importing, the generated notes, the Synced Viewer, note checking, settings, troubleshooting and FAQ.
+- [README in Korean](https://github.com/BiQnT/alt2obsidian/blob/main/README.ko.md)
+- Changelog: [GitHub releases](https://github.com/BiQnT/alt2obsidian/releases), and [CHANGELOG.md](https://github.com/BiQnT/alt2obsidian/blob/main/CHANGELOG.md) for a condensed history of every version from 1.x on.
+- For contributors: the [2.0 spec](https://github.com/BiQnT/alt2obsidian/blob/main/docs/specs/2.0.0-spec.md) (Korean), and the [`/alt2obs` Claude Code Skill](https://github.com/BiQnT/alt2obsidian/blob/main/scripts/phase2/README.md), which imports a lecture from a Claude Code session with the same prompts and note format.
 
-**계정과 비용**: 플러그인은 무료입니다. 주요 기능에는 LLM CLI 로그인이 필요합니다: Claude Code를 쓸 수 있는 Claude 계정(유료 Claude 요금제나 Anthropic API 크레딧) 또는 Codex를 쓸 수 있는 ChatGPT 요금제(또는 OpenAI API 키). 모든 호출은 사용자의 요금제 한도나 API 사용량을 씁니다. Notion MCP를 쓰려면 Notion 계정이 필요합니다(선택). 강의는 Alt 앱과 Alt 계정의 것이고, 플러그인이 Alt에 로그인하지는 않습니다.
-
-**vault 밖에서 읽는 파일과 실행하는 프로그램**
-
-- **Alt 데이터 폴더**(macOS `~/Library/Application Support/alt`, Windows `%APPDATA%\alt`, 설정에서 바꿀 수 있음)를 읽기만 합니다: 로컬 API 토큰과 서버 설정, 슬라이드 PDF, 그리고 Alt가 꺼져 있을 때는 Alt 데이터베이스를 임시 폴더에 복사한 사본(쓰고 나서 지움). 공유 링크 없이 이 컴퓨터의 강의 목록을 보여 주고 가져오는 데 필요합니다.
-- Alt 로컬 API에 토큰을 보내기 전에 그 포트에서 듣는 프로그램이 Alt인지 확인합니다: `lsof`, `ps`(macOS), `netstat`, `tasklist`(Windows).
-- **CLI**: 로그인 셸의 `command -v`, Windows의 `where`, 흔한 설치 폴더에서 찾고 `--version`, `--help`, `claude auth status`, `codex login status`, `claude mcp list/get`으로 확인합니다(모델 호출 없음). 호출은 vault 밖 임시 폴더에서 실행하고 끝나면 지웁니다. Windows에서 취소하면 `taskkill`로 끝냅니다.
-- **모델 목록**: `~/.claude/cache/model-catalog/*-cc.json`(또는 `$CLAUDE_CONFIG_DIR`), `~/.codex/models_cache.json`(또는 `$CODEX_HOME`)을 읽습니다. **Notion MCP**: `~/.claude/plugins/installed_plugins.json`, Claude Code 플러그인의 `.mcp.json`, Claude Code가 큰 조회 결과를 저장한 `~/.claude/projects/**/tool-results/` 파일을 읽습니다.
-- **vault 밖에 쓰는 파일**: Synced viewer의 전사 패널용 전사와 가져온 Notion 페이지를 OS 캐시 폴더(macOS `~/Library/Caches/alt2obsidian`, Windows `%LOCALAPPDATA%\alt2obsidian\Cache`, Linux `~/.cache/alt2obsidian`)에 vault별로 저장합니다(본인만 읽을 수 있는 권한). 강의 텍스트가 vault 동기화에 실리지 않게 하려는 것이고, 2.0.0의 이름 변경 뒤에도 폴더 이름을 그대로 두어 캐시를 계속 씁니다.
-- vault 설정 폴더의 파일은 읽기만 하고 바꾸지 않습니다: id `alt-to-obs`로 나온 2.0.0의 `plugins/alt-to-obs/data.json`은 처음 켤 때(플러그인이 데이터를 처음 저장하기 전까지, 또는 읽지 못했다면 읽힐 때까지 켤 때마다) 읽고, 이때 그 파일과 이 플러그인 `data.json`의 수정 시각을 비교합니다. `community-plugins.json`과 `plugins/alt-to-obs/manifest.json`은 2.0.0이 켜져 있는지 보려고 켤 때마다와 PDF를 열 때마다 읽습니다(아래 2.0.1 참고).
-
-광고, 텔레메트리가 없고 소스는 [MIT 라이선스](LICENSE)로 공개되어 있습니다.
-
-## 2.0.1에서 바뀐 점
-
-- **플러그인 id를 `alt2obsidian`으로 되돌림**: 커뮤니티 플러그인 목록 관리자가 목록에 이미 있는 id `alt2obsidian`을 그대로 써도 된다고 확인해(2026-10-07) 2.0.0의 id `alt-to-obs`를 되돌렸습니다. 이름은 그대로 **Alt2Obs**이고 기능은 2.0.0과 같습니다. 플러그인 폴더는 다시 `<vault>/.obsidian/plugins/alt2obsidian/`입니다.
-  - 1.x나 2.0.0 베타에서 올리면 옮길 것이 없습니다. id와 폴더가 같아 그 자리에서 업데이트되고 설정, 기록, 단축키, 열린 탭이 그대로입니다. 예전 `alt2obsidian-*` 클래스를 쓰는 CSS 스니펫만 `alt-to-obs-*`로 고치세요(2.0.0에서 바뀜).
-  - 2.0.0을 쓰던 vault: 옵시디언은 2.0.0과 2.0.1을 서로 다른 플러그인으로 다룹니다(목록에 둘 다 'Alt2Obs'로 보이고 버전으로 구별). 2.0.1을 처음 켜면 2.0.0의 `<설정 폴더>/plugins/alt-to-obs/data.json`을 한 번 가져와 바로 저장합니다. 가져오는 때는 2.0.1 폴더에 데이터가 없을 때와, 2.0.0의 data.json이 2.0.1 폴더의 data.json보다 나중에 바뀌었을 때입니다(1.x나 베타에서 2.0.0으로 옮겨 이어 쓴 경우. 수정 시각을 알 수 없으면 가져옴). 2.0.1 폴더의 data.json이 더 나중에 바뀌었으면(2.0.0 뒤에 1.x나 베타를 다시 쓴 경우) 그 데이터를 그대로 쓰고 2.0.0 데이터는 다시 보지 않습니다. 이때 한 번, 가져오지 않은 파일(`plugins/alt-to-obs/data.json`)을 알리고, 그래도 가져오려면 명령 **Import settings from version 2.0.0 (alt-to-obs)**를 실행하라고 안내합니다(확인 후 지금 설정과 기록을 2.0.0의 것으로 바꿈). 이 판단은 한 번만 하고 데이터의 `altToObsImport`에 남깁니다. `settingsVersion`은 2.0.0-beta.4부터 2.0.0까지 모두 3이라 구별에 쓸 수 없습니다.
-  - 가져올 때 예전 API 키(`apiKey`, `geminiApiKey`, `claudeApiKey`)는 빼고, 첨부 기록은 가져옵니다. 2.0.0 폴더는 읽기만 하고 바꾸거나 지우지 않습니다. 그 파일이 있는데 읽지 못하면 알리고, 읽힐 때까지 켤 때마다 다시 시도해 읽히면 그 사이 저장한 설정 대신 그 내용을 씁니다. 파일이 없어지면 더 시도하지 않습니다.
-  - 가져온 뒤 한 번, 버전이 2.0.0인 Alt2Obs를 끄고 삭제하라는 알림이 뜹니다. 2.0.0이 아직 켜져 있으면 켤 때마다 경고하고, 그동안은 두 플러그인 모두 강의 PDF를 뷰어로 바꾸지 않습니다(2.0.0은 id `alt2obsidian` 플러그인이 켜져 있으면 PDF를 그쪽에 맡기기 때문). 2.0.0이 'Alt2Obsidian을 끄고 삭제하라'고 알리면 2.0.1을 가리키는 것이니 따르지 마세요.
-  - 뷰 종류는 1.x, 베타와 같은 `alt2obsidian-sidebar`, `alt2obsidian-synced-viewer`로 돌아가 2.0.0의 뷰와 겹치지 않습니다. 2.0.0이 꺼져 있으면 2.0.0의 뷰 종류(`alt-to-obs-sidebar`, `alt-to-obs-synced-viewer`)로 남은 탭을 같은 상태의 2.0.1 뷰로 바꿉니다. CSS 클래스는 2.0.0과 같은 `alt-to-obs-*`입니다.
-  - 명령 id는 1.x, 베타와 같은 `alt2obsidian:...`입니다. 2.0.0 명령(`alt-to-obs:...`)에 단축키를 지정했다면 다시 지정하세요.
-  - 2.0.1 파일을 2.0.0의 `alt-to-obs` 폴더에 덮어 넣었다면 그 폴더가 2.0.1의 폴더이므로 가져오지 않고 삭제하라고도 하지 않습니다.
-  - 스킬은 `<vault>/.obsidian/plugins/alt2obsidian/data.json`에 `altToObsImport`가 있거나 `alt-to-obs/data.json`이 없을 때 그 파일을 읽고, 아니면(2.0.1이 아직 가져오지 않음) `alt-to-obs/data.json`을 읽습니다.
-  - `npm run lint`의 manifest 규칙은 모든 검사를 그대로 하고, id에 "obsidian"이 들어 있다는 지적만 이 id에 한해 넘깁니다(목록 관리자 확인).
-
-## 2.0.0에서 바뀐 점
-
-- **이름 변경: Alt2Obs (id `alt-to-obs`)**: Obsidian 커뮤니티 플러그인 목록에 올리려고 이름과 id를 바꿨습니다(id에 "obsidian"을 쓸 수 없음). 옵시디언은 새 id를 새 플러그인으로 다룹니다. 2.0.1에서 id는 `alt2obsidian`으로 되돌렸습니다(위 2.0.1 참고). 아래는 2.0.0 당시의 내용입니다.
-  - Alt2Obs를 처음 켜면, 아직 자기 데이터가 없고 이전 플러그인의 `<설정 폴더>/plugins/alt2obsidian/data.json`이 있을 때 그 설정과 기록(CLI 경로, 사용량, 최근 노트, 첨부 기록)을 한 번 가져와 저장합니다. 예전 버전의 API 키(`apiKey`, `geminiApiKey`, `claudeApiKey`)는 쓰지 않으므로 가져오지 않습니다. 이전 폴더는 읽기만 하고 바꾸거나 지우지 않습니다.
-  - 그 파일이 있는데 읽지 못하면 알리고, 새로 설치한 것으로 보지 않습니다: 읽힐 때까지 켤 때마다 다시 시도하고, 읽히면 그 사이 저장한 설정 대신 그 내용을 씁니다. 파일이 없어지면 더 시도하지 않습니다.
-  - 가져온 뒤 한 번, 이전 **Alt2Obsidian**을 끄고 삭제하라는 알림이 뜹니다. 이전 플러그인이 아직 켜져 있으면 켤 때마다 경고하고, 그동안 강의 PDF를 뷰어로 바꾸는 일은 이전 플러그인에 맡깁니다(두 플러그인이 같은 PDF 탭을 서로 바꾸지 않게). 리본 아이콘이 두 개 보이는 정도는 그대로 둡니다.
-  - 이전 플러그인이 꺼져 있으면, 옵시디언이 예전 뷰 종류(`alt2obsidian-sidebar`, `alt2obsidian-synced-viewer`)로 남겨 둔 탭을 같은 상태의 Alt2Obs 뷰로 바꿉니다.
-  - 그대로인 것: 노트의 관리 주석(`alt2obs:*`, 예전 `alt2obsidian:start/end`), frontmatter의 `source` 값(`alt2obsidian`, `alt2obsidian-cc-skill`, `alt2obsidian-verify`), 기본 저장 폴더 `Alt2Obsidian/`, OS 캐시 폴더 이름 `alt2obsidian`(전사, Notion 페이지 캐시를 그대로 씀). 그래서 기존 노트, 캐시, 스킬이 그대로 동작합니다.
-  - 바뀐 것: 뷰 종류(`alt-to-obs-sidebar`, `alt-to-obs-synced-viewer`)와 CSS 클래스(`alt-to-obs-*`). `alt2obsidian-*` 클래스를 쓰는 CSS 스니펫이 있으면 `alt-to-obs-*`로 고치세요. 명령 이름 'Open Alt2Obsidian sidebar'는 'Open sidebar'로, 'Import Alt note (local list or URL)'은 'Import lecture note (local list or URL)'로, 'Open Synced Viewer (PDF + lecture .md)'는 'Open synced viewer (PDF + lecture .md)'로 바뀌었습니다(명령 id는 플러그인 id가 앞에 붙어 `alt-to-obs:...`가 됨. 단축키를 지정했다면 다시 지정). 리본 아이콘의 설명은 'Alt 강의 가져오기'입니다.
-  - 스킬은 `<vault>/.obsidian/plugins/alt-to-obs/data.json`을 먼저 읽고, 없으면 이전 `alt2obsidian` 폴더를 읽습니다. 스킬 이름은 그대로 `/alt2obs`입니다.
-- **PDF.js 워커를 `main.js`에 넣음**: 커뮤니티 플러그인 설치는 `main.js`, `manifest.json`, `styles.css`만 받으므로, 따로 받던 `pdf.worker.min.mjs`(pdfjs-dist 4.10.38, 같은 파일)를 `main.js` 안에 넣고 Blob URL로 띄웁니다. 문서마다 모듈 워커를 하나씩 쓰는 동작은 같고, 플러그인을 끌 때 URL을 해제합니다. `main.js`는 약 0.85 MB에서 2.2 MB가 되었습니다.
-- **Obsidian 플러그인 지침 반영**: 공식 ESLint 규칙(eslint-plugin-obsidianmd)을 통과합니다(`npm run lint`). 설정 화면 맨 위의 플러그인 이름 제목을 없애고 구역 제목을 옵시디언 방식으로 바꿨고, 영어 UI 문구는 문장형 대소문자(sentence case)로 바꿨습니다. Synced viewer의 CSS는 `styles.css`로 옮겼습니다. 노트를 읽고 고쳐 쓰는 작업(가져오기 병합, 개념 노트 갱신, 연결·첨부 표시 한 줄)은 `Vault.process`로 한 번에 처리해 다른 플러그인의 동시 수정과 섞이지 않습니다. '저장 폴더' 설정은 `normalizePath`로 정리해 씁니다. 'Open synced viewer'와 'Attach lecture PDF' 명령은 노트나 PDF를 연 동안만 명령 팔레트에 보입니다.
-- **최소 Obsidian 버전 1.7.2**: 쓰는 API 중 가장 늦게 생긴 것(`Workspace.revealLeaf`가 Promise를 돌려주는 형태)의 버전입니다.
-
-## 2.0.0-beta.6에서 바뀐 점
-
-- **강의 종류 표시**: Alt 노트 목록의 각 강의에 종류가 보입니다. `슬라이드`(Alt에 슬라이드 PDF가 있음), `노트(전사만)`(Alt에서 "노트"로 만든 강의, 녹음과 전사만 있음), `슬라이드(미첨부)`(Alt에서 "슬라이드"로 만들었지만 아직 슬라이드를 붙이지 않음), `슬라이드(PDF 첨부)`(플러그인에서 PDF를 첨부함), `슬라이드(저장된 PDF)`(Alt에 지금은 슬라이드가 없지만 예전에 가져온 슬라이드 노트 옆에 PDF가 있음, 그 PDF로 다시 가져옴). 칩에 마우스를 올리면 Alt의 노트 종류가 보입니다. 아래 패널의 버튼이 종류에 따라 바뀝니다.
-  - `노트(전사만)`: **요약 노트 만들기**(기본)와 **PDF 첨부**.
-  - `슬라이드(미첨부)`: Alt에서 슬라이드를 붙인 뒤 **새로고침**하라고 먼저 안내하고, 지금 만들려면 **PDF 첨부**나 **요약 노트 만들기**를 쓸 수 있습니다.
-  - 슬라이드 PDF가 없는데 그냥 가져오기를 누르면(URL 가져오기도 같음) 토큰을 쓰기 전에 멈추고 같은 선택지를 보여줍니다. 예전처럼 슬라이드 없는 강의 단위 노트로 조용히 넘어가지 않습니다. URL 강의의 PDF를 내려받지 못했으면 그렇다고 알리고 **다시 시도**를 먼저 보여줍니다. 공유 페이지를 일부만 읽은 경우(제목과 설명만)도 먼저 묻습니다.
-  - **요약 노트 만들기**는 사용자가 고른 것이므로 노트 옆에 PDF가 있어도 쓰지 않습니다. 이미 슬라이드 노트가 있는 강의는 요약 노트로 바꾸지 않습니다(토큰을 쓰기 전에 멈춤).
-- **전사 구간 요약 노트**: 전사를 말한 시간 기준 9~15분(약 12분) 구간으로 나눕니다(주제가 바뀌는 곳을 스크립트로 찾음, 토큰 0. 1분 넘게 쉰 시간은 1분으로 셈. 2시간 강의는 8~10구간). 구간마다 개조식 요약과 정의·예시 callout을 만들고, 각 항목 끝에 그 내용이 나온 시각 `[mm:ss]`를 붙입니다. 구간 요지로 전체 요약과 개념 노트를 만듭니다(슬라이드 강의와 같은 방식). 2시간 강의도 구간 요약 1회 + 전체 요약 1회 + 개념 1회, 호출 3회입니다. 예상 사용량, 진행, 취소, 사용량 기록, 모델 고르기는 슬라이드 강의와 같습니다. 노트에는 `## ⏱ 구간 N [mm:ss~mm:ss]` 구간과 구간마다 `> [!note] 내 메모`가 있고, 다시 가져오면 전사가 같은 구간은 요약을 다시 쓰고(호출 없음) 메모는 그 구간에 그대로 남습니다. 사라진 구간의 메모는 노트 끝 `사라진 구간`으로 옮깁니다. 구간 경계가 바뀌면 메모는 시간이 가장 많이 겹치는 구간으로 갑니다. 두 구간이 하나로 합쳐지면 다른 쪽 메모는 `이전 구간 N [..]의 메모`라는 표시와 함께 합쳐진 구간 아래에 붙습니다. CRLF로 저장된 노트는 CRLF로 다시 씁니다. 구간 제목의 시각 뒤에 덧붙인 글, 제목 아래에 쓴 글, 메모 안의 제목처럼 보이는 줄도 그대로 남습니다. '처리 실패' 목록은 다시 가져올 때 새 목록으로 바뀝니다(슬라이드 노트도 같음). 예전 버전이 만든 강의 단위 노트는 통째로 '이전 노트 백업'에 남습니다.
-- **PDF 첨부**: 보관함의 PDF(검색해서 고르기)나 컴퓨터의 PDF 파일을 고르면 강의 노트 옆 `<과목>/Lectures/<강의>.pdf`로 복사하고, 그 강의를 슬라이드 강의와 똑같이 가져옵니다(슬라이드별 해설, 전사 정렬, Synced Viewer, 슬라이드 대조 검증). 노트 frontmatter에 `alt_pdf_source: "attached"`가 남아 다음 가져오기도 그 PDF를 씁니다. 이미 만든 요약 노트에도 첨부할 수 있습니다(사이드바의 **PDF 첨부**, 또는 명령 **Attach lecture PDF to the current lecture note**). 다음 가져오기에서 슬라이드 노트로 바뀌고, 예전 요약 노트 전체와 내 메모는 맨 아래 '이전 노트 백업'에 남습니다(예전 frontmatter는 코드 블록으로). 첫 가져오기 전에 첨부한 PDF도 Alt의 PDF보다 먼저 쓰고, 예상 사용량에 그렇게 적습니다. 첨부한 강의에 나중에 Alt 슬라이드가 생기면 패널에 그렇다고 보이고 **Alt 슬라이드로 바꾸기**(노트에서는 `alt_pdf_source` 줄만 지움, 다음 가져오기부터 Alt PDF)를 누를 수 있습니다. **첨부 해제**는 표시를 지웁니다. 휴지통으로 옮기는 것은 첨부할 때 플러그인이 만든 사본이고 그 뒤 바뀌지 않은 파일뿐입니다(만들 때 기록한 크기와 SHA-1이 같아야 함, 파일을 옮기거나 이름을 바꿔도 기록이 따라감). 이 파일은 시스템 휴지통(안 되면 보관함의 `.trash`)으로 옮기고 영구 삭제하지 않습니다. 그 밖의 파일(노트 옆에 원래 있던 보관함 파일을 그대로 첨부한 경우, 옮겨 온 내 파일, 사본에 내가 표시를 더한 경우)은 지우지 않습니다: 첨부 해제는 그대로 두고, Alt 슬라이드로 바꾸기는 Alt PDF가 덮어쓰지 않도록 `<강의> (첨부한 PDF).pdf`(이미 있으면 번호를 붙인 이름)로 바꿉니다. 300 MB가 넘는 파일과 PDF가 아닌 파일은 받지 않습니다.
-- **노트 검증 (슬라이드 없는 강의)**: 요약 노트를 대상 강의로 고르면 전사 구간을 근거로 대조합니다. 근거 링크는 `[[강의#⏱ 구간 N ...|강의 · 구간 N]] [mm:ss]`이고, 근거가 음성 인식뿐이라 깨진 문장은 `전사 불확실`로 나올 수 있다고 판정 모델에 알려줍니다. 슬라이드 강의의 검증은 그대로입니다.
-- **Synced Viewer**: 슬라이드 없는 노트에서 **뷰어로 열기**를 누르면 뷰어가 없는 이유를 알려주고 **PDF 첨부**를 제안합니다. 요약 노트 옆에 첨부한 PDF는 슬라이드 노트로 바뀔 때까지 일반 PDF로 열립니다.
-- **`/alt2obs` 스킬**: 슬라이드 없는 강의를 같은 방식으로 다룹니다(`scripts/phase2/transcript-note.mjs`가 플러그인과 같은 구간, 같은 프롬프트, 같은 노트를 만들고, `verify-prep.mjs -`로 검증). 스킬 설명의 "1.1.0 플러그인" 문구도 고쳤습니다.
-- 실제 호출 확인 (2026-10-06, Claude Code 2.1.291, `sonnet` low): CSED5 6강(Alt "노트", 75분, 전사 19,168자)을 6구간으로 나눠 13,236자를 보냈고, 호출 3회, 입력 12,454 토큰(예상 13,015), 출력 4,429 토큰(예상 6,681), 35초였습니다.
-
-## 2.0.0-beta.5에서 바뀐 점
-
-- **쓸 때 모델 고르기**: 사이드바에서 **가져오기**를 누르면 나오는 예상 사용량 패널과 **노트 검증**의 예상 사용량 패널에서, 이번 실행에 쓸 프로바이더, 모델, effort를 바로 바꿀 수 있습니다(가져오기는 해설·요약 모델과 개념 추출 모델, 검증은 판정 모델). 바꾸면 예상 호출과 토큰을 그 자리에서 다시 계산합니다. Codex로 바꾸면 슬라이드를 두 배씩 묶고 호출당 고정 비용을 더해 계산하고, effort가 높을수록 출력 토큰을 늘려 잡습니다(Claude Code가 쓰는 effort 비용 지수 기준, medium이 기준). effort가 없는 모델(Haiku 4.5)은 늘려 잡지 않고, effort를 CLI 기본값으로 두면 모델 목록에 적힌 그 모델의 기본 단계로 계산합니다. 이 선택은 그 실행에만 쓰고 설정은 바꾸지 않습니다. 설정에 남기려면 **기본값으로 저장**을 누르세요. 진행 패널에는 처음에 고른 모델이, 첫 호출이 끝나면 CLI가 실제로 쓴 모델(예: `claude-opus-5-5`)이 보입니다. 노트의 `alt2obs_usage`에도 `model`, `effort`, 개념 모델이 다르면 `concept_model`이 실제로 쓴 값으로 남습니다.
-- **모델 이름에 버전 표시**: 모델 목록이 `opus`, `sonnet`, `haiku` 대신 `Opus 5.5 (claude-opus-5-5)`, `Sonnet 5.5 (claude-sonnet-5-5)`, `Fable 5.1 (claude-fable-5-1)`, `Haiku 4.5 (claude-haiku-4-5-20251001)`처럼 이름과 전체 id를 보여줍니다. 버전이 붙은 항목을 고르면 그 id를 그대로 CLI에 넘겨 늘 같은 모델로 실행합니다. 목록은 Claude Code가 저장해 둔 모델 목록(`~/.claude/cache/model-catalog`)에서 읽고, 없으면 플러그인에 넣어 둔 목록을 씁니다(모델 호출 없음). 별칭도 그대로 고를 수 있습니다. 아직 실행한 적이 없으면 `opus (최신 Opus, Opus 5.5, 기준일 2026-10)`처럼 플러그인에 넣어 둔 표의 값과 확인한 때를 보여주고, 실제로 실행하면 CLI가 알려 준 id를 기록해 `opus (최신 Opus, 현재 Opus 5.5)`처럼 보여주며, 설정의 작업별 모델에는 `마지막 실행: claude-sonnet-5-5 (Sonnet 5.5), 2026-10-06`처럼 나옵니다. 이미 저장된 `sonnet`, `haiku` 같은 별칭은 바꾸지 않고 그대로 씁니다. Codex는 모델 캐시의 표시 이름(예: `GPT-6-Astra (gpt-6-astra)`)과 설명을 보여주고, effort 목록은 Claude와 Codex 모두 고른 모델이 지원하는 단계만 보여줍니다(Haiku 4.5는 effort가 없어 CLI 기본값만).
-- **강의 PDF를 열면 Synced Viewer로**: 파일 탐색기나 링크로 강의 PDF(같은 폴더에 같은 이름의 강의 노트가 있는 PDF, `.PDF`도 포함)를 열면 그 탭이 PDF와 노트를 나란히 보여주는 Synced Viewer로 바뀝니다. 같은 강의의 뷰어가 이미 열려 있으면 그 탭을 보여주고, PDF를 연 탭은 그 전에 보던 노트로 돌아갑니다(PDF 때문에 새로 열린 탭이면 닫습니다). 뷰어로 바꿀 때 PDF는 탭의 뒤로 가기 기록에 남기지 않습니다. 강의 노트(.md)를 열 때는 바뀌지 않습니다. PDF만 따로 보고 싶으면 뷰어 위쪽의 **PDF만 보기**를 누르세요. 그렇게 연 탭, Obsidian을 켤 때나 이 설정을 켤 때 이미 열려 있던 PDF 탭은 PDF로 남습니다. 설정 → 보기의 **강의 PDF를 열면 뷰어로 열기**(기본 켬)로 끌 수 있습니다.
-- **설정 화면의 CLI 카드 설명 고침**: Obsidian 1.14는 설정을 기본으로 별도 창(900x700, 최소 600x400)에 엽니다. 실제 1.14.4 app.css로 다시 그려 보니, 2.0.0-beta.3 스타일에서는 그 창의 CLI 카드 설명이 6px 폭, 27줄로 한 글자씩 늘어섰고, 2.0.0-beta.4 스타일에서는 카드가 정상이었습니다. 그래서 카드는 이제 Obsidian의 설정 줄(`Setting`)을 쓰지 않고 일반 블록으로 만들어, 어떤 스타일이 적용되어 있어도(예전 styles.css가 남아 있어도) 설명이 카드 폭 전체를 씁니다. 또 1.14는 설정 창 폭이 좁으면(창 폭 약 600px) 설정 줄을 세로로 바꾸는데, 2.0.0-beta.4 규칙이 그때 설명 아래에 큰 빈 칸을 만들던 것도 고쳤습니다.
-- **용어는 영어 원어로**: 해설, 전체 요약, 개념 노트, 검증 이유에서 학술 용어와 개념 이름은 `Lottery Scheduling`, `Context Switch`, `vruntime`, `stride`처럼 영어 원어로 쓰고, 설명하는 일반 낱말(무작위, 비율, 실행)과 프로세스, 스케줄러 같은 기본 낱말은 한국어로 씁니다. 한국어로 옮기거나 소리 나는 대로 적지 않습니다.
-- **개념 노트 이름은 `English (한국어)`**: 새 개념 노트는 `Lottery Scheduling (로터리 스케줄링).md`처럼 만듭니다. 해설의 링크는 `[[Lottery Scheduling (로터리 스케줄링)|Lottery Scheduling]]`처럼 노트 이름 전체를 대상으로 하고 문장에는 영어 이름이 보입니다. 예전에 만든 `로터리 스케줄링 (Lottery Scheduling).md` 같은 노트는 이름을 바꾸지 않습니다. 다시 가져오면 영어 부분이나 한국어 부분이 같은 이름(대소문자, 띄어쓰기 무시)을 같은 개념으로 보고 그 노트를 그대로 이어 씁니다. 약어와 풀어 쓴 이름도 같은 개념입니다(`PTE (Page Table Entry)`와 `PTE (페이지 테이블 엔트리)`, `CFS (Completely Fair Scheduler)`와 `Completely Fair Scheduler (CFS)`). 같은 약어라도 풀어 쓴 이름이 다르면(`PC (Program Counter)`와 `PC (Personal Computer)`) 다른 개념입니다. 다만 한국어 부분만 같고 영어 부분이 분명히 다르면(`Latency (지연)`과 `Delay (지연)`) 다른 개념으로 두고, 한국어만 있는 노트(`지연`)는 그런 개념 둘 중 어느 것도 가져가지 않습니다. 중복 노트를 만들지 않고, 링크도 그 노트 이름으로 겁니다. 모델이 다른 순서의 이름이나 영어 이름만으로 링크를 쓰면(`[[Lottery Scheduling]]`) 기존 노트 이름으로 고쳐 보이는 글자는 그대로 둡니다. 플러그인이 넣는 링크는 슬라이드마다 개념이 처음 나오는 곳에 한 번만 걸고, 더 긴 낱말이나 합성어 안(`트리거`, `페이지 테이블`), 코드, 제목, 대괄호, 주석 안에는 걸지 않습니다. `/alt2obs` 스킬도 같은 규칙을 씁니다.
-- 실제 호출 확인 (2026-10-06, Claude Code 2.1.291): `fable`은 `claude-fable-5-1`, `sonnet`은 `claude-sonnet-5-5`로 실행되었고, `claude-sonnet-5`는 id 그대로 받아들였습니다. 6강 슬라이드 4장과 개념 추출(`sonnet`, low, 호출 2회)에서 해설은 영어 용어로 쓰였고, 개념 7개는 모두 예전 이름(`한국어 (English)`)의 기존 노트로 이어졌습니다.
-
-## 2.0.0-beta.4에서 바뀐 점
-
-- **가져오면 Synced Viewer로 열기**: 슬라이드가 있는 강의를 가져오면 노트와 Obsidian 기본 PDF 창을 따로 여는 대신 Synced Viewer(PDF와 노트가 함께 스크롤)로 엽니다. 이미 연 뷰어가 있으면 그 탭을 다시 씁니다. 사이드바에서 가져온 노트를 고르면 **뷰어로 열기** 버튼이 보이고, 명령 **Open Synced Viewer**는 강의 PDF를 연 상태에서도 됩니다.
-- **동기 스크롤 고침**: 2.0.0-beta.3까지는 페이지 경계를 지나는 순간만 감지해서, 스크롤바를 끌어 크게 이동하면 노트가 따라오지 않거나 한 슬라이드 어긋나는 일이 있었습니다. 이제 두 창의 스크롤 위치에서 현재 슬라이드를 계산하고, 뷰어가 직접 움직인 스크롤은 되돌려 동기화하지 않습니다. 제목에 📚 이모지가 없는 예전 노트도 동기화됩니다.
-- **관리 주석 숨기기** (설정 → 보기, 기본 켬): 노트의 `<!-- alt2obs:slide:N hash:... -->`, `<!-- alt2obs:meta ... -->`, 요약 구간 표시 같은 관리용 주석 줄을 Live Preview와 Synced Viewer에서 감춥니다. 커서가 그 줄이나 바로 위아래 줄에 있으면 보이고, 소스 모드에서는 항상 보입니다. 감춘 줄과 그 앞뒤 줄바꿈은 실수로 지워지지 않게 입력을 막습니다. 한 줄 전체가 `<!-- alt2obs`로 시작하는 주석이면 직접 쓴 줄도 감춰집니다. 노트 내용은 바뀌지 않으며, 이 줄들은 다시 가져올 때 메모를 지키는 데 쓰이니 지우지 마세요. 노트를 고치거나 다시 가져와도 Synced Viewer의 두 창은 보던 자리에 그대로 있습니다.
-- **프로바이더는 Claude CLI와 Codex CLI만**: Gemini API와 Ollama 지원을 없앴습니다. 저장된 설정에서 Gemini나 Ollama였던 작업은 로그인된 Claude CLI로, 없으면 설치된 Codex CLI로 옮기고 한 번 알려줍니다(직접 Claude CLI로 정한 작업은 그대로 둡니다). Ollama를 쓰던 경우 이제 슬라이드 텍스트와 전사가 클라우드 모델로 보내진다는 점도 알려줍니다. 예전 Gemini 키 같은 값은 data.json에 그대로 남아 있어 이전 버전으로 되돌릴 수 있고, 설정의 **이전 API 키 지우기**로 지울 수 있습니다(지우면 이전 버전에서 키를 다시 넣어야 합니다).
-- **모델과 effort를 드롭다운으로**: 작업마다 프로바이더, 모델, effort를 드롭다운으로 고릅니다. Claude는 `sonnet`, `opus`, `haiku`, Codex는 Codex의 모델 캐시에 있는 모델이 보이고, 둘 다 **CLI 기본값**과 **직접 입력...**이 있습니다. 예전에는 빈 칸(곧 CLI 기본값)으로 저장되어 실제로 어떤 모델을 쓰는지 보이지 않았는데, 이번 업데이트에서 빈 값은 한 번 작업 기본값(해설 `sonnet` + medium, 개념 `haiku` + low, 검증 `sonnet` + medium)으로 채우고, 무엇을 바꿨는지 알림으로 한 번 보여줍니다. Codex는 고른 모델이 지원하는 effort만 보여줍니다. 각 줄에 권장 설정이 보이고, 프리셋을 바꾸면 표가 바로 바뀝니다.
-- **설정 화면 배치 고침**: 좁은 카드 안에서 설명이 한 글자씩 세로로 늘어서던 문제를 고쳤습니다. 설명과 입력칸이 한 줄에 다 들어가지 않으면 입력칸이 아래로 내려갑니다.
-- **해설 문장 다듬기**: 해설, 개념 노트, 전체 요약 프롬프트에 문체 규칙을 넣었습니다. 한 출력 안에서 말투 하나, 용어는 처음에만 영어 병기, 한국어 문장 속 영어 일반 명사 금지, 같은 개념은 같은 이름, "이 슬라이드는 ~를 보여 줍니다" 같은 군말과 근거 없는 "자주 출제됩니다" 금지, 소리 나는 대로 적힌 전사는 인용하지 않기. 해설의 위키링크는 개념 노트 이름 형식(`[[로터리 스케줄링 (Lottery Scheduling)]]`, 필요하면 `[[티켓 (Ticket)|티켓]]`)으로 걸어 개념 노트와 이어지게 했습니다. 출력 JSON 형식은 그대로입니다. `/alt2obs` 스킬도 같은 문체 규칙을 쓰고, 슬라이드별 프롬프트는 `scripts/phase2/slide-prompt.mjs`가 만듭니다.
-
-## 2.0.0-beta.3에서 바뀐 점
-
-- **새 폴더 구조 (영어 폴더명)**: 새로 가져오는 강의는 과목 폴더 아래 `Lectures/`에 노트와 PDF가 함께 저장됩니다. 개념 노트는 `Concepts/`, 노트 검증 결과는 `Verification/`, 핵심 다이어그램 이미지는 `Attachments/`에 들어갑니다(아래 구조 참고).
-- **1.x 폴더 옮기기**: 명령 팔레트에서 **Migrate 1.x vault layout**을 실행하면 옮길 파일 목록(강의 노트와 옆의 PDF)을 먼저 보여주고, **옮기기**를 눌러야 옮깁니다. Obsidian의 이름 바꾸기로 옮겨서 노트 안의 링크가 함께 갱신됩니다. 지우거나 덮어쓰는 파일은 없습니다. 옮길 위치에 같은 이름의 파일이 있으면 건너뛰고 목록에 보여줍니다. `Concepts/`는 그대로이고, `Exam/`의 예전 시험 요약과 강의 노트가 아닌 내 노트는 건드리지 않습니다. 다시 실행해도 이미 옮긴 파일은 그대로입니다. 처음에는 vault 사본에서 먼저 해 보길 권합니다.
-- **노트 검증 (노션 대조)**: 사이드바 **노트 검증** 탭에서 내가 쓴 노트를 강의 슬라이드와 전사에 대조합니다. 입력은 세 가지입니다.
-  - **보관함 파일** (기본): 노션 페이지를 마크다운으로 내보내 vault에 넣은 파일.
-  - **Notion MCP**: 노션 페이지 URL을 넣고 **가져오기**를 누르면, Claude CLI가 Notion 조회 도구 하나만 불러 페이지를 가져옵니다(호출 1회, 가져오는 중에는 같은 버튼으로 취소). 페이지 내용은 모델이 옮겨 적은 글이 아니라 조회 도구의 결과를 그대로 씁니다. 원문은 vault 밖 OS 캐시 폴더에 페이지의 마지막 수정 시각과 함께 저장되고(0600), 지난번과 같은 페이지면 그렇다고 알려줍니다. 페이지가 길어 도구 결과가 잘리면 경고합니다. Notion MCP가 없으면 설정 방법을 보여주고 보관함 파일로 검증하게 합니다.
-  - **붙여넣기**.
-  
-  노트를 문장과 불릿 단위 주장으로 나누고, 주장마다 슬라이드 상위 2개와 정렬된 전사 구간 상위 2개를 스크립트로 찾습니다(토큰 0). 모델은 주장 20개씩 근거와 함께 받아 `맞음` / `틀림` / `근거 없음` / `전사 불확실` 중 하나와 짧은 이유를 답합니다. 스크립트가 판정을 내리는 일은 없습니다. 한국어 노트와 영어 슬라이드처럼 용어가 다르면, 괄호 속 영어 용어와 숫자 외에 한국어 전공 용어의 영어 표기(내장 용어표, 일상 단어는 넣지 않음, 토큰 0)로도 찾습니다. 서로 다른 용어 2개 이상이 겹치거나 점수가 충분해야 직접 근거로 치고, 용어 하나만 겹친 주장은 약한 근거로 보고, 그 슬라이드를 첫 근거로 두되 나머지는 같은 절의 문맥으로 채웁니다(프롬프트와 결과 카드에 `겹치는 용어 1개`로 표시). 약한 근거는 이웃 주장의 근거로 빌려주지 않습니다. 그래도 직접 근거가 없는 주장은 같은 절의 가까운 주장들이 찾은 슬라이드, 절 제목에 맞는 슬라이드, 절 전체에 맞는 슬라이드 순서로 근거 후보를 붙여 판정에 보냅니다(프롬프트에 '문맥으로 찾은 후보'로 표시, 결과 카드에는 `(문맥 근거)`, 문맥 근거로 `틀림`이 나오면 `(문맥 근거, 확인 필요)`). 어느 방법으로도 후보가 없는 주장은 판정하지 않고 결과 노트의 `용어 불일치로 근거 검색 실패` 절에 따로 적으며, 그런 주장이 30%를 넘으면 시작 전에 경고합니다. 슬라이드 용어를 거의 그대로 쓴 주장(숫자·수식·부정 없음)은 `맞음 후보`로 묶음 뒤쪽에 둡니다. 어떤 주장과도 이어지지 않은 슬라이드는 제목과 핵심 문장만 한 번 더 보내 `누락 후보`를 고릅니다. 시작 전에 `주장 N개 → 판정 M개`, 예상 호출과 토큰을 보여줍니다. 결과는 `Verification/<강의> verification.md`에 판정별 카드(인용, 판정, 이유, 근거 링크 `[[<강의 노트 경로>#📚 슬라이드 N|<강의> · 슬라이드 N]]`와 전사 시각 `[mm:ss]`. 경로에 `# ^ [ ] |`가 있으면 인코딩한 마크다운 링크이고, frontmatter의 `lecture`는 그 문자를 뺀 `[[제목]]`)로 저장됩니다. 원본 노트는 바꾸지 않고, 다시 실행하면 결과 노트의 `## 내 메모` 아래는 그대로 둡니다. 설정의 **노트 검증** 작업에서 모델을 고릅니다(기본 Claude CLI `sonnet` + medium).
-  - 수락 확인 (2026-09-28): lec13 덱으로 맞는 문장 20개와 일부러 틀린 문장 5개를 섞은 노트에서 틀린 문장 5개를 모두 `틀림`으로 잡았고, 맞는 문장 20개는 모두 `맞음`이었습니다(오탐 0). 호출 2회, 입력 약 19k(캐시 1k), 출력 약 1.3k 토큰(`sonnet`, low effort). 같은 문장을 영어 용어 없이 한국어로만 쓴 노트(`test/fixtures/verify/lec13-ko.json`, 전사 없음)도 25개 모두 판정으로 넘어갔고 22개는 정답 슬라이드가 근거 상위 2개에 들었습니다(가짜 판정기로 확인, 토큰 0). 용어표를 고친 뒤에 만든 다른 과목(운영체제) 한국어 노트 25문장(`os02-ko-heldout.json`, 조정에 쓰지 않은 확인용)에서는 직접 근거 84%, 겹치는 용어 1개인 약한 근거 16%, 근거 검색 실패 0%였고 정답 슬라이드가 상위 2개에 든 것은 18개(72%)였습니다. `node test/eval-verify.mjs <데이터 폴더> [--fixture lec13-ko] [--no-transcript] [--run | --fake]`로 다시 확인할 수 있습니다.
-- **핵심 다이어그램 이미지**: 설정 **핵심 다이어그램 이미지 저장**(기본 켜짐)이 켜져 있으면, 도표·회로도·그래프처럼 그림 비중이 높은 슬라이드(강의당 최대 8장)를 스크립트로 골라(토큰 0) `Attachments/<강의>-<쪽>.png`로 저장하고 그 슬라이드 해설 끝에 `![[...]]`로 넣습니다. 이미지는 관리 블록 안에 있어 다시 가져와도 한 번만 들어가고, 같은 파일을 덮어씁니다. Claude/Codex CLI 경로에서 동작합니다.
-- **시험 요약 제거**: Alt의 퀴즈·플래시카드 플러그인과 겹치는 시험 요약본 생성과 시험 범위 선택을 없앴습니다. 예전에 만든 `Exam/` 파일은 그대로 남고, 새로 만들지 않습니다.
-
-## 2.0.0-beta.2에서 바뀐 점
-
-- **Alt 노트 목록에서 바로 가져오기 (기본 경로)**: 사이드바 **Alt 노트 목록** 탭이 이 컴퓨터의 Alt 노트를 Alt 폴더별로 보여줍니다. 검색, 상태 칩(`새 노트` / `슬라이드 N장 변경` / `가져옴`), Alt 폴더에서 추정한 과목(수정 가능)을 보고 **가져오기**를 누르면 됩니다. 공유 링크가 필요 없고, Alt 요약과 메모도 함께 가져옵니다. 공개 URL 붙여넣기는 **URL 붙여넣기** 탭에 대체 경로로 남아 있습니다.
-- **Alt 연결 상태**: Alt가 실행 중이면 로컬 API(`Alt 연결됨 · 로컬 API`), 꺼져 있으면 Alt 데이터베이스 사본(`Alt 꺼짐 · DB 읽기`)을 읽습니다. 둘 다 안 되면 `연결 안 됨`과 이유가 보입니다. 상태 표시를 누르면 다시 연결합니다.
-- **전사를 슬라이드에 자동 정렬**: 로컬 노트의 전사에는 시각이 있어서, 스크립트가 전사 구간을 슬라이드에 배정합니다(토큰 0). 텍스트 레이어가 없는 스캔 PDF나 슬라이드 절반 이상에 글자가 없는 덱은 균등 분할을 씁니다. 각 슬라이드 해설에는 그 슬라이드 구간의 전사가 들어갑니다(1.x는 글자 수로 균등 분할). 정렬은 켜고 끄는 옵션이 아니며, 사이드바에 `전사 타임스탬프 있음 · 슬라이드에 자동 정렬`로 표시됩니다. 결과는 노트 frontmatter `alt_alignment`에 저장됩니다. 설정에서 **전사 정렬 확인** 작업에 모델을 고르면 불확실한 구간만 한 번의 작은 호출로 확인합니다(기본 끔).
-- **Synced Viewer 전사 패널**: `alt_alignment`가 있는 노트는 툴바에 `정렬 기준 동기화 · 전사 매칭`이 보이고, **전사 패널** 버튼으로 현재 슬라이드 구간의 전사를 `[mm:ss]`와 함께 봅니다. 패널용 전사는 vault 밖 OS 캐시 폴더(macOS `~/Library/Caches/alt2obsidian`, Windows `%LOCALAPPDATA%\alt2obsidian\Cache`, Linux `~/.cache/alt2obsidian`)에 vault별로 저장하고(권한 0600), vault에서 사라진 노트의 전사는 지웁니다. 캐시가 없으면 Alt에서 다시 읽습니다.
-- **정렬 정확도 (초안)**: 사람이 초안으로 라벨링한 강의 2개에서 슬라이드 배정 정확도는 80.4%와 62.9%(1.x 균등 분할 9.9%와 3.0%)입니다. 라벨이 아직 사용자 확인 전이라 명세 6절 2단계의 정렬 수락 기준은 보류 상태입니다.
-- **기존 노트 연결**: 1.x나 URL로 가져온 노트(`alt_id`만 있음)와 제목·날짜가 같은 Alt 노트는 `기존 노트와 연결?`으로 표시됩니다. 확인을 눌러야만 그 노트 frontmatter에 `alt_local_id`를 추가하고, 이후 가져오기가 그 노트를 업데이트합니다(메모 보존). 자동으로 덮어쓰지 않으며, 제목이 같은 다른 강의 노트가 있으면 파일 이름에 강의 날짜를 붙여 따로 만듭니다.
-
-> **개인정보 안내 (Alt 로컬 데이터)**: 플러그인은 이 컴퓨터의 Alt 데이터를 **읽기만** 합니다. Alt가 실행 중이면 Alt의 로컬 HTTP API(`127.0.0.1`)에 GET 요청만 보내고, 인증 토큰은 Alt의 토큰 파일(`http-server-token`)에서 읽어 메모리에만 둡니다(로그·노트·설정에 저장하지 않음). 토큰을 보내기 전에 그 포트를 연 프로그램이 이 사용자로 실행된 Alt인지 확인합니다(macOS `lsof`/`ps`, Linux `/proc`, Windows `netstat`/`tasklist`). 확인되지 않으면 토큰을 보내지 않고 데이터베이스 사본을 읽습니다. Alt가 꺼져 있으면 로그인한 계정의 Alt 데이터베이스와 WAL 파일을 임시 폴더에 복사해 그 사본을 읽고 닫을 때 지웁니다(다른 계정의 저장소는 읽지 않고, Alt와 같은 팀 채널 규칙으로 보이는 노트만 목록에 올립니다). Alt 앱, 설정, 데이터 파일은 바꾸지 않습니다. 슬라이드 PDF는 Alt가 저장한 파일을 읽어 vault에 복사합니다. 데이터베이스 읽기에는 Obsidian에 들어 있는 Node의 내장 SQLite(`node:sqlite`, Node 22.5 이상)를 씁니다. 오래된 Obsidian 설치본이라 없으면 Alt를 실행해 로컬 API로 가져오세요.
-
-## 2.0.0-beta.1에서 바뀐 점
-
-- **API 키 없이 생성**: 이미 구독 중인 Claude Code(`claude`)나 Codex(`codex`) CLI를 플러그인이 직접 실행합니다.
-- **작업별 모델 선택**: 슬라이드 해설과 개념 추출마다 프로바이더, 모델, effort를 따로 고릅니다. 프리셋 `절약` / `품질` / `사용자 지정`.
-- **토큰 절약**: 슬라이드를 8장씩 묶어 한 번에 보내고(이미지가 있으면 4장), 표지·목차·마무리·애니메이션 중복 슬라이드는 LLM에 보내지 않으며, 이미지는 도표 위주 슬라이드에만 1024px JPEG로 붙입니다. 전사는 군말과 반복을 지우고 슬라이드당 600자로 줄입니다. 모든 호출의 앞부분(지시문과 강의 공통 맥락)이 같아서 두 번째 묶음부터 프롬프트 캐시에 걸립니다.
-- **다시 가져오기**: 슬라이드 텍스트와 렌더링 이미지가 모두 그대로인 슬라이드는 기존 해설을 재사용하고, 바뀐 슬라이드만 생성합니다.
-- **가져오기 전 예산 미리보기**: 예상 호출 수, 입력·출력 토큰, 보낼 이미지 수, 생략한 슬라이드 수를 사이드바에서 확인한 뒤 시작합니다. 강의당 토큰 상한을 넘으면 시작 전에 멈추고 이미지 줄이기를 제안합니다. 진행 중에는 단계, 묶음 진행률, 실시간 사용량, 취소 버튼이 보입니다.
-- **사용량 기록**: 실제 사용량(입력, 캐시 적중, 출력)을 노트 frontmatter `alt2obs_usage`와 설정 화면의 누적 사용량에 남깁니다.
-
-> **외부 프로그램 실행과 구독 사용량 안내**: Claude CLI나 Codex CLI를 고르면 이 플러그인은 컴퓨터에 설치된 `claude` / `codex` 프로그램을 자식 프로세스로 실행합니다. 모든 호출은 **사용자 계정의 구독 한도(또는 API 사용량)를 소모**합니다. CLI는 vault 밖 임시 폴더에서 실행되고(Claude: 도구를 모두 끄고 이미지는 메시지에 직접 담아 보냄, 설정·MCP·세션 저장 없음 / Codex: 읽기 전용 샌드박스, 세션 저장 없음), 노트 쓰기는 플러그인만 합니다. 예외는 노트 검증의 Notion MCP 가져오기 하나로, 이 호출만 Notion MCP 서버를 켜고 Notion 조회 도구 하나만 허용합니다(아래 Notion MCP 설정 참고). Codex의 읽기 전용 샌드박스는 사용자 계정이 읽을 수 있는 파일은 읽을 수 있습니다. 프롬프트로 주어진 내용만 쓰라고 지시하지만 이 위험은 남아 있으니, 감수할 수 있을 때만 Codex를 고르세요. 데스크톱 전용입니다(macOS, Windows, Linux).
-
-## 주요 기능
-
-- **페이지-anchored 노트 구조**: 강의 1개당 1 .md 파일에 PDF 슬라이드와 1:1로 대응하는 `## 📚 슬라이드 N` 섹션 자동 생성. 각 섹션의 해설은 슬라이드 텍스트(도표 슬라이드는 이미지 포함)와 해당 구간 음성 전사 발췌로 만듭니다.
-- **사용자 메모 안전 보존**: 슬라이드별 `> [!note] 내 메모` 콜아웃은 관리 블록 바깥에 위치하며, 다음 import 때도 그대로 유지됩니다 (해시-augmented 마커가 슬라이드 reorder/insert/delete를 감지해 재정렬).
-- **Synced Viewer**: 강의를 가져오면 바로 열리고, 사이드바의 **뷰어로 열기**나 명령 팔레트의 'Open synced viewer (PDF + lecture .md)'로도 엽니다. PDF(좌)와 강의 노트(우)가 좌우로 떠오릅니다. **양방향 동기 스크롤** (PDF↔md), 페이지 nav 버튼, 줌, 슬라이드 번호 라벨, **wikilink 클릭 이동** (Cmd-클릭 = 새 탭), **"📝 노트 편집"** 버튼으로 split-pane editor 열기 + 편집 시 우측 자동 refresh.
-- **개념 네트워크**: LLM이 한국어 강의에 한국어 개념(영어 병기), 영어 강의엔 영어 개념을 추출하고, 모든 슬라이드 섹션에 걸쳐 `[[Wikilink]]`로 일관성 있게 연결합니다. 정의 3-5문장 + 강의 맥락 2-3문장 + 구체 예시 + 시험 함정.
-- **안전한 재가져오기**: 변경 요약 (reorder/insert/delete/drift 카운트)을 확인한 뒤 관리 구간만 업데이트, 사용자 메모는 보존. 슬라이드의 절반 이상이 사라지면 deck-replacement 확인 모달이 뜹니다 (실수로 다른 강의 URL을 import한 경우 방지).
-- **슬라이드 없는 강의**: 녹음 전사만 있는 강의는 전사 구간별 요약 노트(`## ⏱ 구간 N [mm:ss~mm:ss]`, 항목마다 시각)로 만들거나, PDF를 첨부해 슬라이드 강의로 가져옵니다.
-- **노트 검증**: 내 노트(노션 내보내기, Notion MCP, 붙여넣기)를 슬라이드와 전사에 대조해 틀린 문장과 빠진 슬라이드를 찾습니다. 슬라이드 없는 강의는 전사 구간에 대조합니다.
-- **사이드바 UI**: Alt 노트 목록(폴더·검색·상태 칩), URL 붙여넣기, 노트 검증 탭과 과목 선택, 예상 사용량, 최근 노트를 한 곳에서 관리.
-- **LLM (Claude Code CLI, Codex CLI)**:
-  - **Claude Code CLI**: `claude -p`를 실행. 기본은 슬라이드 해설 `sonnet` + medium, 개념 추출 `haiku` + low. 모델은 드롭다운에서 `sonnet`, `opus`, `haiku`를 고르거나 **직접 입력...**으로 전체 이름을 넣습니다. 호출 하나가 모델 한 턴이고, CLI가 더하는 고정 입력은 약 0.45k 토큰입니다.
-  - **Codex CLI**: `codex exec`를 실행. 호출마다 Codex 자체 지시문과 전역 `~/.codex/AGENTS.md`가 함께 실려 고정 비용이 큽니다(설정으로 줄일 수 있는 부분을 끈 뒤에도 이 컴퓨터 측정 약 12k 토큰, 끄기 전 18k). 플러그인은 사용자 파일을 건드리지 않고, 대신 Codex는 배치 크기의 두 배로 묶어 보냅니다.
-  - Gemini API와 Ollama는 2.0.0-beta.4에서 없앴습니다. 1.1.0의 Gemini 방식이 필요하면 [v1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0)을 쓰세요.
-- **Claude Code 스킬 (`/alt2obs`)**: 플러그인 없이 Claude Code 세션에서 강의를 가져옵니다. 이 컴퓨터의 Alt 노트(로컬) 또는 공개 URL을 입력으로 받고, 슬라이드 해시, 병합, 개념 링크, 노트 검증 준비를 플러그인과 같은 코드(`scripts/phase2/*.mjs`)로 처리해 결과 노트가 플러그인과 같습니다. 자세히는 [`scripts/phase2/`](scripts/phase2/) 참고.
-
-> 1.x → 2.0 업데이트: 기존 노트와 메모는 그대로 유지됩니다. 새 폴더 구조로 옮기려면 **Migrate 1.x vault layout**을 실행하세요. 1.x 노트를 처음 다시 가져오면 슬라이드 해시 방식이 바뀌어 모든 슬라이드가 한 번 `drift`로 표시되지만 메모는 보존됩니다. 1.0.x 단일 블록 노트는 새 노트 아래 `## 이전 노트 백업`으로 통째로 보관됩니다.
-
-## 설치 방법
-
-### 준비: LLM CLI (권장)
-
-Claude Code 또는 Codex 중 하나를 설치하고 터미널에서 한 번 로그인해 두세요.
+## Development
 
 ```bash
-# Claude Code
-npm install -g @anthropic-ai/claude-code   # 또는 공식 설치 스크립트
-claude    # 처음 한 번 실행해 로그인
-
-# Codex
-npm install -g @openai/codex
-codex login
-```
-
-Dock에서 실행한 Obsidian은 터미널의 PATH(nvm 경로 등)를 모릅니다. 플러그인은 처음 한 번 로그인 셸의 `command -v claude`와 흔한 설치 폴더(nvm, Homebrew, `~/.local/bin` 등)에서 실행 파일을 모두 찾아 각각 `--version`과 도움말(`claude --help`, `codex exec --help`, 모델 호출 없음)을 확인합니다. 이 플러그인이 쓰는 옵션이 도움말에 하나라도 없으면 그 실행 파일은 쓰지 않고, 옵션을 모두 갖춘 것 중 가장 새 버전을 저장합니다. 시험한 버전(Claude Code 2.1.283, Codex 0.155.1)보다 오래되었지만 옵션이 모두 있으면 설정 화면에 경고만 보여줍니다. 쓸 수 있는 실행 파일이 없으면 찾은 경로, 버전, 없는 옵션을 알려줍니다. 그래도 못 찾으면 **설정 → Alt2Obs → LLM 연결**에 `command -v claude` 결과(절대 경로)를 넣고 '다시 찾기'를 누르세요.
-
-**Windows**: 경로는 `where claude`로 찾고, 못 찾으면 `%APPDATA%\npm`, `%USERPROFILE%\.local\bin` 등을 살펴봅니다. npm으로 설치한 `claude.cmd` / `codex.cmd`는 셸 없이 실행하기 위해 스크립트 안의 JavaScript 파일을 찾아 `node.exe`로 직접 실행하고(`node.exe`가 PATH나 같은 폴더에 있어야 함), 네이티브 설치본(`claude.exe`)은 그대로 실행합니다. 취소하면 `taskkill /T /F`로 프로세스 트리를 종료하고, taskkill이 실패하면 직접 실행한 프로세스라도 종료합니다. `where`는 콘솔 코드 페이지로 경로를 출력하므로 사용자 이름에 한글 같은 비ASCII 문자가 있으면 결과가 깨질 수 있는데, 이때는 환경 변수로 만든 설치 폴더 탐색이 대신 찾습니다. Windows 경로는 단위 테스트로만 확인했고 실제 Windows PC에서는 아직 확인하지 않았습니다.
-
-### 방법 1: 커뮤니티 플러그인
-
-1. **설정 → 커뮤니티 플러그인**에서 제한 모드를 끄고 **탐색**을 누릅니다.
-2. "Alt2Obs"를 검색해 **설치**, **활성화**를 누릅니다.
-
-목록에는 이미 등록된 id `alt2obsidian`으로 올라 있고, 여기서 설치하면 다른 플러그인처럼 그 자리에서 업데이트됩니다. 새 버전이 아직 목록에 보이지 않으면 방법 2나 3을 쓰세요.
-
-### 방법 2: BRAT
-
-[BRAT](https://github.com/TfTHacker/obsidian42-brat) 플러그인을 설치하고 **Add Beta plugin**에 `BiQnT/alt2obsidian`을 넣으면 릴리스를 받아 자동으로 업데이트합니다.
-
-### 방법 3: 수동 설치 (파일 3개)
-
-1. [Releases](https://github.com/BiQnT/alt2obsidian/releases)에서 원하는 버전(`2.0.1`, 1.x가 필요하면 `1.1.0`)의 아래 파일 3개를 다운로드합니다. PDF.js 워커는 2.0.0부터 `main.js`에 들어 있어 따로 받을 파일이 없습니다.
-   - `main.js`
-   - `manifest.json`
-   - `styles.css`
-
-2. Obsidian Vault 폴더에 `.obsidian/plugins/alt2obsidian/` 폴더를 만들고 세 파일을 넣습니다(`.obsidian`은 vault 설정 폴더의 기본 이름):
-   ```
-   내 Vault/
-   └── .obsidian/
-       └── plugins/
-           └── alt2obsidian/
-               ├── main.js
-               ├── manifest.json
-               └── styles.css
-   ```
-
-3. Obsidian을 재시작하거나 명령 팔레트의 **Reload app without saving**으로 다시 불러옵니다.
-
-4. **설정 → 커뮤니티 플러그인**에서 제한 모드를 끄고, 설치된 플러그인 목록에서 **Alt2Obs**를 활성화합니다.
-
-### 2.0.0(`alt-to-obs`)에서 옮기기
-
-1.x나 2.0.0 베타에서 올릴 때는 옮길 것이 없습니다(같은 `alt2obsidian` 폴더에서 업데이트). 2.0.0을 쓰던 vault는 다음과 같이 옮깁니다.
-
-1. 위 방법 중 하나로 2.0.1을 설치합니다(`.obsidian/plugins/alt2obsidian/`). `alt-to-obs` 폴더는 그대로 둡니다. 2.0.1을 켜기 전에 지우면 설정과 기록을 가져올 수 없습니다.
-2. **설정 → 커뮤니티 플러그인**에서 버전이 2.0.0인 **Alt2Obs**를 끕니다(아직 삭제하지 않음). 목록에 Alt2Obs가 둘이면 버전으로 구별합니다.
-3. 버전이 2.0.1인 **Alt2Obs**를 켭니다. 2.0.0의 설정과 기록을 가져왔다는 알림이 뜹니다. **설정 → Alt2Obs**에서 저장 폴더, LLM 연결, 작업별 모델이 예전과 같은지 확인합니다.
-4. 버전이 2.0.0인 Alt2Obs를 삭제합니다. 노트와 폴더는 그대로입니다.
-5. 2.0.0 명령에 단축키를 지정했다면 다시 지정합니다.
-
-## Alt 앱에서 노트 링크 가져오는 법 (URL 대체 경로)
-
-이 컴퓨터에 Alt 앱이 설치되어 있으면 링크 없이 **Alt 노트 목록** 탭에서 가져오면 됩니다. 아래는 다른 컴퓨터의 노트나 공유받은 노트처럼 로컬에 없는 노트를 공개 URL로 가져올 때의 방법입니다. URL 경로는 전사 시각이 없어 균등 분할을 쓰고, 요약이 비어 있는 경우가 많습니다.
-
-### 1. Alt 앱 설치
-
-- [alt.io](https://www.altalt.io/ko/features)에서 **Alt** 앱을 다운로드합니다.
-- 회원가입 후 강의 녹음/업로드를 통해 노트를 생성합니다.
-
-### 2. 노트 공유 링크 복사
-
-1. Alt 앱에서 가져오고 싶은 **강의 노트**를 엽니다.
-2. 우측 상단의 **공유(Share)** 버튼을 탭합니다.
-3. **"링크 복사"** 를 선택합니다.
-4. 아래와 같은 형식의 URL이 복사됩니다:
-   ```
-   https://www.altalt.io/en/note/0a471d1c-4ec6-4101-8de2-ccc1781770d4
-   ```
-5. 이 URL을 Alt2Obs 사이드바에 붙여넣으면 됩니다.
-
-> **팁:** Alt 앱에서 **요약 버튼을 눌러 AI 요약을 먼저 생성**한 뒤 링크를 공유하면 가장 좋은 결과를 얻을 수 있습니다. 요약 없이 메모/트랜스크립트만 있는 노트도 지원하지만, Alt에서 생성한 요약이 있으면 더 정확한 개념 추출이 가능합니다.
->
-> **강의자료 반영:** 공유 노트에 PDF 강의자료가 있으면 텍스트를 추출해 핵심 페이지 발췌만 LLM 프롬프트에 넣습니다. 스캔본처럼 텍스트 레이어가 없는 PDF는 원본 파일 저장만 수행합니다.
->
-> **참고:** Alt 노트가 "비공개"로 설정된 경우 가져올 수 없습니다. 공유 설정이 "링크가 있는 사용자" 또는 "공개"로 되어 있어야 합니다.
-
-## 사용 방법
-
-### 1단계: LLM 연결
-
-1. **설정 → Alt2Obs → LLM 연결**에서 Claude CLI / Codex CLI 카드에 경로와 버전이 보이는지 확인합니다.
-   - 처음 설치했거나 1.x, 또는 Gemini/Ollama 설정에서 넘어오면 한 번 확인합니다. 로그인된 Claude CLI가 있으면 Claude CLI를, 없고 Codex CLI가 설치되어 있으면 Codex CLI를 씁니다. 확인은 `--version`, 도움말, `claude auth status`뿐이고 모델은 호출하지 않습니다.
-2. **작업별 모델**에서 작업마다 프로바이더, 모델, effort를 드롭다운으로 고릅니다. 모델은 `Opus 5.5 (claude-opus-5-5)`처럼 버전과 id로 보이고, 별칭은 `sonnet (최신 Sonnet, 현재 Sonnet 5.5)`처럼 지금 가리키는 모델과 함께 보입니다. 기본값: 슬라이드 해설은 `sonnet` + medium, 개념 추출은 `haiku` + low, 노트 검증은 `sonnet` + medium. **CLI 기본값**을 고르면 CLI 쪽 기본 모델(Claude는 계정 기본 모델)을 씁니다. 목록에 없는 모델은 **직접 입력...**으로 넣습니다. 여기 값은 기본값이고, 가져오기와 노트 검증의 예상 사용량 패널에서 그 실행만 다른 모델로 바꿀 수 있습니다.
-
-### 2단계: Alt 노트 가져오기
-
-1. 왼쪽 리본의 📖 아이콘을 클릭하여 **Alt2Obs 사이드바**를 엽니다.
-
-**Alt 노트 목록 (기본)**
-
-1. 위쪽 상태 표시가 `Alt 연결됨 · 로컬 API` 또는 `Alt 꺼짐 · DB 읽기`인지 확인합니다.
-2. 폴더를 펼치거나 검색해서 강의를 고릅니다. 각 노트에는 강의 종류(`슬라이드`, `노트(전사만)`, `슬라이드(미첨부)`, `슬라이드(PDF 첨부)`), 날짜, 슬라이드 수, 전사 길이와 상태 칩이 보입니다. 슬라이드가 없는 강의는 아래 패널에서 **요약 노트 만들기**나 **PDF 첨부**를 고릅니다(위 2.0.0-beta.6 참고).
-3. 아래 패널에서 **과목**(Alt 폴더에서 추정, 수정 가능)과 정렬 상태를 확인하고 **가져오기**를 누릅니다. 이후 과정(예상 사용량, 시작, 취소)은 아래 URL 경로와 같습니다.
-4. `기존 노트와 연결?`이 보이면, 예전에 가져온 노트 경로 옆 **연결**을 눌러 확인해야 연결됩니다.
-
-**URL 붙여넣기 (대체 경로)**
-
-2. [Alt](https://altalt.io) 에서 공유할 노트의 URL을 복사하고 **URL 붙여넣기** 탭을 엽니다.
-   - 예: `https://www.altalt.io/en/note/0a471d1c-4ec6-4101-8de2-ccc1781770d4`
-
-3. URL을 붙여넣고 **과목명**을 입력합니다 (예: `CSED311`).
-   - 기존 과목이 있으면 칩을 클릭하여 선택 가능
-   - 비워두면 자동 감지 시도
-
-4. **"가져오기"** 버튼을 클릭합니다. CLI 프로바이더라면 PDF를 분석한 뒤 **예상 사용량**(호출 수, 토큰, 이미지, 생략 슬라이드)이 먼저 나옵니다. 여기서 이번 실행의 해설·요약 모델과 개념 추출 모델을 바꿀 수 있고, 예상치가 바로 다시 계산됩니다. **시작**을 누르면 생성이 시작되고, 진행 중 **취소**로 언제든 멈출 수 있습니다(취소하면 노트는 바뀌지 않습니다).
-
-5. 잠시 후 Vault에 다음이 생성됩니다:
-   ```
-   Alt2Obsidian/
-   └── CSED311/
-       ├── Lectures/
-       │   ├── CSED311 Lec7-pipelined-CPU.md    ← 강의 노트 (페이지별 섹션)
-       │   └── CSED311 Lec7-pipelined-CPU.pdf   ← 원본 PDF (Synced Viewer가 노트 옆에서 찾음)
-       ├── Concepts/                            ← 과목별 개념 노트
-       │   ├── Pipeline Hazard (파이프라인 해저드).md
-       │   └── ...
-       ├── Verification/
-       │   └── CSED311 Lec7-pipelined-CPU verification.md   ← 노트 검증 결과
-       └── Attachments/
-           └── CSED311 Lec7-pipelined-CPU-12.png            ← 핵심 다이어그램 (선택)
-   ```
-   1.x에서 만든 vault는 강의 노트가 과목 폴더 바로 아래에 있습니다. 명령 팔레트의 **Migrate 1.x vault layout**으로 옮기세요(위 2.0.0-beta.3 설명 참고).
-
-### 3단계: 노트 검증 (선택)
-
-1. 노션 페이지를 마크다운으로 내보내 vault에 넣거나(**보관함 파일**), 노션 URL을 넣거나(**Notion MCP**), 내용을 붙여넣습니다.
-2. 사이드바 **노트 검증** 탭에서 입력과 **대상 강의**를 고르고 **예상 사용량 보기**를 누릅니다. `주장 N개 → 판정 M개`, `근거 검색 (스크립트): 토큰 0`, 예상 호출·토큰이 나오고, 이번 검증의 **판정 모델**을 바꿀 수 있습니다.
-3. **검증 실행**을 누르면 판정이 끝난 뒤 판정별 개수와 **결과 노트 열기** 버튼이 보입니다.
-
-**Notion MCP 설정**: 터미널에서 `claude mcp add --transport http notion https://mcp.notion.com/mcp`를 실행하고 `claude`를 열어 `/mcp`에서 Notion에 로그인합니다. 플러그인은 `claude mcp list`와 `claude mcp get`(둘 다 모델 호출 없음)으로 Notion 서버를 찾고, 가져오기 호출은 다음처럼 제한합니다.
-- `--tools ""`(내장 도구 없음), `--permission-mode dontAsk`, `--allowedTools mcp__<서버>__notion-fetch`: Notion 조회 도구 하나만 쓸 수 있습니다. Notion 서버의 나머지 도구(페이지 만들기·고치기 등)는 이름으로 막습니다.
-- `--setting-sources ""`, `--settings '{"disableAllHooks":true}'`: 사용자 설정의 허용 규칙과 hook이 끼어들지 않습니다.
-- 직접 추가한 Notion 서버(http/sse, 헤더 없음)는 `--strict-mcp-config --mcp-config`로 그 서버 하나만 켭니다. 같은 이름과 URL이라 저장된 Notion 로그인을 그대로 씁니다. 2026-09-28에 확인했을 때 모델에 보이는 도구는 notion-fetch 하나였고 호출당 입력은 약 2k 토큰이었습니다.
-- 플러그인이 제공하는 Notion 서버는 그 플러그인의 `.mcp.json`에 http/sse 주소가 있으면 같은 방식으로 그 서버 하나만 켭니다. 그렇게 할 수 없으면 플러그인을 켜는 사용자 설정(`--setting-sources user`)을 쓰되 hook은 끄고 다른 MCP 서버를 모두 막습니다.
-- claude.ai 커넥터로 연결한 Notion은 이렇게 따로 적을 수 없어, 사용자의 MCP 목록을 쓰되 다른 MCP 서버를 모두 막습니다.
-- 실제 호출로 확인한 것은 직접 추가한 Notion 서버(이 컴퓨터의 설정)뿐입니다. claude.ai 커넥터와 플러그인이 제공하는 서버 경로는 가짜 CLI 테스트로만 확인했습니다.
-- 요청한 페이지를 조회한 결과만 씁니다. 모델이 다른 페이지를 먼저 조회하거나 여러 번 조회하면 첫 번째로 성공한 요청 페이지의 결과를 쓰고 경고합니다. 결과가 너무 커서 Claude Code가 파일로 따로 저장한 경우에는 `~/.claude/projects/**/tool-results/` 아래의 그 파일에서 전체를 읽고, 그 밖의 위치면 잘린 것으로 표시합니다.
-
-서버 이름이 다르거나 도구 이름을 직접 정하려면 설정의 **Notion MCP 조회 도구**에 `mcp__<서버>__notion-fetch` 형식으로 넣으세요. 모델은 도구를 부르기만 하므로 개념 추출 작업의 경량 모델(Claude CLI일 때)과 low effort를 씁니다.
-
-## 생성되는 노트 구조
-
-### 강의 노트 (슬라이드별 구조)
-```markdown
----
-title: "CSED311 Lec7-pipelined-CPU"
-subject: "CSED311"
-tags: [csed311, pipeline, cpu-architecture, hazard]
-date: "2026-03-25"
-source: "alt2obsidian"
-slide_count: 32
-alt_local_id: "019e8c4f-..."
-alt_alignment: "1:0-95.2 2:95.2-210 ..."
-alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "medium", concept_model: "claude-haiku-4-5-20251001", calls: 14, ...}
----
-
-# CSED311 Lec7-pipelined-CPU
-
-## 📋 전체 요약
-
-<!-- alt2obs:overview start -->
-[Alt 요약과 슬라이드별 한 줄 요약으로 만든 강의 전체 요약]
-<!-- alt2obs:overview end -->
-
-## 📚 슬라이드 1
-
-<!-- alt2obs:slide:1 hash:a3f5b2c1 start -->
-[슬라이드 텍스트(도표 슬라이드는 이미지 포함)와 그 슬라이드 구간의 전사를 보고 작성한 한국어 해설]
-
-> [!definition] Pipelining
-> 여러 명령어를 서로 다른 단계에서 동시에 실행해 throughput을 높이는 기법.
-
-> "교수님이 강조: pipelining의 목적은 latency 단축이 아니라 throughput 증가"
-
-[[Pipeline Hazard (파이프라인 해저드)|Pipeline Hazard]]는 다음 슬라이드에서 다룹니다.
-<!-- alt2obs:slide:1 hash:a3f5b2c1 end -->
-
-> [!note] 내 메모
-> 시험 전 `lw → add` 사례 다시 보기
-
-## 📚 슬라이드 2
-
-<!-- alt2obs:slide:2 hash:b8e1d4f3 start -->
-...
-<!-- alt2obs:slide:2 hash:b8e1d4f3 end -->
-
-> [!note] 내 메모
-> 
-
-(... 슬라이드 N까지 ...)
-```
-
-마커 형식: `<!-- alt2obs:slide:N hash:<8-hex> start --> ... <!-- end -->`. 해시는 정규화한 슬라이드 텍스트의 SHA-1 8자리로 페이지 번호와 무관하며(텍스트가 없는 페이지만 Alt 노트 id와 페이지 번호 기반, `src/core/slideHash.ts`), Alt이 슬라이드를 reorder/insert/delete해도 사용자 메모가 올바른 슬라이드에 따라가도록 보존합니다.
-
-### 슬라이드 없는 강의의 요약 노트
-```markdown
----
-title: "6강"
-subject: "CSED5"
-tags: [csed5, probability, random-variable]
-date: "2026-10-06"
-source: "alt2obsidian"
-alt_kind: "transcript"
-section_count: 6
-alt_local_id: "01a0cbab-..."
-alt_source: "alt-local"
-alt2obs_usage: {provider: "Claude CLI sonnet", model: "claude-sonnet-5-5", effort: "low", calls: 3, ...}
----
-# 6강
-
-## 📋 전체 요약
-
-<!-- alt2obs:overview start -->
-[구간 요지와 Alt 요약으로 만든 강의 전체 요약, 불릿 끝에 (구간 2~3)]
-<!-- alt2obs:overview end -->
-
-## ⏱ 구간 1 [00:00~10:46]
-
-<!-- alt2obs:section:1 hash:d46472eb start -->
-- random experiment를 단순한 sub-experiment의 sequence로 구성해 다룰 수 있음 [00:00]
-- 패킷이 도착하기까지 필요한 전송 횟수가 관심사임 [06:57]
-
-> [!example] 재전송 모델
-> A1, ..., A(M-1)은 실패, A(M)은 성공으로 두고 각 전송을 독립으로 가정함
-
-<!-- alt2obs:meta img:none gist:"..." -->
-<!-- alt2obs:section:1 hash:d46472eb end -->
-
-> [!note] 내 메모
-> 
-
-## ⏱ 구간 2 [11:10~19:06]
-...
-```
-
-구간 표식은 `<!-- alt2obs:section:N hash:<8-hex> start --> ... <!-- end -->`이고, 해시는 그 구간 전사 원문의 해시입니다(슬라이드 해시와 같은 규칙). 전사가 바뀌지 않은 구간은 다시 가져올 때 요약을 그대로 쓰고, 내 메모는 해시(같지 않으면 구간 번호)로 그 구간을 따라갑니다.
-
-### 개념 노트
-```markdown
----
-tags: [concept]
----
-
-# Pipeline Hazard (파이프라인 해저드)
-
-**정의:** Pipeline Hazard는 pipeline CPU에서 다음 명령어가 다음 사이클에 정상 실행되지 못하는 상황이다. 명령어 사이의 Data Dependency, 분기 결정 지연, 하드웨어 자원 충돌로 생긴다. 해결하지 못하면 잘못된 결과가 나오거나 Stall로 성능이 떨어진다.
-
-**강의 맥락:** 5단계 MIPS pipeline을 도입한 직후, 단순 pipelining만으로는 결과가 틀릴 수 있음을 보이려고 소개한다. load-use 의존성을 그림으로 먼저 보이고, 이어서 Forwarding과 Stall을 도입한다.
-
-**예시:** `lw $t0, 0($s0)` 바로 뒤에 `add $t1, $t0, $t2`가 오는 코드다. $t0의 값이 EX 단계에 이르기 전에 다음 명령어가 그 값을 쓰므로 1 사이클 Stall이나 Forwarding이 필요하다.
-
-**주의:** Data Hazard와 Structural Hazard를 혼동하기 쉽다. Data Hazard는 의존성, Structural Hazard는 자원 충돌이다.
-
-**관련 강의:** [[CSED311 Lec7-pipelined-CPU]]
-**관련 개념:** [[Data Hazard (데이터 해저드)]], [[Forwarding (포워딩)]], [[Control Hazard (분기 해저드)]]
-
-새 개념 노트는 `English (한국어)` 이름으로 만듭니다. 2.0.0-beta.4까지 만든 `한국어 (English)` 노트는 이름을 그대로 두고, 같은 개념(영어 부분이나 한국어 부분이 같은 이름)이 다시 나오면 그 노트에 이어 씁니다.
-```
-
-## 설정
-
-| 설정 | 설명 | 기본값 |
-|------|------|--------|
-| LLM 연결 | Claude CLI / Codex CLI 경로(비우면 자동 탐색)와 버전 | 자동 탐색 |
-| 작업별 모델 | 슬라이드 해설, 개념 추출, 전사 정렬 확인(선택, 불확실한 구간만), 노트 검증마다 프로바이더(Claude CLI / Codex CLI)·모델·effort 드롭다운. 모델은 버전과 id가 보이는 목록(Claude Code와 Codex의 모델 목록), 별칭(지금 가리키는 모델 표시), CLI 기본값, 직접 입력. 실행 직전 사이드바에서 그 실행만 바꿀 수 있음 | 해설: Claude CLI sonnet medium / 개념: haiku low / 검증: sonnet medium (Codex는 모델 CLI 기본값, effort 같음) |
-| 프리셋 | `절약`: 모든 작업 경량 모델 + low. `품질`: 해설·검증 상위 모델 + high | 사용자 지정 |
-| 배치 크기 | CLI 호출 한 번에 보낼 슬라이드 수 (이미지가 있으면 절반) | 8 |
-| 이미지 전송 규칙 | 자동(도표 위주 슬라이드와 스캔 PDF만) / 텍스트만 | 자동 |
-| 슬라이드당 전사 상한 | 압축 후 남길 전사 글자 수 | 600 |
-| 강의당 토큰 상한 | 예상치가 넘으면 시작 전에 멈춤. 0 = 없음 | 0 |
-| CLI 호출 제한 시간 | 초과하면 중단하고 그 슬라이드만 한 번 재요청 | 300초 |
-| 바뀐 슬라이드만 다시 생성 | 텍스트 해시와 이미지 신호가 같으면 기존 해설 재사용 (요약 노트는 전사가 같은 구간의 요약 재사용) | 켜짐 |
-| 핵심 다이어그램 이미지 저장 | 그림 위주 슬라이드(최대 8장)를 `Attachments/`에 PNG로 저장하고 해설에 삽입 (CLI 경로) | 켜짐 |
-| Notion MCP 조회 도구 | 노트 검증에서 노션 URL을 가져올 도구. 비우면 `claude mcp list`로 찾음 | 자동 |
-| 관리 주석 숨기기 | `<!-- alt2obs:... -->` 관리 주석 줄을 Live Preview와 Synced Viewer에서 감춤(커서가 닿은 줄과 소스 모드에서는 보임). 노트 내용은 그대로 | 켜짐 |
-| 강의 PDF를 열면 뷰어로 열기 | 강의 PDF를 열면 그 탭을 Synced Viewer로 바꿈. 뷰어의 **PDF만 보기**로 연 탭은 그대로 | 켜짐 |
-| 저장 폴더 | Vault 내 저장 경로 | Alt2Obsidian |
-| Alt 데이터 폴더 | Alt 노트 목록을 읽을 Alt 앱 데이터 폴더 (읽기 전용) | 비움 = 기본 위치 (macOS `~/Library/Application Support/alt`) |
-| 언어 | `ko` / `en`: concept 노트와 해설 출력 언어 | ko |
-
-## 지원 환경
-
-- 데스크톱 Obsidian (macOS / Windows / Linux), 1.7.2 이상. 실제로 확인한 버전은 위 **확인한 환경** 표 참고
-- Alt 로컬 노트 목록: 이 컴퓨터에 Alt 데스크톱 앱이 설치되어 있어야 합니다. Alt가 꺼져 있을 때 데이터베이스를 읽으려면 Obsidian에 Node 22.5 이상(`node:sqlite`)이 들어 있어야 합니다.
-- CLI 경로: Claude Code CLI 또는 Codex CLI 설치와 로그인. 이 플러그인이 쓰는 옵션을 모두 지원하는 버전이어야 합니다(설정 화면이 확인해 줍니다).
-
-## 개발
-
-```bash
-# 의존성 설치
 npm install
-
-# 개발 빌드
-npm run dev
-
-# 프로덕션 빌드 (main.js, 릴리스 파일은 main.js, manifest.json, styles.css 3개)
-npm run build
-
-# 린트 (Obsidian 공식 ESLint 규칙, eslint-plugin-obsidianmd)
-npm run lint
-
-# 테스트 (토큰을 쓰지 않음: test/fixtures/bin의 가짜 claude/codex 사용)
-npm test
-
-# Synced Viewer DOM 테스트 (헤드리스 Chromium 필요: Playwright의 headless shell이나 Google Chrome, 또는 ALT2OBS_CHROME)
-npm run test:dom
-
-# 실제 CLI로 한 번씩 확인 (구독 사용량 소량 소모)
-ALT2OBS_SMOKE=1 node test/smoke-cli.mjs
-
-# 노트 검증 수락 확인 (--run 없으면 토큰 0, 있으면 Claude CLI 호출 최대 3회)
-node test/eval-verify.mjs <lec13.pdf와 전사 JSON이 있는 폴더> [--run]
-
-# 벤치마크 (scripts/bench/README.md)
-node scripts/bench/bench.mjs --pdf deck.pdf --transcript t.txt --provider claude-cli
+npm run dev        # development build with an inline source map
+npm run build      # production main.js, plus the Skill's CLI bundles
+npm run lint       # Obsidian's official ESLint rules (eslint-plugin-obsidianmd)
+npm test           # unit tests with fake claude/codex binaries, no tokens spent
+npm run test:dom   # viewer, sidebar, settings and PDF.js worker in headless Chromium
 ```
 
-## 라이선스
+A release ships `main.js`, `manifest.json` and `styles.css`; the PDF.js worker is bundled into `main.js`. `ALT2OBS_SMOKE=1 node test/smoke-cli.mjs` runs each real CLI once (it uses a little of your plan), and [scripts/bench/README.md](https://github.com/BiQnT/alt2obsidian/blob/main/scripts/bench/README.md) describes the token benchmark.
 
-[MIT License](LICENSE)
+## License and credits
 
-`main.js`에는 슬라이드 PDF를 읽고 그리는 [PDF.js](https://github.com/mozilla/pdf.js)(pdfjs-dist 4.10.38, Mozilla Foundation, Apache License 2.0)가 들어 있고, 그 라이선스 고지도 함께 들어 있습니다.
+[MIT License](https://github.com/BiQnT/alt2obsidian/blob/main/LICENSE), by [BiQnT](https://github.com/BiQnT).
 
-## 제작자
+`main.js` bundles [PDF.js](https://github.com/mozilla/pdf.js) (pdfjs-dist 4.10.38, Mozilla Foundation, Apache License 2.0, its license notice kept in the bundle) to read and render the slide PDFs.
 
-**BiQnT** - [GitHub](https://github.com/BiQnT)

@@ -33,7 +33,7 @@ export interface GenerationOptions {
   /** Slides per CLI call (spec 5.3). Batches with images use half. */
   batchSize: number;
   imageRule: ImageRule;
-  /** Per-slide transcript cap after compression (spec 5.1). */
+  /** Per-slide transcript cap after compression (spec 5.1). 1200 since 2.0.2, 600 before. */
   transcriptCapChars: number;
   /** Estimated input + output tokens per lecture. 0 = no cap. */
   tokenCapPerLecture: number;
@@ -84,7 +84,7 @@ export interface Alt2ObsSettings {
 export const DEFAULT_GENERATION: GenerationOptions = {
   batchSize: 8,
   imageRule: "auto",
-  transcriptCapChars: 600,
+  transcriptCapChars: 1200,
   tokenCapPerLecture: 0,
   saveKeyDiagrams: true,
   onlyChangedSlides: true,
@@ -216,7 +216,7 @@ export interface VisionImageRef {
  * Per-slide commentary produced by `BatchCommentaryGenerator`. The hash is
  * the 8-hex SHA-1 of the rendered slide PNG and drives the page-anchored
  * managed-block markers (plan §B Decision B). `commentary` is the LLM's
- * markdown body for that slide — no headers, no markers; the assembler
+ * markdown body for that slide: no headers, no markers; the assembler
  * (Task 1.2) wraps it in `## 📚 슬라이드 N` + `<!-- alt2obs:slide:... -->`.
  */
 export interface SlideSection {
@@ -246,14 +246,14 @@ export interface ImportUpdateSummary {
   changedLineCount: number;
   // Page-anchored (B1 multi-managed-block) merge details. Populated only when
   // both the existing and the next file use B1 markers. The merge algorithm
-  // is the spike-validated 2-pass routine — see
+  // is the spike-validated 2-pass routine, see
   // .omc/research/spike-1.0b-hash-algo.md §3.
   slideReorders?: Array<{ from: number; to: number; hash: string }>;
   slideInsertions?: number[];
   slideDeletions?: Array<{ slideNum: number; hash: string }>;
   slideDrifts?: Array<{ slideNum: number; oldHash: string; newHash: string }>;
   /**
-   * True when more than half of existing sections orphaned — likely the user
+   * True when more than half of existing sections orphaned: likely the user
    * accidentally re-imported a different lecture onto this file. Caller should
    * confirm before write (plan §B v1.1 deck-replacement modal touch-up).
    */
@@ -368,6 +368,15 @@ export interface PluginData {
    * start tries again, and data it can read replaces this data.
    */
   altToObsImport?: "done" | "retry";
+  /**
+   * The one-time move of a per-slide transcript cap still at 600, the
+   * default before 2.0.2, to the new default (see moveOldTranscriptCap).
+   * Missing: not made yet (data of 2.0.1 or older, 2.0.0's imported data,
+   * or a fresh install not saved yet). true: made; a 600 saved from then on
+   * is the user's own and stays. A flag of its own, not `settingsVersion`:
+   * that is 3 from beta.4 on and older versions write 3 back.
+   */
+  transcriptCapChecked?: boolean;
   /**
    * The model id each requested model resolved to on its last real run
    * (Claude: the modelUsage key of the CLI result), keyed by

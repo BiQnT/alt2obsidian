@@ -57,7 +57,7 @@ function parseRscPayload(html) {
 
   const cleanUrl = (url) => url.replace(/\\u0026/g, "&").replace(/\\"/g, "").replace(/"+$/, "");
 
-  // Extract slides_url field (primary — Cloudflare R2 signed URL)
+  // Extract slides_url field (primary: Cloudflare R2 signed URL)
   let pdfUrl = null;
   const slidesFieldMatch = unescapedPayload.match(/"slides_url"\s*:\s*"([^"]+)"/);
   if (slidesFieldMatch) {
@@ -155,7 +155,7 @@ async function testNote(url, label) {
   else failed.push("Title extraction (RSC + OG meta)");
 
   if (rsc.summary || rsc.transcriptSegments > 0) passed.push("Content (summary or transcript)");
-  else failed.push("Content — neither summary nor transcript found");
+  else failed.push("Content: neither summary nor transcript found");
 
   if (rsc.pdfUrl && (rsc.pdfUrl.includes("r2.cloudflarestorage.com") || rsc.pdfUrl.includes("supabase.co")))
     passed.push("Slides URL (Cloudflare R2)");
@@ -182,7 +182,7 @@ async function main() {
   }
 
   console.log(`\n${"=".repeat(50)}`);
-  console.log(`TOTAL — ✓ ${totalPassed} passed, ✗ ${totalFailed} failed`);
+  console.log(`TOTAL: ✓ ${totalPassed} passed, ✗ ${totalFailed} failed`);
 
   // Attempt PDF download for the first URL that has a slides URL
   const pdfUrl = results.find(r => r.pdfUrl)?.pdfUrl;
@@ -196,7 +196,7 @@ async function main() {
         const magic = String.fromCharCode(...new Uint8Array(buf.slice(0, 5)));
         console.log(magic.startsWith("%PDF") ? "✓ Valid PDF confirmed" : "✗ Not a valid PDF");
       } else {
-        console.log(`⚠ PDF download: HTTP ${pdfRes.status} (signed URL may have expired — re-run to get a fresh URL)`);
+        console.log(`⚠ PDF download: HTTP ${pdfRes.status} (signed URL may have expired; re-run to get a fresh URL)`);
       }
     } catch (e) {
       console.log(`⚠ PDF download error: ${e.message}`);

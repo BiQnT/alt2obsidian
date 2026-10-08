@@ -16,6 +16,7 @@ assert.ok(files.length > 0);
 for (const file of files) {
   const template = readFileSync(join(dir, file), "utf8");
   assert.ok(!template.includes("\r"), `${file} must use LF line endings`);
+  assert.ok(!/[\u2013\u2014]/.test(template), `${file}: no em or en dash`);
   const names = [...template.matchAll(/\{\{([A-Za-z0-9_]+)\}\}/g)].map((m) => m[1]);
   const vars = Object.fromEntries(names.map((n) => [n, `<${n}>`]));
   const out = renderPrompt(template, vars);

@@ -39,6 +39,13 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
   assert.equal(m.classifySlide(2, 30, "Contents of a cache line: tag, index", 0.01, ["Contents of a cache line: tag, index"]), "content");
   assert.equal(m.classifySlide(29, 30, "Thank you!", 0.02), "thanks");
   assert.equal(m.classifySlide(28, 30, "Q&A", 0.02), "thanks");
+  // Common closing and Q&A first lines, one phrase or several, are templated without a model call.
+  for (const first of ["Thank you! Questions?", "Thanks for listening", "Thank you for your attention.", "Questions & Answers", "Any Questions?", "감사합니다. 질문?", "질문 있으신가요?", "질의응답", "들어 주셔서 감사합니다"]) {
+    assert.equal(m.classifySlide(29, 30, `${first}gwangsun@postech.ac.kr`, 0.02, [first, "gwangsun@postech.ac.kr"]), "thanks", first);
+  }
+  for (const first of ["Summary", "Next lecture: Virtual Memory", "Thanks to Prof. Kim for the slides", "질문", "Questions about caches"]) {
+    assert.equal(m.classifySlide(29, 30, first, 0.02, [first]), "content", `${first} is not a closing line`);
+  }
   assert.equal(m.classifySlide(29, 30, "질문: 왜 캐시가 빠른가?", 0.02, ["질문: 왜 캐시가 빠른가?"]), "content", "a question slide is not a closing slide");
   assert.equal(m.classifySlide(29, 30, "46Question?Announcements- Textbook reading: P&H Ch. 5.1", 0.02, ["46", "Question?", "Announcements", "- Textbook reading: P&H Ch. 5.1"]), "content");
   // Cover with a long disclaimer (lec13 page 1) (review A.5).
@@ -119,9 +126,42 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
   assert.deepEqual(slides.map((s) => s.dupOf), [null, null, 5, 5, null, null, null, null], "animation run keeps only its last page");
   assert.deepEqual(slides.map((s) => s.sendImage), [false, false, false, false, false, false, true, false]);
   assert.equal(slides[2].hash, await m.computeSlideHash(build, 3, "n1"), "same hash rule as slideHash.ts");
-  assert.match(m.templateCommentary(slides[2], "L7"), /\[\[#📚 슬라이드 5\|슬라이드 5\]\]/);
-  assert.equal(m.templateCommentary(slides[0], "L7"), "표지 슬라이드: **Lecture 7 Pipelining**");
+  // Template lines talk about the content, not the slide (review L6).
+  assert.equal(m.templateCommentary(slides[2], "L7"), "같은 내용이 뒤에서 이어진다. 해설은 [[#📚 슬라이드 5|슬라이드 5]]에 있다.", "a build step points ahead to the run's last page");
+  assert.equal(m.templateCommentary(slides[0], "L7"), "표지: **Lecture 7 Pipelining**");
+  assert.equal(m.templateCommentary(slides[1], "L7", layouts[1]), "다룰 항목: Pipelining, Hazards", "contents items without their numbers");
+  assert.equal(m.templateCommentary(slides[1], "L7", { text: "Outline", boxes: [], lines: ["Outline", "• Caches", "2. Coherence", "3"] }), "다룰 항목: Caches, Coherence");
+  assert.equal(m.templateCommentary(slides[1], "L7"), "목차.", "no lines known: a short neutral line");
+  assert.equal(m.templateCommentary(slides[7], "L7"), "강의를 마친다.");
   assert.equal(m.templateCommentary(slides[5], "L7"), null);
+  const planned = m.planDeck({ slides, layouts, scanned, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "L7" });
+  assert.equal(planned.slides[1].template, "다룰 항목: Pipelining, Hazards", "the plan passes the page's lines");
+  // Contents lines from odd PDFs: footers, a page counter, numbers that belong to the item, dash, symbol and
+  // font bullets (Wingdings "§" and "Ø", a private-use glyph), Markdown syntax.
+  const odd = ["Outline", "CSED311 Computer Architecture", "Prof. Gwangsun Kim", "2 / 40", "10 Things", "8 Queens problem", "\u2013 Hazards", "\u2014 Forwarding", "\uF0A7Caches", "\u00A7 Memory", "\u00D8 Pipelining", "○ Branches", "► TLB", "▪ Paging", "*args and **kwargs", "List<T> #include", "1. Intro", "•"];
+  const footers = new Set(["CSED311 Computer Architecture", "Prof. Gwangsun Kim"]);
+  const oddItems = m.templateCommentary(slides[1], "L7", { text: odd.join(""), boxes: [], lines: odd }, footers);
+  assert.equal(oddItems, "다룰 항목: 10 Things, 8 Queens problem, Hazards, Forwarding, Caches, Memory, Pipelining, Branches, TLB, Paging, \\*args and \\*\\*kwargs, List\\<T\\> \\#include, Intro");
+  assert.ok(!/[\u2013\u2014\uE000-\uF8FF]/.test(oddItems), "no dash or private-use bullet reaches the note");
+  assert.equal(m.templateCommentary(slides[1], "L7", { text: "", boxes: [], lines: ["Agenda", "1 Intro", "8 Queens problem", "2 Caches"] }), "다룰 항목: Intro, 8 Queens problem, Caches", "bare numbers that count 1, 2 are item numbers");
+  assert.equal(m.templateCommentary(slides[1], "L7", { text: "", boxes: [], lines: ["Agenda", "2 / 40", "\u2013"] }), "목차.", "nothing left: the neutral line");
+  // The plan finds the running footer: a line on more than half of the pages.
+  const footer = "CSED311 Computer Architecture";
+  const searchLines = [
+    ["Lecture 3 Search", "Prof. Kim", footer],
+    ["Outline", "Uninformed search", "Heuristics", "2 / 5", footer],
+    ["Uninformed search expands nodes in order without knowing the goal", "3 / 5", footer],
+    ["Heuristics estimate the remaining cost from each node to the goal", "4 / 5", footer],
+    ["Thank you", footer],
+  ];
+  const searchLayouts = searchLines.map((ls) => ({ text: ls.join(""), boxes: [], lines: ls }));
+  assert.deepEqual([...m.repeatedLines(searchLayouts)], [footer]);
+  assert.equal(m.repeatedLines(searchLayouts.slice(0, 3)).size, 0, "fewer than 4 pages: no footer guess");
+  const search = await m.analyzeSlides(searchLayouts, searchLayouts.map(() => null), { sourceId: "n3" });
+  assert.deepEqual(search.slides.map((s) => s.kind), ["cover", "toc", "content", "content", "thanks"]);
+  const searchPlan = m.planDeck({ ...search, layouts: searchLayouts, transcript: null, transcriptCapChars: 1200, batchSize: 8, deckTitle: "L3" });
+  assert.equal(searchPlan.slides[1].template, "다룰 항목: Uninformed search, Heuristics", "footer and page counter left out");
+  for (const s of planned.slides) if (s.template) assert.ok(!/슬라이드|이번 강의/.test(s.template.replace(/\[\[[^\]]*\]\]/g, "")), `no talk about the slide outside the link: ${s.template}`);
 
   const textOnlyRule = await m.analyzeSlides(layouts, grays, { sourceId: "n1", imageRule: "text-only" });
   assert.ok(textOnlyRule.slides.every((s) => !s.sendImage), "text-only rule sends no images");
@@ -141,7 +181,7 @@ function fillRect(img, x0, y0, x1, y1, v = 0) {
     { sourceId: "v" }
   );
   assert.deepEqual(vis.slides.map((x) => [x.kind, x.dupOf]), [["cover", null], ["visual", null], ["visual", null]]);
-  console.log("PASS: analyzeSlides kinds, near-duplicate runs, image rule, scanned PDF, visual steps need the same picture");
+  console.log("PASS: analyzeSlides kinds, near-duplicate runs, image rule, scanned PDF, visual steps need the same picture; contents items without footers, page counters, bullets or Markdown syntax");
 }
 
 // ---- TranscriptCompressor ----
@@ -279,6 +319,10 @@ async function deck(n, visualPages = []) {
   assert.deepEqual(same.slides.map((s) => s.mode), ["template", "reuse", "reuse", "reuse"]);
   assert.equal(same.batches.length, 0, "nothing left to generate");
   assert.equal(same.slides[2].reused.commentary, "해설 3");
+  // "바뀐 슬라이드만 다시 생성" off: every slide is generated again, the old sections still back up a failure.
+  const regen = m.planDeck({ ...d, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "T", existing, reuse: false });
+  assert.deepEqual(regen.slides.map((s) => s.mode), ["template", "llm", "llm", "llm"]);
+  assert.deepEqual(regen.slides.slice(1).map((s) => s.previous?.commentary), ["해설 2", "해설 3", "해설 4"], "previous kept for a failed slide");
   const changedImage = { ...d, slides: d.slides.map((s) => (s.page === 3 ? { ...s, imageSignal: "f".repeat(64) } : s)) };
   const partly = m.planDeck({ ...changedImage, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "T", existing });
   assert.deepEqual(partly.slides.map((s) => s.mode), ["template", "reuse", "llm", "reuse"], "image-only edit regenerates");
@@ -306,6 +350,20 @@ async function deck(n, visualPages = []) {
   assert.equal(m.estimateCalls(shape, "claude-cli", "max").inputTokens, m.estimateCalls(shape, "claude-cli", "low").inputTokens);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 1000), true);
   assert.equal(m.exceedsCap({ inputTokens: 900, outputTokens: 200 }, 0), false);
+  // Output figures refitted on real runs (Claude CLI sonnet, effort medium, reasoning included).
+  assert.deepEqual({ ...m.OUTPUT_TOKENS_PER_SLIDE }, { content: 1000, visual: 1480 });
+  const outputFor = (contentSlides, visualSlides) =>
+    contentSlides * m.OUTPUT_TOKENS_PER_SLIDE.content + visualSlides * m.OUTPUT_TOKENS_PER_SLIDE.visual + m.OVERVIEW_OUTPUT_TOKENS + m.CONCEPTS_OUTPUT_TOKENS;
+  for (const [label, estimated, measured] of [
+    ["L5", outputFor(27, 3), [37576, 38624, 33940]],
+    ["6강", outputFor(31, 2), [36686]],
+  ]) {
+    for (const actual of measured) assert.ok(Math.abs(estimated - actual) / actual < 0.1, `${label}: ${estimated} within 10% of the measured ${actual}`);
+  }
+  // A lecture-level note at its 8000-character cap: about 5,300 visible tokens, times the 2.4 the slide refit found.
+  assert.equal(m.textStandIn(m.LECTURE_NOTE_CHARS).length, 8000);
+  assert.equal(m.estimateTextTokens(m.textStandIn(m.LECTURE_NOTE_CHARS)), 5280);
+  assert.equal(m.LECTURE_NOTE_OUTPUT_TOKENS, Math.round((5300 * 2.4) / 100) * 100);
 
   const d = await deck(20, [5, 6, 7]);
   const plan = m.planDeck({ ...d, transcript: null, transcriptCapChars: 600, batchSize: 8, deckTitle: "T" });
@@ -341,6 +399,21 @@ async function deck(n, visualPages = []) {
   assert.equal(settings.cliTimeoutSec, 300);
   const fresh = m.migrateSettings(undefined);
   assert.deepEqual([fresh.needsCliDefault, fresh.removedFrom, fresh.filled], [true, [], []], "fresh install: CLI chosen once, no removal notice");
+
+  // 2.0.2: the per-slide transcript cap defaults to 1200. A saved 600 (the old default) moves; any other value stays.
+  assert.equal(fresh.settings.generation.transcriptCapChars, 1200, "fresh install: 1200");
+  assert.equal(settings.generation.transcriptCapChars, 1200, "1.x data had no cap: the default");
+  const capAt = (n) => m.migrateSettings({ settingsVersion: 3, generation: { batchSize: 8, transcriptCapChars: n } }).settings;
+  const oldCap = capAt(600);
+  assert.equal(oldCap.generation.transcriptCapChars, 600, "migrateSettings keeps the saved value; the move is its own once-only step");
+  assert.equal(m.moveOldTranscriptCap(oldCap), true);
+  assert.equal(oldCap.generation.transcriptCapChars, 1200);
+  assert.equal(oldCap.generation.batchSize, 8, "nothing else changes");
+  for (const n of [800, 1200, 601, 0]) {
+    const own = capAt(n);
+    assert.equal(m.moveOldTranscriptCap(own), false, `${n} is the user's`);
+    assert.equal(own.generation.transcriptCapChars, n);
+  }
 
   // 2.0 beta data with tasks on Gemini/Ollama: those tasks move to the Claude CLI defaults.
   const beta = m.migrateSettings({
@@ -447,12 +520,15 @@ async function deck(n, visualPages = []) {
   // Claude model dropdown: versioned models with names and ids, then the aliases with what they stand for now, then older models.
   const noCatalog = { claude: [], codex: { models: [], efforts: {} }, resolved: {} };
   const claudeValues = m.modelChoices("claude-cli", "sonnet", [], noCatalog).map((c) => c.value);
-  assert.deepEqual(claudeValues, ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001", "fable", "opus", "sonnet", "haiku", "claude-sonnet-5", ""], "built-in list without Claude Code's catalog");
+  assert.deepEqual(claudeValues, ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "fable", "opus", "sonnet", "haiku", "claude-haiku-4-5-20251001", "claude-sonnet-5", ""], "built-in list without Claude Code's catalog");
   const labels = Object.fromEntries(m.modelChoices("claude-cli", "", [], noCatalog).map((c) => [c.value, c.label]));
   assert.equal(labels["claude-opus-5-5"], "Opus 5.5 (claude-opus-5-5)");
-  assert.equal(labels["claude-haiku-4-5-20251001"], "Haiku 4.5 (claude-haiku-4-5-20251001)");
+  assert.equal(labels["claude-haiku-5-5"], "Haiku 5.5 (claude-haiku-5-5)");
+  assert.equal(labels["claude-haiku-4-5-20251001"], "Haiku 4.5 (claude-haiku-4-5-20251001)", "Haiku 4.5 stays, as an older model");
   assert.equal(labels.opus, "opus (최신 Opus, Opus 5.5, 기준일 2026-10)", "an alias with the built-in target and when it was checked");
   assert.equal(labels.fable, "fable (최신 Fable, Fable 5.1, 기준일 2026-10)");
+  assert.equal(labels.haiku, "haiku (최신 Haiku, Haiku 5.5, 기준일 2026-10)");
+  assert.equal(m.aliasTarget("haiku", noCatalog), "claude-haiku-5-5");
   assert.match(labels[""], /CLI 기본값/);
   // A run recorded what an alias resolved to: that wins over the checked mapping.
   const seen = { ...noCatalog, resolved: { "claude-cli:opus": { id: "claude-opus-6", at: "2026-11-01" } } };
@@ -475,7 +551,13 @@ async function deck(n, visualPages = []) {
   assert.deepEqual(m.modelChoices("claude-cli", "", [], cat).map((c) => c.value), ["claude-opus-5-5", "claude-haiku-4-5-20251001", "fable", "opus", "sonnet", "haiku", "claude-sonnet-5", ""]);
   assert.equal(m.modelChoices("claude-cli", "", [], cat)[0].title, "For complex work", "the description is the tooltip");
   assert.deepEqual(m.effortChoices("claude-cli", "claude-haiku-4-5-20251001", "low", cat), ["", "low"], "Haiku lists no effort: only the CLI default and the saved value");
-  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "", cat), [""], "an alias uses its target's levels");
+  const haiku45 = { ...cat, resolved: { "claude-cli:haiku": { id: "claude-haiku-4-5-20251001", at: "2026-10-01" } } };
+  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "", haiku45), [""], "an alias uses the levels of what it resolved to");
+  // A catalog read before Claude Code listed Haiku 5.5 (a session started earlier): the built-in entry names it.
+  const haiku55 = { ...cat, resolved: { "claude-cli:haiku": { id: "claude-haiku-5-5", at: "2026-10-08" } } };
+  assert.equal(m.modelLabel("claude-cli", "haiku", haiku55), "haiku (최신 Haiku, 현재 Haiku 5.5)");
+  assert.equal(m.modelName("claude-cli", "claude-haiku-5-5", cat), "Haiku 5.5");
+  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "low", haiku55), m.EFFORT_LEVELS, "every level, like Sonnet 5.5's built-in entry");
   assert.deepEqual(m.effortChoices("claude-cli", "claude-sonnet-5", "", cat), ["", "low", "high"]);
   assert.deepEqual(m.effortChoices("claude-cli", "", "", cat), m.EFFORT_LEVELS, "CLI default model: every level");
   // Codex names and descriptions from its cache.
@@ -496,13 +578,36 @@ async function deck(n, visualPages = []) {
   assert.equal(m.estimateEffort("codex-cli", "gpt-6-luna", "", withDefaults), "medium", "Codex default_reasoning_level");
   assert.equal(m.estimateEffort("claude-cli", "claude-fable-5-1", "low", withDefaults), "low");
   assert.equal(m.estimateEffort("claude-cli", "my-model", "", withDefaults), "", "unknown model and level: factor 1");
+  // Haiku 5.5 as Claude Code's catalog lists it (2026-10-08): effort levels with medium recommended,
+  // Haiku 4.5 an older model without levels. The haiku alias and saved settings follow the catalog.
+  const haikuJson = (levels) => JSON.stringify({ version: 2, catalog: { surface: "cc", config: { models: [
+    { id: "claude-haiku-5-5", name: "Haiku 5.5", description: "Fastest for quick answers", section: "main", thinking: { type: "effort", effort_options: levels } },
+    { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", section: "overflow", thinking: { type: "none" } },
+  ] } } });
+  const allLevels = [{ id: "low" }, { id: "medium", badge: { message: "Recommended" } }, { id: "high" }, { id: "xhigh" }, { id: "max" }];
+  const haikuCat = { claude: m.parseClaudeModelCatalog(haikuJson(allLevels)), codex: { models: [], efforts: {} }, resolved: {} };
+  assert.deepEqual(haikuCat.claude.map((x) => [x.id, x.name, !!x.older, x.efforts, x.defaultEffort]), [
+    ["claude-haiku-5-5", "Haiku 5.5", false, ["low", "medium", "high", "xhigh", "max"], "medium"],
+    ["claude-haiku-4-5-20251001", "Haiku 4.5", true, [], undefined],
+  ]);
+  assert.deepEqual(m.modelChoices("claude-cli", "", [], haikuCat).map((c) => c.value), ["claude-haiku-5-5", "fable", "opus", "sonnet", "haiku", "claude-haiku-4-5-20251001", ""], "Haiku 4.5 after the aliases");
+  assert.deepEqual(m.effortChoices("claude-cli", "claude-haiku-5-5", "", haikuCat), m.EFFORT_LEVELS, "Haiku 5.5: the levels the catalog lists");
+  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "low", haikuCat), m.EFFORT_LEVELS, "the haiku alias: Haiku 5.5's levels, no longer the CLI default only");
+  assert.equal(m.estimateEffort("claude-cli", "haiku", "low", haikuCat), "low", "a saved haiku with low effort counts as low");
+  assert.equal(m.estimateEffort("claude-cli", "haiku", "", haikuCat), "medium", "CLI default: Haiku 5.5's recommended level");
+  assert.deepEqual(m.effortChoices("claude-cli", "claude-haiku-4-5-20251001", "low", haikuCat), ["", "low"], "a saved Haiku 4.5 keeps the CLI default and its saved level");
+  assert.equal(m.estimateEffort("claude-cli", "claude-haiku-4-5-20251001", "low", haikuCat), "", "and still counts no effort");
+  const fewerLevels = { ...haikuCat, claude: m.parseClaudeModelCatalog(haikuJson([{ id: "low" }, { id: "high" }])) };
+  assert.deepEqual(m.effortChoices("claude-cli", "haiku", "", fewerLevels), ["", "low", "high"], "the catalog's list, not a fixed one");
+  assert.equal(m.describeModel("claude-cli", "haiku", haikuCat), "haiku (최신 Haiku, Haiku 5.5, 기준일 2026-10)");
+  assert.equal(m.describeModel("claude-cli", "claude-haiku-5-5", haikuCat), "Haiku 5.5 (claude-haiku-5-5)");
   assert.equal(m.describeEffort(""), "effort CLI 기본값");
   assert.equal(m.describeModel("claude-cli", "", noCatalog), "CLI 기본 모델");
   assert.equal(m.describeModel("claude-cli", "claude-sonnet-5-5", noCatalog), "Sonnet 5.5 (claude-sonnet-5-5)");
   assert.equal(m.describeDefault("claude-cli", "concepts"), "haiku · effort low");
   assert.equal(m.describeDefault("codex-cli", "commentary"), "CLI 기본 모델 · effort medium");
   assert.equal(m.describeDefault("none", "alignment"), "");
-  console.log("PASS: settings migration (Gemini/Ollama tasks to a CLI, empty model/effort to task defaults once), presets, recent models, unsafe values dropped");
+  console.log("PASS: settings migration (Gemini/Ollama tasks to a CLI, empty model/effort to task defaults once, a 600 transcript cap to 1200), presets, recent models, unsafe values dropped");
 }
 
 // ---- key diagram selection and embed (spec 4.8) ----

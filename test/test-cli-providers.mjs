@@ -1,12 +1,16 @@
 /**
  * Test: CliRunner (spawn, timeout, cancel, process-group kill, binary
- * lookup) and the Claude/Codex CLI providers, against the fake executables
- * in test/fixtures/bin. The fakes reject any flag the real CLIs would not
+ * lookup, timers) and the Claude/Codex CLI providers, against the fake
+ * executables in test/fixtures/bin. The fakes reject any flag the real CLIs would not
  * get from us, so a wrong command line fails here. No tokens are spent.
  * Run: node test/test-cli-providers.mjs
  */
 
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import { PassThrough } from "node:stream";
+import timers from "node:timers";
 import { mkdtempSync, rmSync, readdirSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,6 +66,58 @@ const quiet = async (fn) => {
     m.removeJobDir(job);
     s.cleanup();
   }
+}
+
+// The call's timers: window's where there is a window (Obsidian), Node's
+// `timers` where there is none. The stub child has no pid, so no process
+// starts and no signal is sent; it closes when the test says.
+{
+  let child = null;
+  const spawnFn = () => {
+    child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    return child;
+  };
+  const run = (timeoutMs) => m.runCli({ bin: "/fake/claude", args: [], platform: "darwin", spawnFn, timeoutMs });
+  const AFTER_TIMEOUT = [m.KILL_GRACE_MS, 2 * m.KILL_GRACE_MS]; // SIGKILL, then give up
+
+  const set = [];
+  const cleared = [];
+  globalThis.window = { setTimeout: (fn, ms) => set.push({ fn, ms }), clearTimeout: (id) => void cleared.push(id) };
+  try {
+    const p = run(12345);
+    assert.deepEqual(set.map((t) => t.ms), [12345], "the timeout is set with window.setTimeout");
+    set[0].fn();
+    assert.deepEqual(set.map((t) => t.ms), [12345, ...AFTER_TIMEOUT], "then the SIGKILL and give-up timers");
+    child.emit("close", null);
+    await assert.rejects(p, (e) => e.kind === "timeout");
+    assert.deepEqual(cleared, [1, 2, 3], "all three cleared with window.clearTimeout");
+  } finally {
+    delete globalThis.window;
+  }
+
+  const nodeSet = [];
+  const nodeCleared = [];
+  const { setTimeout: realSet, clearTimeout: realClear } = timers;
+  timers.setTimeout = (fn, ms) => (nodeSet.push(ms), realSet(fn, ms));
+  timers.clearTimeout = (t) => (nodeCleared.push(t), realClear(t));
+  syncBuiltinESMExports();
+  try {
+    const p = run(30);
+    assert.deepEqual(nodeSet, [30], "no window: the timeout is a Node timer");
+    await sleep(150);
+    assert.deepEqual(nodeSet, [30, ...AFTER_TIMEOUT], "it fired, and the SIGKILL and give-up timers are Node timers too");
+    child.emit("close", null);
+    await assert.rejects(p, (e) => e.kind === "timeout");
+    assert.equal(nodeCleared.length, 3, "all three cleared with Node's clearTimeout");
+  } finally {
+    timers.setTimeout = realSet;
+    timers.clearTimeout = realClear;
+    syncBuiltinESMExports();
+  }
+  console.log("PASS: runCli's timers are window's where there is a window, Node's where there is none");
 }
 
 // Cancel through AbortSignal, before and during the call.
@@ -286,6 +342,25 @@ for (const [label, Provider, bin] of [
   assert.deepEqual(m.parseJsonText('Here you go:\n{"a":{"b":2}}\nHope this helps.'), { a: { b: 2 } });
   assert.deepEqual(m.parseJsonText('First try:\n```json\n{"a":1,\n```\nFixed:\n```json\n{"a":2}\n```\nDone.'), { a: 2 }, "last fenced block");
   assert.throws(() => m.parseJsonText("no json here"));
+  // A raw `\|` (a table wikilink) inside a JSON string is repaired; nothing else is.
+  const linkIn = (json) => m.parseJsonText(json).c;
+  assert.equal(linkIn(String.raw`{"c":"| [[A (가)\\|a]] |"}`), String.raw`| [[A (가)\|a]] |`, "a valid \\\\| is read as is");
+  assert.equal(m.repairPipeEscapes(String.raw`{"c":"[[A (가)\\|a]]"}`), String.raw`{"c":"[[A (가)\\|a]]"}`, "a valid \\\\| is left alone");
+  assert.equal(linkIn(String.raw`{"c":"| [[A (가)\|a]] |"}`), String.raw`| [[A (가)\|a]] |`, "a raw \\| is repaired");
+  assert.equal(linkIn(String.raw`{"c":"x\\\|y"}`), String.raw`x\\|y`, "an escaped backslash, then a raw \\|");
+  assert.equal(linkIn(String.raw`{"c":"say \"hi\" [[A\|b]] \u00e9\n"}`), 'say "hi" [[A\\|b]] é\n', "other escapes and quotes inside the string stay");
+  assert.equal(linkIn('Here you go:\n' + String.raw`{"c":"[[A\|b]]"}` + '\nDone.'), String.raw`[[A\|b]]`, "repaired in the brace span too");
+  assert.equal(linkIn('```json\n' + String.raw`{"c":"[[A\|b]]"}` + '\n```'), String.raw`[[A\|b]]`, "and in a fence");
+  assert.equal(m.repairPipeEscapes(String.raw`{"c":1} \| {"d":"\q"}`), String.raw`{"c":1} \| {"d":"\q"}`, "outside strings and other escapes: untouched");
+  for (const bad of [String.raw`{"c":"\q"}`, String.raw`{"c":"[[A\|b]] \q"}`]) {
+    let expected;
+    try {
+      JSON.parse(bad);
+    } catch (e) {
+      expected = e.message;
+    }
+    assert.throws(() => m.parseJsonText(bad), (e) => e instanceof SyntaxError && e.message === expected, "other invalid escapes still fail, with the original error");
+  }
   // Login failure only from the CLI's error field, never stderr noise (review N6).
   const noisy = new m.CliRunError("exit", "x", "warn: GET /v1/oauth token refresh 401 from a plugin");
   assert.equal(m.isAuthError(noisy), false);
@@ -309,5 +384,5 @@ for (const [label, Provider, bin] of [
   assert.equal(x.text, "hello");
   assert.deepEqual(x.usage, { calls: 1, inputTokens: 50, cachedInputTokens: 20, outputTokens: 5, imagesSent: 0, costUsd: 0 });
   assert.throws(() => m.parseCodexEvents('{"type":"turn.failed","error":{"message":"quota"}}'), /quota/);
-  console.log("PASS: Claude JSON result and Codex JSONL parsing (usage with cache reads)");
+  console.log("PASS: Claude JSON result and Codex JSONL parsing (usage with cache reads); a raw \\| in a JSON string is repaired, other invalid escapes still fail");
 }

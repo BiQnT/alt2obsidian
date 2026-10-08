@@ -81,7 +81,7 @@ async function main() {
   console.log("\n=== Verdict ===");
   const hasContent = memo || transcriptSegments.length > 0;
   if (memo) console.log("✓ Memo available");
-  if (transcriptSegments.length > 0) console.log("✓ Transcript available — LLM can summarize");
+  if (transcriptSegments.length > 0) console.log("✓ Transcript available: LLM can summarize");
   if (pdfMatch) console.log("✓ PDF slides available");
   if (!hasContent) console.log("✗ No usable content found");
 }

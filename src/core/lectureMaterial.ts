@@ -1,10 +1,14 @@
 // Compact lecture-material excerpt of a PDF (the "[PDF 강의자료 발췌]" input
-// of prompts/summary-enhance-material.md and summary-from-material.md).
+// of prompts/lecture-note-enhance-material.md and lecture-note-from-material.md
+// in the plugin, and of summary-enhance-material.md in the Skill).
 // Shared by PdfProcessor and the Skill CLI (scripts/src/lecture-material.ts)
 // so both feed the same excerpt to the prompt. No obsidian import.
 
 import type { LectureMaterialContext, LectureMaterialPage } from "../types";
 import type { PdfTextSource } from "./slideHash";
+
+/** Size budget of the excerpt, in characters. */
+export const MATERIAL_MAX_CHARS = 12000;
 
 /**
  * Scores every page against `seedText` (lecture title + Alt summary) and
@@ -43,8 +47,10 @@ export async function extractLectureMaterialContext(
 
     onProgress?.(pageNum, pageCount);
 
-    if (pageNum % 10 === 0 && pageNum < pageCount) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Lets Obsidian draw the progress; under plain Node (the Skill's CLI)
+    // there is no window and nothing to draw.
+    if (pageNum % 10 === 0 && pageNum < pageCount && typeof window !== "undefined") {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     }
   }
 
@@ -59,7 +65,7 @@ function buildCompactContext(
   extractedCharCount: number
 ): LectureMaterialContext {
   const maxPages = 14;
-  const maxChars = 12000;
+  const maxChars = MATERIAL_MAX_CHARS;
   const firstPages = pages.filter((page) => page.pageNum <= 3);
   const scoredPages = [...pages]
     .sort((a, b) => b.score - a.score)

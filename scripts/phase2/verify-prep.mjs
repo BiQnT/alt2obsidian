@@ -609,13 +609,13 @@ function cosine(a, b) {
     nb += y * y;
   return na === 0 || nb === 0 ? 0 : dot / Math.sqrt(na * nb);
 }
-function topicShift(segs, i, pos, window) {
+function topicShift(segs, i, pos, window2) {
   const at = pos[i];
   const before = [];
   const after = [];
-  for (let k = i - 1; k >= 0 && pos[k] >= at - window; k--)
+  for (let k = i - 1; k >= 0 && pos[k] >= at - window2; k--)
     before.push(segs[k].text);
-  for (let k = i; k < segs.length && pos[k] < at + window; k++)
+  for (let k = i; k < segs.length && pos[k] < at + window2; k++)
     after.push(segs[k].text);
   const a = termCounts(before.join(" "));
   const b = termCounts(after.join(" "));
@@ -765,7 +765,7 @@ function splitTranscriptSections(segments) {
 var DEFAULT_GENERATION = {
   batchSize: 8,
   imageRule: "auto",
-  transcriptCapChars: 600,
+  transcriptCapChars: 1200,
   tokenCapPerLecture: 0,
   saveKeyDiagrams: true,
   onlyChangedSlides: true
@@ -915,7 +915,7 @@ var CLAUDE_ALIASES = [
   { alias: "fable", family: "Fable", knownId: "claude-fable-5-1" },
   { alias: "opus", family: "Opus", knownId: "claude-opus-5-5" },
   { alias: "sonnet", family: "Sonnet", knownId: "claude-sonnet-5-5" },
-  { alias: "haiku", family: "Haiku", knownId: "claude-haiku-4-5-20251001" }
+  { alias: "haiku", family: "Haiku", knownId: "claude-haiku-5-5" }
 ];
 var CLAUDE_MODEL_ALIASES = CLAUDE_ALIASES.map((a) => a.alias);
 var EFFORT_OUTPUT_FACTOR = {
@@ -997,8 +997,8 @@ function capLength(sentence) {
   const parts = [];
   let rest = sentence;
   while (rest.length > MAX_CLAIM_CHARS) {
-    const window = rest.slice(0, MAX_CLAIM_CHARS);
-    const cut = Math.max(window.lastIndexOf("; "), window.lastIndexOf(", "));
+    const window2 = rest.slice(0, MAX_CLAIM_CHARS);
+    const cut = Math.max(window2.lastIndexOf("; "), window2.lastIndexOf(", "));
     const at = cut > MAX_CLAIM_CHARS / 3 ? cut + 1 : MAX_CLAIM_CHARS;
     parts.push(rest.slice(0, at).trim());
     rest = rest.slice(at).trim();
@@ -1101,7 +1101,7 @@ var VISUAL_RATIO = 0.3;
 var LOW_TEXT_CHARS = 30;
 var LOW_TEXT_VISUAL_RATIO = 0.08;
 var TOC_LINE = /^(table of contents|contents|목차|차례|outline|agenda)\s*:?$/i;
-var THANKS_LINE = /^(thank you( very much)?|thanks|감사합니다|수고하셨습니다|q\s*&\s*a|questions?|any questions|질문 있나요|the end|끝)\s*[!.?]*$/i;
+var THANKS_LINE = /^(?:(?:thank(?:s| you)(?: (?:very|so) much)?(?: for (?:listening|watching|your attention|your time))?|any questions|questions?(?:\s*(?:&|and)\s*answers?)?|q\s*(?:&|and)\s*a|the end|감사합니다|고맙습니다|수고하셨습니다|(?:경청해|들어)\s*주셔서\s*감사합니다|질문\s*있(?:나요|으신가요|으세요|습니까)|질문(?:과|\s*&)\s*답변|질의\s*응답|질문(?=\s*\?)|끝)[\s!.?,]*)+$/i;
 var COVER_TITLE = /\b(lecture|lec\.?|chapter|week|unit|session)\s*\d+|\b[A-Z]{2,6}\s?-?\d{3,4}[A-Z]?\b|제\s*\d+\s*강|\d+\s*강\b|\d+\s*주차|강의/i;
 var COVER_AFFILIATION = /universit|department|dept\.|school of|college|institute|laborator|\blab\b|professor|prof\.|@[\w.-]+\.[a-z]{2,}|대학|학과|학부|연구실|교수/i;
 var COVER_MAX_CHARS = 1200;

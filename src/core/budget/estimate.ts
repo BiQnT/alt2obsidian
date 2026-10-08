@@ -48,10 +48,40 @@ export const PROVIDER_COSTS: Record<
   "codex-cli": { fixedPerTurn: 11900, schemaTurns: 0, imageTurns: 0, perImage: 1750 },
 };
 
-/** Expected output per generated slide: commentary + gist + JSON keys. */
-export const OUTPUT_TOKENS_PER_SLIDE = { content: 420, visual: 620 } as const;
+/**
+ * Expected output per generated slide at medium effort: commentary + gist +
+ * JSON keys + reasoning. Refitted on real runs with the 2.0.2 prompts
+ * (2026-10-08, Claude CLI sonnet, effort medium, the overview and concept
+ * figures below taken as they are): L5, 27 content and 3 visual slides
+ * generated, 33,940 to 38,624 output tokens over three runs; 6강, 31
+ * content and 2 visual, 36,686. That is about 1,000 per content slide, 2.4
+ * times the former 420; visual slides keep their former ratio (620 / 420).
+ */
+export const OUTPUT_TOKENS_PER_SLIDE = { content: 1000, visual: 1480 } as const;
 export const OVERVIEW_OUTPUT_TOKENS = 1400;
 export const CONCEPTS_OUTPUT_TOKENS = 3800;
+
+/** Length cap of a lecture-level note (prompts/lecture-note-*.md: "분량은 8000자 이내"). */
+export const LECTURE_NOTE_CHARS = 8000;
+/**
+ * Expected output of one call that writes a whole lecture-level note at
+ * medium effort. The visible note at the 8000-character cap is about 5,300
+ * tokens (the size of Alt's own 7,900-character summary of a one-hour
+ * lecture by estimateTextTokens), and a two-hour lecture fills it. Reasoning
+ * is counted as the per-slide refit above found it: real output 2.4 times
+ * the former visible-text figure. Not measured on this call itself.
+ */
+export const LECTURE_NOTE_OUTPUT_TOKENS = 12700;
+
+/**
+ * Stand-in for text the estimate cannot read yet (a note still to be
+ * written, the PDF excerpt): two Hangul to three ASCII characters, 0.66
+ * tokens a character by estimateTextTokens, so 8000 characters come to
+ * 5,280 tokens, like Alt's own 7,900-character summary.
+ */
+export function textStandIn(chars: number): string {
+  return "가나 a ".repeat(Math.ceil(chars / 5)).slice(0, chars);
+}
 
 export interface CallShape {
   promptText: string;

@@ -66,7 +66,7 @@ export class VerifyPanel {
     // Notion MCP.
     const notionBox = root.createDiv({ cls: "alt-to-obs-verify-input" });
     const row = notionBox.createDiv({ cls: "alt-to-obs-input-row" });
-    this.notionInput = row.createEl("input", { type: "text", placeholder: "https://www.notion.so/..." });
+    this.notionInput = row.createEl("input", { type: "text", placeholder: "https://www.notion.so/... 또는 https://app.notion.com/p/..." });
     const fetchBtn = row.createEl("button", { text: "가져오기" });
     fetchBtn.addEventListener("click", () => void this.fetchNotion(fetchBtn));
     const nm = this.plugin.notionFetchModel();

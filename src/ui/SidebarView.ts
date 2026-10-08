@@ -71,6 +71,8 @@ export class Alt2ObsSidebarView extends ItemView {
   /** Bumped on every refresh so a stale background loop stops. */
   private loadGeneration = 0;
   private busy = false;
+  /** A lecture note's metadata changed since the statuses were read (see onOpen). */
+  private statusesStale = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: Alt2ObsPlugin) {
     super(leaf);
@@ -102,12 +104,31 @@ export class Alt2ObsSidebarView extends ItemView {
     this.verifyPane = container.createDiv({ cls: "alt-to-obs-verify-pane" });
     this.verifyPanel = new VerifyPanel(this.app, this.plugin, this.verifyPane);
     this.verifyPanel.render();
+    // The import's progress, estimate and run panel and messages
+    // (alt-to-obs-import-only) belong to the import tabs: while 노트 검증 is
+    // shown they are hidden as they are, a pending estimate included.
     this.renderProgressSection(container);
-    this.cliPanel = container.createDiv({ cls: "alt-to-obs-cli-panel" });
+    this.cliPanel = container.createDiv({ cls: "alt-to-obs-cli-panel alt-to-obs-import-only" });
     this.cliPanel.hide();
     this.renderMessageSection(container);
     this.renderRecentSection(container);
     this.switchTab(this.tab);
+    // Statuses come from the metadata cache. Restored at startup, the list
+    // can be built before Obsidian has indexed every note (an imported
+    // lecture showed as 새 노트): a lecture note's metadata arriving or
+    // changing marks them stale, and the next "resolved" reads them again
+    // (from the vault only, the list is not fetched from Alt again).
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file, _data, cache) => {
+        const fm = cache.frontmatter;
+        if (fm?.alt_local_id || fm?.alt_id || this.vaultNotes.some((v) => v.path === file.path)) this.statusesStale = true;
+      })
+    );
+    this.registerEvent(
+      this.app.metadataCache.on("resolved", () => {
+        if (this.statusesStale) this.recheckStatuses();
+      })
+    );
     void this.refreshLocal();
   }
 
@@ -136,6 +157,7 @@ export class Alt2ObsSidebarView extends ItemView {
     this.localPane?.toggle(tab === "local");
     this.urlPane?.toggle(tab === "url");
     this.verifyPane?.toggle(tab === "verify");
+    this.containerEl.children[1]?.toggleClass("is-verify-tab", tab === "verify");
     // Lists of notes and lectures may have changed since the tab was built.
     if (tab === "verify") this.verifyPanel?.refreshLists();
   }
@@ -481,7 +503,7 @@ export class Alt2ObsSidebarView extends ItemView {
         if (d?.hasSlides && d.pdfPath) {
           button("Alt 슬라이드로 바꾸기", () => void this.switchToAlt(it, notePath), { work: true, title: "다음 가져오기부터 첨부한 PDF 대신 Alt의 슬라이드를 씁니다" });
         }
-        button("첨부 해제", () => void this.confirmDetach(it, notePath), { work: true, title: "첨부한 PDF 사본을 휴지통으로 옮기고 표시를 지웁니다 (보관함의 원래 파일은 그대로)" });
+        button("첨부 해제", () => void this.confirmDetach(it, notePath), { work: true, title: "첨부할 때 만든 PDF 사본을 Obsidian에서 정한 파일 삭제 방식대로 지우고 첨부 표시를 없앱니다 (원본 파일은 그대로)" });
       }
     } else if (kind === "transcript") {
       button("PDF 첨부", () => void this.attachForLocal(it), { work: true, title: "강의 PDF를 골라 슬라이드 강의로 가져옵니다" });
@@ -491,7 +513,7 @@ export class Alt2ObsSidebarView extends ItemView {
     }
   }
 
-  /** What happens to the attached PDF, for the confirmation text (only a plugin-made copy goes to the trash). */
+  /** What happens to the attached PDF, for the confirmation text (only a plugin-made copy is deleted). */
   private attachedFate(notePath: string, rename: boolean, isCopy: boolean): string {
     const pdf = this.plugin.siblingPdf(notePath);
     const path = pdf?.path ?? attachedPdfPath(notePath);
@@ -501,13 +523,13 @@ export class Alt2ObsSidebarView extends ItemView {
         ? `${path}는 플러그인이 만든 사본이 아니거나 그 뒤 바뀐 파일이라 지우지 않고, Alt PDF가 그 자리에 저장되지 않도록 "${path.replace(/\.pdf$/i, "")} (첨부한 PDF).pdf"로 이름을 바꿔 둡니다.`
         : `${path}는 플러그인이 만든 사본이 아니거나 그 뒤 바뀐 파일이라 지우지 않고 그대로 둡니다.`;
     }
-    return `첨부할 때 플러그인이 만든 사본(${path})은 시스템 휴지통으로 옮깁니다(안 되면 보관함의 .trash 폴더). 영구 삭제하지 않으며 원본 파일은 그대로입니다.`;
+    return `첨부할 때 플러그인이 만든 사본(${path})은 Obsidian에서 정한 파일 삭제 방식대로(기본은 시스템 휴지통) 지웁니다. 영구 삭제로 정해 두었다면 되돌릴 수 없습니다. 원본 파일은 그대로입니다.`;
   }
 
   /** Message after the attached PDF left. */
   private releasedText(r: { pdfPath: string | null; trashed: boolean; keptAt: string | null }): string {
     if (!r.pdfPath) return "";
-    if (r.trashed) return ` 첨부한 사본(${r.pdfPath})은 휴지통으로 옮겼습니다.`;
+    if (r.trashed) return ` 첨부한 사본(${r.pdfPath})은 Obsidian에서 정한 파일 삭제 방식대로 지웠습니다.`;
     return r.keptAt && r.keptAt !== r.pdfPath ? ` 원래 파일은 ${r.keptAt}로 이름을 바꿔 두었습니다.` : ` 원래 파일(${r.pdfPath})은 그대로 두었습니다.`;
   }
 
@@ -632,6 +654,30 @@ export class Alt2ObsSidebarView extends ItemView {
     void this.loadDetails();
   }
 
+  /**
+   * Statuses read again from the metadata cache once it has caught up (see
+   * onOpen). Only the notes whose status changed are drawn again, so a
+   * subject being typed keeps its field unless that note changed; a note
+   * found imported gets its slide comparison in the details loop.
+   */
+  private recheckStatuses(): void {
+    this.statusesStale = false;
+    if (this.items.length === 0) return;
+    this.vaultNotes = this.plugin.vaultLectureNotes();
+    const key = (s: LocalNoteStatus) => (s.kind === "imported" ? `imported:${s.path}` : s.kind === "link" ? `link:${s.candidates.map((c) => c.path).join("|")}` : s.kind);
+    let changed = false;
+    for (const it of this.items) {
+      const next = this.plugin.localNoteStatus(it.note, this.vaultNotes, it.details?.slidesTitle);
+      if (key(next) === key(it.status)) continue;
+      if (next.kind === "imported" && it.details?.pdfPath) it.details = undefined;
+      it.status = next;
+      changed = true;
+      this.fillItem(it);
+      if (it.note.id === this.selectedId) this.renderFooter();
+    }
+    if (changed) void this.loadDetails();
+  }
+
   private renderInputSection(container: Element): void {
     const section = container.createDiv({ cls: "alt-to-obs-input-section" });
 
@@ -682,7 +728,7 @@ export class Alt2ObsSidebarView extends ItemView {
 
   private renderProgressSection(container: Element): void {
     this.progressContainer = container.createDiv({
-      cls: "alt-to-obs-progress",
+      cls: "alt-to-obs-progress alt-to-obs-import-only",
     });
     this.progressContainer.hide();
 
@@ -698,7 +744,7 @@ export class Alt2ObsSidebarView extends ItemView {
   }
 
   private renderMessageSection(container: Element): void {
-    this.messageContainer = container.createDiv();
+    this.messageContainer = container.createDiv({ cls: "alt-to-obs-import-only" });
   }
 
   private renderRecentSection(container: Element): void {
@@ -786,7 +832,7 @@ export class Alt2ObsSidebarView extends ItemView {
     this.clearMessage();
 
     try {
-      // Phase 1: Preview — scrape Alt note data.
+      // Phase 1 (preview): scrape Alt note data.
       this.updateProgress(0, "Alt 노트 가져오는 중...");
 
       const preview = await this.plugin.previewImport(url, (stage, pct) => {

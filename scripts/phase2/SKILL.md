@@ -3,7 +3,7 @@ name: alt2obs
 description: Import an Alt (altalt.io) lecture into the user's Obsidian vault as notes compatible with the Alt2Obs 2.0 plugin (named Alt2Obsidian before 2.0.0). A lecture with slides gets page-anchored per-slide Korean commentary from Claude Code's native PDF vision (Read with pages parameter); a lecture without slides gets a transcript section summary note, or the user attaches a PDF and it is imported like a slide lecture. Uses the plugin's prompt files, writing rules and helper scripts, so the notes work in the plugin (Synced Viewer, re-import merge, note verification).
 ---
 
-# alt2obs Skill (Phase 2 Stage A — Claude Code Max import path)
+# alt2obs Skill (Phase 2 Stage A: Claude Code Max import path)
 
 This Skill produces an Obsidian lecture note from an Alt note on this Mac (preferred: Alt's local data, with transcript timestamps) or from a public Alt URL (fallback). The output uses the Alt2Obs 2.0 plugin's storage format (`## 📚 슬라이드 N` sections, `<!-- alt2obs:slide:N hash:H start --> ... <!-- end -->` managed markers, `> [!note] 내 메모` callouts; for a lecture without slides `## ⏱ 구간 N [mm:ss~mm:ss]` sections in `<!-- alt2obs:section:N hash:H start --> ... <!-- end -->` markers), so the plugin's Synced Viewer renders it correctly and re-imports with either tool preserve user free-space through the same merge code.
 
@@ -25,7 +25,7 @@ Parse from the user's message (or ask if missing):
 | `url` | `https://altalt.io/note/b7472c41-…` (fallback, no timestamps) | one of `note` / `url` |
 | `vault` | absolute path of the Obsidian vault | yes: read from `~/Library/Application Support/obsidian/obsidian.json` if a single vault, else ask |
 | `subject` | folder under `<base>/`, e.g. `CSED232` | local notes: the `subject` guessed from the Alt folder (confirm with the user); URL: ask if not in user's message |
-| `title` | filename stem, e.g. `8강` | optional — falls back to scraped Alt note title |
+| `title` | filename stem, e.g. `8강` | optional: falls back to scraped Alt note title |
 
 Exam periods are obsolete: 2.0 removed the plugin's exam summary (spec G5), so the Skill no longer asks for a `midterm` / `final` period and adds no period tag. Existing `Exam/` notes and period tags in old notes are left as they are.
 
@@ -92,7 +92,7 @@ curl -sSL -o "/tmp/alt-deck-<noteId>.pdf" "<pdfUrl>"
 
 Quote the URL (it has `&` query params). Verify the file is non-empty (`ls -l`).
 
-The steps follow the plugin's import pipeline (`prepareCliImport` and `runCliImport` in `$REPO/src/main.ts`; for a lecture without slides, `runLegacyImport`) in the same order, with the same prompt files and the same deterministic helpers, so a Skill import and a plugin import of the same lecture have the same structure. The prompt files in `$REPO/prompts/` are the single source for every generation rule; `$REPO/prompts/README.md` explains the `{{variable}}` rules. Keep scratch files under `/tmp/alt2obs-<noteId>/`.
+The steps follow the plugin's import pipeline (`prepareCliImport` and `runCliImport` in `$REPO/src/main.ts`; for a lecture without slides, `runTranscriptImport`) in the same order, with the same prompt files and the same deterministic helpers, so a Skill import and a plugin import of the same lecture have the same structure. The prompt files in `$REPO/prompts/` are the single source for every generation rule; `$REPO/prompts/README.md` explains the `{{variable}}` rules. Keep scratch files under `/tmp/alt2obs-<noteId>/`.
 
 ### 3. Build the lecture summary (overview source)
 
@@ -111,14 +111,14 @@ b. **Lecture-material pass** (always attempted): write the seed text `<title>\n\
 
    If it prints `{"material":null}`, keep `S`. Otherwise generate with `summary-enhance-material.system.md` + `summary-enhance-material.md`, `{{summary}}` = `S` truncated, and `{{pageCount}}`, `{{excerptPageCount}}`, `{{excerptScope}}`, `{{materialText}}` taken verbatim from the JSON. The result replaces `S`.
 
-`S` is now the enhanced summary. Save it to `/tmp/alt2obs-<noteId>/summary.md`.
+`S` is now the overview. Save it to `/tmp/alt2obs-<noteId>/summary.md`. These prompts give it the shape of the plugin's overview, in the plain "~다" style: `## 개요` (2 to 4 sentences), `## 핵심 개념` (4 to 8 `**Term:** definition` bullets) and `## 흐름` (3 to 7 topics, with page ranges such as `(p.3~5)` after the material pass). The plugin builds its overview from per-slide gists (`overview-from-gists.md`); the Skill cannot, because its commentary comes later (step 6) and has no gists. The overview stays short because the slide commentary below it carries the details; the plugin's lecture-level note, where this text is the whole note, uses the full-note prompts `lecture-note-*.md` instead. Keep the scraped summary, `T` and the material JSON of 3b: step 4 reads them too. When neither pass runs (no transcript or an Alt summary of 2500 characters or more, and a PDF without a text layer), `S` stays Alt's own summary.
 
 ### 4. Extract concepts
 
-Concepts are extracted from the enhanced summary `S` (not from the slide commentary), exactly like the plugin's `ConceptExtractor`. The concept notes are what the lecture's `[[wikilinks]]` resolve to; without this step the wikilinks dangle.
+Concepts are extracted from the overview `S` and the text it was written from (not from the slide commentary), with the plugin's concept prompt (`ConceptExtractor.extract`). The concept notes are what the lecture's `[[wikilinks]]` resolve to; without this step the wikilinks dangle.
 
 1. List existing concept names by globbing `<vault>/<base>/<subject>/Concepts/*.md` (use `Bash` `ls`). These are reuse candidates. New concepts are named `English (한국어)` (for example `Lottery Scheduling (로터리 스케줄링)`); notes made before 2.0.0-beta.5 are named `한국어 (English)`. Both orders name the same concept: a new name matches an existing one when the English parts are equal, or the Korean parts are equal and the English parts are not plainly different (the same words, or one with an added s, es, ing, ed or d, as in Context Switch and Context Switching; Process and Processor are different words), ignoring case, spaces, `_` and `-` (`src/core/conceptNames.ts`; `Latency (지연)` and `Delay (지연)` stay two concepts).
-2. Generate with `$REPO/prompts/concept-extraction.system.ko.md` + `concept-extraction.md`: `{{subject}}` = subject, `{{langInstruction}}` = the Korean (`ko`) branch of `langInstruction` in `$REPO/src/generator/ConceptExtractor.ts`, `{{existingConceptHint}}` = empty if there are no existing names, else `\nExisting concept notes in this course (REUSE these exact names when the same concept appears, also when a name is in the older "한국어 (English)" order):\n` + one `- <name>` line per name + `\n`, `{{summary}}` = `S`. The prompt defines the JSON shape (`concepts[]` with `name`, `definition`, `lectureContext`, `example`, `caution`, `relatedConcepts`, plus `tags[]`).
+2. Generate with `$REPO/prompts/concept-extraction.system.ko.md` + `concept-extraction.md`: `{{subject}}` = subject, `{{langInstruction}}` = the Korean (`ko`) branch of `langInstruction` in `$REPO/src/generator/ConceptExtractor.ts`, `{{existingConceptHint}}` = empty if there are no existing names, else `\nExisting concept notes in this course (REUSE these exact names when the same concept appears, also when a name is in the older "한국어 (English)" order):\n` + one `- <name>` line per name + `\n`, `{{summary}}` = `S`, then the text step 3 wrote it from, so the concepts get the lecture's definitions, examples and cautions and not only the short overview (no extra generation: step 3 already read this text): when a pass of step 3 replaced the scraped summary and that summary is not empty, `\n\n[Alt 요약]\n` + the scraped summary truncated; when the transcript pass ran, `\n\n[강의 전사]\n` + `T`; when the material pass ran, `\n\n[PDF 강의자료 발췌]\n` + its `materialText`. When neither pass ran, `S` is Alt's own summary and nothing is added. The prompt defines the JSON shape (`concepts[]` with `name`, `definition`, `lectureContext`, `example`, `caution`, `relatedConcepts`, plus `tags[]`).
 3. Replace every extracted name that matches an existing note (rule in 4.1) with that note's exact name, in its own order, and merge duplicates. Never rename an existing file. Save the concept names as a JSON array to `/tmp/alt2obs-<noteId>/concepts.json`.
 
 **Concept note files:**
@@ -185,7 +185,7 @@ Reading a PDF returns the page contents as images you can see directly. Run the 
 node "$REPO/scripts/phase2/slide-prompt.mjs" <pageCount> --concepts "/tmp/alt2obs-<noteId>/known-concepts.json" --prep "/tmp/alt2obs-<noteId>/prep.json"
 ```
 
-It prints `{"system":"...","slides":[{"slide":N,"user":"..."}]}`. For page N follow `system` (the role, content rules and the writing rules the plugin also uses: one speech level, academic terms and concept names in their original English with general words in Korean, links as `[[English (한국어)|English]]` with an existing note's exact name when there is one, no narration about the slide, no unverified exam claims) and `slides[N-1].user`. For reference, the two optional fragments of `user` are, each after a blank line: `[기존 개념 목록 (같은 의미면 이 이름을 그대로 쓰시오. 새 개념은 새 이름으로 도입 가능)]` plus the names (first 100, comma separated), and `[해당 구간 음성 전사 (참고용. 그대로 붙여넣지 말고 교수님이 강조한 점만 골라 쓰시오)]` plus the trimmed chunk; each is absent when empty (`$REPO/src/prompts/slidePrompt.ts`, fixture `test/fixtures/skill-slide-prompts.json`). Without prep use `--transcript transcript.txt` (even split) instead of `--prep`.
+It prints `{"system":"...","slides":[{"slide":N,"user":"..."}]}`. For page N follow `system` (the role, content rules and the writing rules the plugin also uses: one speech level, academic terms and concept names in their original English with general words in Korean, links as `[[English (한국어)|English]]` with an existing note's exact name when there is one, no narration about the slide, no unverified exam claims) and `slides[N-1].user`. For reference, the two optional fragments of `user` are, each after a blank line: `[기존 개념 목록 (같은 의미면 이 이름을 그대로 쓰시오. 새 개념은 새 이름으로 도입 가능)]` plus the names (first 100, comma separated), and `[해당 구간 음성 전사 (그대로 붙여넣지 말고 교수님이 든 예시, 이유, 비유, 주의점부터 살려 쓰시오)]` plus the trimmed chunk; each is absent when empty (`$REPO/src/prompts/slidePrompt.ts`, fixture `test/fixtures/skill-slide-prompts.json`). Without prep use `--transcript transcript.txt` (even split) instead of `--prep`.
 
 **Token saving (same prep as the plugin 2.0 CLI path).** Before writing commentary, save the full transcript to `/tmp/alt2obs-<noteId>/transcript.txt` and run the plugin's deterministic prep:
 

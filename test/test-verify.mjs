@@ -3,7 +3,8 @@
  * claim splitting, BM25 evidence (slides top 2, aligned transcript top 2),
  * script-only "근거 없음", likely-true claims last, batches of 20, the
  * estimate from the exact prompts, the shared retry rules, the missing-slide
- * call, the verification note and its re-run merge.
+ * call, the verification note and its re-run merge, and the model the
+ * sidebar's Notion line names.
  * Run: node test/test-verify.mjs
  */
 
@@ -387,6 +388,27 @@ try {
   assert.equal(m.fetchInputMatches({ url: pageUrl }, pageUrl), true);
   assert.equal(m.fetchInputMatches({ id: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d" }, pageUrl), true);
   assert.equal(m.fetchInputMatches({ id: "notion://docs/enhanced-markdown-spec" }, pageUrl), false);
+  // Notion links: the old and the notion.com forms.
+  const nid = "0123456789abcdef0123456789abcdef";
+  for (const ok of [`https://app.notion.com/p/Some-Page-Title-${nid}`, `https://www.notion.com/${nid}`, `https://www.notion.so/work/Some-Title-${nid}`, `https://team.notion.site/Some-Title-${nid}`, `https://app.notion.com/p/Some-Title-${nid}?pvs=4`, `https://app.notion.com/p/Some-Title-${nid}?source=copy_link#blk`]) {
+    assert.equal(m.isNotionUrl(ok), true, ok);
+    assert.equal(m.notionPageId(ok), nid, ok);
+  }
+  assert.equal(m.notionPageId("https://www.notion.so/01234567-89ab-cdef-0123-456789abcdef"), nid);
+  for (const bad of [`http://app.notion.com/p/x-${nid}`, `https://notion.com.evil.example/p/x-${nid}`, `https://evilnotion.so/x-${nid}`, `https://evilnotion.com/x-${nid}`, `https://notion.so.evil.example/${nid}`, "not a url"]) assert.equal(m.isNotionUrl(bad), false, bad);
+  assert.equal(m.notionFetchUrl(`https://app.notion.com/p/Some-Page-Title-${nid}?pvs=4`), `https://www.notion.so/${nid}`);
+  assert.equal(m.notionFetchUrl(`https://www.notion.com/Some-${nid}`), `https://www.notion.so/${nid}`);
+  assert.equal(m.notionFetchUrl(`https://www.notion.so/work/Some-Title-${nid}?pvs=4`), `https://www.notion.so/work/Some-Title-${nid}?pvs=4`);
+  assert.equal(m.notionFetchUrl(`https://team.notion.site/Some-Title-${nid}`), `https://team.notion.site/Some-Title-${nid}`);
+  assert.throws(() => m.notionFetchUrl("https://www.notion.com/product"), /페이지 ID/);
+  const comUrl = `https://app.notion.com/p/Some-Page-Title-${nid}`;
+  for (const given of [{ id: nid }, { id: "01234567-89ab-cdef-0123-456789abcdef" }, { url: comUrl }, { url: `https://www.notion.so/${nid}` }, { id: `https://www.notion.so/work/Some-Title-${nid}` }]) {
+    assert.equal(m.fetchInputMatches(given, comUrl), true, JSON.stringify(given));
+    assert.equal(m.fetchInputMatches(given, `https://www.notion.so/work/Other-${nid}`), true);
+  }
+  assert.equal(m.fetchInputMatches({ id: "ffffffffffffffffffffffffffffffff" }, comUrl), false);
+  assert.match(m.notionCachePath("/c", comUrl), new RegExp(`${nid}\\.json$`));
+  assert.equal(m.notionCachePath("/c", comUrl), m.notionCachePath("/c", `https://www.notion.so/${nid}`));
   // A plugin's .mcp.json entry.
   assert.deepEqual(m.detailsFromMcpJson({ mcpServers: { notion: { type: "http", url: "https://mcp.notion.com/mcp" } } }, "notion"), { scope: "plugin", type: "http", url: "https://mcp.notion.com/mcp", hasHeaders: false });
   assert.equal(m.detailsFromMcpJson({ notion: { url: "https://x", headers: { Authorization: "Bearer y" } } }, "notion").hasHeaders, true);
@@ -426,6 +448,11 @@ try {
     const edited = await fetch();
     assert.equal(edited.unchanged, false);
     assert.match(edited.markdown, /새 내용/);
+    // A notion.com link is fetched as www.notion.so/<id> (the fake echoes the prompt's URL as the tool input) and shares the cache of the id.
+    const viaCom = await fetch({ url: "https://app.notion.com/p/Lec-Title-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d?pvs=4" });
+    assert.match(viaCom.markdown, /새 내용/);
+    assert.equal(viaCom.unchanged, true, "same page id, same cache");
+    await assert.rejects(fetch({ url: "https://www.notion.com/product" }), /페이지 ID/);
     // A claude.ai connector: no strict config, every other server denied (checked by the fake).
     process.env.FAKE_NOTION_MCP = "connector";
     const viaConnector = await fetch();
@@ -528,4 +555,46 @@ try {
     s2.cleanup();
     rmSync(join(cacheDir, ".."), { recursive: true, force: true });
   }
+}
+
+// ---- the Notion line of the sidebar's 노트 검증 tab names the fetch model ----
+{
+  // Takes any Obsidian DOM call and keeps the texts it was given.
+  const texts = [];
+  const el = () =>
+    new Proxy({}, {
+      get: (_, p) =>
+        p === "value"
+          ? ""
+          : (...args) => {
+              for (const a of args) if (a && typeof a === "object" && typeof a.text === "string") texts.push(a.text);
+              return el();
+            },
+    });
+  const notionLine = (model, resolved = {}, claude = []) => {
+    texts.length = 0;
+    const plugin = {
+      notionFetchModel: () => ({ model, effort: "low" }),
+      modelCatalog: () => ({ claude, codex: { models: [], efforts: {} }, resolved }),
+      verifySourceFiles: () => [],
+      verifyTargets: () => [],
+    };
+    new m.VerifyPanel({}, plugin, el()).render();
+    const line = texts.find((t) => t.startsWith("Claude CLI가 Notion 조회 도구"));
+    assert.ok(line, "the Notion line is drawn");
+    return line.slice(line.indexOf("모델: ") + 4);
+  };
+  assert.equal(notionLine("haiku"), "haiku (최신 Haiku, Haiku 5.5, 기준일 2026-10) · effort low.", "before any run: the built-in target of the haiku alias");
+  const ran = { "claude-cli:haiku": { id: "claude-haiku-5-5", at: "2026-10-08" } };
+  assert.equal(notionLine("haiku", ran), "haiku (최신 Haiku, 현재 Haiku 5.5) · effort low.", "after a run: the id it resolved to, by name");
+  // Claude Code's catalog read before it listed Haiku 5.5: the built-in list still names it.
+  const older = m.parseClaudeModelCatalog(JSON.stringify({ catalog: { config: { models: [
+    { id: "claude-sonnet-5-5", name: "Sonnet 5.5", section: "main" },
+    { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", section: "main", thinking: { type: "none" } },
+  ] } } }));
+  assert.equal(notionLine("haiku", ran, older), "haiku (최신 Haiku, 현재 Haiku 5.5) · effort low.");
+  assert.equal(notionLine("claude-haiku-5-5"), "Haiku 5.5 (claude-haiku-5-5) · effort low.");
+  assert.equal(notionLine("claude-haiku-4-5-20251001", {}, older), "Haiku 4.5 (claude-haiku-4-5-20251001) · effort low.", "a saved Haiku 4.5 keeps its name");
+  assert.equal(notionLine(""), "CLI 기본 모델 · effort low.", "concepts on Codex: the Claude CLI default");
+  console.log("PASS: the Notion line names Haiku 5.5 for the haiku alias (built-in target, then the run's id) and for claude-haiku-5-5");
 }

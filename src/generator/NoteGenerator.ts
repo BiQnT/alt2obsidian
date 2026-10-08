@@ -163,7 +163,7 @@ export class NoteGenerator {
 
     // Concept-name list drives global wikilink injection across all sections.
     // Plan §Task 1.2 risk note: "a concept linked in slide 5 should also be
-    // linked in slide 12 even if [[X]] already exists locally — handled by
+    // linked in slide 12 even if [[X]] already exists locally: handled by
     // running the regex pass once per section over all concepts[]". This
     // matches: every section is rewritten with all known concept names.
     const conceptNames = llmResult.concepts.map((c) => c.name);

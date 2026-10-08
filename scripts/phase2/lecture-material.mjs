@@ -4,6 +4,7 @@
 import { readFile as readFile2 } from "node:fs/promises";
 
 // src/core/lectureMaterial.ts
+var MATERIAL_MAX_CHARS = 12e3;
 async function extractLectureMaterialContext(pdf, seedText, onProgress) {
   const pageCount = pdf.numPages;
   const seedTerms = extractTerms(seedText);
@@ -26,8 +27,8 @@ async function extractLectureMaterialContext(pdf, seedText, onProgress) {
       });
     }
     onProgress?.(pageNum, pageCount);
-    if (pageNum % 10 === 0 && pageNum < pageCount) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    if (pageNum % 10 === 0 && pageNum < pageCount && typeof window !== "undefined") {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
   }
   if (pages.length === 0)
@@ -36,7 +37,7 @@ async function extractLectureMaterialContext(pdf, seedText, onProgress) {
 }
 function buildCompactContext(pages, pageCount, extractedCharCount) {
   const maxPages = 14;
-  const maxChars = 12e3;
+  const maxChars = MATERIAL_MAX_CHARS;
   const firstPages = pages.filter((page) => page.pageNum <= 3);
   const scoredPages = [...pages].sort((a, b) => b.score - a.score).slice(0, maxPages);
   const selectedMap = /* @__PURE__ */ new Map();

@@ -100,27 +100,73 @@ export function anySignal(a?: AbortSignal, b?: AbortSignal): { signal?: AbortSig
 }
 
 /**
+ * A wikilink inside a markdown table is written `[[Name\|alias]]`; a model
+ * answering free-text JSON often leaves that `\|` as is, an invalid JSON
+ * escape. Inside string literals, a backslash that starts an escape and is
+ * followed by `|` becomes `\\`, so the string holds `\|`. Escaped
+ * backslashes (`\\|` stays), every valid escape, text outside strings and
+ * any other invalid escape are left as they are.
+ */
+export function repairPipeEscapes(json: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < json.length; i++) {
+    const c = json[i];
+    if (!inString) {
+      if (c === '"') inString = true;
+      out += c;
+    } else if (c === "\\") {
+      // An escape is the backslash and the next character, so an escaped
+      // backslash is consumed whole and never pairs with a following "|".
+      const next = json[i + 1] ?? "";
+      out += next === "|" ? "\\\\|" : c + next;
+      i++;
+    } else {
+      if (c === '"') inString = false;
+      out += c;
+    }
+  }
+  return out;
+}
+
+/** JSON.parse, then once more with `\|` escapes repaired; the first error otherwise. */
+function parseJsonLenient(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const repaired = repairPipeEscapes(text);
+    if (repaired === text) throw e;
+    try {
+      return JSON.parse(repaired);
+    } catch {
+      throw e;
+    }
+  }
+}
+
+/**
  * Parse a model's JSON answer: the text as is (a ```json fence around it
  * allowed), else the last fenced block, else the span from the first "{" to
- * the last "}" (prose before or after the JSON).
+ * the last "}" (prose before or after the JSON). Each try repairs a raw
+ * `\|` in a string (`repairPipeEscapes`) before it gives up.
  */
 export function parseJsonText(text: string): unknown {
   const trimmed = text.trim();
   const unfenced = trimmed.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
   try {
-    return JSON.parse(unfenced);
+    return parseJsonLenient(unfenced);
   } catch (first) {
     const fences = [...trimmed.matchAll(/```(?:json)?\s*\n([\s\S]*?)\n?```/g)];
     if (fences.length > 0) {
       try {
-        return JSON.parse(fences[fences.length - 1][1].trim());
+        return parseJsonLenient(fences[fences.length - 1][1].trim());
       } catch {
         // fall through to the brace span
       }
     }
     const a = trimmed.indexOf("{");
     const b = trimmed.lastIndexOf("}");
-    if (a >= 0 && b > a) return JSON.parse(trimmed.slice(a, b + 1));
+    if (a >= 0 && b > a) return parseJsonLenient(trimmed.slice(a, b + 1));
     throw first;
   }
 }

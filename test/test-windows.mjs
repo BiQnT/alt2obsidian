@@ -4,7 +4,8 @@
  * CLI). Covers npm .cmd shim resolution to `node.exe <script>` (no shell),
  * .exe and .ps1 handling, windowsHide, PATH with ";", process-tree kill with
  * taskkill on timeout and cancel, and the `where` / %APPDATA%\npm lookup.
- * What still needs a real Windows PC is listed in README ("Windows").
+ * What still needs a real Windows PC is listed in docs/user-guide.md
+ * ("Windows" under Troubleshooting, and "Tested versions and known limitations").
  * Run: node test/test-windows.mjs
  */
 
