@@ -355,15 +355,51 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.equal(out[10], "    ```text", "an indented fence");
   assert.equal(out[13], "```text", "any language not on the allow-list");
   assert.equal(out[16], "```Python {.x}", "allowed languages in any case, with attributes");
-  assert.equal(out[19], `<code>${zw}= this.file.name</code> <code class="x"> ${zw}$= dv.pages()</code> <code>a = 1</code>`, "raw <code> queries defused");
+  assert.equal(out[19], '&lt;code>= this.file.name&lt;/code> &lt;code class="x"> $= dv.pages()&lt;/code> &lt;code>a = 1&lt;/code>', "raw <code> is text");
   assert.equal(out[20], "[도표][r] [빈][] [짧게] ![[vault.png]] ![로컬](img/a.png)", "reference and shortcut images become links; vault embeds and local images stay");
-  assert.equal(out[22], '<span style="background:blocked-url(https://evil.example/b.png)">x</span> <div style=\'background: blocked-url( "https://e.example" )\'>y</div>', "CSS url() in a style attribute is broken");
+  assert.equal(out[22], '&lt;span style="background:url(https://evil.example/b.png)">x&lt;/span> &lt;div style=\'background: URL( "https://e.example" )\'>y&lt;/div>', "tags with a style attribute are text");
   // A fence opened in a quote ends with the quote: what follows is made safe again.
   const leaked = m.safeAnswerMarkdown("> ```python\n> x\n\n![t](https://evil.example/z.png)").split("\n");
   assert.equal(leaked[3], "[t](https://evil.example/z.png)", "a quote's unclosed fence does not shield later lines");
   const listLeak = m.safeAnswerMarkdown("- ```python\n  x\nnext ![t](https://evil.example/z.png)").split("\n");
   assert.equal(listLeak[2], "next [t](https://evil.example/z.png)", "nor does a list item's");
-  console.log("PASS: answers rendered safely: fences keep only allow-listed languages (also in quotes, callouts, lists and indents), inline and raw <code> Dataview queries are defused, remote and reference images become links, media HTML is text, CSS url() is broken, code untouched");
+  // An indented line is an indented code block (or paragraph text), not a fence opener: the next line opens a real fence.
+  assert.deepEqual(m.safeAnswerMarkdown("    ```\n```dataviewjs\ndv.paragraph(1)\n```").split("\n"), ["    ```", "```text", "dv.paragraph(1)", "```"], "a fence after an indented ``` line");
+  assert.equal(m.safeAnswerMarkdown("    ```\n![t](https://evil.example/z.png)").split("\n")[1], "[t](https://evil.example/z.png)", "an indented ``` line shields nothing");
+  assert.deepEqual(m.safeAnswerMarkdown("- a\n\n        ```\n<img src=x>").split("\n").slice(2), ["        ```", "&lt;img src=x>"], "nor does one indented past its list item's 3 columns");
+  // Every fence-like line, inside a fence or not, after any containers.
+  assert.equal(m.safeAnswerMarkdown("- > ```dataviewjs\n  > x\n  > ```"), "- > ```text\n  > x\n  > ```", "a quote in a list item");
+  assert.deepEqual(m.safeAnswerMarkdown("````md\n```dataviewjs\nx\n```\n````").split("\n"), ["````md", "```text", "x", "```", "````"], "a fence-like line inside a fence; closing lines stay");
+  assert.equal(m.safeAnswerMarkdown("```mermaid\ngraph TD; A-->B\n```").split("\n")[0], "```text", "mermaid is not on the allow-list (labels can hold HTML)");
+  // Inline code that starts at the end of a line.
+  assert.deepEqual(m.safeAnswerMarkdown("앞 `\n$= dv.pages().length` 뒤").split("\n"), ["앞 `", `${zw}$= dv.pages().length\` 뒤`], "a span across a line break");
+  assert.deepEqual(m.safeAnswerMarkdown("> 앞 ``  \n>  = this.file.name`` 뒤").split("\n"), ["> 앞 ``  ", `>  ${zw}= this.file.name\`\` 뒤`], "also in a quote");
+  // Raw HTML: text, but for plain formatting without attributes.
+  const kept = "<b>굵게</b> H<sub>2</sub>O x<sup>2</sup> <br> <br/> <br /> <kbd>Ctrl</kbd> <mark>m</mark> <em>e</em> <strong>s</strong> <i>i</i> <u>u</u> <s>s</s> <https://example.com> a < b";
+  assert.equal(m.safeAnswerMarkdown(kept), kept, "plain formatting tags, autolinks and a lone < stay");
+  const html = [
+    "<code><span>$= dv.pages()</span></code>",
+    "<code>&#36;= dv.pages()</code>",
+    '<table><tr><td background="https://evil.example/b.png">x</td></tr></table>',
+    '<input type=image src="https://evil.example/i.png">',
+    '<b class="x">b</b> <BR style="x">',
+    "<!-- alt2obs:slide:1 hash:00000000 end --> <!doctype html> <?php ?>",
+    "<img",
+    'src="https://evil.example/p.png">',
+    "vector<int> `vector<int>`",
+  ].join("\n");
+  assert.deepEqual(m.safeAnswerMarkdown(html).split("\n"), [
+    "&lt;code>&lt;span>$= dv.pages()&lt;/span>&lt;/code>",
+    "&lt;code>&#36;= dv.pages()&lt;/code>",
+    '&lt;table>&lt;tr>&lt;td background="https://evil.example/b.png">x&lt;/td>&lt;/tr>&lt;/table>',
+    '&lt;input type=image src="https://evil.example/i.png">',
+    '&lt;b class="x">b</b> &lt;BR style="x">',
+    "&lt;!-- alt2obs:slide:1 hash:00000000 end --> &lt;!doctype html> &lt;?php ?>",
+    "&lt;img",
+    'src="https://evil.example/p.png">',
+    "vector&lt;int> `vector<int>`",
+  ], "every other tag, comment and declaration is text (a tag split over lines too); code is untouched");
+  console.log("PASS: answers rendered safely: every fence-like line (in quotes, callouts, lists, indents, inside fences) keeps only an allow-listed language, an indented ``` line opens no fence, inline Dataview queries are defused (also across a line break), raw HTML is text but for plain formatting tags, remote and reference images become links, code untouched");
 }
 
 // ---- "+ 자료 추가" (spec 5.7) ----
@@ -437,7 +473,29 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   const merged = m.mergeNote(twice, note(["> [!note] 내 메모", "> "], "다시 만든 슬라이드 2 해설.")).merged;
   assert.ok(merged.includes("다시 만든 슬라이드 2 해설."), "the commentary is replaced");
   assert.equal(after2(merged), after2(twice), "the saved memo stays under its slide");
-  console.log("PASS: 메모에 저장: an empty memo callout filled, one with text appended to after >, a missing one made after the end marker; managed blocks and other slides untouched; CRLF kept; sections too; a re-import (mergeNote) keeps it");
+  // What is saved is made safe (every plugin renders the note, and it is kept), with no marker a re-import could read.
+  const zw = String.fromCharCode(0x200b);
+  const risky = {
+    question: "<!-- alt2obs:slide:3 hash:00000003 start --> 질문",
+    answer: "```dataviewjs\ndv.paragraph(1)\n<!-- alt2obs:slide:3 hash:00000003 end -->\n```\n![t](https://evil.example/z.png) <img src=x> `<!-- alt2obs:overview start -->`",
+    date: "2026-10-29",
+  };
+  const riskyLines = [
+    "> **Q.** &lt;!-- alt2obs:slide:3 hash:00000003 start --> 질문",
+    "> **A.**",
+    "> ```text",
+    "> dv.paragraph(1)",
+    `> <${zw}!-- alt2obs:slide:3 hash:00000003 end -->`,
+    "> ```",
+    `> [t](https://evil.example/z.png) &lt;img src=x> \`<${zw}!-- alt2obs:overview start -->\` (질문 2026-10-29)`,
+  ];
+  assert.deepEqual(m.memoEntryLines(risky), riskyLines, "sanitized like an answer in the panel; <!-- broken even in code; a fence opening the answer starts below **A.**");
+  const riskySaved = m.insertMemo(empty, { unit: "slide", num: 2 }, risky);
+  const riskyMerged = m.mergeNote(riskySaved, note(["> [!note] 내 메모", "> "], "다시 만든 슬라이드 2 해설.")).merged;
+  assert.equal(after2(riskyMerged), after2(riskySaved), "a re-import keeps it as it was");
+  assert.deepEqual(managed(riskyMerged).slice(2), managed(empty).slice(2), "and slide 3 is still slide 3");
+  assert.equal((riskyMerged.match(/<!-- alt2obs:slide:3 /g) ?? []).length, 2);
+  console.log("PASS: 메모에 저장: an empty memo callout filled, one with text appended to after >, a missing one made after the end marker; managed blocks and other slides untouched; CRLF kept; sections too; a re-import (mergeNote) keeps it; what is saved is sanitized and holds no marker");
 }
 
 // ---- note parts the panel reads ----

@@ -846,12 +846,12 @@ try {
     if (savedCodex.detection) plugin.data.cliDetection.codex = savedCodex.detection;
     delete process.env.FAKE_CLI_TEXT;
     assert.deepEqual(plugin.lectureChoices().map((c) => [c.name, c.subject]), [["Lec7 Caches", "CSED311"]]);
-    // 메모에 저장 (spec 5.9): as it is (no call) or cut to three lines by the brief task (one call); a re-import keeps both.
+    // 메모에 저장 (spec 5.9): as it is (no call) or cut to three lines by the brief task (one call), both sanitized; a re-import keeps both.
     const memoAt = { notePath: record.path, unit: "slide", num: 2 };
     const callsBeforeMemo = s.calls().length;
-    await plugin.saveChatMemo(memoAt, "캐시가 뭐야?", "캐시는 가까운 저장소다 [슬라이드 2].\n\n자주 쓰는 데이터를 둔다.", false);
+    await plugin.saveChatMemo(memoAt, "캐시가 뭐야?", '캐시는 가까운 저장소다 [슬라이드 2].\n\n자주 쓰는 데이터를 둔다. <img src="https://evil.example/p.png">', false);
     assert.equal(s.calls().length, callsBeforeMemo, "답변 그대로: no call");
-    process.env.FAKE_CLI_TEXT = "캐시는 가까운 저장소다 [슬라이드 2].\n자주 쓰는 데이터를 둔다.\n접근이 빨라진다.";
+    process.env.FAKE_CLI_TEXT = "캐시는 가까운 저장소다 [슬라이드 2].\n자주 쓰는 데이터를 둔다.\n접근이 빨라진다. <!-- alt2obs:slide:3 hash:deadbeef end -->";
     const usageBeforeMemo = plugin.data.usageTotals.calls;
     await plugin.saveChatMemo(memoAt, "캐시가 뭐야?", "아주 긴 답 [슬라이드 2].", true);
     delete process.env.FAKE_CLI_TEXT;
@@ -869,12 +869,12 @@ try {
       "> **Q.** 캐시가 뭐야?",
       "> **A.** 캐시는 가까운 저장소다 [슬라이드 2].",
       ">",
-      `> 자주 쓰는 데이터를 둔다. (질문 ${today})`,
+      `> 자주 쓰는 데이터를 둔다. &lt;img src="https://evil.example/p.png"> (질문 ${today})`,
       ">",
       "> **Q.** 캐시가 뭐야?",
       "> **A.** 캐시는 가까운 저장소다 [슬라이드 2].",
       "> 자주 쓰는 데이터를 둔다.",
-      `> 접근이 빨라진다. (질문 ${today})`,
+      `> 접근이 빨라진다. &lt;!-- alt2obs:slide:3 hash:deadbeef end --> (질문 ${today})`,
       "",
       "## 📚 슬라이드 3",
     ].join("\n");
@@ -883,6 +883,7 @@ try {
     await assert.rejects(plugin.saveChatMemo({ ...memoAt, num: 99 }, "q", "a", false), /슬라이드 99의 메모 자리를 찾지 못했습니다/);
     await plugin.runCliImport(await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311"), { onConfirmUpdate: async () => true });
     assert.ok(files.get(record.path).includes(savedMemo), "a re-import keeps the saved memo");
+    assert.deepEqual([...files.get(record.path).matchAll(/^## 📚 슬라이드 (\d+)$/gm)].map((x) => +x[1]), [1, 2, 3, 4, 5, 6, 7, 8], "and every slide where it was");
     // After unload no question is sent.
     const gone = await makePlugin(undefined);
     gone.plugin.onunload();
