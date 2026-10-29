@@ -270,12 +270,20 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.deepEqual([turn.status, turn.answer], ["stopped", "부분"]);
   await store.run(thread, turn, { runChat: async () => { throw new Error("boom"); }, chatErrorInfo: (e) => ({ kind: "timeout", message: e.message }) });
   assert.deepEqual([turn.status, turn.error], ["error", { kind: "timeout", message: "boom" }]);
-  // Unload: dropAll stops what runs.
+  // One run per thread: a second turn asked to run while one answers does not start.
+  const second = { ...turn, id: m.newTurnId(), answer: "", status: "done", error: undefined };
+  thread.items.push({ kind: "turn", turn: second });
+  let secondCalls = 0;
   const lost = store.run(thread, turn, { runChat: (req) => new Promise((_, reject) => req.signal.addEventListener("abort", () => reject(new Error("aborted")))), chatErrorInfo: runner.chatErrorInfo });
+  await store.run(thread, second, { runChat: async () => (secondCalls++, { text: "x", usage: turn.usage, model: "" }), chatErrorInfo: runner.chatErrorInfo });
+  assert.deepEqual([secondCalls, second.status], [0, "done"], "refused while the thread answers");
+  // Unload: dropAll stops what runs, and nothing starts after it.
   store.dropAll();
   await lost;
   assert.equal(turn.status, "stopped");
-  console.log("PASS: a run belongs to the thread store: it streams into the turn with or without a listener, a reset starts the answer over, stop keeps the part, errors land in the turn, unload stops it");
+  await store.run(thread, second, { runChat: async () => (secondCalls++, { text: "x", usage: turn.usage, model: "" }), chatErrorInfo: runner.chatErrorInfo });
+  assert.equal(secondCalls, 0, "no run after dropAll");
+  console.log("PASS: a run belongs to the thread store: it streams into the turn with or without a listener, a reset starts the answer over, stop keeps the part, errors land in the turn, one run per thread, unload stops it and refuses new runs");
 }
 
 // ---- model output made safe before rendering (review L6) ----
@@ -311,7 +319,48 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.equal(safe[12], '&lt;img src="https://evil.example/p.png"> &lt;iframe src="https://e.example">&lt;/iframe>', "raw media HTML shown as text");
   assert.deepEqual(safe.slice(13), ["````text", "```", "return 1", "````"], "a longer fence keeps its inner backticks");
   assert.equal(m.safeAnswerMarkdown("보통 답이다. **굵게** [슬라이드 2]"), "보통 답이다. **굵게** [슬라이드 2]", "plain answers unchanged");
-  console.log("PASS: answers rendered safely: executable fences (dataview, dataviewjs, js-engine, ...) become text, inline Dataview queries are defused, remote images become links and media HTML is text, code untouched");
+  // The reviewer's bypasses: fences inside quotes, callouts, lists and indents; any unknown language; raw <code>; reference images; CSS url().
+  const bypass = [
+    "> ```dataviewjs",
+    "> dv.paragraph(1)",
+    "> ```",
+    "> [!note] 콜아웃",
+    "> > ~~~DataviewJS",
+    "> > x",
+    "> > ~~~",
+    "- ```dataviewjs",
+    "  dv.paragraph(2)",
+    "  ```",
+    "    ```dataview",
+    "    LIST",
+    "    ```",
+    "```someplugin-runner",
+    "run()",
+    "```",
+    "```Python {.x}",
+    "print(1)",
+    "```",
+    '<code>= this.file.name</code> <code class="x"> $= dv.pages()</code> <code>a = 1</code>',
+    "![도표][r] ![빈][] ![짧게] ![[vault.png]] ![로컬](img/a.png)",
+    "[r]: https://evil.example/t.png",
+    '<span style="background:url(https://evil.example/b.png)">x</span> <div style=\'background: URL( "https://e.example" )\'>y</div>',
+  ].join("\n");
+  const out = m.safeAnswerMarkdown(bypass).split("\n");
+  assert.deepEqual(out.slice(0, 3), ["> ```text", "> dv.paragraph(1)", "> ```"], "a fence in a quote");
+  assert.equal(out[4], "> > ~~~text", "a fence in a nested quote or callout");
+  assert.deepEqual(out.slice(7, 10), ["- ```text", "  dv.paragraph(2)", "  ```"], "a fence in a list item");
+  assert.equal(out[10], "    ```text", "an indented fence");
+  assert.equal(out[13], "```text", "any language not on the allow-list");
+  assert.equal(out[16], "```Python {.x}", "allowed languages in any case, with attributes");
+  assert.equal(out[19], `<code>${zw}= this.file.name</code> <code class="x"> ${zw}$= dv.pages()</code> <code>a = 1</code>`, "raw <code> queries defused");
+  assert.equal(out[20], "[도표][r] [빈][] [짧게] ![[vault.png]] ![로컬](img/a.png)", "reference and shortcut images become links; vault embeds and local images stay");
+  assert.equal(out[22], '<span style="background:blocked-url(https://evil.example/b.png)">x</span> <div style=\'background: blocked-url( "https://e.example" )\'>y</div>', "CSS url() in a style attribute is broken");
+  // A fence opened in a quote ends with the quote: what follows is made safe again.
+  const leaked = m.safeAnswerMarkdown("> ```python\n> x\n\n![t](https://evil.example/z.png)").split("\n");
+  assert.equal(leaked[3], "[t](https://evil.example/z.png)", "a quote's unclosed fence does not shield later lines");
+  const listLeak = m.safeAnswerMarkdown("- ```python\n  x\nnext ![t](https://evil.example/z.png)").split("\n");
+  assert.equal(listLeak[2], "next [t](https://evil.example/z.png)", "nor does a list item's");
+  console.log("PASS: answers rendered safely: fences keep only allow-listed languages (also in quotes, callouts, lists and indents), inline and raw <code> Dataview queries are defused, remote and reference images become links, media HTML is text, CSS url() is broken, code untouched");
 }
 
 // ---- note parts the panel reads ----
