@@ -257,6 +257,12 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.deepEqual([nfm.ai_hash, nfm.ai_part, nfm.source_hash], ["3b10c2d4", '{status: "ok", model: "claude-haiku-5-5", input: 4120, output: 760}', changedGist.sourceHash]);
   assert.ok(m.bodyOf(next.text).endsWith(`## 핵심 개념\n- **Leftmost Derivation:** 가장 왼쪽 Nonterminal (비단말)부터 바꾸는 유도다.\n\n${ai}\n`), "script part rebuilt, AI sections after it as they were");
   assert.match(m.bodyOf(next.text), /- 14 \[26:26~28:38\] 바뀐 요지다\./);
+  // A brief of the first build (format 1, the lecture's id as alt_local_id) is rebuilt once: the format version is in the source hash.
+  assert.equal(m.BRIEF_FORMAT_VERSION, 2);
+  const firstBuild = first.text.replace(/^lecture_alt_local_id:/m, "alt_local_id:").replace(/^source_hash: "[0-9a-f]{8}"$/m, 'source_hash: "0badf00d"');
+  const migrated = await m.planBriefUpdate(firstBuild, script, { today: TODAY });
+  assert.equal(migrated.action, "write");
+  assert.ok(!/^alt_local_id:/m.test(migrated.text) && /^lecture_alt_local_id:/m.test(migrated.text), "the old key is gone");
   // An AI part that found nothing (or failed) has no sections: its hash and status still go along.
   const failed = await m.composeBrief(script, { sections: "", hash: "77aa77aa", part: '{status: "failed", model: "claude-haiku-5-5"}' }, TODAY);
   const kept = m.readFrontmatter((await m.planBriefUpdate(failed, changedGist, { today: TODAY })).text);

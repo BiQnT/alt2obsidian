@@ -198,6 +198,13 @@ assert.equal(stopped.hasStopped, false, "a stopped turn is not in the earlier co
 assert.match(stopped.history, /^\[이전 대화\]\nQ \(슬라이드 17 기준\): 왜 작은 수부터 더해\?\nA: 부동소수점 덧셈은/);
 console.log("PASS: a followed slide change puts a divider in the thread; a stopped answer stays as (중지됨) and is left out of the next question's history");
 
+// One run per thread, also while a question is being prepared; the input keeps its focus.
+const prep = at("regenerate while sending");
+assert.equal(prep.runs, 1, "다시 생성 during the preparation of a question starts nothing");
+assert.equal(prep.last, "준비 중에 다시 생성?");
+assert.equal(prep.focused, true, "the input has its focus back after the send");
+console.log("PASS: 다시 생성 while a question is being prepared starts no second run; the input gets its focus back after a send");
+
 // Error cards (spec 5.6).
 const errors = at("errors");
 const card = (kind) => errors.cards.find((c) => c.kind === kind);

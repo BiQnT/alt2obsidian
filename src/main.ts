@@ -1928,6 +1928,7 @@ export default class Alt2ObsPlugin extends Plugin {
    * the chat task (not a lecture) and the model it resolved is recorded.
    */
   async runChat(req: ChatRunRequest): Promise<ChatRunResult> {
+    if (this.unloaded) throw new Error("플러그인이 꺼져 있어 질문을 보내지 않았습니다.");
     const task = sanitizeTask(req.task, this.data.settings.tasks.chat);
     if (!isCliProvider(task.provider)) throw new Error("질문에 쓸 LLM이 설정되어 있지 않습니다.");
     // A CLI that cannot be found is its own error card.

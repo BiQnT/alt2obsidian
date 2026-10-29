@@ -69,6 +69,7 @@ async function main() {
   const vaultHandlers: Record<string, Array<(...a: unknown[]) => void>> = {};
   const app: any = { workspace: ws, vault: { on: (name: string, cb: (...a: unknown[]) => void) => ((vaultHandlers[name] ??= []).push(cb), { name }) }, metadataCache: {} };
   let memo17 = "시험 범위";
+  let materialDelay = 0;
   const calls: any[] = [];
   const settings = structuredClone(DEFAULT_SETTINGS);
   const segments = [
@@ -97,7 +98,7 @@ async function main() {
       briefStatus = "ok";
     },
     rebuildBrief: async () => true,
-    chatMaterial: async (_l: unknown, slide: number) => ({
+    chatMaterial: async (_l: unknown, slide: number) => (materialDelay && (await sleep(materialDelay)), {
       slideText: `Slide ${slide} floating point addition`,
       image: null,
       commentary: `해설 ${slide}: 작은 수끼리 먼저 더한다.`,
@@ -293,6 +294,20 @@ async function main() {
   await until("the fourth answer", () => calls.filter((c) => c.run).length === 4 && !root().querySelector(".alt-to-obs-chat-a.is-streaming"));
   const third = calls.filter((c) => c.run).pop().run.user as string;
   log.push({ step: "stopped", answers: text(".alt-to-obs-chat-a").map((t) => t!.slice(0, 12)), history: third.split("[이번 자료]")[0], hasStopped: third.includes("더 길게") });
+
+  // ---- Enter, then 다시 생성 while the question is being prepared: one run; the input keeps its focus ----
+  materialDelay = 150;
+  const runsBeforePrep = runs();
+  input.focus();
+  input.value = "준비 중에 다시 생성?";
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  const regen = button("다시 생성");
+  const regenDisabled = regen.disabled;
+  regen.click();
+  await until("the prepared question answered", () => runs() === runsBeforePrep + 1 && !root().querySelector(".alt-to-obs-chat-a.is-streaming"));
+  await sleep(300);
+  log.push({ step: "regenerate while sending", runs: runs() - runsBeforePrep, focused: document.activeElement === input, last: calls.filter((c) => c.run).pop().run.user.split("[질문]\n")[1], regenDisabled });
+  materialDelay = 0;
 
   // ---- error cards (spec 5.6) ----
   const cards: any[] = [];

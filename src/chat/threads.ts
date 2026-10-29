@@ -109,6 +109,8 @@ export class ThreadStore {
   private threads = new Map<string, ChatThread>();
   private runs = new Map<number, AbortController>();
   private listeners = new Set<(event: ThreadEvent) => void>();
+  /** dropAll() ran (the plugin unloads): no run starts any more. */
+  private dropped = false;
 
   constructor(private max = MAX_THREADS) {}
 
@@ -149,8 +151,9 @@ export class ThreadStore {
     return Array.from(this.threads.values()).filter(hasTurns).reverse();
   }
 
-  /** Every run stopped and every thread dropped (the plugin unloads). */
+  /** Every run stopped and every thread dropped (the plugin unloads); no run starts after this. */
   dropAll(): void {
+    this.dropped = true;
     for (const controller of this.runs.values()) controller.abort();
     this.threads.clear();
   }
@@ -179,10 +182,12 @@ export class ThreadStore {
   /**
    * Runs (or runs again) a turn's request; its answer grows in the turn as
    * the pieces come. Never throws: a failure is the turn's error, a stop
-   * leaves what came marked as stopped.
+   * leaves what came marked as stopped. One run per thread at a time: a run
+   * asked for while another turn of the thread answers (or after the
+   * plugin unloaded) does not start.
    */
   async run(thread: ChatThread, turn: ChatTurn, runner: TurnRunner): Promise<void> {
-    if (this.runs.has(turn.id)) return;
+    if (this.dropped || this.isRunning(thread)) return;
     const controller = new AbortController();
     this.runs.set(turn.id, controller);
     Object.assign(turn, { answer: "", status: "streaming", error: undefined, usage: undefined, model: undefined, startedAt: Date.now() });

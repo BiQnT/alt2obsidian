@@ -795,7 +795,11 @@ try {
     if (savedCodex.detection) plugin.data.cliDetection.codex = savedCodex.detection;
     delete process.env.FAKE_CLI_TEXT;
     assert.deepEqual(plugin.lectureChoices().map((c) => [c.name, c.subject]), [["Lec7 Caches", "CSED311"]]);
-    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, a streamed chat call on the chat task (usage counted, not as a lecture), error kinds");
+    // After unload no question is sent.
+    const gone = await makePlugin(undefined);
+    gone.plugin.onunload();
+    await assert.rejects(gone.plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }), /플러그인이 꺼져/);
+    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, a streamed chat call on the chat task (usage counted, not as a lecture), error kinds, nothing sent after unload");
   }
 
   // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).

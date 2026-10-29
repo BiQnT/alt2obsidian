@@ -930,7 +930,7 @@ export class ChatView extends ItemView {
   /** Runs a turn again in its thread (다시 생성, 다시 보내기, the other provider). */
   private rerun(turn: ChatTurn): void {
     const thread = this.thread;
-    if (!thread || this.runningTurn()) return;
+    if (!thread || this.sending || this.runningTurn()) return;
     void this.host.chatThreads.run(thread, turn, this.host);
   }
 
@@ -1108,6 +1108,8 @@ export class ChatView extends ItemView {
     const question = text.trim();
     if (!question || this.sending || !this.lecture || this.runningTurn()) return;
     this.sending = true;
+    // Disabling the input takes its focus: it gets it back when the send is done.
+    const hadFocus = this.inputEl.ownerDocument.activeElement === this.inputEl;
     if (this.inputEl.value.trim() === question) this.inputEl.value = "";
     this.renderComposer();
     let sent = false;
@@ -1154,7 +1156,10 @@ export class ChatView extends ItemView {
     } finally {
       this.sending = false;
       if (!sent && !this.inputEl.value.trim()) this.inputEl.value = question;
-      if (!this.closed) this.renderComposer();
+      if (!this.closed) {
+        this.renderComposer();
+        if (hadFocus) this.inputEl.focus();
+      }
     }
   }
 }

@@ -30,8 +30,12 @@ import { shortHash } from "../core/slideHash";
 import { stemOf, subjectFolderOfNote } from "../vault/layout";
 import { bodyOf, commentaryText, firstSentence, fmString, isBriefFrontmatter, LectureNoteKind, NoteUnit, parseLectureNote, readFrontmatter, unwrapWikilinks } from "./lectureNote";
 
-/** Brief format version: part of `source_hash`, so a new format rebuilds every brief once. */
-export const BRIEF_FORMAT_VERSION = 1;
+/**
+ * Brief format version: part of `source_hash`, so a new format rebuilds
+ * every brief the user did not edit once. 2: `lecture_alt_local_id` in
+ * place of the first build's `alt_local_id`.
+ */
+export const BRIEF_FORMAT_VERSION = 2;
 /** Body size (estimateTextTokens) above which the slide map's gists are cut (spec 4.2). */
 export const BRIEF_TOKEN_CAP = 4000;
 /** A slide without a gist: the first sentence of its commentary, cut to this. */
