@@ -1,8 +1,17 @@
-// Question threads (2.1.0 spec 5.1, 5.2): one per lecture note, kept in the
-// plugin's memory while it runs (closing the panel keeps them, disabling
-// the plugin drops them), the 10 most recently used. A thread holds the
-// turns, the "슬라이드 N으로 이동" dividers and notes such as "앞 대화 N개를
-// 줄였습니다". Pure: no obsidian import.
+// Question threads (2.1.0 spec 5.1, 5.2, 5.4): one per lecture note, kept
+// in the plugin's memory while it runs (closing the panel keeps them,
+// disabling the plugin drops them). A thread holds the turns, the
+// "슬라이드 N으로 이동" dividers and notes such as "앞 대화 N개를 줄였습니다".
+//
+// The store also owns the runs: a question keeps streaming into its turn
+// when the panel closes, its usage is recorded when it ends, and a panel
+// opened again shows the turn as it is (still streaming, or done). Only
+// the stop button and the plugin's unload stop a run. A panel listens to
+// the store's events while it is open.
+//
+// A thread is made when its first question is sent; looking at a lecture
+// does not make one, and a thread without a turn never counts toward the
+// 10 kept. Pure: no obsidian import.
 
 import type { EffortLevel, ImageInput, LLMUsage, ProviderId, TaskLLMSetting } from "../types";
 import type { HistoryTurn } from "./contextPack";
@@ -26,6 +35,26 @@ export interface ChatRequest {
   images: ImageInput[];
 }
 
+export interface ChatRunRequest extends ChatRequest {
+  signal: AbortSignal;
+  onDelta(text: string): void;
+  /** The answer starts over (the CLI retried mid-stream). */
+  onReset?(): void;
+}
+
+export interface ChatRunResult {
+  text: string;
+  usage: LLMUsage;
+  /** The model the CLI reported (an alias as its full id), else the one asked for. */
+  model: string;
+}
+
+/** What runs a turn: the plugin (its CLI call and its error mapping). */
+export interface TurnRunner {
+  runChat(req: ChatRunRequest): Promise<ChatRunResult>;
+  chatErrorInfo(e: unknown): ChatErrorInfo;
+}
+
 export interface ChatTurn {
   id: number;
   question: string;
@@ -44,6 +73,8 @@ export interface ChatTurn {
   effort?: EffortLevel;
   /** When it was asked (ms). */
   at: number;
+  /** When its current run started (ms): the panel shows how long it has been writing. */
+  startedAt?: number;
 }
 
 export type ThreadItem = { kind: "turn"; turn: ChatTurn } | { kind: "divider"; slide: number } | { kind: "note"; text: string };
@@ -57,47 +88,131 @@ export interface ChatThread {
   used: number;
 }
 
+/** A run started, got a piece (or started over), or ended. */
+export interface ThreadEvent {
+  kind: "start" | "delta" | "end";
+  thread: ChatThread;
+  turn: ChatTurn;
+}
+
 let turnIds = 0;
 
 export function newTurnId(): number {
   return ++turnIds;
 }
 
+function hasTurns(thread: ChatThread): boolean {
+  return thread.items.some((i) => i.kind === "turn");
+}
+
 export class ThreadStore {
   private threads = new Map<string, ChatThread>();
+  private runs = new Map<number, AbortController>();
+  private listeners = new Set<(event: ThreadEvent) => void>();
 
   constructor(private max = MAX_THREADS) {}
 
-  /** The lecture's thread (made when there is none), now the most recent; the oldest beyond the limit are dropped. */
+  /**
+   * The lecture's thread for a question (made when there is none), now the
+   * most recent. Past the limit the least recently used threads with turns
+   * go, except one that is answering.
+   */
   get(notePath: string): ChatThread {
     let thread = this.threads.get(notePath);
     if (thread) this.threads.delete(notePath);
     else thread = { notePath, items: [], folded: 0, used: Date.now() };
     thread.used = Date.now();
     this.threads.set(notePath, thread);
-    // A Map iterates in insertion order: the first keys are the least recently used.
-    for (const oldest of [...this.threads.keys()].slice(0, Math.max(0, this.threads.size - this.max))) this.threads.delete(oldest);
+    // A Map iterates in insertion order: the first ones are the least recently used.
+    const kept = Array.from(this.threads.values()).filter((t) => t === thread || hasTurns(t));
+    for (const old of kept.slice(0, Math.max(0, kept.length - this.max))) {
+      if (old !== thread && !this.isRunning(old)) this.threads.delete(old.notePath);
+    }
     return thread;
   }
 
+  /** The lecture's thread when it has one (looking at a lecture makes none). */
   peek(notePath: string): ChatThread | undefined {
     return this.threads.get(notePath);
   }
 
-  /** "새 대화": the lecture's thread starts over. */
+  /** "새 대화": the lecture's thread goes (its running answer is stopped). */
   clear(notePath: string): void {
     const thread = this.threads.get(notePath);
-    if (thread) Object.assign(thread, { items: [], folded: 0 });
+    if (!thread) return;
+    for (const turn of turnsOf(thread)) this.stop(turn);
+    this.threads.delete(notePath);
   }
 
   /** Threads with at least one turn, most recently used first. */
   recent(): ChatThread[] {
-    return [...this.threads.values()].filter((t) => t.items.some((i) => i.kind === "turn")).reverse();
+    return Array.from(this.threads.values()).filter(hasTurns).reverse();
   }
 
-  /** Every thread is dropped (the plugin is disabled). */
+  /** Every run stopped and every thread dropped (the plugin unloads). */
   dropAll(): void {
+    for (const controller of this.runs.values()) controller.abort();
     this.threads.clear();
+  }
+
+  /** Listens to the runs' events; returns what stops listening. */
+  subscribe(listener: (event: ThreadEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private emit(kind: ThreadEvent["kind"], thread: ChatThread, turn: ChatTurn): void {
+    for (const listener of Array.from(this.listeners)) {
+      try {
+        listener({ kind, thread, turn });
+      } catch (e) {
+        console.warn("[Alt2Obs] thread listener failed:", e);
+      }
+    }
+  }
+
+  /** A turn of the thread is answering now. */
+  isRunning(thread: ChatThread): boolean {
+    return turnsOf(thread).some((t) => this.runs.has(t.id));
+  }
+
+  /**
+   * Runs (or runs again) a turn's request; its answer grows in the turn as
+   * the pieces come. Never throws: a failure is the turn's error, a stop
+   * leaves what came marked as stopped.
+   */
+  async run(thread: ChatThread, turn: ChatTurn, runner: TurnRunner): Promise<void> {
+    if (this.runs.has(turn.id)) return;
+    const controller = new AbortController();
+    this.runs.set(turn.id, controller);
+    Object.assign(turn, { answer: "", status: "streaming", error: undefined, usage: undefined, model: undefined, startedAt: Date.now() });
+    this.emit("start", thread, turn);
+    try {
+      const result = await runner.runChat({
+        ...turn.request,
+        signal: controller.signal,
+        onDelta: (piece) => {
+          turn.answer += piece;
+          this.emit("delta", thread, turn);
+        },
+        onReset: () => {
+          turn.answer = "";
+          this.emit("delta", thread, turn);
+        },
+      });
+      Object.assign(turn, { answer: result.text, status: "done", usage: result.usage, model: result.model, provider: turn.request.task.provider, effort: turn.request.task.effort });
+    } catch (e) {
+      if (controller.signal.aborted) turn.status = "stopped";
+      else Object.assign(turn, { status: "error", error: runner.chatErrorInfo(e) });
+    } finally {
+      this.runs.delete(turn.id);
+      this.emit("end", thread, turn);
+    }
+  }
+
+  /** The stop button: what came stays, marked as stopped. */
+  stop(turn: ChatTurn): void {
+    this.runs.get(turn.id)?.abort();
   }
 }
 
@@ -106,7 +221,8 @@ export function turnsOf(thread: ChatThread): ChatTurn[] {
 }
 
 /** The earlier conversation a question sends: finished turns only (a stopped or failed one is left out, spec 5.4). */
-export function historyOf(thread: ChatThread, before?: ChatTurn): HistoryTurn[] {
+export function historyOf(thread: ChatThread | undefined, before?: ChatTurn): HistoryTurn[] {
+  if (!thread) return [];
   const turns = turnsOf(thread);
   const end = before ? turns.indexOf(before) : -1;
   return (end >= 0 ? turns.slice(0, end) : turns)
@@ -130,8 +246,8 @@ function conversationSlide(thread: ChatThread): number | null {
  * next question replaces that divider, and coming back to the slide the
  * conversation is on removes it.
  */
-export function moveThreadTo(thread: ChatThread, slide: number | null): void {
-  if (slide === null || !thread.items.some((i) => i.kind === "turn")) return;
+export function moveThreadTo(thread: ChatThread | undefined, slide: number | null): void {
+  if (!thread || slide === null || !hasTurns(thread)) return;
   const last = thread.items[thread.items.length - 1];
   if (last?.kind === "divider") thread.items.pop();
   if (conversationSlide(thread) !== slide) thread.items.push({ kind: "divider", slide });

@@ -62,6 +62,7 @@ import {
   resolvedKey,
   sanitizeTask,
   estimateEffort,
+  withTasksSinceV4,
 } from "./settings/llmSettings";
 import { analyzeSlides, selectKeyDiagrams } from "./core/prep/SlideAnalyzer";
 import { DeckPlan, makeBatches, parseExistingSlides, planDeck, withFewerImages, withTranscriptChunks } from "./pipeline/batchPlan";
@@ -120,9 +121,9 @@ import { decidePdfOpen, isLectureFrontmatter, isLectureNote, lectureNoteForPdf }
 import { BriefFiles, readLectureBrief, updateLectureBrief } from "./brief/briefStore";
 import { commentaryText, fmString, isBriefFrontmatter, memoText, parseLectureNote, readFrontmatter } from "./brief/lectureNote";
 import { neighbourLectures, subjectOfNote } from "./brief/lectureBrief";
-import { ChatBriefState, ChatLecture, ChatRunRequest, ChatRunResult, ChatView, SlideMaterial } from "./ui/ChatView";
+import { ChatBriefState, ChatLecture, ChatView, SlideMaterial } from "./ui/ChatView";
 import { ChatPanelController, VIEW_TYPE_CHAT } from "./ui/chatPanel";
-import { ChatErrorInfo, ThreadStore } from "./chat/threads";
+import { ChatErrorInfo, ChatRunRequest, ChatRunResult, ThreadStore } from "./chat/threads";
 import { segmentsInSpans, TEXTLESS_PAGE_CHARS, TimedText } from "./chat/contextPack";
 import { isAuthError, isUsageLimitError } from "./llm/cli/CliProviderBase";
 import { renderPrompt } from "./prompts/render";
@@ -396,7 +397,9 @@ export default class Alt2ObsPlugin extends Plugin {
     // Kill running CLI processes; their finally blocks remove the temp folders.
     this.abortAllJobs();
     this.unloaded = true;
+    // Running answers stop with the plugin; the panel's close (before or after this) changes nothing more.
     this.chatThreads.dropAll();
+    this.chatPanel?.dispose();
     this.localSource?.close?.();
     this.localSource = null;
     if (this.pdfWorkerUrl) URL.revokeObjectURL(this.pdfWorkerUrl);
@@ -1787,9 +1790,9 @@ export default class Alt2ObsPlugin extends Plugin {
     this.chatPanel?.close();
   }
 
-  /** The panel's view closed: the right sidebar goes back to how it was (not while the plugin unloads). */
+  /** The panel's view closed: the right sidebar goes back to how it was (ChatPanelController.dispose covers the unload). */
   chatPanelClosed(leaf: WorkspaceLeaf): void {
-    if (!this.unloaded) this.chatPanel?.closed(leaf);
+    this.chatPanel?.closed(leaf);
   }
 
   /** The viewers' "💬 질문" buttons show whether the panel is open. */
@@ -1818,9 +1821,15 @@ export default class Alt2ObsPlugin extends Plugin {
 
   /** Page texts of a lecture PDF for the panel (lines kept), read once per file version. */
   private chatPageTextCache = new Map<string, string[]>();
+  /** Page images of textless pages, by PDF version and page (the last PDF only). */
+  private chatPageImageCache = new Map<string, SlideMaterial["image"]>();
+
+  private pdfVersion(pdf: TFile): string {
+    return `${pdf.path}:${pdf.stat?.mtime ?? 0}:${pdf.stat?.size ?? 0}`;
+  }
 
   private async chatPageTexts(pdf: TFile): Promise<string[]> {
-    const key = `${pdf.path}:${pdf.stat?.mtime ?? 0}:${pdf.stat?.size ?? 0}`;
+    const key = this.pdfVersion(pdf);
     const cached = this.chatPageTextCache.get(key);
     if (cached) return cached;
     const layouts = await this.pdfProcessor!.getPageLayouts(await this.app.vault.readBinary(pdf));
@@ -1830,13 +1839,23 @@ export default class Alt2ObsPlugin extends Plugin {
     return texts;
   }
 
+  private async chatPageImage(pdf: TFile, page: number): Promise<SlideMaterial["image"]> {
+    const key = `${this.pdfVersion(pdf)}#${page}`;
+    if (this.chatPageImageCache.has(key)) return this.chatPageImageCache.get(key) ?? null;
+    const image = await this.pdfProcessor!.renderPageJpeg(await this.app.vault.readBinary(pdf), page);
+    if (![...this.chatPageImageCache.keys()].every((k) => k.startsWith(`${this.pdfVersion(pdf)}#`))) this.chatPageImageCache.clear();
+    this.chatPageImageCache.set(key, image);
+    return image;
+  }
+
   /** The lecture of a note for the panel; null when the note is not a lecture note (spec 5.2). */
   async chatLecture(notePath: string): Promise<ChatLecture | null> {
     const file = this.app.vault.getAbstractFileByPath(notePath);
     if (!(file instanceof TFile) || !/\.md$/i.test(notePath)) return null;
     const text = await this.app.vault.cachedRead(file);
     const parts = parseLectureNote(text);
-    const fm = parts.frontmatter;
+    // The metadata cache reads YAML as Obsidian does (Properties may rewrite it); the note's own text until it is indexed.
+    const fm = this.frontmatterOf(notePath) ?? parts.frontmatter;
     if (!isLectureNote(fm, text)) return null;
     const maxNum = parts.units.reduce((n, u) => Math.max(n, u.num), 0);
     // The alignment's end until a slide's material reads the transcript (its end then counts).
@@ -1873,22 +1892,24 @@ export default class Alt2ObsPlugin extends Plugin {
   async chatMaterial(lecture: ChatLecture, slide: number): Promise<SlideMaterial> {
     const file = this.app.vault.getAbstractFileByPath(lecture.notePath);
     if (!(file instanceof TFile)) throw new Error(`강의 노트를 찾지 못했습니다: ${lecture.notePath}`);
-    const parts = parseLectureNote(await this.app.vault.cachedRead(file));
+    // Read now, not cached: a memo typed a moment ago and a re-imported commentary count (spec 6.2).
+    const parts = parseLectureNote(await this.app.vault.read(file));
+    const fm = this.frontmatterOf(lecture.notePath) ?? parts.frontmatter;
     const unit = parts.units.find((u) => u.num === slide);
-    const spans = spansForSlide(parseAlignment(parts.frontmatter.alt_alignment), slide);
+    const spans = spansForSlide(parseAlignment(fm.alt_alignment), slide);
     let slideText = "";
     let image: SlideMaterial["image"] = null;
     const pdf = lecture.pdfPath ? this.app.vault.getAbstractFileByPath(lecture.pdfPath) : null;
     if (pdf instanceof TFile && this.pdfProcessor) {
       try {
         slideText = (await this.chatPageTexts(pdf))[slide - 1] ?? "";
-        // A page without a text layer goes as an image (long edge 1024, JPEG 80).
-        if (normalizePageText(slideText).length < TEXTLESS_PAGE_CHARS) image = await this.pdfProcessor.renderPageJpeg(await this.app.vault.readBinary(pdf), slide);
+        // A page without a text layer goes as an image (long edge 1024, JPEG 80), rendered once per PDF version.
+        if (normalizePageText(slideText).length < TEXTLESS_PAGE_CHARS) image = await this.chatPageImage(pdf, slide);
       } catch (e) {
         console.warn("[Alt2Obs] slide text not read:", e);
       }
     }
-    const id = fmString(parts.frontmatter, "alt_local_id");
+    const id = fmString(fm, "alt_local_id");
     const transcript = id && spans.length > 0 ? (await this.chatTranscript(id)) ?? [] : [];
     return {
       slideText,
@@ -1925,7 +1946,13 @@ export default class Alt2ObsPlugin extends Plugin {
     try {
       const llm = await this.providerFor("chat", job, usage, controller.signal, task);
       if (!llm.streamText) throw new Error(`${llm.name}: 질문 패널에 쓸 수 없는 프로바이더입니다.`);
-      const text = await llm.streamText(req.user, { systemPrompt: req.system, images: req.images, signal: controller.signal, onDelta: (piece) => req.onDelta(piece) });
+      const text = await llm.streamText(req.user, {
+        systemPrompt: req.system,
+        images: req.images,
+        signal: controller.signal,
+        onDelta: (piece) => req.onDelta(piece),
+        onReset: () => req.onReset?.(),
+      });
       const record = usage.entries().pop();
       return { text, usage: usage.total(), model: record?.resolvedModel || record?.model || task.model };
     } finally {
@@ -1955,9 +1982,9 @@ export default class Alt2ObsPlugin extends Plugin {
 
   /** The plugin's settings tab (Obsidian's settings window has no public API for this). */
   openSettings(): void {
-    const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
-    setting?.open();
-    setting?.openTabById(this.manifest.id);
+    const setting = (this.app as unknown as { setting?: { open?: unknown; openTabById?: unknown } }).setting;
+    if (typeof setting?.open === "function") (setting.open as () => void).call(setting);
+    if (typeof setting?.openTabById === "function") (setting.openTabById as (id: string) => void).call(setting, this.manifest.id);
   }
 
   /** "뷰어로 열기" of the panel: the lecture's Synced Viewer, or why there is none. */
@@ -2922,6 +2949,9 @@ export default class Alt2ObsPlugin extends Plugin {
     if (needsCliDefault) {
       this.data.pendingCliDefault = true;
       this.data.pendingMovedTasks = movedTasks;
+    } else if (this.data.pendingMovedTasks && !(typeof saved.settings?.settingsVersion === "number" && saved.settings.settingsVersion >= 4)) {
+      // A CLI default still pending from data before version 4: the chat and brief tasks it just got follow the commentary task.
+      this.data.pendingMovedTasks = withTasksSinceV4(this.data.pendingMovedTasks, settings);
     }
     if (removedFrom.length > 0) this.data.removedProviderNotice = removedFrom;
     if (filled.length > 0) this.data.pendingFilledNotice = describeFilled(filled);

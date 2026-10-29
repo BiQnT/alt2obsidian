@@ -7,21 +7,27 @@
 //   kind of tab changes nothing. The slide follows the viewer's page
 //   (SLIDE_CHANGE_EVENT, getCurrentSlide()) or the heading above the
 //   editor's cursor, read when a tab is activated, when the input gets
-//   focus and when a question is sent. 📌 pins it.
+//   focus and when a question is sent. 📌 pins it. Nothing is read before
+//   the workspace layout is ready (a panel restored at startup goes then).
 // - Chips choose what goes with the question (brief, slide, transcript,
 //   memo) and show their estimated tokens; the input row shows the whole
 //   estimate and asks in the panel before sending past "질문당 토큰 상한".
+//   The commentary, the memo and the brief are read again at every send and
+//   when the note changes; the PDF text and the transcript stay cached.
 // - The answer streams in as plain text (redrawn once per animation frame),
-//   then is rendered as Markdown with its grounding marks as chips (spec
-//   5.5; they only show what they point at until navigation comes).
-// - Threads live in the plugin (ThreadStore): closing the panel keeps them.
+//   then is rendered as Markdown (made safe first: src/chat/safeMarkdown.ts)
+//   with its grounding marks as chips (spec 5.5; they only show what they
+//   point at until navigation comes).
+// - Threads and their runs live in the plugin (ThreadStore): closing the
+//   panel neither drops a thread nor stops an answer; the panel only
+//   listens while it is open.
 //
 // Everything that touches the vault, the PDF or a CLI goes through
 // ChatHost (the plugin), so the view runs in a browser test as it is.
 
-import { ItemView, MarkdownRenderer, Menu, Notice, WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, Menu, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import type { Events } from "obsidian";
-import type { Alt2ObsSettings, CliName, ImageInput, LLMUsage, TaskId, TaskLLMSetting } from "../types";
+import type { Alt2ObsSettings, CliName, ImageInput, TaskId, TaskLLMSetting } from "../types";
 import type { BriefStatus } from "../brief/lectureBrief";
 import { alignedRange } from "../brief/lectureBrief";
 import type { LectureNoteKind } from "../brief/lectureNote";
@@ -30,6 +36,7 @@ import { estimateTextTokens } from "../core/budget/estimate";
 import type { StoredSpan } from "../core/prep/TranscriptAligner";
 import { formatClock } from "../core/sections";
 import { parseCitations } from "../chat/citations";
+import { safeAnswerMarkdown } from "../chat/safeMarkdown";
 import {
   buildChatPack,
   ChatPack,
@@ -41,7 +48,7 @@ import {
   TimedText,
   transcriptLines,
 } from "../chat/contextPack";
-import { ChatErrorInfo, ChatRequest, ChatThread, ChatTurn, historyOf, moveThreadTo, newTurnId, ThreadStore } from "../chat/threads";
+import { ChatErrorInfo, ChatThread, ChatTurn, historyOf, moveThreadTo, newTurnId, ThreadEvent, ThreadStore, TurnRunner, turnsOf } from "../chat/threads";
 import { defaultTaskSetting, estimateEffort, isCliProvider, ModelCatalog, modelName } from "../settings/llmSettings";
 import { renderModelPicker } from "./modelPicker";
 import { SLIDE_CHANGE_EVENT, SlideChangeInfo, VIEW_TYPE_CHAT } from "./chatPanel";
@@ -65,7 +72,7 @@ export interface ChatLecture {
   neighbours: { prev: string | null; next: string | null };
 }
 
-/** One slide's material, read once per slide. */
+/** One slide's material. */
 export interface SlideMaterial {
   slideText: string;
   /** The page as a JPEG when it has no text layer (spec 6.2), else null. */
@@ -89,20 +96,8 @@ export interface ChatBriefState {
   sourceHash: string;
 }
 
-export interface ChatRunRequest extends ChatRequest {
-  signal: AbortSignal;
-  onDelta(text: string): void;
-}
-
-export interface ChatRunResult {
-  text: string;
-  usage: LLMUsage;
-  /** The model the CLI reported (an alias as its full id), else the one asked for. */
-  model: string;
-}
-
-/** What the panel needs from the plugin. */
-export interface ChatHost {
+/** What the panel needs from the plugin (it also runs the turns: TurnRunner). */
+export interface ChatHost extends TurnRunner {
   data: { settings: Alt2ObsSettings; cliDetection: Partial<Record<CliName, unknown>> };
   chatThreads: ThreadStore;
   modelCatalog(): ModelCatalog;
@@ -114,9 +109,8 @@ export interface ChatHost {
   buildChatBrief(notePath: string, force: boolean): Promise<void>;
   /** "브리프 다시 만들기" from the menu (asks first when the user edited it). */
   rebuildBrief(notePath: string | null): Promise<boolean>;
+  /** One slide's material: the note read now, the PDF text and the transcript from their caches. */
   chatMaterial(lecture: ChatLecture, slide: number): Promise<SlideMaterial>;
-  runChat(req: ChatRunRequest): Promise<ChatRunResult>;
-  chatErrorInfo(e: unknown): ChatErrorInfo;
   /** Lecture notes for the "강의 없음" card. */
   lectureChoices(): Array<{ path: string; name: string; subject: string }>;
   openSettings(): void;
@@ -138,6 +132,12 @@ const QUICK_QUESTIONS: Array<[string, string]> = [
 const MAX_EXTRA_SLIDES = 8;
 /** A chip's tooltip shows this much of what it sends. */
 const CHIP_TITLE_CHARS = 300;
+/** A followed slide is read once the reader stays on it this long. */
+const MATERIAL_DELAY_MS = 200;
+/** A note change is read again once it has settled this long. */
+const NOTE_CHANGE_DELAY_MS = 300;
+/** Within this much of the end, the thread keeps following a streaming answer. */
+const NEAR_BOTTOM_PX = 60;
 
 /** Briefs the user chose to keep as they are ("내 수정 유지"), by note and source, for this session. */
 const keptBriefs = new Set<string>();
@@ -174,8 +174,9 @@ function errorText(info: ChatErrorInfo): { title: string; fix: string } {
 
 export class ChatView extends ItemView {
   private lecture: ChatLecture | null = null;
-  private thread: ChatThread | null = null;
   private brief: ChatBriefState | null = null;
+  /** The brief could not be read and there is no earlier state to show. */
+  private briefError = false;
   /** The slide the viewer or the editor is on. */
   private followed: number | null = null;
   /** 📌: the slide the panel stays on (null: it follows). */
@@ -184,20 +185,32 @@ export class ChatView extends ItemView {
   private extraSlides: number[] = [];
   private chips = { brief: true, slide: true, transcript: true, memo: true };
   private materials = new Map<string, SlideMaterial>();
+  /** Material reads in flight, so one slide is not read twice at once. */
+  private materialLoads = new Map<string, Promise<void>>();
   /** This run's model (the picker); the saved setting until changed. */
   private runChoice: TaskLLMSetting;
-  private running: { controller: AbortController; turn: ChatTurn } | null = null;
+  /** A question is being prepared (from the first click until its run starts). */
+  private sending = false;
   /** A question waiting for "그래도 보내기" past the token cap. */
   private capPending: string | null = null;
   /** "새로 만들기" of a stale brief waits for its confirmation. */
   private confirmRebuild = false;
   /** Rendered turns by id, so a thread is drawn again without rendering every answer again. */
   private turnEls = new Map<number, HTMLElement>();
+  /** One render component per rendered answer, unloaded when it is drawn again or goes. */
+  private turnComponents = new Map<number, Component>();
+  /** Answers with a redraw waiting for the next animation frame. */
+  private drawFrames = new Map<number, number>();
   /** Lecture switches in flight: only the last one applies. */
   private switchSeq = 0;
   /** Thread drawings in flight: one that waited on a rendering stops when a newer one started. */
   private threadSeq = 0;
   private estimateFrame = 0;
+  private materialTimer: number | null = null;
+  private noteTimer: number | null = null;
+  private clockTimer: number | null = null;
+  private unsubscribe: (() => void) | null = null;
+  private closed = false;
 
   private headEl!: HTMLElement;
   private cardsEl!: HTMLElement;
@@ -207,7 +220,7 @@ export class ChatView extends ItemView {
   private inputEl!: HTMLTextAreaElement;
   private capEl!: HTMLElement;
   private modelEl!: HTMLElement;
-  private estimateEl!: HTMLElement;
+  private estimateEl: HTMLElement | null = null;
   private sendBtn!: HTMLButtonElement;
 
   constructor(
@@ -241,7 +254,20 @@ export class ChatView extends ItemView {
     return this.lecture?.notePath ?? null;
   }
 
+  /** The lecture's thread, when a question was asked about it. */
+  private get thread(): ChatThread | undefined {
+    return this.lecture ? this.host.chatThreads.peek(this.lecture.notePath) : undefined;
+  }
+
+  /** The turn of this lecture's thread answering now, if any. */
+  private runningTurn(): ChatTurn | null {
+    const thread = this.thread;
+    if (!thread || !this.host.chatThreads.isRunning(thread)) return null;
+    return turnsOf(thread).find((t) => t.status === "streaming") ?? null;
+  }
+
   async onOpen(): Promise<void> {
+    this.closed = false;
     const root = this.containerEl.children[1] as HTMLElement;
     root.empty();
     root.addClass("alt-to-obs-chat");
@@ -253,21 +279,37 @@ export class ChatView extends ItemView {
     this.buildComposer();
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => void this.syncFromWorkspace()));
     this.registerEvent((this.app.workspace as Events).on(SLIDE_CHANGE_EVENT, (info: unknown) => void this.onSlideChange(info as SlideChangeInfo)));
+    // The lecture note changed (a memo typed, a re-import): its chips are read again.
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (file instanceof TFile && file.path === this.lecture?.notePath) this.noteChangedLater();
+      })
+    );
+    this.unsubscribe = this.host.chatThreads.subscribe((e) => this.onThreadEvent(e));
+    // "답변 쓰는 중 · N초" of answers with no piece yet (Codex never sends one).
+    this.clockTimer = window.setInterval(() => this.tickClock(), 1000);
     this.render();
     await this.syncFromWorkspace();
   }
 
   async onClose(): Promise<void> {
-    // A running answer stops with the panel; what came stays in the thread as stopped.
-    this.running?.controller.abort();
+    // A running answer goes on in the thread (spec 5.4); the panel only stops listening.
+    this.closed = true;
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    for (const timer of [this.materialTimer, this.noteTimer]) if (timer !== null) window.clearTimeout(timer);
+    if (this.clockTimer !== null) window.clearInterval(this.clockTimer);
     if (this.estimateFrame) window.cancelAnimationFrame(this.estimateFrame);
+    for (const frame of this.drawFrames.values()) window.cancelAnimationFrame(frame);
+    this.clearRendered();
     this.host.chatPanelClosed(this.leaf);
   }
 
   // ---- the current lecture and slide (spec 5.2) ----
 
-  /** Reads the lecture and slide from the main area's most recent tab. */
+  /** Reads the lecture and slide from the main area's most recent tab (once the layout is ready). */
   async syncFromWorkspace(): Promise<void> {
+    if (this.closed || !this.app.workspace.layoutReady) return;
     const view = this.app.workspace.getMostRecentLeaf()?.view as unknown;
     if (!view || view === this) return;
     const v = view as {
@@ -293,7 +335,7 @@ export class ChatView extends ItemView {
   }
 
   private async onSlideChange(info: SlideChangeInfo): Promise<void> {
-    if (!info?.mdPath) return;
+    if (!info?.mdPath || this.closed) return;
     if (info.mdPath === this.lecture?.notePath) this.follow(info.page);
     else {
       // Another pair loaded in the viewer the reader is on.
@@ -313,30 +355,43 @@ export class ChatView extends ItemView {
     }
     const seq = ++this.switchSeq;
     const lecture = await this.host.chatLecture(notePath);
-    if (seq !== this.switchSeq || !lecture) return;
+    if (seq !== this.switchSeq || !lecture || this.closed) return;
     this.lecture = lecture;
-    this.thread = this.host.chatThreads.get(notePath);
     this.materials.clear();
-    this.turnEls.clear();
+    this.clearRendered();
     this.followed = slide;
     this.pinned = pinned[0] ?? null;
     this.extraSlides = pinned.slice(1, 1 + MAX_EXTRA_SLIDES);
     this.capPending = null;
     this.confirmRebuild = false;
     this.brief = null;
+    this.briefError = false;
     this.render();
-    await Promise.all([this.loadBrief(), this.loadMaterials()]);
+    await Promise.all([this.loadBrief(true), this.loadMaterials(false)]);
   }
 
-  /** The followed slide changed; a pinned panel stays where it is. */
+  /** The followed slide changed; a pinned panel stays where it is. Its material is read once the reader stays. */
   private follow(slide: number | null): void {
     if (slide === null || slide === this.followed) return;
     this.followed = slide;
-    if (this.pinned !== null || !this.thread) return;
+    if (this.pinned !== null) return;
     moveThreadTo(this.thread, slide);
     void this.renderThread();
     this.renderChips();
-    void this.loadMaterials();
+    if (this.materialTimer !== null) window.clearTimeout(this.materialTimer);
+    this.materialTimer = window.setTimeout(() => {
+      this.materialTimer = null;
+      void this.loadMaterials(false);
+    }, MATERIAL_DELAY_MS);
+  }
+
+  /** The note changed: its commentary and memo (chips) and the brief's state are read again, once it settles. */
+  private noteChangedLater(): void {
+    if (this.noteTimer !== null) window.clearTimeout(this.noteTimer);
+    this.noteTimer = window.setTimeout(() => {
+      this.noteTimer = null;
+      void Promise.all([this.loadMaterials(true), this.loadBrief(false)]);
+    }, NOTE_CHANGE_DELAY_MS);
   }
 
   /** The slide the question is about (pinned, else followed), null without one. */
@@ -356,42 +411,75 @@ export class ChatView extends ItemView {
     return `${this.lecture?.notePath}#${slide}`;
   }
 
-  private async loadMaterials(): Promise<void> {
+  /**
+   * Reads the material of the current and added slides: the missing ones,
+   * or (`fresh`) all of them again, as a send does (spec 6.2). A slide whose
+   * read is already running is not read a second time.
+   */
+  private async loadMaterials(fresh: boolean): Promise<void> {
     const lecture = this.lecture;
     const current = this.currentSlide();
     if (!lecture || current === null) return;
+    const reads: Array<Promise<void>> = [];
     for (const slide of [current, ...this.extraSlides]) {
       const key = this.materialKey(slide);
-      if (this.materials.has(key)) continue;
-      try {
-        const material = await this.host.chatMaterial(lecture, slide);
-        if (this.lecture !== lecture) return;
-        this.materials.set(key, material);
-        // The transcript's end, once read, is the lecture's length for the time marks (spec 5.5).
-        if (material.transcriptEndMs !== null) lecture.lengthMs = Math.max(lecture.lengthMs ?? 0, material.transcriptEndMs);
-      } catch (e) {
-        console.warn("[Alt2Obs] slide material not read:", e);
+      const running = this.materialLoads.get(key);
+      if (running && !fresh) {
+        reads.push(running);
+        continue;
       }
+      if (!fresh && this.materials.has(key)) continue;
+      // A fresh read after one still running, so the older one cannot land last.
+      const read = running ? running.then(() => this.readMaterial(lecture, slide, key)) : this.readMaterial(lecture, slide, key);
+      this.materialLoads.set(key, read);
+      void read.then(() => {
+        if (this.materialLoads.get(key) === read) this.materialLoads.delete(key);
+      });
+      reads.push(read);
     }
-    this.renderChips();
+    await Promise.all(reads);
+    if (this.lecture === lecture) this.renderChips();
   }
 
-  private async loadBrief(): Promise<void> {
+  private async readMaterial(lecture: ChatLecture, slide: number, key: string): Promise<void> {
+    try {
+      const material = await this.host.chatMaterial(lecture, slide);
+      if (this.lecture !== lecture) return;
+      this.materials.set(key, material);
+      // The transcript's end, once read, is the lecture's length for the time marks (spec 5.5).
+      if (material.transcriptEndMs !== null) lecture.lengthMs = Math.max(lecture.lengthMs ?? 0, material.transcriptEndMs);
+    } catch (e) {
+      console.warn("[Alt2Obs] slide material not read:", e);
+    }
+  }
+
+  /**
+   * Reads the brief. `rebuild`: a brief the note left behind (and the user
+   * did not edit) is built again first (no tokens). A failed read or
+   * rebuild keeps the last state that could be read.
+   */
+  private async loadBrief(rebuild: boolean): Promise<void> {
     const lecture = this.lecture;
     if (!lecture) return;
     try {
       let brief = await this.host.chatBrief(lecture.notePath);
-      // The note changed and the brief is the plugin's own: rebuilt without asking (no tokens).
-      if (brief.status === "outdated") {
-        await this.host.buildChatBrief(lecture.notePath, false);
-        brief = await this.host.chatBrief(lecture.notePath);
+      if (rebuild && brief.status === "outdated") {
+        try {
+          await this.host.buildChatBrief(lecture.notePath, false);
+          brief = await this.host.chatBrief(lecture.notePath);
+        } catch (e) {
+          // The outdated brief is still readable: it is used as it is.
+          console.warn("[Alt2Obs] brief not rebuilt:", e);
+        }
       }
       if (this.lecture !== lecture) return;
       this.brief = brief;
+      this.briefError = false;
     } catch (e) {
       console.warn("[Alt2Obs] brief not read:", e);
-      if (this.lecture === lecture) this.brief = null;
+      if (this.lecture === lecture && !this.brief) this.briefError = true;
     }
+    if (this.lecture !== lecture || this.closed) return;
     this.renderHead();
     this.renderCards();
     this.renderChips();
@@ -399,12 +487,62 @@ export class ChatView extends ItemView {
 
   /** The brief was rebuilt elsewhere (the command): read it again. */
   async reloadBrief(): Promise<void> {
-    await this.loadBrief();
+    await this.loadBrief(false);
   }
 
   private briefStale(): boolean {
     const b = this.brief;
     return !!b && !!this.lecture && b.status === "edited-stale" && !keptBriefs.has(`${this.lecture.notePath}\n${b.sourceHash}`);
+  }
+
+  // ---- the runs (ThreadStore events) ----
+
+  private onThreadEvent(e: ThreadEvent): void {
+    if (this.closed || e.thread !== this.thread) return;
+    if (e.kind === "delta") {
+      this.drawLater(e.turn);
+      return;
+    }
+    const follow = this.nearBottom();
+    void this.renderTurn(e.turn).then(() => this.keepAtBottom(follow));
+    this.renderComposer();
+    if (e.kind === "end") this.renderChips();
+  }
+
+  /** The streaming answer's text, redrawn once per animation frame. */
+  private drawLater(turn: ChatTurn): void {
+    if (this.drawFrames.has(turn.id)) return;
+    this.drawFrames.set(
+      turn.id,
+      window.requestAnimationFrame(() => {
+        this.drawFrames.delete(turn.id);
+        const el = this.turnEls.get(turn.id);
+        if (!el || turn.status !== "streaming") return;
+        const follow = this.nearBottom();
+        el.querySelector(".alt-to-obs-chat-a")?.setText(turn.answer);
+        el.querySelector(".alt-to-obs-chat-status")?.setText(turn.answer ? "" : this.writingText(turn));
+        this.keepAtBottom(follow);
+      })
+    );
+  }
+
+  private writingText(turn: ChatTurn): string {
+    return `답변 쓰는 중 · ${Math.round((Date.now() - (turn.startedAt ?? turn.at)) / 1000)}초`;
+  }
+
+  private tickClock(): void {
+    const turn = this.runningTurn();
+    if (!turn || turn.answer) return;
+    this.turnEls.get(turn.id)?.querySelector(".alt-to-obs-chat-status")?.setText(this.writingText(turn));
+  }
+
+  private nearBottom(): boolean {
+    const el = this.threadEl;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  }
+
+  private keepAtBottom(follow: boolean): void {
+    if (follow) this.threadEl.scrollTop = this.threadEl.scrollHeight;
   }
 
   // ---- drawing ----
@@ -415,6 +553,13 @@ export class ChatView extends ItemView {
     this.renderChips();
     void this.renderThread();
     this.renderComposer();
+  }
+
+  /** Every rendered answer goes (its render component unloaded). */
+  private clearRendered(): void {
+    for (const component of this.turnComponents.values()) component.unload();
+    this.turnComponents.clear();
+    this.turnEls.clear();
   }
 
   private renderHead(): void {
@@ -443,7 +588,7 @@ export class ChatView extends ItemView {
       menu.addItem((i) =>
         i.setTitle("브리프 다시 만들기").onClick(() => {
           void this.host.rebuildBrief(lecture.notePath).then(async (done) => {
-            if (done) await this.loadBrief();
+            if (done) await this.loadBrief(false);
           });
         })
       );
@@ -451,13 +596,14 @@ export class ChatView extends ItemView {
     menu.showAtMouseEvent(e);
   }
 
+  /** "새 대화": the lecture's thread goes (a running answer is stopped). */
   private newThread(): void {
     if (!this.lecture) return;
-    this.running?.controller.abort();
     this.host.chatThreads.clear(this.lecture.notePath);
-    this.turnEls.clear();
+    this.clearRendered();
     void this.renderThread();
     this.renderChips();
+    this.renderComposer();
   }
 
   private renderCards(): void {
@@ -507,7 +653,7 @@ export class ChatView extends ItemView {
     try {
       await this.host.buildChatBrief(lecture.notePath, force);
       this.confirmRebuild = false;
-      await this.loadBrief();
+      await this.loadBrief(false);
     } catch (e) {
       button.disabled = false;
       new Notice(`브리프를 만들지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
@@ -530,11 +676,12 @@ export class ChatView extends ItemView {
   private renderChips(): void {
     const el = this.chipsEl;
     el.empty();
+    this.estimateEl = null;
     const lecture = this.lecture;
     if (!lecture) return;
     const row = el.createDiv({ cls: "alt-to-obs-chat-chip-row" });
     const brief = this.brief;
-    if (!brief) this.chip(row, { text: "📘 브리프 읽는 중", disabled: true });
+    if (!brief) this.chip(row, { text: this.briefError ? "📘 브리프를 읽지 못함" : "📘 브리프 읽는 중", warning: this.briefError, disabled: true });
     else if (brief.status === "missing" || !brief.body) this.chip(row, { text: "📘 브리프 없음", warning: true, disabled: true });
     else
       this.chip(row, {
@@ -585,7 +732,7 @@ export class ChatView extends ItemView {
       if (m && m.memo) this.chip(row, { text: "✏️ 내 메모", tokens: estimateTextTokens(m.memo), on: this.chips.memo, title: m.memo, onClick: () => this.toggleChip("memo") });
       else if (m) this.chip(row, { text: "✏️ 비어 있음", disabled: true });
     }
-    const history = this.thread ? historyOf(this.thread) : [];
+    const history = historyOf(this.thread);
     if (history.length > 0) {
       const text = history.map((h) => `Q: ${h.question}\nA: ${h.answer}`).join("\n\n");
       this.chip(row, { text: `💬 이전 대화 ${history.length}`, tokens: Math.min(estimateTextTokens(text), 3000), info: true, title: text });
@@ -602,11 +749,11 @@ export class ChatView extends ItemView {
   private togglePin(): void {
     if (this.pinned !== null) {
       this.pinned = null;
-      if (this.thread) moveThreadTo(this.thread, this.followed);
+      moveThreadTo(this.thread, this.followed);
       void this.renderThread();
     } else this.pinned = this.followed;
     this.renderChips();
-    void this.loadMaterials();
+    void this.loadMaterials(false);
   }
 
   /** The pack this question would send now (materials as read so far). */
@@ -639,7 +786,7 @@ export class ChatView extends ItemView {
       neighbours: lecture.neighbours,
       brief,
       extraBriefs: [],
-      history: this.thread ? historyOf(this.thread) : [],
+      history: historyOf(this.thread),
       focus,
       quote: null,
       question,
@@ -656,7 +803,7 @@ export class ChatView extends ItemView {
     const { pack, images } = this.pack(this.inputEl?.value ?? "");
     const effort = estimateEffort(task.provider, task.model, task.effort, this.host.modelCatalog());
     const est = estimateChat(pack, task.provider, effort, images.length);
-    const cached = this.thread && historyOf(this.thread).length > 0 && est.cached > 0 ? ` (캐시 약 ${k(est.cached)})` : "";
+    const cached = historyOf(this.thread).length > 0 && est.cached > 0 ? ` (캐시 약 ${k(est.cached)})` : "";
     el.setText(`이번 질문 예상: 입력 약 ${k(est.input)}${cached} · 출력 약 ${k(est.output)}`);
     el.toggleClass("is-over", est.input + est.output > this.host.data.settings.chatTokenCap);
   }
@@ -700,9 +847,8 @@ export class ChatView extends ItemView {
       const list = card.createDiv({ cls: "alt-to-obs-chat-recent" });
       list.createDiv({ cls: "alt-to-obs-muted", text: "최근 대화" });
       for (const t of recent) {
-        const turns = t.items.filter((i) => i.kind === "turn");
-        const last = turns[turns.length - 1];
-        const turn = last?.kind === "turn" ? last.turn : null;
+        const turns = turnsOf(t);
+        const turn = turns[turns.length - 1] ?? null;
         const name = (t.notePath.split("/").pop() ?? t.notePath).replace(/\.md$/, "");
         const text = [name, turn?.slide ? `슬라이드 ${turn.slide}` : "", turn ? clock(turn.at) : ""].filter(Boolean).join(" · ");
         list.createEl("button", { text, cls: "alt-to-obs-chat-recent-item" }).addEventListener("click", () => void this.showLecture(t.notePath, turn?.slide ?? null));
@@ -751,6 +897,8 @@ export class ChatView extends ItemView {
   /** Draws a turn (in place of its old element, or at the end of `parent`). */
   private async renderTurn(turn: ChatTurn, parent?: HTMLElement): Promise<HTMLElement> {
     const old = this.turnEls.get(turn.id);
+    this.turnComponents.get(turn.id)?.unload();
+    this.turnComponents.delete(turn.id);
     const el = createDiv({ cls: "alt-to-obs-chat-turn" });
     el.dataset.turn = String(turn.id);
     if (old?.parentElement) old.replaceWith(el);
@@ -763,17 +911,27 @@ export class ChatView extends ItemView {
     if (turn.status === "streaming") {
       answer.addClass("is-streaming");
       answer.setText(turn.answer);
-      el.createDiv({ cls: "alt-to-obs-chat-status", text: turn.answer ? "" : "답변 쓰는 중 · 0초" });
+      el.createDiv({ cls: "alt-to-obs-chat-status", text: turn.answer ? "" : this.writingText(turn) });
       return el;
     }
     if (turn.answer.trim()) {
-      await MarkdownRenderer.render(this.app, turn.answer, answer, this.lecture?.notePath ?? "", this);
+      const component = new Component();
+      component.load();
+      this.turnComponents.set(turn.id, component);
+      await MarkdownRenderer.render(this.app, safeAnswerMarkdown(turn.answer), answer, this.lecture?.notePath ?? "", component);
       this.applyCitations(answer);
     }
     if (turn.status === "stopped") el.createDiv({ cls: "alt-to-obs-chat-status", text: "(중지됨)" });
     if (turn.status === "error" && turn.error) this.renderError(el, turn, turn.error);
     if (turn.status !== "error") this.renderActions(el, turn);
     return el;
+  }
+
+  /** Runs a turn again in its thread (다시 생성, 다시 보내기, the other provider). */
+  private rerun(turn: ChatTurn): void {
+    const thread = this.thread;
+    if (!thread || this.runningTurn()) return;
+    void this.host.chatThreads.run(thread, turn, this.host);
   }
 
   private renderActions(el: HTMLElement, turn: ChatTurn): void {
@@ -787,8 +945,8 @@ export class ChatView extends ItemView {
       });
     }
     const again = actions.createEl("button", { text: "다시 생성" });
-    again.disabled = !!this.running;
-    again.addEventListener("click", () => void this.runTurn(turn));
+    again.disabled = !!this.runningTurn();
+    again.addEventListener("click", () => this.rerun(turn));
     if (turn.usage && turn.provider) {
       const u = turn.usage;
       const model = turn.model ? modelName(turn.provider, turn.model, this.host.modelCatalog()) : "CLI 기본 모델";
@@ -805,17 +963,18 @@ export class ChatView extends ItemView {
     card.createEl("strong", { text: title });
     card.createEl("p", { text: fix });
     const actions = card.createDiv({ cls: "alt-to-obs-chat-card-actions" });
+    const busy = !!this.runningTurn();
     const retry = actions.createEl("button", { text: "다시 보내기", cls: "mod-cta" });
-    retry.disabled = !!this.running;
-    retry.addEventListener("click", () => void this.runTurn(turn));
+    retry.disabled = busy;
+    retry.addEventListener("click", () => this.rerun(turn));
     const provider = turn.request.task.provider;
     const other = provider === "claude-cli" ? "codex-cli" : "claude-cli";
     if (this.host.data.cliDetection[other === "claude-cli" ? "claude" : "codex"]) {
       const switchBtn = actions.createEl("button", { text: `${other === "claude-cli" ? "Claude" : "Codex"}로 보내기`, attr: { title: "다른 프로바이더로 보내기 (이번 질문만)" } });
-      switchBtn.disabled = !!this.running;
+      switchBtn.disabled = busy;
       switchBtn.addEventListener("click", () => {
         turn.request = { ...turn.request, task: defaultTaskSetting(other, "chat") };
-        void this.runTurn(turn);
+        this.rerun(turn);
       });
     }
     actions.createEl("button", { text: "설정 열기" }).addEventListener("click", () => this.host.openSettings());
@@ -879,22 +1038,27 @@ export class ChatView extends ItemView {
     const row = c.createDiv({ cls: "alt-to-obs-chat-send-row" });
     this.sendBtn = row.createEl("button", { cls: "mod-cta alt-to-obs-chat-send", text: "보내기" });
     this.sendBtn.addEventListener("click", () => {
-      if (this.running) this.running.controller.abort();
+      const running = this.runningTurn();
+      if (running) this.host.chatThreads.stop(running);
       else void this.send(this.inputEl.value);
     });
   }
 
   private renderComposer(): void {
+    const running = !!this.runningTurn();
+    const busy = running || this.sending;
     this.composerEl.toggle(!!this.lecture);
-    this.sendBtn.setText(this.running ? "중지" : "보내기");
-    this.sendBtn.toggleClass("mod-cta", !this.running);
-    this.sendBtn.toggleClass("mod-warning", !!this.running);
-    for (const b of Array.from(this.composerEl.querySelectorAll<HTMLButtonElement>(".alt-to-obs-chat-quick-chip"))) b.disabled = !!this.running;
-    this.renderModel();
+    this.sendBtn.setText(running ? "중지" : "보내기");
+    this.sendBtn.toggleClass("mod-cta", !running);
+    this.sendBtn.toggleClass("mod-warning", running);
+    this.sendBtn.disabled = this.sending;
+    this.inputEl.disabled = this.sending;
+    for (const b of Array.from(this.composerEl.querySelectorAll<HTMLButtonElement>(".alt-to-obs-chat-quick-chip"))) b.disabled = busy;
+    this.renderModel(busy);
     this.renderCap();
   }
 
-  private renderModel(): void {
+  private renderModel(busy: boolean): void {
     this.modelEl.empty();
     const settings = this.host.data.settings;
     renderModelPicker(this.modelEl, {
@@ -904,10 +1068,10 @@ export class ChatView extends ItemView {
       saved: settings.tasks.chat,
       catalog: this.host.modelCatalog(),
       recent: settings.recentModels,
-      disabled: !!this.running,
+      disabled: busy,
       onChange: (next) => {
         this.runChoice = next;
-        this.renderModel();
+        this.renderModel(false);
         this.renderEstimate();
       },
       onSaveDefault: (next) => this.host.saveTaskDefault("chat", next),
@@ -927,94 +1091,70 @@ export class ChatView extends ItemView {
       if (question !== null) void this.send(question, true);
     });
     el.createEl("button", { text: "취소" }).addEventListener("click", () => {
+      // The question goes back to the input.
+      if (this.capPending !== null && !this.inputEl.value.trim()) this.inputEl.value = this.capPending;
       this.capPending = null;
       this.renderCap();
     });
   }
 
-  /** Sends a question (spec 5.4): the pack, the cap check, then the run. */
+  /**
+   * Sends a question (spec 5.4): the commentary, memo and brief read again,
+   * the pack, the cap check, then a run in the lecture's thread (made now
+   * if it is the first question). A second send while this one is being
+   * prepared does nothing.
+   */
   async send(text: string, overCapOk = false): Promise<void> {
     const question = text.trim();
-    if (!question || this.running || !this.lecture || !this.thread) return;
-    await this.syncFromWorkspace();
-    await this.loadMaterials();
-    const task = { ...this.runChoice };
-    if (!isCliProvider(task.provider)) {
-      new Notice("질문에 쓸 LLM이 설정되어 있지 않습니다. 설정의 '작업별 모델'에서 '질문'을 고르세요.");
-      return;
-    }
-    const { pack, images, focus } = this.pack(question);
-    const effort = estimateEffort(task.provider, task.model, task.effort, this.host.modelCatalog());
-    const est = estimateChat(pack, task.provider, effort, images.length);
-    if (!overCapOk && est.input + est.output > this.host.data.settings.chatTokenCap) {
-      this.capPending = question;
-      this.renderCap();
-      return;
-    }
-    const thread = this.thread;
-    if (pack.folded > thread.folded) {
-      thread.items.push({ kind: "note", text: `앞 대화 ${pack.folded}개를 줄였습니다` });
-      thread.folded = pack.folded;
-    }
-    const turn: ChatTurn = {
-      id: newTurnId(),
-      question,
-      label: materialLabel(focus, this.chips.brief && !!this.brief?.body),
-      slide: this.currentSlide(),
-      answer: "",
-      status: "streaming",
-      request: { task, system: pack.system, user: pack.user, images },
-      at: Date.now(),
-    };
-    // The trailing divider is where this question is asked: it stays.
-    thread.items.push({ kind: "turn", turn });
-    this.inputEl.value = "";
-    await this.renderThread();
-    await this.runTurn(turn);
-  }
-
-  /** Runs (or runs again) a turn's request, streaming into its answer. */
-  private async runTurn(turn: ChatTurn): Promise<void> {
-    if (this.running) return;
-    const controller = new AbortController();
-    this.running = { controller, turn };
-    Object.assign(turn, { answer: "", status: "streaming", error: undefined, usage: undefined, model: undefined });
-    let el = await this.renderTurn(turn);
+    if (!question || this.sending || !this.lecture || this.runningTurn()) return;
+    this.sending = true;
+    if (this.inputEl.value.trim() === question) this.inputEl.value = "";
     this.renderComposer();
-    const started = Date.now();
-    let frame = 0;
-    const draw = () => {
-      frame = 0;
-      el = this.turnEls.get(turn.id) ?? el;
-      el.querySelector(".alt-to-obs-chat-a")?.setText(turn.answer);
-      el.querySelector(".alt-to-obs-chat-status")?.setText("");
-    };
-    // No piece yet (Codex never sends one): how long it has been writing.
-    const timer = window.setInterval(() => {
-      if (turn.answer) return;
-      el = this.turnEls.get(turn.id) ?? el;
-      el.querySelector(".alt-to-obs-chat-status")?.setText(`답변 쓰는 중 · ${Math.round((Date.now() - started) / 1000)}초`);
-    }, 1000);
+    let sent = false;
     try {
-      const result = await this.host.runChat({
-        ...turn.request,
-        signal: controller.signal,
-        onDelta: (piece) => {
-          turn.answer += piece;
-          if (!frame) frame = window.requestAnimationFrame(draw);
-        },
-      });
-      Object.assign(turn, { answer: result.text, status: "done", usage: result.usage, model: result.model, provider: turn.request.task.provider, effort: turn.request.task.effort });
-    } catch (e) {
-      if (controller.signal.aborted) turn.status = "stopped";
-      else Object.assign(turn, { status: "error", error: this.host.chatErrorInfo(e) });
+      await this.syncFromWorkspace();
+      const lecture = this.lecture;
+      if (!lecture) return;
+      await Promise.all([this.loadMaterials(true), this.loadBrief(true)]);
+      if (this.lecture !== lecture) return;
+      const task = { ...this.runChoice };
+      if (!isCliProvider(task.provider)) {
+        new Notice("질문에 쓸 LLM이 설정되어 있지 않습니다. 설정의 '작업별 모델'에서 '질문'을 고르세요.");
+        return;
+      }
+      const { pack, images, focus } = this.pack(question);
+      const effort = estimateEffort(task.provider, task.model, task.effort, this.host.modelCatalog());
+      const est = estimateChat(pack, task.provider, effort, images.length);
+      if (!overCapOk && est.input + est.output > this.host.data.settings.chatTokenCap) {
+        this.capPending = question;
+        sent = true;
+        return;
+      }
+      const thread = this.host.chatThreads.get(lecture.notePath);
+      if (pack.folded > thread.folded) {
+        thread.items.push({ kind: "note", text: `앞 대화 ${pack.folded}개를 줄였습니다` });
+        thread.folded = pack.folded;
+      }
+      const turn: ChatTurn = {
+        id: newTurnId(),
+        question,
+        label: materialLabel(focus, this.chips.brief && !!this.brief?.body),
+        slide: this.currentSlide(),
+        answer: "",
+        status: "streaming",
+        request: { task, system: pack.system, user: pack.user, images },
+        at: Date.now(),
+      };
+      // A trailing divider is where this question is asked: it stays.
+      thread.items.push({ kind: "turn", turn });
+      sent = true;
+      // The run belongs to the thread: it goes on if the panel closes.
+      void this.host.chatThreads.run(thread, turn, this.host);
+      await this.renderThread();
     } finally {
-      window.clearInterval(timer);
-      if (frame) window.cancelAnimationFrame(frame);
-      this.running = null;
+      this.sending = false;
+      if (!sent && !this.inputEl.value.trim()) this.inputEl.value = question;
+      if (!this.closed) this.renderComposer();
     }
-    if (this.thread?.items.some((i) => i.kind === "turn" && i.turn === turn)) await this.renderTurn(turn);
-    this.renderComposer();
-    this.renderChips();
   }
 }

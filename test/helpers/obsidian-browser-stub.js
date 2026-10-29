@@ -56,7 +56,11 @@ export class Menu {
   }
   showAtMouseEvent() { Menu.shown = this; }
 }
-export class Component { load() {} unload() {} }
+// Component.live counts loaded components that were not unloaded yet (the question panel's per-answer components).
+export class Component {
+  load() { if (!this.loaded) { this.loaded = true; Component.live = (Component.live ?? 0) + 1; } }
+  unload() { if (this.loaded) { this.loaded = false; Component.live--; } }
+}
 export class ItemView {
   constructor(leaf) {
     this.leaf = leaf;

@@ -124,8 +124,10 @@ const at = (name) => {
 assert.deepEqual(at("opened (sidebar was collapsed)"), { step: "opened (sidebar was collapsed)", open: true, collapsed: false, events: [true] });
 assert.deepEqual(at("toggled closed"), { step: "toggled closed", open: false, collapsed: true, collapses: 1, events: [true, false] }, "closing collapses the sidebar again");
 assert.deepEqual(at("tab closed (sidebar was open)"), { step: "tab closed (sidebar was open)", open: false, collapsed: false, collapses: 1 }, "closing the tab itself: the open sidebar stays open");
-assert.deepEqual(at("restored and detached"), { step: "restored and detached", open: false, collapsed: false, collapses: 1 }, "a restored panel is detached at startup, the sidebar left as it is");
-console.log("PASS: question panel opens on demand in the right sidebar, closing (button, tab, ×) restores the sidebar's collapsed state, a restored panel is detached at layout ready");
+assert.deepEqual(at("restored and detached"), { step: "restored and detached", open: false, collapsed: false, collapses: 1, readBeforeReady: 0 }, "a restored panel reads nothing before the layout is ready, is detached, the sidebar left as it is");
+assert.deepEqual(at("deferred restored"), { step: "deferred restored", open: false, events: [false] }, "a restored tab that never showed its view still turns the buttons off");
+assert.deepEqual(at("double open"), { step: "double open", panels: 1, events: [true] }, "a double click opens one panel");
+console.log("PASS: question panel opens on demand in the right sidebar (once on a double click), closing (button, tab, ×) restores the sidebar's collapsed state, a restored panel reads nothing before the layout is ready and is detached then");
 
 // No lecture, then a lecture picked with a slide range (spec 5.6).
 const none = at("no lecture");
@@ -149,13 +151,17 @@ assert.ok(following.chips.every((c) => !c.startsWith("📄 슬라이드 15")), "
 assert.match(following.chips.find((c) => c.startsWith("📘")), /k\|is-on$/, "a chip shows its tokens");
 assert.equal(following.title, "## 개요\n부동소수점 덧셈을 다룬다.", "the chip's tooltip: what it sends");
 assert.match(following.estimate, /^이번 질문 예상: 입력 약 \d+\.\dk · 출력 약 0\.6k$/);
-assert.match(at("memo off").memo, /^✏️ 내 메모.*\|is-off$/);
-console.log("PASS: the panel follows the viewer's lecture and slide; brief, slide, transcript and memo chips with tokens and tooltips, toggled off by a click");
+assert.match(at("note edited").memo, /^✏️ 비어 있음\|is-disabled$/, "the note's memo emptied: its chip is read again");
+assert.match(at("chip toggles").off, /^🎙 전사.*\|is-off$/);
+assert.match(at("chip toggles").on, /^🎙 전사.*\|is-on$/);
+console.log("PASS: the panel follows the viewer's lecture and slide; brief, slide, transcript and memo chips with tokens and tooltips, toggled by a click and read again when the note changes");
 
 // Enter and the Korean composition (spec 5.3).
 assert.deepEqual(at("composing"), { step: "composing", runs: 0, value: "왜 작은 수부터 더해?" }, "Enter while composing (isComposing or keyCode 229) and Shift+Enter do not send");
 const streaming = at("streaming");
-assert.equal(streaming.runs, 1);
+assert.equal(streaming.runs, 1, "two Enters and a quick question while sending: one question");
+assert.equal(streaming.turns, 1);
+assert.equal(streaming.disabledWhileSending, true, "the input is disabled at once");
 assert.equal(streaming.streaming, true);
 assert.ok(streaming.partial.length > 0 && "부동소수점 덧셈은 작은 수부터 더한다 [슬라이드 17]. ".startsWith(streaming.partial.slice(0, 10)), `plain text while streaming (${streaming.partial})`);
 assert.equal(streaming.sendButton, "중지", "the send button stops while answering");
@@ -169,17 +175,25 @@ assert.equal(answered.usage, "Sonnet 5.5 · low · 입력 5.1k (캐시 3.0k) · 
 assert.equal(answered.label, "슬라이드 17 기준");
 assert.equal(answered.system, "[강의 브리프: CSED423 · L5 (앞 강의: L4, 다음 강의: L6)]\n## 개요\n부동소수점 덧셈을 다룬다.", "the brief after the instructions in the system prompt");
 assert.deepEqual(answered.userHead, ["[이번 자료]", "## L5 · 슬라이드 17 [29:06~35:56]"]);
-assert.equal(answered.memoSent, false, "the memo chip was off");
+assert.equal(answered.memoSent, true);
+assert.equal(answered.memoText, "시험 범위, 오늘 고친 메모", "the memo is read again at the send");
 assert.equal(answered.transcriptSent, true);
 assert.deepEqual(answered.task, { provider: "claude-cli", model: "sonnet", effort: "low" }, "the chat task's model");
 console.log("PASS: Enter sends (not while composing, not with Shift); the answer streams as text, then renders as Markdown with slide, time and outside chips (not in code); the usage line names the model");
+
+// A run outlives the panel (spec 5.4).
+const outlived = at("outlived the panel");
+assert.equal(outlived.aborted, false, "closing the panel does not stop the answer");
+assert.deepEqual(outlived.status, ["done", "done"]);
+assert.equal(outlived.answers[1], "닫아도 계속 쓴다 슬라", "the panel opened again shows the whole answer, rendered with its chips");
+console.log("PASS: closing the panel while answering leaves the run going in the thread; the panel opened again shows the finished answer");
 
 // Divider, stop (spec 5.2, 5.4).
 const moved = at("moved");
 assert.deepEqual(moved.dividers, ["슬라이드 18으로 이동"]);
 assert.match(moved.chip, /^📄 슬라이드 18 · 따라가는 중/);
 const stopped = at("stopped");
-assert.equal(stopped.answers[1], "받은 부분", "the partial answer stays");
+assert.equal(stopped.answers[2], "받은 부분", "the partial answer stays");
 assert.equal(stopped.hasStopped, false, "a stopped turn is not in the earlier conversation");
 assert.match(stopped.history, /^\[이전 대화\]\nQ \(슬라이드 17 기준\): 왜 작은 수부터 더해\?\nA: 부동소수점 덧셈은/);
 console.log("PASS: a followed slide change puts a divider in the thread; a stopped answer stays as (중지됨) and is left out of the next question's history");
@@ -198,8 +212,14 @@ assert.deepEqual(errors.retried, { provider: "codex-cli", model: "", effort: "lo
 assert.equal(errors.settingsOpened, true);
 console.log("PASS: error cards for login, usage limit, missing CLI, timeout and others, with retry, the other provider and the settings");
 
+// The brief unreadable now: the last state stays (review M4).
+assert.match(at("brief unreadable").chip, /^📘 브리프\d/);
+assert.equal(at("brief unreadable").sentBrief, true, "the last brief that could be read is sent");
+
 // The cap (spec 5.4).
 const cap = at("over the cap");
+assert.ok(cap.liveBeforeClear > 0 && cap.liveAfterClear === 0, `새 대화 unloads every answer's render component (${cap.liveBeforeClear} to ${cap.liveAfterClear})`);
+assert.equal(cap.threadGone, true, "새 대화 drops the thread");
 assert.equal(cap.runs, 0, "nothing sent past the cap");
 assert.match(cap.cap, /질문당 상한\(2\.0k\)을 넘습니다그래도 보내기취소/);
 console.log("PASS: a question past 질문당 토큰 상한 is confirmed in the panel (그래도 보내기 / 취소) before it is sent");

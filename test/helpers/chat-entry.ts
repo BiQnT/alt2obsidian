@@ -2,5 +2,6 @@
 export * from "../../src/chat/contextPack";
 export * from "../../src/chat/citations";
 export * from "../../src/chat/threads";
+export * from "../../src/chat/safeMarkdown";
 export { unitAtLine, memoText, commentaryText } from "../../src/brief/lectureNote";
 export { estimateTextTokens, PROVIDER_COSTS } from "../../src/core/budget/estimate";

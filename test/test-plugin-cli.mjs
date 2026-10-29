@@ -573,6 +573,26 @@ try {
     assert.equal(beta4.plugin.data.settings.tasks.commentary.provider, "claude-cli", "nothing moved");
     const said = notices.slice(n1).join("\n");
     assert.ok(!said.includes("Codex CLI로 옮겼습니다") && said.includes("Claude CLI로 옮겼습니다") && said.includes("Codex CLI로 바꾸세요"), said);
+    // Data before version 4 saved with a CLI default still pending: chat and brief go to Codex with the commentary task.
+    const pendingV3 = await makePlugin({
+      settings: {
+        settingsVersion: 3,
+        tasks: {
+          commentary: { provider: "claude-cli", model: "sonnet", effort: "medium" },
+          concepts: { provider: "claude-cli", model: "haiku", effort: "low" },
+          alignment: { provider: "none", model: "", effort: "" },
+          verification: { provider: "claude-cli", model: "sonnet", effort: "medium" },
+        },
+      },
+      pendingCliDefault: true,
+      pendingMovedTasks: ["commentary", "concepts"],
+    });
+    assert.deepEqual(pendingV3.plugin.data.pendingMovedTasks, ["commentary", "concepts", "chat", "brief"]);
+    pendingV3.plugin.data.settings.claudePath = FAKE_CLAUDE;
+    pendingV3.plugin.data.settings.codexPath = FAKE_CODEX;
+    await pendingV3.plugin.applyCliDefaultOnce();
+    assert.deepEqual([pendingV3.plugin.data.settings.tasks.chat, pendingV3.plugin.data.settings.tasks.brief], [{ provider: "codex-cli", model: "", effort: "low" }, { provider: "codex-cli", model: "", effort: "low" }]);
+    assert.equal(pendingV3.plugin.data.settings.tasks.verification.provider, "claude-cli", "a task not pending stays");
     delete process.env.FAKE_CLAUDE_LOGGED_OUT;
     assert.equal(s.calls().length, 0, "the login check never calls a model");
   }
@@ -873,7 +893,14 @@ try {
     assert.deepEqual(await plugin.loadTranscript("local-1").then((t) => t[0]), { startMs: 0, endMs: 4800, text: talk[0] });
     const vault = plugin.vaultLectureNotes();
     assert.deepEqual(plugin.localNoteStatus({ id: "local-1", title: "Lec7 Caches", lectureDate: "2026-04-21" }, vault), { kind: "imported", path: rec.path, changed: null });
-    console.log("PASS: local import: aligned chunks, alt_local_id and alt_alignment frontmatter, no merge into a same-titled URL note, transcript cached");
+    // Its brief names the lecture's id under its own key: alt_local_id finds only the lecture note.
+    const localBrief = files.get("Alt2Obsidian/CSED311/Briefs/Lec7 Caches (2026-04-21) brief.md");
+    assert.match(localBrief, /^lecture_alt_local_id: "local-1"$/m);
+    assert.ok(!/^alt_local_id:/m.test(localBrief));
+    assert.equal(vault.filter((v) => v.altLocalId === "local-1").length, 1, "one lecture with this id");
+    // The brief's slide map carries the aligned times.
+    assert.match(localBrief, /\n- 2 \[\d{2}:\d{2}~\d{2}:\d{2}\??\] 슬라이드 2의 요지\n/);
+    console.log("PASS: local import: aligned chunks, alt_local_id and alt_alignment frontmatter, no merge into a same-titled URL note, transcript cached; the brief keys the id as lecture_alt_local_id");
 
     // Opening the lecture PDF opens the Synced Viewer for the pair (setting on by default).
     {

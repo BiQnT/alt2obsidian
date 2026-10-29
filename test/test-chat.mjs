@@ -53,7 +53,9 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
       "[이번 자료]",
       "## L5 · 슬라이드 17 [29:06~35:56]",
       "### 슬라이드 글",
+      "```text",
       "Floating point addition\nsmall + large",
+      "```",
       "### 해설",
       "작은 수끼리 먼저 더해야 정밀도를 지킨다.",
       "### 내 메모",
@@ -81,12 +83,14 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.equal(extra, "지시\n\n[강의 브리프: S · L5]\nb\n\n[과목 브리프: S]\n- L1: x\n\n[다른 강의 브리프: S · L4]\nc");
   // A page without a text layer goes as an image; a section unit has 요약 instead of 해설.
   assert.equal(m.renderFocusUnit({ ...unit, imageAttached: true, memo: "", transcript: [] }), "## L5 · 슬라이드 17 [29:06~35:56]\n### 슬라이드 글\n(글이 없는 페이지라 이미지를 함께 보냄)\n### 해설\n작은 수끼리 먼저 더해야 정밀도를 지킨다.");
+  // Slide text sits in a text fence, so a page line starting with # is not a heading of the pack; the fence outgrows backticks in it.
+  assert.match(m.renderFocusUnit({ ...unit, slideText: "# Title\n`a` ```b```", memo: "", transcript: [] }), /### 슬라이드 글\n````text\n# Title\n`a` ```b```\n````\n### 해설/);
   assert.equal(m.renderFocusUnit({ lecture: "6강", unit: "section", num: 3, range: "[24:00~36:00]", slideText: "", imageAttached: false, commentary: "- 요약", memo: "", transcript: [] }), "## 6강 · 구간 3 [24:00~36:00]\n### 요약\n- 요약");
   assert.equal(m.materialLabel([{ unit: "slide", num: 17 }], true), "슬라이드 17 기준");
   assert.equal(m.materialLabel([{ unit: "slide", num: 17 }, { unit: "slide", num: 18 }], true), "슬라이드 17, 18 기준");
   assert.equal(m.materialLabel([], true), "강의 브리프 기준");
   assert.equal(m.materialLabel([], false), "");
-  assert.ok(!/[–—]/.test(INSTRUCTIONS), "no em or en dash in the instructions");
+  assert.ok(!/[\u2013\u2014]/.test(INSTRUCTIONS), "no em or en dash in the instructions");
   console.log("PASS: question pack: system prompt (instructions, brief header with neighbours, extra briefs), user message blocks in order with exact headers, no-brief line, image and section units");
 }
 
@@ -187,38 +191,127 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   console.log("PASS: grounding marks: slide, list, range, section, mm:ss and h:mm:ss, outside badge; out-of-range marks stay text");
 }
 
-// ---- threads: LRU of 10, dividers, history (spec 5.1, 5.2, 5.4) ----
+// ---- threads: made on the first question, LRU of 10 with turns, dividers, history (spec 5.1, 5.2, 5.4) ----
 {
   const store = new m.ThreadStore();
-  for (let i = 1; i <= 12; i++) store.get(`L${i}.md`);
+  const turn = (slide, status = "done") => ({ id: m.newTurnId(), question: `q${slide}`, label: `슬라이드 ${slide} 기준`, slide, answer: `a${slide}`, status, request: { task: { provider: "claude-cli", model: "", effort: "" }, system: "", user: "", images: [] }, at: 0 });
+  const ask = (path) => store.get(path).items.push({ kind: "turn", turn: turn(1) });
+  assert.equal(store.peek("L0.md"), undefined, "looking at a lecture makes no thread");
+  for (let i = 1; i <= 12; i++) ask(`L${i}.md`);
   assert.equal(store.peek("L1.md"), undefined, "the oldest two are dropped");
   assert.ok(store.peek("L3.md") && store.peek("L12.md"));
-  store.get("L3.md");
-  store.get("L13.md");
+  ask("L3.md");
+  ask("L13.md");
   assert.ok(store.peek("L3.md"), "a used thread moves to the front");
   assert.equal(store.peek("L4.md"), undefined);
+  // A thread made for a question counts while it is asked; left without a turn it never pushes one out later.
+  store.get("E.md");
+  assert.equal(store.recent().length, 9, "the thread being asked in takes a place");
+  ask("X.md");
+  assert.equal(store.recent().length, 10, "the empty one no longer counts");
+  assert.ok(store.peek("E.md") && store.peek("L6.md"));
 
   const t = store.get("L5.md");
-  m.moveThreadTo(t, 17);
-  assert.equal(t.items.length, 0, "no divider before the first question");
-  const turn = (slide, status = "done") => ({ id: m.newTurnId(), question: `q${slide}`, label: `슬라이드 ${slide} 기준`, slide, answer: `a${slide}`, status, request: { task: { provider: "claude-cli", model: "", effort: "" }, system: "", user: "", images: [] }, at: 0 });
-  t.items.push({ kind: "turn", turn: turn(17) });
-  m.moveThreadTo(t, 17);
-  assert.equal(t.items.length, 1, "the same slide: no divider");
-  m.moveThreadTo(t, 18);
-  m.moveThreadTo(t, 19);
-  assert.deepEqual(t.items.slice(1), [{ kind: "divider", slide: 19 }], "moving on before a question replaces the divider");
-  m.moveThreadTo(t, 17);
-  assert.equal(t.items.length, 1, "back on the conversation's slide: the divider goes");
-  m.moveThreadTo(t, 18);
-  t.items.push({ kind: "turn", turn: turn(18, "stopped") });
-  t.items.push({ kind: "turn", turn: turn(18, "error") });
-  t.items.push({ kind: "turn", turn: turn(18) });
-  assert.deepEqual(m.historyOf(t).map((h) => h.question), ["q17", "q18"], "stopped and failed turns are not sent again");
-  assert.deepEqual(store.recent().map((x) => x.notePath), ["L5.md"], "recent threads: only with a turn");
   store.clear("L5.md");
-  assert.deepEqual(store.peek("L5.md").items, []);
-  console.log("PASS: threads: 10 most recent kept, dividers on a followed slide change (replaced, removed on return), history without stopped or failed turns");
+  assert.equal(store.peek("L5.md"), undefined, "새 대화: the thread goes");
+  const fresh = store.get("L5.md");
+  m.moveThreadTo(fresh, 17);
+  assert.equal(fresh.items.length, 0, "no divider before the first question");
+  fresh.items.push({ kind: "turn", turn: turn(17) });
+  m.moveThreadTo(fresh, 17);
+  assert.equal(fresh.items.length, 1, "the same slide: no divider");
+  m.moveThreadTo(fresh, 18);
+  m.moveThreadTo(fresh, 19);
+  assert.deepEqual(fresh.items.slice(1), [{ kind: "divider", slide: 19 }], "moving on before a question replaces the divider");
+  m.moveThreadTo(fresh, 17);
+  assert.equal(fresh.items.length, 1, "back on the conversation's slide: the divider goes");
+  m.moveThreadTo(fresh, 18);
+  fresh.items.push({ kind: "turn", turn: turn(18, "stopped") });
+  fresh.items.push({ kind: "turn", turn: turn(18, "error") });
+  fresh.items.push({ kind: "turn", turn: turn(18) });
+  assert.deepEqual(m.historyOf(fresh).map((h) => h.question), ["q17", "q18"], "stopped and failed turns are not sent again");
+  assert.deepEqual(m.historyOf(undefined), []);
+  assert.equal(store.recent()[0].notePath, "L5.md", "recent: the last used first");
+  assert.ok(t !== fresh);
+  console.log("PASS: threads: made on the first question (looking makes none), 10 kept with turns (an empty one never counts), 새 대화 drops it, dividers on a followed slide change, history without stopped or failed turns");
+}
+
+// ---- runs belong to the store: they outlive the panel, stop on request (spec 5.4) ----
+{
+  const store = new m.ThreadStore();
+  const thread = store.get("L5.md");
+  const turn = { id: m.newTurnId(), question: "q", label: "", slide: 1, answer: "", status: "streaming", request: { task: { provider: "claude-cli", model: "sonnet", effort: "low" }, system: "S", user: "U", images: [] }, at: 0 };
+  thread.items.push({ kind: "turn", turn });
+  const events = [];
+  const off = store.subscribe((e) => events.push([e.kind, e.turn.answer]));
+  let release;
+  const runner = {
+    runChat: async (req) => {
+      req.onDelta("첫 ");
+      req.onReset();
+      req.onDelta("다시 ");
+      await new Promise((r) => (release = r));
+      req.onDelta("끝");
+      return { text: "다시 끝", usage: { calls: 1, inputTokens: 10, cachedInputTokens: 0, outputTokens: 2, imagesSent: 0, costUsd: 0 }, model: "claude-sonnet-5-5" };
+    },
+    chatErrorInfo: (e) => ({ kind: "other", message: String(e) }),
+  };
+  const run = store.run(thread, turn, runner);
+  assert.equal(store.isRunning(thread), true);
+  off(); // the panel closes: nobody listens, the run goes on
+  release();
+  await run;
+  assert.deepEqual(events, [["start", ""], ["delta", "첫 "], ["delta", ""], ["delta", "다시 "]], "events until the listener left; a reset empties the answer");
+  assert.deepEqual([turn.status, turn.answer, turn.model, turn.usage.outputTokens, store.isRunning(thread)], ["done", "다시 끝", "claude-sonnet-5-5", 2, false], "the run finished in the thread without a panel");
+  // Stop: what came stays, marked; a failure becomes the turn's error.
+  const stopping = store.run(thread, turn, { runChat: (req) => new Promise((_, reject) => (req.onDelta("부분"), req.signal.addEventListener("abort", () => reject(new Error("aborted"))))), chatErrorInfo: runner.chatErrorInfo });
+  store.stop(turn);
+  await stopping;
+  assert.deepEqual([turn.status, turn.answer], ["stopped", "부분"]);
+  await store.run(thread, turn, { runChat: async () => { throw new Error("boom"); }, chatErrorInfo: (e) => ({ kind: "timeout", message: e.message }) });
+  assert.deepEqual([turn.status, turn.error], ["error", { kind: "timeout", message: "boom" }]);
+  // Unload: dropAll stops what runs.
+  const lost = store.run(thread, turn, { runChat: (req) => new Promise((_, reject) => req.signal.addEventListener("abort", () => reject(new Error("aborted")))), chatErrorInfo: runner.chatErrorInfo });
+  store.dropAll();
+  await lost;
+  assert.equal(turn.status, "stopped");
+  console.log("PASS: a run belongs to the thread store: it streams into the turn with or without a listener, a reset starts the answer over, stop keeps the part, errors land in the turn, unload stops it");
+}
+
+// ---- model output made safe before rendering (review L6) ----
+{
+  const answer = [
+    "답이다 [슬라이드 3].",
+    "```dataviewjs",
+    "dv.paragraph(app.vault.getFiles().length)",
+    "```",
+    "~~~ Dataview",
+    "LIST FROM #x",
+    "~~~",
+    "```python",
+    "print('![x](http://ok.example/a.png)')",
+    "```",
+    "인라인 `= this.file.name` 과 `$= dv.pages().length`, 그냥 `a = 1`.",
+    "그림 ![도표](https://evil.example/t.png \"t\") 와 ![](http://e.example/x.gif), 볼트 그림 ![[d.png]].",
+    '<img src="https://evil.example/p.png"> <iframe src="https://e.example"></iframe>',
+    "````js-engine",
+    "```",
+    "return 1",
+    "````",
+  ].join("\n");
+  const safe = m.safeAnswerMarkdown(answer).split("\n");
+  assert.equal(safe[1], "```text", "dataviewjs becomes a plain text fence");
+  assert.equal(safe[2], "dv.paragraph(app.vault.getFiles().length)", "its lines stay");
+  assert.equal(safe[4], "~~~text", "a tilde fence, any case");
+  assert.equal(safe[7], "```python", "other languages stay");
+  assert.equal(safe[8], "print('![x](http://ok.example/a.png)')", "nothing changes inside code");
+  const zw = String.fromCharCode(0x200b);
+  assert.equal(safe[10], `인라인 \`${zw}= this.file.name\` 과 \`${zw}$= dv.pages().length\`, 그냥 \`a = 1\`.`, "inline Dataview queries defused, other code left");
+  assert.equal(safe[11], "그림 [도표](https://evil.example/t.png) 와 [http://e.example/x.gif](http://e.example/x.gif), 볼트 그림 ![[d.png]].", "remote images become links; vault embeds stay");
+  assert.equal(safe[12], '&lt;img src="https://evil.example/p.png"> &lt;iframe src="https://e.example">&lt;/iframe>', "raw media HTML shown as text");
+  assert.deepEqual(safe.slice(13), ["````text", "```", "return 1", "````"], "a longer fence keeps its inner backticks");
+  assert.equal(m.safeAnswerMarkdown("보통 답이다. **굵게** [슬라이드 2]"), "보통 답이다. **굵게** [슬라이드 2]", "plain answers unchanged");
+  console.log("PASS: answers rendered safely: executable fences (dataview, dataviewjs, js-engine, ...) become text, inline Dataview queries are defused, remote images become links and media HTML is text, code untouched");
 }
 
 // ---- note parts the panel reads ----

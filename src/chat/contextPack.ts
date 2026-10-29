@@ -182,12 +182,23 @@ export function buildSystemPrompt(input: Pick<ChatPackInput, "instructions" | "s
   return blocks.join("\n\n");
 }
 
+/**
+ * Slide text in a `text` fence (spec 6.2), so a page line starting with
+ * `#` is not read as a heading of the pack; the fence is longer than any
+ * backtick run in the text.
+ */
+export function fencedText(text: string): string {
+  const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longest + 1);
+  return `${fence}text\n${text}\n${fence}`;
+}
+
 /** "## L5 · 슬라이드 17 [29:06~35:56]" with its parts (spec 6.2). */
 export function renderFocusUnit(u: FocusUnit): string {
   const slide = u.unit === "slide";
   const parts = [`## ${u.lecture} · ${slide ? "슬라이드" : "구간"} ${u.num}${u.range ? ` ${u.range}` : ""}`];
   if (slide && u.imageAttached) parts.push("### 슬라이드 글\n(글이 없는 페이지라 이미지를 함께 보냄)");
-  else if (slide && u.slideText.trim()) parts.push(`### 슬라이드 글\n${u.slideText.trim()}`);
+  else if (slide && u.slideText.trim()) parts.push(`### 슬라이드 글\n${fencedText(u.slideText.trim())}`);
   if (u.commentary.trim()) parts.push(`### ${slide ? "해설" : "요약"}\n${u.commentary.trim()}`);
   if (u.memo.trim()) parts.push(`### 내 메모\n${u.memo.trim()}`);
   if (u.transcript.length > 0) parts.push(`### 전사\n${formatTranscriptLines(u.transcript)}`);

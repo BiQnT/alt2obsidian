@@ -4,7 +4,8 @@
 // its ×, the command, or the tab's own close) detaches its tab. When the
 // right sidebar was collapsed before it opened, it is collapsed again on
 // close. A panel tab Obsidian restores at startup is detached once the
-// layout is ready. The threads live in the plugin, so they survive this.
+// layout is ready. The threads and their running answers live in the
+// plugin, so they survive this.
 
 import type { WorkspaceLeaf } from "obsidian";
 
@@ -39,6 +40,12 @@ function sidebar(ws: ChatWorkspace): { collapsed: boolean; collapse(): void } | 
 export class ChatPanelController {
   /** The right sidebar was collapsed when the panel opened: collapse it again when it closes. */
   private collapseOnClose = false;
+  /** An open in progress: a second click waits for it instead of opening another panel. */
+  private opening: Promise<void> | null = null;
+  /** The plugin is unloading: a view closing from now on changes nothing. */
+  private disposed = false;
+  /** What onChange was last told (null: nothing yet). */
+  private announced: boolean | null = null;
 
   constructor(
     private workspace: ChatWorkspace,
@@ -55,7 +62,14 @@ export class ChatPanelController {
   }
 
   /** Opens (or shows) the panel in the right sidebar. */
-  async open(): Promise<void> {
+  open(): Promise<void> {
+    this.opening ??= this.openNow().finally(() => {
+      this.opening = null;
+    });
+    return this.opening;
+  }
+
+  private async openNow(): Promise<void> {
     const existing = this.leaves()[0];
     if (existing) {
       await this.workspace.revealLeaf(existing);
@@ -66,30 +80,61 @@ export class ChatPanelController {
     if (!leaf) return;
     await leaf.setViewState({ type: VIEW_TYPE_CHAT, active: true });
     await this.workspace.revealLeaf(leaf);
-    this.onChange(true);
+    this.announce(true);
   }
 
-  /** Detaches the panel; its view reports back through `closed`. */
+  private announce(open: boolean, always = false): void {
+    if (!always && this.announced === open) return;
+    this.announced = open;
+    this.onChange(open);
+  }
+
+  /**
+   * Detaches the panel. Its view reports back through `closed`; a tab that
+   * never showed its view (Obsidian defers background tabs) does not, so
+   * the sidebar and the buttons are put back here too.
+   */
   close(): void {
     for (const leaf of this.leaves()) leaf.detach();
+    this.finishClose();
   }
 
   async toggle(): Promise<void> {
+    if (this.opening) return this.opening;
     if (this.isOpen()) this.close();
     else await this.open();
   }
 
   /** The panel's view closed (any way): the sidebar goes back to how it was when the panel opened. */
   closed(leaf: WorkspaceLeaf): void {
-    if (this.leaves().some((l) => l !== leaf)) return;
-    if (this.collapseOnClose) sidebar(this.workspace)?.collapse();
-    this.collapseOnClose = false;
-    this.onChange(false);
+    if (this.disposed || this.leaves().some((l) => l !== leaf)) return;
+    this.finishClose();
   }
 
-  /** At startup: a panel restored with the layout is detached (it opens only on demand). */
+  private finishClose(): void {
+    if (this.disposed) return;
+    if (this.collapseOnClose) sidebar(this.workspace)?.collapse();
+    this.collapseOnClose = false;
+    this.announce(false);
+  }
+
+  /**
+   * At startup: a panel restored with the layout is detached (it opens only
+   * on demand), the sidebar left as it is. The buttons are told it is
+   * closed even when the restored tab never showed its view.
+   */
   detachRestored(): void {
     this.collapseOnClose = false;
     this.close();
+    if (!this.disposed) this.announce(false, true);
+  }
+
+  /**
+   * The plugin unloads. Obsidian may close the panel's view before or after
+   * onunload; from here on that changes nothing (no sidebar collapse, no
+   * button update).
+   */
+  dispose(): void {
+    this.disposed = true;
   }
 }
