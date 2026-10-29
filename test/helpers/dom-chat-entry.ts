@@ -5,6 +5,7 @@
 // Results go to <pre id="out"> as JSON.
 import { ChatView } from "../../src/ui/ChatView";
 import { ChatPanelController, SLIDE_CHANGE_EVENT, VIEW_TYPE_CHAT } from "../../src/ui/chatPanel";
+import { BriefsModal } from "../../src/ui/BriefsModal";
 import { ThreadStore } from "../../src/chat/threads";
 import { DEFAULT_SETTINGS } from "../../src/types";
 // @ts-ignore resolved to test/helpers/obsidian-browser-stub.js
@@ -93,10 +94,11 @@ async function main() {
       if (briefStatus === "broken") throw new Error("brief unreadable");
       return { status: briefStatus, body: briefStatus === "missing" ? null : "## 개요\n부동소수점 덧셈을 다룬다.", path: path.replace("/Lectures/", "/Briefs/").replace(/\.md$/, " brief.md"), sourceHash: "abcd1234" };
     },
-    buildChatBrief: async (path: string, force: boolean) => {
-      calls.push({ build: path, force });
+    buildChatBrief: async (path: string, force: boolean, withAi?: boolean) => {
+      calls.push({ build: path, force, ...(withAi ? { withAi } : {}) });
       briefStatus = "ok";
     },
+    briefAiEstimate: async (path: string) => (path === L4 ? 2400 : null),
     rebuildBrief: async () => true,
     chatMaterial: async (_l: unknown, slide: number) => (materialDelay && (await sleep(materialDelay)), {
       slideText: `Slide ${slide} floating point addition`,
@@ -355,7 +357,7 @@ async function main() {
   ws.mostRecent = { view: { getViewType: () => "alt2obsidian-synced-viewer", getState: () => ({ mdPath: L4, pdfPath: "L4.pdf" }), getCurrentSlide: () => 3 } };
   ws.trigger("active-leaf-change");
   await until("the missing brief card", () => !!root().querySelector(".alt-to-obs-chat-card.is-warning"));
-  const missing = { card: text(".alt-to-obs-chat-card strong")[0], chip: text(".alt-to-obs-chat-chip")[0], head: text(".alt-to-obs-chat-lecture")[0], thread: text(".alt-to-obs-chat-turn").length };
+  const missing = { card: text(".alt-to-obs-chat-card strong")[0], chip: text(".alt-to-obs-chat-chip")[0], head: text(".alt-to-obs-chat-lecture")[0], thread: text(".alt-to-obs-chat-turn").length, buttons: Array.from(root().querySelectorAll(".alt-to-obs-chat-card button")).map((b) => b.textContent) };
   button("노트로 바로 만들기").click();
   await until("brief built", () => !root().querySelector(".alt-to-obs-chat-card"));
   log.push({ step: "brief missing", ...missing, built: calls.find((c) => c.build), chipAfter: text(".alt-to-obs-chat-chip")[0] });
@@ -377,6 +379,28 @@ async function main() {
   ws.rightSplit.collapsed = false;
   button("×").click();
   log.push({ step: "closed with ×", open: controller.isOpen(), threadKept: host.chatThreads.peek(L5).items.length > 0, events: opened.slice(-1) });
+
+  // ---- 모든 강의 브리프 만들기 (spec 4.6) ----
+  const built: any[] = [];
+  const modal: any = new (BriefsModal as any)(app, {
+    planAllBriefs: async () => ({ todo: [{ notePath: L4, hasTranscript: true }, { notePath: L5, hasTranscript: false }], edited: ["X/L1.md"], aiEstimate: { calls: 1, inputTokens: 2400, outputTokens: 624 } }),
+    buildAllBriefs: async (plan: any, withAi: boolean, o: any) => {
+      for (const [i, t] of plan.todo.entries()) {
+        o.onProgress(i, plan.todo.length, t.notePath);
+        await sleep(30);
+      }
+      built.push(withAi);
+      return { made: 2, skipped: 1, failed: 0, cancelled: false };
+    },
+  });
+  document.getElementById("host")!.replaceChildren(modal.contentEl);
+  modal.onOpen();
+  await until("the briefs plan", () => modal.contentEl.querySelectorAll("button").length >= 3);
+  const planText = modal.contentEl.querySelector("p").textContent;
+  const planButtons = Array.from(modal.contentEl.querySelectorAll("button")).map((b: any) => b.textContent);
+  (Array.from(modal.contentEl.querySelectorAll("button")) as HTMLButtonElement[]).find((b) => b.textContent!.startsWith("강조점 포함"))!.click();
+  await until("the briefs summary", () => !!modal.contentEl.querySelector(".alt-to-obs-briefs-summary"));
+  log.push({ step: "all briefs", planText, planButtons, withAi: built, summary: modal.contentEl.querySelector(".alt-to-obs-briefs-summary").textContent });
   return log;
 }
 main().then(

@@ -238,6 +238,7 @@ assert.match(missing.chip, /^📘 브리프 없음/);
 assert.equal(missing.head, "CSED423 · L4", "the other lecture's own thread");
 assert.equal(missing.thread, 0);
 assert.deepEqual(missing.built, { build: "Alt2Obsidian/CSED423/Lectures/L4.md", force: false }, "노트로 바로 만들기: the script part, no tokens");
+assert.deepEqual(missing.buttons, ["노트로 바로 만들기 · 토큰 0", "강조점까지 만들기 · 약 2.4k"], "with a transcript: 강조점까지 만들기 and its estimate");
 assert.match(missing.chipAfter, /^📘 브리프\d/);
 const stale = at("brief stale");
 assert.match(stale.chip, /^📘 브리프 오래됨/);
@@ -249,3 +250,11 @@ assert.deepEqual(at("menu").items, ["브리프 열기", "브리프 다시 만들
 const closed = at("closed with ×");
 assert.deepEqual([closed.open, closed.threadKept, closed.events], [false, true, [false]], "× closes the panel; the threads stay in the plugin");
 console.log("PASS: brief cards: missing (노트로 바로 만들기 · 토큰 0) and edited then stale (내 수정 유지 / 새로 만들기 with confirmation); the menu; × keeps the threads");
+
+// 모든 강의 브리프 만들기 (spec 4.6).
+const all = at("all briefs");
+assert.equal(all.planText, "브리프가 없거나 노트보다 오래된 강의 2개, 직접 고친 브리프 1개는 건너뜁니다.");
+assert.deepEqual(all.planButtons, ["스크립트만 (토큰 0)", "강조점 포함 (예상 호출 1회 · 입력 약 2.4k · 출력 약 624)", "취소"]);
+assert.deepEqual(all.withAi, [true]);
+assert.equal(all.summary, "만든 브리프 2개, 건너뜀 1개, 실패 0개.");
+console.log("PASS: 모든 강의 브리프 만들기: counts (to build, edited to skip), script only or with the emphasis estimate, progress and the summary");

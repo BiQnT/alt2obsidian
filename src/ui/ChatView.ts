@@ -105,8 +105,10 @@ export interface ChatHost extends TurnRunner {
   /** The lecture of a note, null when it is not a lecture note. */
   chatLecture(notePath: string): Promise<ChatLecture | null>;
   chatBrief(notePath: string): Promise<ChatBriefState>;
-  /** The brief's script part (no tokens); `force` overwrites the user's edits. */
-  buildChatBrief(notePath: string, force: boolean): Promise<void>;
+  /** The brief's script part (no tokens), with `withAi` the AI part too; `force` overwrites the user's edits. */
+  buildChatBrief(notePath: string, force: boolean, withAi?: boolean): Promise<void>;
+  /** Tokens of the brief's AI part for "강조점까지 만들기 · 약 Nk"; null without a transcript or candidates. */
+  briefAiEstimate(notePath: string): Promise<number | null>;
   /** "브리프 다시 만들기" from the menu (asks first when the user edited it). */
   rebuildBrief(notePath: string | null): Promise<boolean>;
   /** One slide's material: the note read now, the PDF text and the transcript from their caches. */
@@ -177,6 +179,8 @@ export class ChatView extends ItemView {
   private brief: ChatBriefState | null = null;
   /** The brief could not be read and there is no earlier state to show. */
   private briefError = false;
+  /** Tokens of "강조점까지 만들기" for a lecture without a brief (null: no transcript, no button). */
+  private briefAiTokens: number | null = null;
   /** The slide the viewer or the editor is on. */
   private followed: number | null = null;
   /** 📌: the slide the panel stays on (null: it follows). */
@@ -475,6 +479,8 @@ export class ChatView extends ItemView {
       if (this.lecture !== lecture) return;
       this.brief = brief;
       this.briefError = false;
+      this.briefAiTokens = brief.status === "missing" ? await this.host.briefAiEstimate(lecture.notePath).catch(() => null) : null;
+      if (this.lecture !== lecture) return;
     } catch (e) {
       console.warn("[Alt2Obs] brief not read:", e);
       if (this.lecture === lecture && !this.brief) this.briefError = true;
@@ -615,8 +621,13 @@ export class ChatView extends ItemView {
       const card = cards.createDiv({ cls: "alt-to-obs-chat-card is-warning" });
       card.createEl("strong", { text: "이 강의에는 브리프가 아직 없습니다" });
       card.createEl("p", { text: "브리프는 질문마다 강의 전체 대신 보내는 요약입니다. 만들지 않아도 질문할 수 있습니다." });
-      const make = card.createEl("button", { text: "노트로 바로 만들기 · 토큰 0", cls: "mod-cta" });
+      const row = card.createDiv({ cls: "alt-to-obs-chat-card-actions" });
+      const make = row.createEl("button", { text: "노트로 바로 만들기 · 토큰 0", cls: "mod-cta" });
       make.addEventListener("click", () => void this.buildBrief(make, false));
+      if (this.briefAiTokens !== null) {
+        const withAi = row.createEl("button", { text: `강조점까지 만들기 · 약 ${k(this.briefAiTokens)}`, attr: { title: "전사에서 교수님이 강조한 점과 강의 중 질문을 경량 모델로 한 번 뽑습니다." } });
+        withAi.addEventListener("click", () => void this.buildBrief(withAi, false, true));
+      }
       return;
     }
     if (this.briefStale()) {
@@ -646,12 +657,12 @@ export class ChatView extends ItemView {
     }
   }
 
-  private async buildBrief(button: HTMLButtonElement, force: boolean): Promise<void> {
+  private async buildBrief(button: HTMLButtonElement, force: boolean, withAi = false): Promise<void> {
     const lecture = this.lecture;
     if (!lecture) return;
     button.disabled = true;
     try {
-      await this.host.buildChatBrief(lecture.notePath, force);
+      await this.host.buildChatBrief(lecture.notePath, force, withAi);
       this.confirmRebuild = false;
       await this.loadBrief(false);
     } catch (e) {

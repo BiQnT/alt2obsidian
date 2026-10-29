@@ -116,6 +116,7 @@ import { fetchNotionPage, NotionFetchProvider, NotionFetchResult } from "./verif
 import { parseAlignment, spansForSlide } from "./core/prep/TranscriptAligner";
 import { applyLayoutMigration, MigrationPlan, MigrationResult, planLayoutMigration, VaultFileEntry } from "./vault/layoutMigration";
 import { MigrationModal } from "./ui/MigrationModal";
+import { AllBriefsPlan, AllBriefsResult, BriefsModal } from "./ui/BriefsModal";
 import { normalizeConcepts } from "./core/conceptNames";
 import { decidePdfOpen, isLectureFrontmatter, isLectureNote, lectureNoteForPdf } from "./ui/pdfOpen";
 import { aiInputFor, BriefAiStep, BriefFiles, readLectureBrief, updateLectureBrief } from "./brief/briefStore";
@@ -386,6 +387,12 @@ export default class Alt2ObsPlugin extends Plugin {
       id: "toggle-question-panel",
       name: "질문 패널 열기/닫기",
       callback: () => void this.toggleChatPanel(),
+    });
+
+    this.addCommand({
+      id: "build-all-briefs",
+      name: "모든 강의 브리프 만들기",
+      callback: () => new BriefsModal(this.app, this).open(),
     });
 
     this.addCommand({
@@ -971,6 +978,19 @@ export default class Alt2ObsPlugin extends Plugin {
     return joinPath(this.transcriptCacheDir(), `${localId.replace(/[^0-9A-Za-z-]/g, "")}.json`);
   }
 
+  /** The transcript from this vault's cache only (nothing asked of Alt), null when it is not there. */
+  async cachedTranscript(localId: string): Promise<TimedText[] | null> {
+    try {
+      const json = JSON.parse(await fsp.readFile(this.transcriptCachePath(localId), "utf8")) as { segments?: unknown } | null;
+      if (Array.isArray(json?.segments)) {
+        return (json.segments as Array<[number, number, string]>).map(([startMs, endMs, text]) => ({ startMs, endMs, text }));
+      }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") console.warn("[Alt2Obs] transcript cache unreadable:", e);
+    }
+    return null;
+  }
+
   private async cacheTranscript(bundle: LectureBundle | undefined): Promise<void> {
     if (!bundle || bundle.sourceKind !== "alt-local") return;
     const timed = bundle.transcript.filter((s) => s.startMs !== null);
@@ -1012,14 +1032,8 @@ export default class Alt2ObsPlugin extends Plugin {
 
   /** Timestamped transcript of a local note for the Synced Viewer panel; null when unknown. */
   async loadTranscript(localId: string): Promise<Array<{ startMs: number; endMs: number; text: string }> | null> {
-    try {
-      const json = JSON.parse(await fsp.readFile(this.transcriptCachePath(localId), "utf8")) as { segments?: unknown } | null;
-      if (Array.isArray(json?.segments)) {
-        return (json.segments as Array<[number, number, string]>).map(([startMs, endMs, text]) => ({ startMs, endMs, text }));
-      }
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") console.warn("[Alt2Obs] transcript cache unreadable:", e);
-    }
+    const cached = await this.cachedTranscript(localId);
+    if (cached) return cached;
     // Not cached (imported elsewhere, or cache cleared): ask Alt.
     try {
       const source = await this.usableSource();
@@ -2032,8 +2046,85 @@ export default class Alt2ObsPlugin extends Plugin {
     return { status: state.status, body: state.body, path: state.path, sourceHash: state.script.sourceHash };
   }
 
-  async buildChatBrief(notePath: string, force: boolean): Promise<void> {
-    await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate(), force });
+  /** The panel's brief buttons: the script part, or with `withAi` the AI part too ("강조점까지 만들기"). */
+  async buildChatBrief(notePath: string, force: boolean, withAi = false): Promise<void> {
+    const ai = withAi ? await this.briefAiStep(notePath, this.data.settings.tasks.brief, null) : undefined;
+    const result = await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate(), force, ai });
+    if (result.ai === "failed") new Notice(`강조점을 만들지 못해 스크립트 부분만 썼습니다: ${result.aiError ?? "알 수 없는 오류"}`);
+  }
+
+  /**
+   * Tokens (input plus output) of a lecture's brief AI part, for the
+   * panel's "강조점까지 만들기 · 약 Nk": null when it has no cached
+   * transcript or no candidate (no button then).
+   */
+  async briefAiEstimate(notePath: string): Promise<number | null> {
+    const b = await this.briefAiCost(notePath);
+    return b ? b.inputTokens + b.outputTokens : null;
+  }
+
+  /** The brief AI call of a lecture as the estimate counts it (cached transcript only), null when it makes none. */
+  private async briefAiCost(notePath: string): Promise<{ calls: number; inputTokens: number; outputTokens: number } | null> {
+    const task = this.data.settings.tasks.brief;
+    const file = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(file instanceof TFile) || !isCliProvider(task.provider)) return null;
+    const text = await this.app.vault.cachedRead(file);
+    const id = fmString(this.frontmatterOf(notePath) ?? readFrontmatter(text), "alt_local_id");
+    const transcript = id ? await this.cachedTranscript(id) : null;
+    if (!transcript || transcript.length === 0) return null;
+    const input = await aiInputFor(await buildBriefScript(notePath, text), transcript);
+    if (!input) return null;
+    return estimateCalls([{ promptText: `${input.system}\n\n${input.user}`, images: 0, schema: true, outputTokens: BRIEF_AI_OUTPUT_TOKENS }], task.provider, this.estimatedEffort(task));
+  }
+
+  /** "모든 강의 브리프 만들기" (spec 4.6): lecture notes whose brief is missing or out of date, those the user edited, the AI estimate. */
+  async planAllBriefs(): Promise<AllBriefsPlan> {
+    const files = this.briefFiles();
+    const plan: AllBriefsPlan = { todo: [], edited: [], aiEstimate: null };
+    const ai = { calls: 0, inputTokens: 0, outputTokens: 0 };
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      if (!isLectureNote(fm, null)) continue;
+      const state = await readLectureBrief(files, file.path);
+      if (state.status === "edited" || state.status === "edited-stale") plan.edited.push(file.path);
+      if (state.status !== "missing" && state.status !== "outdated") continue;
+      const cost = await this.briefAiCost(file.path);
+      plan.todo.push({ notePath: file.path, hasTranscript: !!cost });
+      if (cost) {
+        ai.calls += cost.calls;
+        ai.inputTokens += cost.inputTokens;
+        ai.outputTokens += cost.outputTokens;
+      }
+    }
+    plan.todo.sort((a, b) => a.notePath.localeCompare(b.notePath, "ko", { numeric: true }));
+    plan.aiEstimate = ai.calls > 0 ? ai : null;
+    return plan;
+  }
+
+  /** Builds the planned briefs one by one (the AI part only for lectures with a transcript); stops between lectures on cancel. */
+  async buildAllBriefs(plan: AllBriefsPlan, withAi: boolean, o: { signal: AbortSignal; onProgress(done: number, total: number, notePath: string): void }): Promise<AllBriefsResult> {
+    const result: AllBriefsResult = { made: 0, skipped: plan.edited.length, failed: 0, cancelled: false };
+    const files = this.briefFiles();
+    for (const [i, item] of plan.todo.entries()) {
+      if (o.signal.aborted) {
+        result.cancelled = true;
+        break;
+      }
+      o.onProgress(i, plan.todo.length, item.notePath);
+      try {
+        const ai = withAi && item.hasTranscript ? await this.briefAiStep(item.notePath, this.data.settings.tasks.brief, null, o.signal) : undefined;
+        const r = await updateLectureBrief(files, item.notePath, { today: formatDate(), ai });
+        if (r.ai === "failed") result.failed++;
+        else if (r.result === "written") result.made++;
+        else result.skipped++;
+      } catch (e) {
+        console.warn("[Alt2Obs] brief not built:", item.notePath, e);
+        result.failed++;
+      }
+    }
+    if (o.signal.aborted) result.cancelled = true;
+    o.onProgress(plan.todo.length, plan.todo.length, plan.todo[plan.todo.length - 1]?.notePath ?? "");
+    return result;
   }
 
   /** One slide's material (spec 6.2): page text (or its image), commentary, memo, aligned transcript. */

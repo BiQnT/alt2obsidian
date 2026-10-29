@@ -982,10 +982,37 @@ try {
       assert.equal(s.calls().length - n2, scriptOnly.estimate.calls);
       assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec10 Script brief.md"), /^ai_part: \{status: "none"\}$/m);
       plugin.data.settings.briefMode = "ai";
+      // "모든 강의 브리프 만들기" (spec 4.6): a missing brief is made (with the AI part), an edited one skipped.
+      files.delete("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md");
+      const failPath = "Alt2Obsidian/CSED311/Briefs/Lec9 Fail brief.md";
+      files.set(failPath, files.get(failPath) + "\n내가 고친 줄\n");
+      const allPlan = await plugin.planAllBriefs();
+      const lec8 = allPlan.todo.find((t) => t.notePath.endsWith("Lec8 Coherence.md"));
+      assert.deepEqual(lec8 && lec8.hasTranscript, true, "the lecture without a brief, with its cached transcript");
+      assert.ok(allPlan.edited.some((p) => p.endsWith("Lec9 Fail.md")), "the edited brief is counted to skip");
+      assert.ok(allPlan.aiEstimate && allPlan.aiEstimate.calls >= 1);
+      const progress = [];
+      const n3 = s.calls().length;
+      const built = await plugin.buildAllBriefs(allPlan, true, { signal: new AbortController().signal, onProgress: (d, t) => progress.push(`${d}/${t}`) });
+      assert.equal(built.made + built.failed, allPlan.todo.length);
+      assert.equal(built.skipped, allPlan.edited.length);
+      assert.equal(s.calls().length - n3, allPlan.aiEstimate.calls, "one call per lecture with candidates");
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md"), /^ai_part: \{status: "ok"/m);
+      assert.match(files.get(failPath), /내가 고친 줄/, "the edited brief is left alone");
+      assert.equal(progress[progress.length - 1], `${allPlan.todo.length}/${allPlan.todo.length}`);
+      const stopped = new AbortController();
+      stopped.abort();
+      assert.equal((await plugin.buildAllBriefs(allPlan, false, { signal: stopped.signal, onProgress: () => {} })).cancelled, true, "cancel stops between lectures");
+      // The panel's 강조점까지 만들기: its estimate, then the build with the AI part.
+      files.delete("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md");
+      assert.ok((await plugin.briefAiEstimate("Alt2Obsidian/CSED311/Lectures/Lec8 Coherence.md")) > 500);
+      await plugin.buildChatBrief("Alt2Obsidian/CSED311/Lectures/Lec8 Coherence.md", false, true);
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md"), /^ai_part: \{status: "ok"/m);
+      assert.equal(await plugin.briefAiEstimate(recB.path.replace("Lec8 Coherence", "nowhere")), null);
       // Leave the vault and the transcript cache as the tests below expect them.
       for (const k of [...files.keys()]) if (/Lec(8 Coherence|9 Fail|10 Script)/.test(k)) files.delete(k);
       for (const f of readdirSync(cacheRoot, { recursive: true })) if (/local-brief/.test(String(f))) rmSync(join(cacheRoot, String(f)), { force: true });
-      console.log("PASS: brief AI part on import: candidates from the transcript, one call of the brief task counted in the estimate (row and model picker), sections and one_line written, usage in the totals not in the note; unchanged input reused; a failed call leaves the script part and one warning and is tried again; script mode makes no call");
+      console.log("PASS: brief AI part on import: candidates from the transcript, one call of the brief task counted in the estimate (row and model picker), sections and one_line written, usage in the totals not in the note; unchanged input reused; a failed call leaves the script part and one warning and is tried again; script mode makes no call; 모든 강의 브리프 만들기 builds missing briefs and skips edited ones; the panel's 강조점까지 만들기");
     }
 
     // Opening the lecture PDF opens the Synced Viewer for the pair (setting on by default).
