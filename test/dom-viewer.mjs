@@ -195,3 +195,8 @@ assert.equal(chat.slide, 5, "getCurrentSlide()");
 assert.equal(chat.toggles, 1, "the button toggles the panel");
 assert.deepEqual([chat.activeWhenOpen, chat.activeAfter], [true, false], "is-active while the panel is open");
 console.log("PASS: Synced Viewer's 💬 질문 button toggles the question panel and shows it open (is-active); each page change is announced once with the pair; getCurrentSlide()");
+
+// 2.1.0: the question panel's chips (spec 5.5).
+assert.deepEqual(at("time chip"), { step: "time chip", page: 2, panelOpen: true, flashed: "[00:41]슬라이드 2 둘째 줄", ms: "41000" }, "a time goes to its aligned slide, the transcript panel opens on its line and highlights it");
+assert.deepEqual(at("slide chip"), { step: "slide chip", page: 3 });
+console.log("PASS: Synced Viewer's showTranscriptAt(ms) and gotoSlide(n) for the question panel's chips");

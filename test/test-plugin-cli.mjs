@@ -1282,6 +1282,22 @@ try {
     const summaryBrief = files.get(notePath.replace("/Lectures/", "/Briefs/").replace(/\.md$/, " brief.md"));
     assert.match(summaryBrief, /^kind: "transcript"$/m);
     assert.match(summaryBrief, /\n## 구간 지도\n- 구간 1 \[00:00~09:5\d\] 구간 1의 요지다\n/);
+    // The panel's chips in a summary note (spec 5.5): a section or a time goes to the section's heading.
+    {
+      const opened = [];
+      const ws = plugin.app.workspace;
+      Object.assign(ws, { openLinkText: async (t) => void opened.push(t), getLeavesOfType: () => [] });
+      const lec = await plugin.chatLecture(notePath);
+      assert.equal(lec.kind, "transcript");
+      await plugin.gotoSection(lec, 2);
+      await plugin.gotoTime(lec, 30_000);
+      await plugin.gotoSlide({ ...lec, kind: "slides" }, 3);
+      assert.match(opened[0], new RegExp(`^${notePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}#⏱ 구간 2 \\d{2} \\d{2} \\d{2} \\d{2}$`), "the section's heading, as Obsidian links it");
+      assert.match(opened[1], /#⏱ 구간 1 00 00 /, "a time: the section that holds it");
+      assert.ok(opened[2].endsWith("#📚 슬라이드 3"), "no viewer: the slide's heading");
+      delete ws.openLinkText;
+      delete ws.getLeavesOfType;
+    }
     // Re-import: every section unchanged (2 calls), the memo kept.
     files.set(notePath, note.replace(/(<!-- alt2obs:section:2 hash:[0-9a-f]{8} end -->\n\n> \[!note\] 내 메모\n> )/, "$1구간 2 메모"));
     const again = await plugin.prepareCliImport("", pv, "CSED423", undefined, { withoutPdf: "summary" });

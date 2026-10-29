@@ -377,6 +377,7 @@ export class SyncedViewerView extends ItemView {
     }
     for (const seg of segs) {
       const row = body.createDiv({ cls: "alt-to-obs-seg" });
+      row.dataset.ms = String(seg.startMs);
       row.createSpan({ cls: "alt-to-obs-seg-time", text: `[${mmss(seg.startMs)}]` });
       row.createSpan({ text: seg.text });
     }
@@ -390,6 +391,35 @@ export class SyncedViewerView extends ItemView {
       text:
         "강의 노트를 선택한 뒤 'Open synced viewer' 명령을 실행하시거나 사이드바에서 노트를 여세요.",
     });
+  }
+
+  /** Shows a slide in both panes (the question panel's slide chips, spec 5.5). */
+  gotoSlide(slide: number): void {
+    this.gotoPage(slide);
+  }
+
+  /**
+   * A transcript time (the question panel's time chips, spec 5.5): the
+   * slide aligned to it, the transcript panel open on it, its line scrolled
+   * into view and highlighted for a moment.
+   */
+  async showTranscriptAt(ms: number): Promise<void> {
+    const span = this.alignment.find((x) => ms >= x.startMs && ms < x.endMs) ?? [...this.alignment].reverse().find((x) => x.startMs <= ms);
+    if (span) this.gotoPage(span.slide);
+    if (!this.transcriptOpen) {
+      this.transcriptOpen = true;
+      this.transcriptBtnEl?.toggleClass("is-active", true);
+      this.transcriptPanelEl?.toggle(true);
+    }
+    await this.renderTranscript();
+    const rows = Array.from(this.transcriptPanelEl?.querySelectorAll<HTMLElement>(".alt-to-obs-seg") ?? []);
+    let line: HTMLElement | null = rows[0] ?? null;
+    for (const row of rows) if (Number(row.dataset.ms) <= ms) line = row;
+    if (!line) return;
+    line.scrollIntoView({ block: "center" });
+    line.addClass("is-flash");
+    const flashed = line;
+    window.setTimeout(() => flashed.removeClass("is-flash"), 2000);
   }
 
   /** "💬 질문" shows whether the question panel is open. */

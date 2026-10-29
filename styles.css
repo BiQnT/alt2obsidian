@@ -1249,3 +1249,16 @@
   display: flex;
   justify-content: flex-end;
 }
+.alt-to-obs-seg.is-flash {
+  background: var(--text-highlight-bg);
+}
+.alt-to-obs-chat-cite.is-slide,
+.alt-to-obs-chat-cite.is-section,
+.alt-to-obs-chat-cite.is-time {
+  cursor: pointer;
+}
+.alt-to-obs-chat-cite.is-slide:hover,
+.alt-to-obs-chat-cite.is-section:hover,
+.alt-to-obs-chat-cite.is-time:hover {
+  background: var(--background-modifier-active-hover);
+}

@@ -181,6 +181,12 @@ assert.equal(answered.transcriptSent, true);
 assert.deepEqual(answered.task, { provider: "claude-cli", model: "sonnet", effort: "low" }, "the chat task's model");
 console.log("PASS: Enter sends (not while composing, not with Shift); the answer streams as text, then renders as Markdown with slide, time and outside chips (not in code); the usage line names the model");
 
+// The chips go where they point (spec 5.5).
+const nav = at("chips navigate");
+assert.deepEqual(nav.gone, ["slide:17", `time:${29 * 60_000 + 10_000}`, "slide:16"], "a slide chip to its slide (a range to its first), a time chip to its time; the outside badge goes nowhere");
+assert.deepEqual([nav.role, nav.outsideRole], ["button", null]);
+console.log("PASS: grounding chips navigate: slide chips to the slide, time chips to the transcript time");
+
 // A run outlives the panel (spec 5.4).
 const outlived = at("outlived the panel");
 assert.equal(outlived.aborted, false, "closing the panel does not stop the answer");

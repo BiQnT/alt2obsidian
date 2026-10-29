@@ -117,6 +117,12 @@ export interface ChatHost extends TurnRunner {
   lectureChoices(): Array<{ path: string; name: string; subject: string }>;
   openSettings(): void;
   openLectureViewer(notePath: string): Promise<void>;
+  /** A slide chip (spec 5.5): the slide in the lecture's Synced Viewer (opened if needed), else its heading in the note. */
+  gotoSlide(lecture: ChatLecture, slide: number): Promise<void>;
+  /** A time chip: the viewer's transcript at that time, or the transcript section heading that holds it. */
+  gotoTime(lecture: ChatLecture, ms: number): Promise<void>;
+  /** A section chip: the section's heading in the summary note. */
+  gotoSection(lecture: ChatLecture, num: number): Promise<void>;
   openVaultFile(path: string): Promise<void>;
   closeChatPanel(): void;
   chatPanelClosed(leaf: WorkspaceLeaf): void;
@@ -1019,7 +1025,21 @@ export class ChatView extends ItemView {
               : p.kind === "time"
                 ? [`▶ ${formatClock(p.ms)}`, `전사 ${formatClock(p.ms)}`]
                 : ["강의 자료 밖", "강의 자료에 없는 일반 지식이나 예시"];
-        frag.createSpan({ cls: `alt-to-obs-chat-cite is-${p.kind}`, text, attr: { title } });
+        const chip = frag.createSpan({ cls: `alt-to-obs-chat-cite is-${p.kind}`, text, attr: { title } });
+        // Where the mark points (spec 5.5); "강의 자료 밖" is only a badge.
+        const go =
+          p.kind === "slide"
+            ? () => this.host.gotoSlide(lecture, p.slides[0])
+            : p.kind === "section"
+              ? () => this.host.gotoSection(lecture, p.num)
+              : p.kind === "time"
+                ? () => this.host.gotoTime(lecture, p.ms)
+                : null;
+        if (go) {
+          chip.setAttr("role", "button");
+          chip.setAttr("tabindex", "0");
+          chip.addEventListener("click", () => void go().catch((e) => new Notice(`이동하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`)));
+        }
       }
       node.replaceWith(frag);
     }

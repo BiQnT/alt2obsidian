@@ -24,9 +24,9 @@ import { AltLocalSource, altUserDataDir, connectAltLocal, ConnectResult, inferSu
 import { alignLecture, buildAlignmentCheckPrompt, checkAlignmentWithLlm, LectureAlignment } from "./pipeline/alignment";
 import { layoutAlignmentText } from "./core/prep/pageLayout";
 import { computeSlideHash, normalizePageText } from "./core/slideHash";
-import { hasMultiManagedMarkers, splitMultiManagedNote } from "./core/merge";
+import { hasMultiManagedMarkers, splitMultiManagedNote, splitSectionNote, toLf } from "./core/merge";
 import { isLinkCandidate, LectureKind, lectureKind, LocalNoteStatus, MissingPdfError, slideChangeCount, VaultNoteInfo } from "./core/noteStatus";
-import { hasSectionMarkers } from "./core/sections";
+import { hasSectionMarkers, headingLinkTarget } from "./core/sections";
 import { ATTACHED_LINE, attachedPdfPath, looksLikePdf, markedAttached, MAX_ATTACH_BYTES, sha1Hex } from "./core/pdfAttach";
 import { parseExistingSections, planTranscript, TranscriptPlan, verifySectionsFromNote } from "./pipeline/transcriptPlan";
 import { estimateTranscriptSummary, runTranscriptSummary } from "./pipeline/transcriptPipeline";
@@ -2235,6 +2235,58 @@ export default class Alt2ObsPlugin extends Plugin {
       return;
     }
     await this.openSyncedViewer(notePath, pdf.path);
+  }
+
+  /** The open Synced Viewer of a lecture note, or one opened for it; null without its PDF. */
+  private async viewerFor(notePath: string): Promise<SyncedViewerView | null> {
+    const find = () => this.app.workspace.getLeavesOfType(VIEW_TYPE_SYNCED_VIEWER).find((l) => l.view instanceof SyncedViewerView && l.view.getState().mdPath === notePath);
+    let leaf = find();
+    if (!leaf) {
+      const pdf = this.siblingPdf(notePath);
+      if (!pdf || this.frontmatterOf(notePath)?.alt_kind === "transcript") return null;
+      await this.openSyncedViewer(notePath, pdf.path);
+      leaf = find();
+    }
+    if (!leaf || !(leaf.view instanceof SyncedViewerView)) return null;
+    await this.app.workspace.revealLeaf(leaf);
+    return leaf.view;
+  }
+
+  /** A heading of a note in the editor (its link target, as Obsidian matches headings). */
+  private async openHeading(notePath: string, heading: string): Promise<void> {
+    await this.app.workspace.openLinkText(`${notePath}#${headingLinkTarget(heading)}`, "", false);
+  }
+
+  /** A slide chip of the panel (spec 5.5): the slide in the lecture's viewer, else its heading in the note. */
+  async gotoSlide(lecture: ChatLecture, slide: number): Promise<void> {
+    const viewer = await this.viewerFor(lecture.notePath);
+    if (viewer) viewer.gotoSlide(slide);
+    else await this.openHeading(lecture.notePath, `📚 슬라이드 ${slide}`);
+  }
+
+  /** A time chip: the viewer's transcript at that time; in a summary note, the heading of the section that holds it. */
+  async gotoTime(lecture: ChatLecture, ms: number): Promise<void> {
+    if (lecture.kind === "slides") {
+      const viewer = await this.viewerFor(lecture.notePath);
+      if (viewer) await viewer.showTranscriptAt(ms);
+      return;
+    }
+    const section = (await this.sectionHeadings(lecture.notePath)).find((h) => h.startMs !== null && h.endMs !== null && ms >= h.startMs && ms < h.endMs);
+    if (section) await this.openHeading(lecture.notePath, section.text);
+  }
+
+  /** A section chip: the section's heading in the summary note. */
+  async gotoSection(lecture: ChatLecture, num: number): Promise<void> {
+    const section = (await this.sectionHeadings(lecture.notePath)).find((h) => h.num === num);
+    if (section) await this.openHeading(lecture.notePath, section.text);
+  }
+
+  private async sectionHeadings(notePath: string): Promise<Array<{ num: number; text: string; startMs: number | null; endMs: number | null }>> {
+    const file = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(file instanceof TFile)) return [];
+    return splitSectionNote(toLf(await this.app.vault.cachedRead(file)))
+      .sections.filter((x) => x.parsed)
+      .map((x) => ({ num: x.num, text: x.parsed!.text, startMs: x.parsed!.startMs, endMs: x.parsed!.endMs }));
   }
 
   /** A vault file in a new tab ("브리프 열기"). */

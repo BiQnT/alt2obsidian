@@ -132,6 +132,9 @@ async function main() {
     ],
     openSettings: () => calls.push({ settings: true }),
     openLectureViewer: async (p: string) => void calls.push({ viewer: p }),
+    gotoSlide: async (l: any, n: number) => void calls.push({ go: "slide", note: l.notePath, n }),
+    gotoTime: async (l: any, ms: number) => void calls.push({ go: "time", note: l.notePath, ms }),
+    gotoSection: async (l: any, n: number) => void calls.push({ go: "section", note: l.notePath, n }),
     openVaultFile: async () => {},
     closeChatPanel: () => controller.close(),
     chatPanelClosed: (leaf: unknown) => controller.closed(leaf as any),
@@ -254,6 +257,14 @@ async function main() {
     transcriptSent: req.user.includes("[29:10] 작은 수를 먼저 더합니다."),
     task: req.task,
   });
+
+  // ---- the grounding chips go where they point (spec 5.5) ----
+  (a.querySelector(".alt-to-obs-chat-cite.is-slide") as HTMLElement).click();
+  (a.querySelector(".alt-to-obs-chat-cite.is-time") as HTMLElement).click();
+  (Array.from(a.querySelectorAll(".alt-to-obs-chat-cite.is-slide"))[1] as HTMLElement).click();
+  (a.querySelector(".alt-to-obs-chat-cite.is-outside") as HTMLElement).click();
+  await sleep(50);
+  log.push({ step: "chips navigate", gone: calls.filter((c) => c.go).map((c) => `${c.go}:${c.n ?? c.ms}`), role: a.querySelector(".alt-to-obs-chat-cite.is-slide")!.getAttribute("role"), outsideRole: a.querySelector(".alt-to-obs-chat-cite.is-outside")!.getAttribute("role") });
 
   // ---- closing the panel does not stop an answer (spec 5.4); a panel opened again shows it ----
   const original = answer;

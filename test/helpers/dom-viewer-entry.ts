@@ -152,6 +152,28 @@ async function main() {
   const active = chatBtn().classList.contains("is-active");
   chatOpen = false;
   withChat.setChatActive(false);
+  // The panel's time chip: the aligned slide, the transcript panel open on that line, highlighted.
+  const navTranscript = [
+    { startMs: 5000, endMs: 9000, text: "슬라이드 1 이야기" },
+    { startMs: 35000, endMs: 39000, text: "슬라이드 2 첫 줄" },
+    { startMs: 41000, endMs: 45000, text: "슬라이드 2 둘째 줄" },
+    { startMs: 65000, endMs: 69000, text: "슬라이드 3 이야기" },
+  ];
+  const navApp: any = { ...chatApp, workspace: { trigger: () => {} }, metadataCache: { getFileCache: () => ({ frontmatter: { alt_local_id: "nav", alt_alignment: "1:0-30 2:30-60 3:60-90" } }), on: () => ({}) } };
+  const nav: any = new (SyncedViewerView as any)({}, async () => navTranscript, () => true, undefined, { toggle: () => {}, isOpen: () => false });
+  nav.app = navApp;
+  document.getElementById("host")!.appendChild(nav.containerEl);
+  (nav.containerEl.children[1] as HTMLElement).style.height = "760px";
+  await nav.onOpen();
+  await nav.openPair("note.md", "deck.pdf");
+  await sleep(300);
+  await nav.showTranscriptAt(42000);
+  const flashed = nav.transcriptPanelEl.querySelector(".alt-to-obs-seg.is-flash");
+  log.push({ step: "time chip", page: nav.getCurrentSlide(), panelOpen: nav.transcriptOpen, flashed: flashed?.textContent ?? null, ms: flashed?.dataset.ms ?? null });
+  nav.gotoSlide(3);
+  log.push({ step: "slide chip", page: nav.getCurrentSlide() });
+  await nav.onClose();
+
   log.push({
     step: "chat",
     buttons: buttons(),
