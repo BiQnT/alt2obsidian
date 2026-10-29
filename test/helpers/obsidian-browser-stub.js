@@ -79,6 +79,7 @@ export class ItemView {
   async setState() {}
 }
 export class WorkspaceLeaf {}
+export class MarkdownView {}
 function inline(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/`([^`\n]+)`/g, "<code>$1</code>"); }
 export const MarkdownRenderer = {
   // Enough markdown for layout: headings and paragraphs.

@@ -1,4 +1,4 @@
-import { editorLivePreviewField, normalizePath, Plugin, Notice, WorkspaceLeaf } from "obsidian";
+import { editorLivePreviewField, MarkdownView, normalizePath, Plugin, Notice, WorkspaceLeaf } from "obsidian";
 import type { CodexModels, ModelCatalog, ModelInfo } from "./settings/llmSettings";
 import type { Extension } from "@codemirror/state";
 import { managedCommentHider } from "./editor/managedComments";
@@ -14,6 +14,7 @@ import {
   CliDetection,
   CliName,
   EffortLevel,
+  ImageInput,
   LLMUsage,
   ProviderId,
   TaskId,
@@ -73,6 +74,7 @@ import {
   CallShape,
   CONCEPTS_OUTPUT_TOKENS,
   estimateCalls,
+  estimateTextTokens,
   exceedsCap,
   LECTURE_NOTE_CHARS,
   LECTURE_NOTE_OUTPUT_TOKENS,
@@ -122,11 +124,12 @@ import { decidePdfOpen, isLectureFrontmatter, isLectureNote, lectureNoteForPdf }
 import { aiInputFor, BriefAiStep, BriefFiles, readLectureBrief, updateLectureBrief } from "./brief/briefStore";
 import { aiPartStatus, BRIEF_AI_OUTPUT_TOKENS, BRIEF_AI_SCHEMA, briefAiInput } from "./brief/briefAi";
 import { commentaryText, fmString, isBriefFrontmatter, memoText, parseLectureNote, readFrontmatter } from "./brief/lectureNote";
-import { aiOf, buildBriefScript, isEditedBrief, neighbourLectures, subjectOfNote } from "./brief/lectureBrief";
+import { aiOf, briefChatBody, buildBriefScript, composeBrief, isEditedBrief, neighbourLectures, subjectOfNote } from "./brief/lectureBrief";
 import { ChatBriefState, ChatLecture, ChatView, SlideMaterial } from "./ui/ChatView";
 import { ChatPanelController, VIEW_TYPE_CHAT } from "./ui/chatPanel";
 import { ChatErrorInfo, ChatRunRequest, ChatRunResult, ThreadStore } from "./chat/threads";
-import { segmentsInSpans, TEXTLESS_PAGE_CHARS, TimedText } from "./chat/contextPack";
+import { formatTranscriptLines, segmentsInSpans, TEXTLESS_PAGE_CHARS, TimedText, transcriptLines } from "./chat/contextPack";
+import { SLIDE_TEXT_STANDIN_TOKENS, SlideRow } from "./chat/addMaterial";
 import { isAuthError, isUsageLimitError } from "./llm/cli/CliProviderBase";
 import { renderPrompt } from "./prompts/render";
 // The lecture-level note (no slide plan, no transcript sections) is the
@@ -2218,6 +2221,64 @@ export default class Alt2ObsPlugin extends Plugin {
     return this.vaultLectureNotes()
       .map((v) => ({ path: v.path, name: stemOf(v.path), subject: v.subject || subjectFolderOfNote(v.path).split("/").pop() || "" }))
       .sort((a, b) => a.subject.localeCompare(b.subject, "ko") || a.name.localeCompare(b.name, "ko", { numeric: true }));
+  }
+
+  /**
+   * A lecture's slides for "+ 자료 추가" (spec 5.7): the brief's slide map
+   * (gist, time) and rough tokens of each part. Page texts count only when
+   * the panel has read that PDF already (a stand-in otherwise); a send
+   * counts exactly.
+   */
+  async chatSlideList(lecture: ChatLecture): Promise<SlideRow[]> {
+    const file = this.app.vault.getAbstractFileByPath(lecture.notePath);
+    if (!(file instanceof TFile) || lecture.kind !== "slides") return [];
+    const text = await this.app.vault.cachedRead(file);
+    const parts = parseLectureNote(text);
+    const map = new Map((await buildBriefScript(lecture.notePath, text)).map.map((e) => [e.num, e]));
+    const fm = this.frontmatterOf(lecture.notePath) ?? parts.frontmatter;
+    const alignment = parseAlignment(fm.alt_alignment);
+    const pdf = lecture.pdfPath ? this.app.vault.getAbstractFileByPath(lecture.pdfPath) : null;
+    const pages = pdf instanceof TFile ? this.chatPageTextCache.get(this.pdfVersion(pdf)) ?? null : null;
+    const id = fmString(fm, "alt_local_id");
+    const transcript = id && alignment.length > 0 ? (await this.chatTranscript(id)) ?? [] : [];
+    const cap = this.data.settings.generation.transcriptCapChars;
+    return [...parts.units]
+      .sort((a, b) => a.num - b.num)
+      .map((u) => {
+        const segments = segmentsInSpans(transcript, spansForSlide(alignment, u.num));
+        return {
+          num: u.num,
+          gist: map.get(u.num)?.text ?? "",
+          range: map.get(u.num)?.range ?? "",
+          tokens: {
+            slideText: pages ? estimateTextTokens(pages[u.num - 1] ?? "") : SLIDE_TEXT_STANDIN_TOKENS,
+            commentary: estimateTextTokens(commentaryText(u.managed)),
+            transcript: segments.length > 0 ? estimateTextTokens(formatTranscriptLines(transcriptLines(segments, cap, ""))) : 0,
+            memo: estimateTextTokens(memoText(u.after)),
+          },
+        };
+      });
+  }
+
+  /** Another lecture's brief for a question: its file's body, else the script part built in memory (nothing written). */
+  async chatOtherBrief(lecture: ChatLecture): Promise<string> {
+    const state = await readLectureBrief(this.briefFiles(), lecture.notePath);
+    return state.body ?? briefChatBody(await composeBrief(state.script, null, formatDate()));
+  }
+
+  /** An added slide's page as an image (long edge 1024, JPEG 80), null without its PDF. */
+  async chatSlideImage(lecture: ChatLecture, slide: number): Promise<ImageInput | null> {
+    const pdf = lecture.pdfPath ? this.app.vault.getAbstractFileByPath(lecture.pdfPath) : null;
+    if (!(pdf instanceof TFile) || !this.pdfProcessor) return null;
+    return this.chatPageImage(pdf, slide);
+  }
+
+  /** "노트에서 선택한 글" (spec 5.7): the selection in the note the reader was on, the viewer's note pane or an editor. */
+  noteSelection(): string {
+    const view = this.app.workspace.getMostRecentLeaf?.()?.view;
+    if (view instanceof SyncedViewerView) return view.getSelectedText();
+    if (view instanceof MarkdownView) return view.editor.getSelection();
+    return "";
   }
 
   /** The plugin's settings tab (Obsidian's settings window has no public API for this). */

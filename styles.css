@@ -1117,6 +1117,109 @@
 .alt-to-obs-chat-estimate.is-over {
   color: var(--text-error);
 }
+.alt-to-obs-chat-add.is-active {
+  background: var(--background-modifier-hover);
+}
+.alt-to-obs-chat-popover-host:empty {
+  display: none;
+}
+.alt-to-obs-chat-popover {
+  margin: 6px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  font-size: var(--font-ui-small);
+  flex-shrink: 0;
+}
+.alt-to-obs-chat-popover-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.alt-to-obs-chat-popover-tab {
+  font-size: var(--font-ui-smaller);
+}
+.alt-to-obs-chat-popover-tab.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+.alt-to-obs-chat-popover-range input {
+  width: 100%;
+  margin-bottom: 6px;
+}
+.alt-to-obs-chat-popover-note {
+  margin-bottom: 6px;
+  color: var(--color-orange);
+  font-size: var(--font-ui-smaller);
+}
+.alt-to-obs-chat-popover-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+}
+.alt-to-obs-chat-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+}
+.alt-to-obs-chat-popover-row:hover {
+  background: var(--background-modifier-hover);
+}
+.alt-to-obs-chat-popover-num {
+  min-width: 2em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.alt-to-obs-chat-popover-gist {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.alt-to-obs-chat-popover-time,
+.alt-to-obs-chat-popover-tokens {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+.alt-to-obs-chat-uncertain {
+  color: var(--color-yellow);
+  font-weight: var(--font-bold);
+}
+.alt-to-obs-chat-popover-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 8px 0;
+}
+.alt-to-obs-chat-popover-toggles label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.alt-to-obs-chat-popover-quote {
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 4px 8px;
+  border-left: 3px solid var(--background-modifier-border);
+  white-space: pre-wrap;
+}
+.alt-to-obs-chat-popover-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+.alt-to-obs-chat-popover-summary {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
 .alt-to-obs-chat-thread {
   flex: 1;
   overflow-y: auto;

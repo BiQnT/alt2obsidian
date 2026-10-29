@@ -3,7 +3,8 @@
  * and user message in their order and exact block headers, the transcript
  * lines (30 seconds or 200 characters, cleaned, capped by overlap), the
  * earlier conversation folded to 3,000 tokens, the estimate, the slide
- * range input, the grounding marks of an answer, the threads (LRU and the
+ * range input, the "+ 자료 추가" plan (range and checks, the 8-slide limit,
+ * the estimate), the grounding marks of an answer, the threads (LRU and the
  * "슬라이드 N으로 이동" dividers) and the note parts the panel reads.
  * No tokens, no obsidian.
  * Run: node test/test-chat.mjs
@@ -361,6 +362,37 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   const listLeak = m.safeAnswerMarkdown("- ```python\n  x\nnext ![t](https://evil.example/z.png)").split("\n");
   assert.equal(listLeak[2], "next [t](https://evil.example/z.png)", "nor does a list item's");
   console.log("PASS: answers rendered safely: fences keep only allow-listed languages (also in quotes, callouts, lists and indents), inline and raw <code> Dataview queries are defused, remote and reference images become links, media HTML is text, CSS url() is broken, code untouched");
+}
+
+// ---- "+ 자료 추가" (spec 5.7) ----
+{
+  const row = (num, t = 100) => ({ num, gist: `g${num}`, range: "", tokens: { slideText: t, commentary: 200, transcript: 300, memo: 0 } });
+  const rows = Array.from({ length: 30 }, (_, i) => row(i + 1));
+  const include = { ...m.DEFAULT_INCLUDE };
+  assert.equal(include.image, false, "the slide image is off by default");
+  assert.equal(m.rowTokens(rows[0], include), 600, "text, commentary, transcript and memo");
+  assert.equal(m.rowTokens(rows[0], { ...include, transcript: false, image: true }), 300 + m.IMAGE_TOKENS, "an image instead of the transcript");
+  assert.deepEqual(m.rowTime("[26:26~28:38]"), { text: "26:26~28:38", uncertain: false });
+  assert.deepEqual(m.rowTime("[28:38~28:59?]"), { text: "28:38~28:59", uncertain: true }, "an uncertain alignment keeps its mark apart");
+  assert.deepEqual(m.rowTime(""), { text: "", uncertain: false });
+
+  const plan = (o) => m.planAddition({ rows, checked: [], range: "", max: 30, current: 17, alreadyAdded: [], addedCount: 0, include, ...o });
+  let p = plan({ checked: [3], range: "14-18, 23" });
+  assert.deepEqual(p.slides, [3, 14, 15, 16, 18, 23], "checks and the range together, the current slide left out");
+  assert.equal(p.tokens, 6 * 600);
+  assert.deepEqual(p.ignored, []);
+  p = plan({ range: "14~16, 40, 0" });
+  assert.deepEqual([p.slides, p.ignored], [[14, 15, 16], [0, 40]], "numbers outside the deck are left out and said");
+  p = plan({ range: "1-12" });
+  assert.deepEqual([p.slides, p.over], [[1, 2, 3, 4, 5, 6, 7, 8], [9, 10, 11, 12]], "8 added slides at most");
+  p = plan({ range: "1-6", alreadyAdded: [2, 3], addedCount: 5 });
+  assert.deepEqual([p.slides, p.over], [[1, 4, 5], [6]], "slides already added (any lecture) count toward the 8; this lecture's are left out");
+  p = plan({ range: "5", current: null });
+  assert.deepEqual(p.slides, [5], "another lecture has no locked slide");
+
+  assert.equal(m.quoteOf("  a\r\nb  "), "a\nb", "a quote is trimmed, line ends made LF");
+  assert.equal(Array.from(m.quoteOf("가".repeat(2000))).length, m.QUOTE_MAX_CHARS, "cut at 1,500 characters");
+  console.log("PASS: + 자료 추가: checks and a typed range together without the current slide, numbers outside the deck said, 8 added slides at most (every lecture's), row tokens with the toggles (image about 1.1k, off by default), time marks with the uncertain ?, quotes cut at 1,500 characters");
 }
 
 // ---- note parts the panel reads ----

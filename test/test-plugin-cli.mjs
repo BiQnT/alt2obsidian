@@ -772,6 +772,25 @@ try {
     const m4 = await plugin.chatMaterial(lecture, 4);
     assert.equal(m4.image?.pageNum, 4, "a page without a text layer goes as an image");
     assert.equal((await plugin.chatMaterial(lecture, 2)).memo, "내 메모 유지", "the memo callout's text (slide 2's, kept by the re-import)");
+    // "+ 자료 추가" (spec 5.7): the slide list, another lecture's brief (nothing written), an added slide's image.
+    const rows = await plugin.chatSlideList(lecture);
+    assert.deepEqual(rows.map((r) => r.num), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.equal(rows[6].gist, "슬라이드 7의 요지", "the gist of the slide map");
+    assert.ok(rows[6].tokens.commentary > 0 && rows[6].tokens.slideText > 0);
+    assert.equal(rows[3].tokens.slideText, 0, "page texts the panel read count as they are (a textless page: none)");
+    assert.deepEqual([rows[0].range, rows[0].tokens.transcript], ["", 0], "no alignment: no time, no transcript");
+    const otherBriefPath = "Alt2Obsidian/CSED311/Briefs/Lec7 Caches brief.md";
+    const savedBrief = files.get(otherBriefPath);
+    files.delete(otherBriefPath);
+    const other = await plugin.chatOtherBrief(lecture);
+    assert.match(other, /^## 개요/m);
+    assert.match(other, /^## 슬라이드 지도\n- 1 /m, "built in memory");
+    assert.ok(!/^---|alt2obs_brief|# Lec7 Caches brief/m.test(other), "the body only");
+    assert.equal(files.has(otherBriefPath), false, "nothing written");
+    if (savedBrief !== undefined) files.set(otherBriefPath, savedBrief);
+    assert.equal((await plugin.chatSlideImage(lecture, 7))?.pageNum, 7, "an added slide's image");
+    assert.equal(await plugin.chatSlideImage({ ...lecture, pdfPath: null }, 7), null);
+    assert.equal(plugin.noteSelection(), "", "no note open: no selection");
 
     const totals = { ...plugin.data.usageTotals };
     process.env.FAKE_CLI_TEXT = "캐시는 자주 쓰는 데이터를 가까이 둔다 [슬라이드 2].";
@@ -809,7 +828,7 @@ try {
     const gone = await makePlugin(undefined);
     gone.plugin.onunload();
     await assert.rejects(gone.plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }), /플러그인이 꺼져/);
-    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, a streamed chat call on the chat task (usage counted, not as a lecture), error kinds, nothing sent after unload");
+    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, the + 자료 추가 slide list, another lecture's brief built in memory, a streamed chat call on the chat task (usage counted, not as a lecture), error kinds, nothing sent after unload");
   }
 
   // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).

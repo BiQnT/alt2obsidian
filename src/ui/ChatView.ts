@@ -51,6 +51,8 @@ import {
 import { ChatErrorInfo, ChatThread, ChatTurn, historyOf, moveThreadTo, newTurnId, ThreadEvent, ThreadStore, TurnRunner, turnsOf } from "../chat/threads";
 import { defaultTaskSetting, estimateEffort, isCliProvider, ModelCatalog, modelName } from "../settings/llmSettings";
 import { renderModelPicker } from "./modelPicker";
+import { AddRequest, renderAddPopover } from "./addMaterialPopover";
+import { DEFAULT_INCLUDE, IMAGE_TOKENS, IncludeOptions, MAX_ADDED_SLIDES, SlideRow } from "../chat/addMaterial";
 import { SLIDE_CHANGE_EVENT, SlideChangeInfo, VIEW_TYPE_CHAT } from "./chatPanel";
 import chatSystemPrompt from "../../prompts/chat.system.md";
 
@@ -113,8 +115,16 @@ export interface ChatHost extends TurnRunner {
   rebuildBrief(notePath: string | null): Promise<boolean>;
   /** One slide's material: the note read now, the PDF text and the transcript from their caches. */
   chatMaterial(lecture: ChatLecture, slide: number): Promise<SlideMaterial>;
-  /** Lecture notes for the "강의 없음" card. */
+  /** Lecture notes for the "강의 없음" card and "+ 자료 추가". */
   lectureChoices(): Array<{ path: string; name: string; subject: string }>;
+  /** A lecture's slides for "+ 자료 추가" (gist, time, rough tokens). */
+  chatSlideList(lecture: ChatLecture): Promise<SlideRow[]>;
+  /** Another lecture's brief body: its file, else the script part built in memory (nothing written). */
+  chatOtherBrief(lecture: ChatLecture): Promise<string>;
+  /** A slide as an image ("슬라이드 이미지" of an added slide), null when it cannot be rendered. */
+  chatSlideImage(lecture: ChatLecture, slide: number): Promise<ImageInput | null>;
+  /** The text selected in the note the reader is on (the viewer's note pane or an editor), "" for none. */
+  noteSelection(): string;
   openSettings(): void;
   openLectureViewer(notePath: string): Promise<void>;
   /** A slide chip (spec 5.5): the slide in the lecture's Synced Viewer (opened if needed), else its heading in the note. */
@@ -136,8 +146,6 @@ const QUICK_QUESTIONS: Array<[string, string]> = [
   ["앞 슬라이드와 연결", "앞 슬라이드 내용과 어떻게 이어지는지 설명해줘"],
 ];
 
-/** Slides added besides the current one, at most (spec 5.7). */
-const MAX_EXTRA_SLIDES = 8;
 /** A chip's tooltip shows this much of what it sends. */
 const CHIP_TITLE_CHARS = 300;
 /** A followed slide is read once the reader stays on it this long. */
@@ -191,8 +199,16 @@ export class ChatView extends ItemView {
   private followed: number | null = null;
   /** 📌: the slide the panel stays on (null: it follows). */
   private pinned: number | null = null;
-  /** Slides added besides the current one ("강의 없음" range). */
-  private extraSlides: number[] = [];
+  /** Slides added besides the current one ("+ 자료 추가", the "강의 없음" range), with what each carries. */
+  private addedSlides: Array<{ lecture: ChatLecture; slide: number; include: IncludeOptions }> = [];
+  /** Other lectures' briefs added ("다른 강의 브리프"). */
+  private addedBriefs: Array<{ lecture: ChatLecture; body: string }> = [];
+  /** Text selected in the note, sent as [선택한 글]. */
+  private quote: string | null = null;
+  /** The "+ 자료 추가" popover is open. */
+  private popoverOpen = false;
+  /** Images of added slides that carry one, by material key. */
+  private images = new Map<string, ImageInput | null>();
   private chips = { brief: true, slide: true, transcript: true, memo: true };
   private materials = new Map<string, SlideMaterial>();
   /** Material reads in flight, so one slide is not read twice at once. */
@@ -225,6 +241,8 @@ export class ChatView extends ItemView {
   private headEl!: HTMLElement;
   private cardsEl!: HTMLElement;
   private chipsEl!: HTMLElement;
+  /** The "+ 자료 추가" popover, outside the chips so their re-renders keep what is typed in it. */
+  private popoverEl!: HTMLElement;
   private threadEl!: HTMLElement;
   private composerEl!: HTMLElement;
   private inputEl!: HTMLTextAreaElement;
@@ -284,6 +302,7 @@ export class ChatView extends ItemView {
     this.headEl = root.createDiv({ cls: "alt-to-obs-chat-head" });
     this.cardsEl = root.createDiv({ cls: "alt-to-obs-chat-cards" });
     this.chipsEl = root.createDiv({ cls: "alt-to-obs-chat-chips" });
+    this.popoverEl = root.createDiv({ cls: "alt-to-obs-chat-popover-host" });
     this.threadEl = root.createDiv({ cls: "alt-to-obs-chat-thread" });
     this.composerEl = root.createDiv({ cls: "alt-to-obs-chat-composer" });
     this.buildComposer();
@@ -371,7 +390,11 @@ export class ChatView extends ItemView {
     this.clearRendered();
     this.followed = slide;
     this.pinned = pinned[0] ?? null;
-    this.extraSlides = pinned.slice(1, 1 + MAX_EXTRA_SLIDES);
+    this.addedSlides = pinned.slice(1, 1 + MAX_ADDED_SLIDES).map((slide) => ({ lecture, slide, include: { ...DEFAULT_INCLUDE } }));
+    this.addedBriefs = [];
+    this.quote = null;
+    this.popoverOpen = false;
+    this.images.clear();
     this.capPending = null;
     this.confirmRebuild = false;
     this.brief = null;
@@ -410,15 +433,28 @@ export class ChatView extends ItemView {
     return this.pinned ?? this.followed;
   }
 
-  /** The slides a question sends: the current one, then the added ones (the slide chip on). */
-  private focusSlides(): number[] {
+  /**
+   * The slides a question sends, with what each carries: the current one
+   * (the chips decide; the slide chip off sends none of it), then the added
+   * ones (their own toggles).
+   */
+  private focusTargets(): Array<{ lecture: ChatLecture; slide: number; include: IncludeOptions }> {
+    const lecture = this.lecture;
+    if (!lecture) return [];
     const current = this.currentSlide();
-    if (!this.chips.slide || current === null) return [];
-    return [current, ...this.extraSlides.filter((n) => n !== current)];
+    const own: IncludeOptions = { slideText: true, commentary: true, transcript: this.chips.transcript, memo: this.chips.memo, image: false };
+    const head = this.chips.slide && current !== null ? [{ lecture, slide: current, include: own }] : [];
+    return [...head, ...this.addedSlides.filter((a) => !(a.lecture.notePath === lecture.notePath && a.slide === current))];
   }
 
-  private materialKey(slide: number): string {
-    return `${this.lecture?.notePath}#${slide}`;
+  /** Every slide whose material is read: the current one (for its chips) and the added ones. */
+  private materialTargets(): Array<{ lecture: ChatLecture; slide: number }> {
+    const current = this.currentSlide();
+    return [...(this.lecture && current !== null ? [{ lecture: this.lecture, slide: current }] : []), ...this.addedSlides];
+  }
+
+  private materialKey(slide: number, lecture: ChatLecture | null = this.lecture): string {
+    return `${lecture?.notePath}#${slide}`;
   }
 
   /**
@@ -428,11 +464,10 @@ export class ChatView extends ItemView {
    */
   private async loadMaterials(fresh: boolean): Promise<void> {
     const lecture = this.lecture;
-    const current = this.currentSlide();
-    if (!lecture || current === null) return;
+    if (!lecture) return;
     const reads: Array<Promise<void>> = [];
-    for (const slide of [current, ...this.extraSlides]) {
-      const key = this.materialKey(slide);
+    for (const { lecture: of, slide } of this.materialTargets()) {
+      const key = this.materialKey(slide, of);
       const running = this.materialLoads.get(key);
       if (running && !fresh) {
         reads.push(running);
@@ -440,21 +475,27 @@ export class ChatView extends ItemView {
       }
       if (!fresh && this.materials.has(key)) continue;
       // A fresh read after one still running, so the older one cannot land last.
-      const read = running ? running.then(() => this.readMaterial(lecture, slide, key)) : this.readMaterial(lecture, slide, key);
+      const read = running ? running.then(() => this.readMaterial(of, slide, key)) : this.readMaterial(of, slide, key);
       this.materialLoads.set(key, read);
       void read.then(() => {
         if (this.materialLoads.get(key) === read) this.materialLoads.delete(key);
       });
       reads.push(read);
     }
+    // Added slides that carry their image (the textless ones get theirs with the material).
+    for (const a of this.addedSlides) {
+      const key = this.materialKey(a.slide, a.lecture);
+      if (a.include.image && !this.images.has(key)) reads.push(this.host.chatSlideImage(a.lecture, a.slide).then((img) => void this.images.set(key, img), () => void this.images.set(key, null)));
+    }
     await Promise.all(reads);
     if (this.lecture === lecture) this.renderChips();
   }
 
   private async readMaterial(lecture: ChatLecture, slide: number, key: string): Promise<void> {
+    const shown = this.lecture;
     try {
       const material = await this.host.chatMaterial(lecture, slide);
-      if (this.lecture !== lecture) return;
+      if (this.lecture !== shown) return;
       this.materials.set(key, material);
       // The transcript's end, once read, is the lecture's length for the time marks (spec 5.5).
       if (material.transcriptEndMs !== null) lecture.lengthMs = Math.max(lecture.lengthMs ?? 0, material.transcriptEndMs);
@@ -563,6 +604,7 @@ export class ChatView extends ItemView {
     this.renderHead();
     this.renderCards();
     this.renderChips();
+    this.renderPopover();
     void this.renderThread();
     this.renderComposer();
   }
@@ -727,20 +769,7 @@ export class ChatView extends ItemView {
         attr: { title: this.pinned !== null ? "고정 풀기 (지금 슬라이드를 따라감)" : "이 슬라이드에 고정" },
       });
       pin.addEventListener("click", () => this.togglePin());
-      for (const extra of this.extraSlides.filter((n) => n !== current)) {
-        const xm = this.materials.get(this.materialKey(extra));
-        const chip = this.chip(row, {
-          text: `📄 슬라이드 ${extra} ×`,
-          tokens: xm ? estimateTextTokens([xm.slideText, xm.commentary].join("\n\n")) : undefined,
-          on: this.chips.slide,
-          title: xm ? [xm.slideText, xm.commentary].join("\n\n") : "",
-          onClick: () => {
-            this.extraSlides = this.extraSlides.filter((n) => n !== extra);
-            this.renderChips();
-          },
-        });
-        chip.addClass("is-extra");
-      }
+
       if (m && m.segments.length > 0) {
         const lines = transcriptLines(m.segments, this.host.data.settings.generation.transcriptCapChars, m.slideText);
         const span = `${formatClock(m.spans[0].startMs)}-${formatClock(m.spans[m.spans.length - 1].endMs)}`;
@@ -749,6 +778,48 @@ export class ChatView extends ItemView {
       if (m && m.memo) this.chip(row, { text: "✏️ 내 메모", tokens: estimateTextTokens(m.memo), on: this.chips.memo, title: m.memo, onClick: () => this.toggleChip("memo") });
       else if (m) this.chip(row, { text: "✏️ 비어 있음", disabled: true });
     }
+    for (const a of this.addedSlides) {
+      if (a.lecture.notePath === lecture.notePath && a.slide === current) continue;
+      const xm = this.materials.get(this.materialKey(a.slide, a.lecture));
+      const text = xm ? [a.include.slideText ? xm.slideText : "", a.include.commentary ? xm.commentary : "", a.include.memo ? xm.memo : ""].filter(Boolean).join("\n\n") : "";
+      const chip = this.chip(row, {
+        text: `📄 ${a.lecture.notePath === lecture.notePath ? "" : `${a.lecture.name} · `}슬라이드 ${a.slide} ×`,
+        tokens: xm ? estimateTextTokens(text) + (a.include.image ? IMAGE_TOKENS : 0) : undefined,
+        on: true,
+        title: text || "읽는 중",
+        onClick: () => {
+          this.addedSlides = this.addedSlides.filter((x) => x !== a);
+          this.renderChips();
+        },
+      });
+      chip.addClass("is-extra");
+    }
+    for (const b of this.addedBriefs) {
+      this.chip(row, {
+        text: `📚 ${b.lecture.name} 브리프 ×`,
+        tokens: estimateTextTokens(b.body),
+        on: true,
+        title: b.body,
+        onClick: () => {
+          this.addedBriefs = this.addedBriefs.filter((x) => x !== b);
+          this.renderChips();
+        },
+      }).addClass("is-extra");
+    }
+    if (this.quote) {
+      this.chip(row, {
+        text: "❝ 선택한 글 ×",
+        tokens: estimateTextTokens(this.quote),
+        on: true,
+        title: this.quote,
+        onClick: () => {
+          this.quote = null;
+          this.renderChips();
+        },
+      }).addClass("is-extra");
+    }
+    const adder = row.createEl("button", { text: "+ 자료 추가", cls: `alt-to-obs-chat-chip alt-to-obs-chat-add${this.popoverOpen ? " is-active" : ""}` });
+    adder.addEventListener("click", () => this.setPopover(!this.popoverOpen));
     const history = historyOf(this.thread);
     if (history.length > 0) {
       const text = history.map((h) => `Q: ${h.question}\nA: ${h.answer}`).join("\n\n");
@@ -756,6 +827,53 @@ export class ChatView extends ItemView {
     }
     this.estimateEl = el.createDiv({ cls: "alt-to-obs-chat-estimate" });
     this.renderEstimate();
+  }
+
+  private setPopover(open: boolean): void {
+    this.popoverOpen = open;
+    this.renderChips();
+    this.renderPopover();
+  }
+
+  /** "+ 자료 추가" (spec 5.7). */
+  private renderPopover(): void {
+    const el = this.popoverEl;
+    el.empty();
+    const lecture = this.lecture;
+    if (!this.popoverOpen || !lecture) return;
+    renderAddPopover(el, {
+      lecture,
+      current: this.currentSlide(),
+      alreadyAdded: (notePath) => this.addedSlides.filter((a) => a.lecture.notePath === notePath).map((a) => a.slide),
+      addedCount: this.addedSlides.length,
+      choices: this.host.lectureChoices(),
+      loadLecture: (notePath) => this.host.chatLecture(notePath),
+      slideList: (l) => this.host.chatSlideList(l),
+      selection: () => this.host.noteSelection(),
+      onAdd: (request) => void this.addMaterial(request),
+      onClose: () => this.setPopover(false),
+    });
+  }
+
+  private async addMaterial(request: AddRequest): Promise<void> {
+    const shown = this.lecture;
+    this.setPopover(false);
+    if ("quote" in request) this.quote = request.quote;
+    else {
+      const room = MAX_ADDED_SLIDES - this.addedSlides.length;
+      for (const slide of request.slides.slice(0, Math.max(0, room))) this.addedSlides.push({ lecture: request.lecture, slide, include: request.include });
+      if (request.withBrief && !this.addedBriefs.some((b) => b.lecture.notePath === request.lecture.notePath)) {
+        try {
+          const body = await this.host.chatOtherBrief(request.lecture);
+          if (this.lecture !== shown) return;
+          this.addedBriefs.push({ lecture: request.lecture, body });
+        } catch (e) {
+          new Notice(`그 강의의 브리프를 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    }
+    this.renderChips();
+    await this.loadMaterials(false);
   }
 
   private toggleChip(name: "brief" | "slide" | "transcript" | "memo"): void {
@@ -779,21 +897,24 @@ export class ChatView extends ItemView {
     const settings = this.host.data.settings;
     const focus: FocusUnit[] = [];
     const images: ImageInput[] = [];
-    for (const num of this.focusSlides()) {
-      const m = this.materials.get(this.materialKey(num));
+    for (const t of this.focusTargets()) {
+      const key = this.materialKey(t.slide, t.lecture);
+      const m = this.materials.get(key);
       if (!m) continue;
+      // A textless page goes as an image anyway; an added slide may ask for its image too.
+      const image = m.image ?? (t.include.image ? this.images.get(key) ?? null : null);
       focus.push({
-        lecture: lecture.name,
+        lecture: t.lecture.name,
         unit: "slide",
-        num,
+        num: t.slide,
         range: alignedRange(m.spans),
-        slideText: m.image ? "" : m.slideText,
+        slideText: m.image || !t.include.slideText ? "" : m.slideText,
         imageAttached: !!m.image,
-        commentary: m.commentary,
-        memo: this.chips.memo ? m.memo : "",
-        transcript: this.chips.transcript ? transcriptLines(m.segments, settings.generation.transcriptCapChars, `${m.slideText}\n${question}`) : [],
+        commentary: t.include.commentary ? m.commentary : "",
+        memo: t.include.memo ? m.memo : "",
+        transcript: t.include.transcript ? transcriptLines(m.segments, settings.generation.transcriptCapChars, `${m.slideText}\n${question}`) : [],
       });
-      if (m.image) images.push(m.image);
+      if (image) images.push(image);
     }
     const brief = this.chips.brief && this.brief?.body ? this.brief.body : null;
     const pack = buildChatPack({
@@ -802,10 +923,10 @@ export class ChatView extends ItemView {
       lecture: lecture.name,
       neighbours: lecture.neighbours,
       brief,
-      extraBriefs: [],
+      extraBriefs: this.addedBriefs.map((b) => ({ title: `다른 강의 브리프: ${[b.lecture.subject, b.lecture.name].filter(Boolean).join(" · ")}`, body: b.body })),
       history: historyOf(this.thread),
       focus,
-      quote: null,
+      quote: this.quote,
       question,
     });
     return { pack, images, focus };

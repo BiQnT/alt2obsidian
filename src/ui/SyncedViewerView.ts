@@ -129,6 +129,8 @@ export class SyncedViewerView extends ItemView {
   private chatBtnEl: HTMLButtonElement | null = null;
   /** The last page the workspace was told about (pair and page), so each change is sent once. */
   private lastSlideEvent: string | null = null;
+  /** Text last selected in the note pane, kept while focus is in the question panel. */
+  private mdSelection = "";
   constructor(
     leaf: WorkspaceLeaf,
     private loadTranscript?: TranscriptLoader,
@@ -299,6 +301,14 @@ export class SyncedViewerView extends ItemView {
     this.mdPaneEl = column.createDiv({ cls: "alt-to-obs-md-pane" });
     this.transcriptPanelEl = column.createDiv({ cls: "alt-to-obs-transcript-panel" });
     this.transcriptPanelEl.hide();
+    // A click elsewhere (the panel's buttons) leaves it; a click in the note pane or a selection elsewhere clears it.
+    this.registerDomEvent(document, "selectionchange", () => {
+      const sel = document.getSelection();
+      if (!sel || !sel.anchorNode) return;
+      const inPane = this.mdPaneEl.contains(sel.anchorNode);
+      if (inPane && !sel.isCollapsed) this.mdSelection = sel.toString();
+      else if (inPane || !sel.isCollapsed) this.mdSelection = "";
+    });
     for (const pane of ["pdf", "md"] as Pane[]) {
       const el = this.paneEl(pane);
       this.registerDomEvent(el, "scroll", () => this.onPaneScroll(pane), { passive: true });
@@ -423,6 +433,11 @@ export class SyncedViewerView extends ItemView {
   }
 
   /** "💬 질문" shows whether the question panel is open. */
+  /** The text selected in the note pane ("" for none). */
+  getSelectedText(): string {
+    return this.mdSelection;
+  }
+
   setChatActive(open: boolean): void {
     this.chatBtnEl?.toggleClass("is-active", open);
   }

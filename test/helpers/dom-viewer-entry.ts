@@ -172,6 +172,26 @@ async function main() {
   log.push({ step: "time chip", page: nav.getCurrentSlide(), panelOpen: nav.transcriptOpen, flashed: flashed?.textContent ?? null, ms: flashed?.dataset.ms ?? null });
   nav.gotoSlide(3);
   log.push({ step: "slide chip", page: nav.getCurrentSlide() });
+  // The note pane's selection, kept while focus moves to the question panel ("노트에서 선택한 글").
+  const select = async (node: Node, collapsed: boolean) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    if (collapsed) range.collapse(true);
+    const sel = document.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    await sleep(30);
+    return nav.getSelectedText();
+  };
+  const heading = nav.mdPaneEl.querySelector("h2") as HTMLElement;
+  const outside = document.body.createDiv({ text: "패널 글" });
+  const picked = await select(heading, false);
+  const keptOnPanelClick = await select(outside, true);
+  const clearedByOther = await select(outside, false);
+  await select(heading, false);
+  const clearedInPane = await select(heading, true);
+  log.push({ step: "selection", picked, heading: heading.textContent, keptOnPanelClick, clearedByOther, clearedInPane });
+  outside.remove();
   await nav.onClose();
 
   log.push({

@@ -10,8 +10,10 @@
  * syllable is composed, the answer streams as text and then renders as
  * Markdown with grounding chips (none inside code), a slide change puts a
  * divider in the thread, a stopped answer stays marked and is not sent
- * again, the error cards, the per-question cap asked in the panel, and the
- * brief cards (missing, edited and stale).
+ * again, the error cards, the per-question cap asked in the panel, "+ 자료
+ * 추가" (this lecture's slides, another lecture with its brief, the
+ * note's selection as a quote) and the brief cards (missing, edited and
+ * stale).
  *
  * Needs a Chromium binary, so it is not part of `npm test`:
  *   npm run test:dom                 (finds Playwright's headless shell or Google Chrome)
@@ -252,6 +254,34 @@ assert.deepEqual(stale.buttons, ["내 수정 유지", "새로 만들기"]);
 assert.deepEqual(stale.confirm, ["덮어쓰기", "취소"], "새로 만들기 asks first");
 assert.deepEqual(stale.rebuilt, { build: "Alt2Obsidian/CSED423/Lectures/L5.md", force: true });
 assert.equal(stale.thread, 1, "back on L5: its thread is still there");
+// + 자료 추가 (spec 5.7).
+const add = at("add material");
+const bare = (chip) => chip.replace(/\d+(\.\d+)?k$/, "");
+assert.deepEqual(add.tabs, ["이 강의", "다른 강의", "노트에서 선택한 글"]);
+assert.equal(add.typed.rows, 30);
+assert.deepEqual(add.typed.locked, [18], "the current slide is checked and locked");
+assert.deepEqual(add.typed.checked, [14, 15, 16, 18], "the typed range checks its slides");
+assert.equal(add.typed.note, "슬라이드 수 밖의 번호는 뺐습니다: 40");
+assert.equal(add.typed.summary, "3장 추가 · 약 1.8k 토큰");
+assert.deepEqual([add.typed.time15, add.typed.time16, add.typed.uncertain], ["26:26~28:38", "28:38~28:59?", 1], "times, the uncertain one with a yellow ?");
+assert.equal(add.typed.rangeKept, "14-16, 40", "a re-render of the chips keeps what is typed in the popover");
+assert.ok(add.typed.rereadWhileOpen, "the chips were read again while it was open");
+assert.equal(add.withImage, "3장 추가 · 약 5.0k 토큰", "the slide image adds about 1.1k a slide");
+assert.deepEqual(add.afterThis.chips.map(bare), ["📄 슬라이드 18 · 따라가는 중", "📄 슬라이드 14 ×", "📄 슬라이드 15 ×", "📄 슬라이드 16 ×"]);
+assert.deepEqual(add.afterThis.images, ["L5:14", "L5:15", "L5:16"], "their images are rendered");
+assert.ok(add.afterThis.closed, "추가 closes the popover");
+assert.equal(add.otherLecture, "Alt2Obsidian/CSED423/Lectures/L4.md", "다른 강의 lists the other lectures only");
+assert.equal(add.otherSummary, "브리프와 1장 추가 · 약 0.6k 토큰");
+assert.deepEqual(add.otherBriefRead, ["L4"]);
+assert.deepEqual(add.noSelection, { text: "노트(synced viewer의 노트 창이나 편집기)에서 글을 선택한 뒤 이 탭을 다시 여세요.", disabled: true });
+assert.equal(add.quoted, "선택한 문장입니다.\n둘째 줄", "the selection trimmed");
+assert.deepEqual(add.added.map(bare).slice(1), ["📄 슬라이드 14 ×", "📄 슬라이드 15 ×", "📄 슬라이드 16 ×", "📄 L4 · 슬라이드 2 ×", "📚 L4 브리프 ×", "❝ 선택한 글 ×"]);
+assert.deepEqual(add.headings, ["## L5 · 슬라이드 18", "## L5 · 슬라이드 14", "## L5 · 슬라이드 15", "## L5 · 슬라이드 16", "## L4 · 슬라이드 2"], "the current slide first, then the added ones");
+assert.equal(add.quoteSent, "> 선택한 문장입니다.\n> 둘째 줄", "the quote as [선택한 글]");
+assert.ok(add.otherBriefSent, "the other lecture's brief in the system prompt");
+assert.deepEqual(add.images, [14, 15, 16], "the added slides' images go with the question");
+assert.equal(add.quoteAfterRemove, false, "× takes the quote out");
+console.log("PASS: + 자료 추가: this lecture's list (range, locked current slide, uncertain times, image estimate), another lecture with its brief, the note's selection as a quote; all of it sent and removable with ×");
 assert.deepEqual(at("menu").items, ["브리프 열기", "브리프 다시 만들기", "설정 열기"]);
 const closed = at("closed with ×");
 assert.deepEqual([closed.open, closed.threadKept, closed.events], [false, true, [false]], "× closes the panel; the threads stay in the plugin");

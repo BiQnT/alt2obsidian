@@ -199,4 +199,8 @@ console.log("PASS: Synced Viewer's 💬 질문 button toggles the question panel
 // 2.1.0: the question panel's chips (spec 5.5).
 assert.deepEqual(at("time chip"), { step: "time chip", page: 2, panelOpen: true, flashed: "[00:41]슬라이드 2 둘째 줄", ms: "41000" }, "a time goes to its aligned slide, the transcript panel opens on its line and highlights it");
 assert.deepEqual(at("slide chip"), { step: "slide chip", page: 3 });
-console.log("PASS: Synced Viewer's showTranscriptAt(ms) and gotoSlide(n) for the question panel's chips");
+const sel = at("selection");
+assert.ok(sel.picked.length > 0 && sel.picked === sel.heading, "the note pane's selection");
+assert.equal(sel.keptOnPanelClick, sel.picked, "kept when the click lands outside the pane (the question panel)");
+assert.deepEqual([sel.clearedByOther, sel.clearedInPane], ["", ""], "cleared by a selection elsewhere or a click in the pane");
+console.log("PASS: Synced Viewer's showTranscriptAt(ms) and gotoSlide(n) for the question panel's chips; the note pane's selection for 노트에서 선택한 글");

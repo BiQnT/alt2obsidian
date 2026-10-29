@@ -70,6 +70,7 @@ async function main() {
   const vaultHandlers: Record<string, Array<(...a: unknown[]) => void>> = {};
   const app: any = { workspace: ws, vault: { on: (name: string, cb: (...a: unknown[]) => void) => ((vaultHandlers[name] ??= []).push(cb), { name }) }, metadataCache: {} };
   let memo17 = "시험 범위";
+  let selection = "";
   let materialDelay = 0;
   const calls: any[] = [];
   const settings = structuredClone(DEFAULT_SETTINGS);
@@ -126,6 +127,13 @@ async function main() {
       return { text: answer.pieces.join(""), usage: { calls: 1, inputTokens: 5100, cachedInputTokens: 3000, outputTokens: 400, imagesSent: 0, costUsd: 0 }, model: "claude-sonnet-5-5" };
     },
     chatErrorInfo: (e: Error) => ({ kind: e.message.split(":")[0], message: e.message.split(":").slice(1).join(":").trim() || e.message }),
+    chatSlideList: async (l: any) => (
+      calls.push({ slideList: l.name }),
+      Array.from({ length: 30 }, (_, i) => ({ num: i + 1, gist: `요지 ${i + 1}`, range: i === 14 ? "[26:26~28:38]" : i === 15 ? "[28:38~28:59?]" : "", tokens: { slideText: 100, commentary: 200, transcript: 300, memo: 0 } }))
+    ),
+    chatOtherBrief: async (l: any) => (calls.push({ otherBrief: l.name }), "## 개요\nL4 브리프 본문"),
+    chatSlideImage: async (l: any, n: number) => (calls.push({ image: `${l.name}:${n}` }), { pageNum: n, mimeType: "image/jpeg", base64: "AAAA" }),
+    noteSelection: () => selection,
     lectureChoices: () => [
       { path: L4, name: "L4", subject: "CSED423" },
       { path: L5, name: "L5", subject: "CSED423" },
@@ -382,6 +390,80 @@ async function main() {
   button("덮어쓰기").click();
   await until("rebuilt", () => calls.filter((c) => c.build).length === 2);
   log.push({ step: "brief stale", ...stale, confirm, rebuilt: calls.filter((c) => c.build)[1] });
+
+  // ---- + 자료 추가 (spec 5.7): this lecture's slides, another lecture with its brief, the selected text ----
+  const pop = () => root().querySelector(".alt-to-obs-chat-popover") as HTMLElement | null;
+  const rowNums = (sel: string) => Array.from(pop()!.querySelectorAll<HTMLInputElement>(`input[data-slide]${sel}`)).map((b) => Number(b.dataset.slide));
+  button("+ 자료 추가").click();
+  await until("the slide list", () => !!pop()?.querySelector(".alt-to-obs-chat-popover-row"));
+  const tabs = text(".alt-to-obs-chat-popover-tab");
+  const rangeEl = pop()!.querySelector<HTMLInputElement>(".alt-to-obs-chat-popover-range input")!;
+  rangeEl.value = "14-16, 40";
+  rangeEl.dispatchEvent(new Event("input"));
+  // The note changes while the popover is open: the chips are read again, what is typed stays.
+  const readsBefore = calls.filter((c) => c.briefRead).length;
+  for (const cb of vaultHandlers.modify ?? []) cb(new (TFile as any)(L5));
+  await sleep(500);
+  const typed = {
+    rows: pop()!.querySelectorAll(".alt-to-obs-chat-popover-row").length,
+    locked: rowNums(":disabled"),
+    checked: rowNums(":checked"),
+    note: pop()!.querySelector(".alt-to-obs-chat-popover-note")!.textContent,
+    summary: pop()!.querySelector(".alt-to-obs-chat-popover-summary")!.textContent,
+    time15: pop()!.querySelectorAll(".alt-to-obs-chat-popover-time")[0]?.textContent,
+    time16: pop()!.querySelectorAll(".alt-to-obs-chat-popover-time")[1]?.textContent,
+    uncertain: pop()!.querySelectorAll(".alt-to-obs-chat-uncertain").length,
+    rangeKept: (pop()!.querySelector(".alt-to-obs-chat-popover-range input") as HTMLInputElement).value,
+    rereadWhileOpen: calls.filter((c) => c.briefRead).length > readsBefore,
+  };
+  pop()!.querySelector<HTMLInputElement>('input[data-include="image"]')!.click();
+  const withImage = pop()!.querySelector(".alt-to-obs-chat-popover-summary")!.textContent;
+  button("추가", pop()!).click();
+  await until("the added slides", () => text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("📄 슬라이드 16 ×")) && calls.filter((c) => c.image).length === 3);
+  const afterThis = { chips: text(".alt-to-obs-chat-chip").filter((t) => t!.startsWith("📄")), images: calls.filter((c) => c.image).map((c) => c.image), closed: !pop() };
+  button("+ 자료 추가").click();
+  button("다른 강의", pop()!).click();
+  await until("the other lecture's list", () => !!pop()?.querySelector(".alt-to-obs-chat-popover-row"));
+  const otherLecture = (pop()!.querySelectorAll("select")[1] as HTMLSelectElement).value;
+  pop()!.querySelector<HTMLInputElement>('input[data-slide="2"]')!.click();
+  const otherSummary = pop()!.querySelector(".alt-to-obs-chat-popover-summary")!.textContent;
+  button("추가", pop()!).click();
+  await until("the other lecture added", () => text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("📚 L4 브리프 ×")));
+  button("+ 자료 추가").click();
+  button("노트에서 선택한 글", pop()!).click();
+  const noSelection = { text: pop()!.querySelector(".alt-to-obs-muted")?.textContent, disabled: button("인용으로 넣기", pop()!).disabled };
+  button("취소", pop()!).click();
+  selection = "  선택한 문장입니다.\n둘째 줄  ";
+  button("+ 자료 추가").click();
+  button("노트에서 선택한 글", pop()!).click();
+  const quoted = pop()!.querySelector(".alt-to-obs-chat-popover-quote")!.textContent;
+  button("인용으로 넣기", pop()!).click();
+  await until("the quote chip", () => text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("❝ 선택한 글 ×")));
+  const added = text(".alt-to-obs-chat-chip").filter((t) => /^(📄|📚|❝)/.test(t!));
+  const runsBeforeAdded = runs();
+  input.value = "자료를 더하고 묻기";
+  button("보내기", root().querySelector(".alt-to-obs-chat-composer")!).click();
+  await until("the answer with added material", () => runs() === runsBeforeAdded + 1 && root().querySelector(".alt-to-obs-chat-send")!.textContent === "보내기");
+  const addedReq = calls.filter((c) => c.run).pop().run;
+  button("❝ 선택한 글 ×").click();
+  log.push({
+    step: "add material",
+    tabs,
+    typed,
+    withImage,
+    afterThis,
+    otherLecture,
+    otherSummary,
+    otherBriefRead: calls.filter((c) => c.otherBrief).map((c) => c.otherBrief),
+    noSelection,
+    quoted,
+    added,
+    headings: addedReq.user.match(/^## .+$/gm),
+    quoteSent: addedReq.user.split("[선택한 글]\n")[1]?.split("\n\n")[0] ?? null,
+    otherBriefSent: addedReq.system.includes("[다른 강의 브리프: CSED423 · L4]\n## 개요\nL4 브리프 본문"),
+    images: addedReq.images.map((i: any) => i.pageNum),
+    quoteAfterRemove: text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("❝")),
+  });
 
   // ---- the menu, and the × closes the panel ----
   button("⋯").click();
