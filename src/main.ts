@@ -116,7 +116,9 @@ import { parseAlignment } from "./core/prep/TranscriptAligner";
 import { applyLayoutMigration, MigrationPlan, MigrationResult, planLayoutMigration, VaultFileEntry } from "./vault/layoutMigration";
 import { MigrationModal } from "./ui/MigrationModal";
 import { normalizeConcepts } from "./core/conceptNames";
-import { decidePdfOpen, isLectureFrontmatter, lectureNoteForPdf } from "./ui/pdfOpen";
+import { decidePdfOpen, isLectureFrontmatter, isLectureNote, lectureNoteForPdf } from "./ui/pdfOpen";
+import { BriefFiles, readLectureBrief, updateLectureBrief } from "./brief/briefStore";
+import { isBriefFrontmatter, readFrontmatter } from "./brief/lectureNote";
 import { renderPrompt } from "./prompts/render";
 // The lecture-level note (no slide plan, no transcript sections) is the
 // whole body, so it gets the full-note prompts; the short summary-*.md
@@ -327,6 +329,12 @@ export default class Alt2ObsPlugin extends Plugin {
         if (!checking) void this.attachPdfToActiveNote();
         return true;
       },
+    });
+
+    this.addCommand({
+      id: "rebuild-brief",
+      name: "이 강의 브리프 다시 만들기",
+      callback: () => void this.activeLectureNote().then((path) => this.rebuildBrief(path)).catch((e) => new Notice(`브리프를 만들지 못했습니다: ${e instanceof Error ? e.message : String(e)}`)),
     });
 
     // Register settings tab
@@ -709,7 +717,8 @@ export default class Alt2ObsPlugin extends Plugin {
     const out: VaultNoteInfo[] = [];
     for (const file of this.app.vault.getMarkdownFiles()) {
       const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
-      if (!fm || (!fm.alt_local_id && !fm.alt_id)) continue;
+      // A lecture brief carries the lecture's alt_local_id but is not the lecture.
+      if (!fm || (!fm.alt_local_id && !fm.alt_id) || isBriefFrontmatter(fm)) continue;
       out.push({
         path: file.path,
         title: typeof fm.title === "string" ? fm.title : file.basename,
@@ -1182,6 +1191,7 @@ export default class Alt2ObsPlugin extends Plugin {
     for (const a of args.attachments ?? []) await vm.saveRawFile(a.data, a.path);
     await this.cacheTranscript(args.bundle).catch((e) => console.warn("[Alt2Obs] transcript cache write failed:", e));
     void this.pruneTranscriptCache(args.bundle ? [args.bundle.sourceId] : []).catch(() => undefined);
+    await this.writeBriefAfterImport(notePath, onProgress);
 
     onProgress?.("완료!", 100);
 
@@ -1657,6 +1667,87 @@ export default class Alt2ObsPlugin extends Plugin {
     });
   }
 
+  // ---- lecture brief (2.1.0 spec 4) ----
+
+  /** The vault as the brief store sees it: read, write (vault.process / create, folders made), list a folder. */
+  briefFiles(): BriefFiles {
+    const vault = this.app.vault;
+    return {
+      read: async (path) => {
+        const f = vault.getAbstractFileByPath(path);
+        return f instanceof TFile ? vault.read(f) : null;
+      },
+      write: async (path, text) => {
+        const f = vault.getAbstractFileByPath(path);
+        if (f instanceof TFile) {
+          await vault.process(f, () => text);
+          return;
+        }
+        await this.vaultManager!.ensureFolder(path.replace(/\/[^/]*$/, ""));
+        await vault.create(path, text);
+      },
+      list: async (folder) => vault.getMarkdownFiles().filter((f) => f.path.replace(/\/?[^/]*$/, "") === folder).map((f) => f.path),
+    };
+  }
+
+  /**
+   * The import's brief step, after the note is saved (spec 4.4): the script
+   * part (no tokens) unless the setting "가져올 때 챗봇 브리프 만들기" is off.
+   * "AI 강조점 포함" adds the AI part in a later step; until then it builds
+   * the script part like "스크립트만". A failure never fails the import.
+   */
+  private async writeBriefAfterImport(notePath: string, onProgress?: (stage: string, percent: number) => void): Promise<void> {
+    if (this.data.settings.briefMode === "off") return;
+    try {
+      onProgress?.("챗봇 브리프 만드는 중...", 98);
+      await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate() });
+    } catch (e) {
+      console.warn("[Alt2Obs] lecture brief not written:", e);
+    }
+  }
+
+  /**
+   * The lecture the brief command means: the active lecture note, or the
+   * note of the active Synced Viewer. Null when neither is open.
+   */
+  private async activeLectureNote(): Promise<string | null> {
+    const viewer = this.app.workspace.getActiveViewOfType(SyncedViewerView);
+    const viewerNote = viewer?.getState().mdPath;
+    if (typeof viewerNote === "string" && viewerNote) return viewerNote;
+    const file = this.app.workspace.getActiveFile();
+    if (!file || file.extension !== "md") return null;
+    const text = await this.app.vault.cachedRead(file);
+    return isLectureNote(readFrontmatter(text), text) ? file.path : null;
+  }
+
+  /**
+   * "이 강의 브리프 다시 만들기": the script part built again (no tokens). A
+   * brief the user edited is overwritten only after they confirm.
+   */
+  async rebuildBrief(notePath: string | null): Promise<boolean> {
+    if (!notePath) {
+      new Notice("강의 노트나 synced viewer를 연 뒤 다시 시도하세요.");
+      return false;
+    }
+    const files = this.briefFiles();
+    const state = await readLectureBrief(files, notePath);
+    if (state.status === "edited" || state.status === "edited-stale") {
+      const answer = await choose(
+        this.app,
+        "브리프 다시 만들기",
+        [`직접 고친 브리프입니다: ${state.path}. 다시 만들면 고친 내용이 노트에서 새로 만든 내용으로 바뀝니다.`],
+        [
+          { id: "rebuild", text: "덮어쓰기", cta: true },
+          { id: "cancel", text: "취소" },
+        ]
+      );
+      if (answer !== "rebuild") return false;
+    }
+    const result = await updateLectureBrief(files, notePath, { today: formatDate(), force: true });
+    new Notice(`브리프를 다시 만들었습니다: ${result.path}`);
+    return true;
+  }
+
   // ---- lectures without slides: kind and attached PDF (spec 4.10) ----
 
   /** The note an import of this Alt local note writes (the same rule as an import). */
@@ -1998,7 +2089,10 @@ export default class Alt2ObsPlugin extends Plugin {
     const lectures = new Set(this.vaultLectureNotes().map((v) => v.path));
     return this.app.vault
       .getMarkdownFiles()
-      .filter((f) => !lectures.has(f.path) && this.app.metadataCache.getFileCache(f)?.frontmatter?.source !== "alt2obsidian-verify")
+      .filter((f) => {
+        const fm = this.app.metadataCache.getFileCache(f)?.frontmatter;
+        return !lectures.has(f.path) && fm?.source !== "alt2obsidian-verify" && !isBriefFrontmatter(fm);
+      })
       .map((f) => f.path)
       .sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
   }
@@ -2368,6 +2462,7 @@ export default class Alt2ObsPlugin extends Plugin {
     if (pdfData) {
       pdfPath = await vm.saveRawFile(pdfData, notePath.replace(/\.md$/, ".pdf"));
     }
+    await this.writeBriefAfterImport(notePath, onProgress);
 
     onProgress?.("완료!", 100);
 

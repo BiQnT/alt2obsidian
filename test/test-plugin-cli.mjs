@@ -649,7 +649,17 @@ try {
   assert.equal(plugin.data.usageTotals.calls, lastUsage.calls);
   assert.deepEqual(plugin.data.settings.recentModels["claude-cli"], ["haiku", "sonnet"]);
   assert.equal(plugin.data.recentImports[0].path, record.path);
-  console.log(`PASS: CLI import writes the note (usage frontmatter, meta, tags), concepts and PDF; ${lastUsage.calls} calls recorded`);
+  // The lecture brief's script part after the note (2.1.0 spec 4.4): no call of its own.
+  const briefPath = "Alt2Obsidian/CSED311/Briefs/Lec7 Caches brief.md";
+  const brief = files.get(briefPath);
+  assert.ok(brief, "Briefs/<lecture> brief.md written by the import");
+  assert.match(brief, /^---\nalt2obs_brief: 1\nlecture: "Alt2Obsidian\/CSED311\/Lectures\/Lec7 Caches\.md"\nsubject: "CSED311"\n/);
+  assert.match(brief, /\n# Lec7 Caches brief\n\n## 개요\n[^]*## 슬라이드 지도\n- 1 [^\n]+\n- 2 슬라이드 2의 요지\n/);
+  assert.ok(files.has("Alt2Obsidian/CSED311/Briefs/CSED311 subject brief.md"), "the subject brief too");
+  assert.equal(s.calls().length, prepared.estimate.calls, "the brief made no model call");
+  assert.deepEqual(plugin.vaultLectureNotes().map((v) => v.path), [record.path], "the brief (it carries the Alt id) is not a lecture note");
+  assert.ok(!plugin.verifySourceFiles().includes(briefPath), "nor a note to verify");
+  console.log(`PASS: CLI import writes the note (usage frontmatter, meta, tags), concepts, PDF and the lecture brief; ${lastUsage.calls} calls recorded`);
 
   // Re-import of the same deck: every generated slide reused, memo kept.
   files.set(record.path, note.replace("> [!note] 내 메모\n> \n\n## 📚 슬라이드 3", "> [!note] 내 메모\n> 내 메모 유지\n\n## 📚 슬라이드 3"));
@@ -666,6 +676,31 @@ try {
   assert.equal((files.get(record.path).match(/^alt_id:/gm) ?? []).length, 1, "one alt_id line");
   assert.equal((files.get(record.path).match(/!\[\[[^\]]+\.png\]\]/g) ?? []).length, 1, "the diagram embed is not duplicated by a re-import");
   assert.equal([...files.keys()].filter((k) => k.includes("/Attachments/")).length, 1, "the image is replaced in place");
+  // The re-import wrote a new overview (the fake numbers its calls): the brief follows; the same source again leaves it alone.
+  const rebuilt = files.get(briefPath);
+  assert.notEqual(rebuilt, brief, "the overview changed: the brief is written again");
+  assert.match(rebuilt, /## 개요\n- 요약 텍스트 \(호출 \d+\)\n/);
+  await plugin.writeBriefAfterImport(record.path);
+  assert.equal(files.get(briefPath), rebuilt, "an unchanged source leaves the brief alone");
+  {
+    // A brief step that fails never fails the import; the setting "끔" skips it.
+    const warn = console.warn;
+    const warned = [];
+    console.warn = (...a) => warned.push(a.join(" "));
+    const realRead = plugin.briefFiles;
+    plugin.briefFiles = () => ({ ...realRead.call(plugin), read: async () => { throw new Error("disk gone"); } });
+    const n = s.calls().length;
+    await plugin.runCliImport(await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311"));
+    assert.ok(s.calls().length > n, "the import ran");
+    assert.ok(warned.some((w) => w.includes("lecture brief not written") && w.includes("disk gone")), "the failure is only logged");
+    plugin.briefFiles = realRead;
+    console.warn = warn;
+    plugin.data.settings.briefMode = "off";
+    files.delete(briefPath);
+    await plugin.runCliImport(await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311"));
+    assert.equal(files.has(briefPath), false, "brief mode off: no brief");
+    plugin.data.settings.briefMode = "ai";
+  }
   // A URL import of a lecture whose 1.x note was never migrated updates that note in place.
   {
     const legacy = "Alt2Obsidian/CSED311/Old Lec.md";
@@ -1044,6 +1079,10 @@ try {
     assert.equal(rec.pdfPath, undefined);
     assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf"));
     assert.equal(plugin.vaultLectureNotes().find((v) => v.path === notePath).kind, "transcript");
+    // Its brief: kind transcript, a section map with the heading times.
+    const summaryBrief = files.get(notePath.replace("/Lectures/", "/Briefs/").replace(/\.md$/, " brief.md"));
+    assert.match(summaryBrief, /^kind: "transcript"$/m);
+    assert.match(summaryBrief, /\n## 구간 지도\n- 구간 1 \[00:00~09:5\d\] 구간 1의 요지다\n/);
     // Re-import: every section unchanged (2 calls), the memo kept.
     files.set(notePath, note.replace(/(<!-- alt2obs:section:2 hash:[0-9a-f]{8} end -->\n\n> \[!note\] 내 메모\n> )/, "$1구간 2 메모"));
     const again = await plugin.prepareCliImport("", pv, "CSED423", undefined, { withoutPdf: "summary" });

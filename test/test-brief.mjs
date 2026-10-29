@@ -1,0 +1,351 @@
+/**
+ * Test: the lecture brief's script part (2.1.0 spec 4.1 to 4.4, src/brief):
+ * built from a slide note, a transcript summary note, a lecture-level note
+ * and a 1.x note without gists; wikilinks unwrapped; the three hashes; a
+ * brief the user edited is kept; the AI sections are carried over when the
+ * note changes; the size cap; the subject brief; lecture order; briefs are
+ * never taken for lecture notes. No tokens, no obsidian.
+ * Run: node test/test-brief.mjs
+ */
+
+import assert from "node:assert/strict";
+import { importTs } from "./helpers/bundle-ts.mjs";
+
+const m = await importTs("test/helpers/brief-entry.ts");
+const TODAY = "2026-10-29";
+const NOTE = "Alt2Obsidian/CSED423/Lectures/L5.md";
+
+/** A slide note in the plugin's 2.0 format. */
+function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따라 parse tree와 평가 순서가 달라진다.", overviewExtra = "", crlf = false } = {}) {
+  const slide = (n, body, gist) => [
+    `## 📚 슬라이드 ${n}`,
+    "",
+    `<!-- alt2obs:slide:${n} hash:${String(n).padStart(8, "a")} start -->`,
+    body,
+    "",
+    gist === null ? "" : m.formatSlideMeta(null, gist),
+    `<!-- alt2obs:slide:${n} hash:${String(n).padStart(8, "a")} end -->`,
+    "",
+    "> [!note] 내 메모",
+    "> ",
+    "",
+  ].join("\n");
+  const text = [
+    "---",
+    'title: "L5"',
+    'subject: "CSED423"',
+    "tags: [csed423]",
+    'date: "2026-10-01"',
+    'source: "alt2obsidian"',
+    "slide_count: 3",
+    'alt_created: "2026-09-30"',
+    'alt_local_id: "01a0a896-9b8d-76da-bc0f-02710d511217"',
+    'alt_alignment: "14:1586-1718 15:1718-1739? 16:1739-1800"',
+    "---",
+    "# L5",
+    "",
+    "## 📋 전체 요약",
+    "",
+    "<!-- alt2obs:overview start -->",
+    "### 개요",
+    "Parse tree와 [[Derivation (유도)|Derivation]] 순서가 평가에 주는 영향을 다룬다." + overviewExtra,
+    "",
+    "### 핵심 개념",
+    "- **Leftmost Derivation:** 가장 왼쪽 [[Nonterminal (비단말)]]부터 바꾸는 유도다.",
+    "",
+    "### 흐름",
+    "1. Derivation과 parse tree (슬라이드 14~16)",
+    "<!-- alt2obs:overview end -->",
+    "",
+    slide(14, "같은 문장도 [[Derivation (유도)|유도]]에 따라 다르다.\n\n![[Alt2Obsidian/CSED423/Attachments/L5-14.png]]", gist14),
+    slide(15, "Leftmost Derivation의 parse tree는 곱셈을 먼저 하는 `x - (2 * y)`로 평가된다. 두 번째 문장이다.", null),
+    slide(16, "> [!definition] Rightmost\n> 오른쪽부터 바꾼다.", "Rightmost Derivation은 가장 오른쪽 nonterminal부터 바꾼다."),
+  ].join("\n");
+  return crlf ? text.replace(/\n/g, "\r\n") : text;
+}
+
+// ---- slide note: the format of spec 4.2 ----
+{
+  const script = await m.buildBriefScript(NOTE, slideNote());
+  assert.equal(script.kind, "slides");
+  assert.equal(script.subject, "CSED423");
+  assert.equal(script.altLocalId, "01a0a896-9b8d-76da-bc0f-02710d511217");
+  const text = await m.composeBrief(script, null, TODAY);
+  const fm = m.readFrontmatter(text);
+  assert.deepEqual(
+    Object.keys(fm),
+    ["alt2obs_brief", "lecture", "subject", "alt_local_id", "kind", "source_hash", "ai_hash", "ai_part", "body_hash", "built", "size_tokens"],
+    "the frontmatter keys of spec 4.2, in order"
+  );
+  assert.deepEqual([fm.alt2obs_brief, fm.lecture, fm.kind, fm.ai_hash, fm.ai_part, fm.built], ["1", NOTE, "slides", "", '{status: "none"}', TODAY]);
+  assert.match(fm.source_hash, /^[0-9a-f]{8}$/);
+  assert.match(fm.body_hash, /^[0-9a-f]{8}$/);
+  const body = m.bodyOf(text);
+  assert.equal(
+    body,
+    [
+      "# L5 brief",
+      "",
+      "## 개요",
+      "Parse tree와 Derivation 순서가 평가에 주는 영향을 다룬다.",
+      "",
+      "## 흐름",
+      "1. Derivation과 parse tree (슬라이드 14~16)",
+      "",
+      "## 슬라이드 지도",
+      "- 14 [26:26~28:38] 같은 문장 x - 2 * y도 유도 방식에 따라 parse tree와 평가 순서가 달라진다.",
+      "- 15 [28:38~28:59?] Leftmost Derivation의 parse tree는 곱셈을 먼저 하는 x - (2 * y)로 평가된다.",
+      "- 16 [28:59~30:00] Rightmost Derivation은 가장 오른쪽 nonterminal부터 바꾼다.",
+      "",
+      "## 핵심 개념",
+      "- **Leftmost Derivation:** 가장 왼쪽 Nonterminal (비단말)부터 바꾸는 유도다.",
+      "",
+    ].join("\n")
+  );
+  assert.doesNotMatch(body, /\[\[|\]\]/, "no wikilinks in a brief");
+  assert.equal(Number(fm.size_tokens), m.estimateTextTokens(body));
+  // The gist's escaped "-" (- in the meta comment) comes back as "-"; a slide without a gist uses its first sentence.
+  assert.match(slideNote(), /x \\u002d 2/);
+  // CRLF notes give the same brief.
+  const crlf = await m.buildBriefScript(NOTE, slideNote({ crlf: true }));
+  assert.equal(crlf.sourceHash, script.sourceHash, "CRLF and LF: the same source");
+  console.log("PASS: slide note brief: frontmatter keys, 개요/흐름/슬라이드 지도/핵심 개념, times from alt_alignment (uncertain ?), gist escapes, first-sentence fallback, no wikilinks");
+}
+
+// ---- transcript summary note and lecture-level note (spec 4.2 kinds) ----
+{
+  const section = (n, start, end, summary, gist) => [
+    `## ⏱ 구간 ${n} [${start}~${end}]`,
+    "",
+    `<!-- alt2obs:section:${n} hash:${String(n).padStart(8, "b")} start -->`,
+    summary,
+    "",
+    m.formatSlideMeta(null, gist),
+    `<!-- alt2obs:section:${n} hash:${String(n).padStart(8, "b")} end -->`,
+    "",
+    "> [!note] 내 메모",
+    "> 내가 쓴 메모",
+    "",
+  ].join("\n");
+  const transcript = [
+    "---",
+    'title: "6강"',
+    'subject: "CSED5"',
+    'alt_kind: "transcript"',
+    "section_count: 2",
+    "---",
+    "# 6강",
+    "",
+    "## 📋 전체 요약",
+    "",
+    "<!-- alt2obs:overview start -->",
+    "### 개요",
+    "캐시를 다룬다.",
+    "<!-- alt2obs:overview end -->",
+    "",
+    section(1, "00:00", "12:03", "- 구간 1 요약 [00:10]", "캐시의 필요성을 설명한다."),
+    section(2, "12:03", "1:02:03", "- 구간 2 요약", "캐시 일관성을 다룬다."),
+  ].join("\n");
+  const t = await m.buildBriefScript("Alt2Obsidian/CSED5/Lectures/6강.md", transcript);
+  assert.equal(t.kind, "transcript");
+  const tb = m.bodyOf(await m.composeBrief(t, null, TODAY));
+  assert.match(tb, /## 구간 지도\n- 구간 1 \[00:00~12:03\] 캐시의 필요성을 설명한다\.\n- 구간 2 \[12:03~1:02:03\] 캐시 일관성을 다룬다\./);
+  assert.doesNotMatch(tb, /슬라이드 지도|## 흐름/, "no slide map, and no flow when the overview has none");
+
+  // A lecture-level note without an overview block: the first 1500 characters of its managed block.
+  const long = "강의 내용 문장이다. ".repeat(200);
+  const lecture = ['---', 'title: "L1"', "---", "<!-- alt2obsidian:start -->", "# L1", "", `[[캐시]]를 배운다. ${long}`, "<!-- alt2obsidian:end -->", "", "## 내 메모", ""].join("\n");
+  const l = await m.buildBriefScript("Alt2Obsidian/CSED311/L1.md", lecture);
+  assert.equal(l.kind, "lecture");
+  assert.equal(l.subject, "CSED311", "no subject in the frontmatter: the subject folder's name");
+  const headChars = Array.from(l.overview).length;
+  assert.ok(headChars <= 1500 && headChars >= 1490, `cut at 1500 characters (${headChars} after trimming)`);
+  assert.ok(l.overview.startsWith("캐시를 배운다."), "title line dropped, links unwrapped");
+  const lb = m.bodyOf(await m.composeBrief(l, null, TODAY));
+  assert.match(lb, /^# L1 brief\n\n## 개요\n캐시를 배운다\./);
+  assert.doesNotMatch(lb, /지도|## 흐름/);
+  // A lecture-level note with an overview block: overview and key concepts only.
+  const withOverview = lecture.replace("<!-- alt2obsidian:start -->", "<!-- alt2obs:overview start -->\n### 개요\n짧은 개요다.\n\n### 핵심 개념\n- **A:** a다.\n\n### 흐름\n1. x\n<!-- alt2obs:overview end -->\n\n<!-- alt2obsidian:start -->");
+  const lo = m.bodyOf(await m.composeBrief(await m.buildBriefScript("Alt2Obsidian/CSED311/L1.md", withOverview), null, TODAY));
+  assert.equal(lo, "# L1 brief\n\n## 개요\n짧은 개요다.\n\n## 핵심 개념\n- **A:** a다.\n");
+  console.log("PASS: transcript note brief (구간 지도 with heading times, h:mm:ss) and lecture-level note brief (managed block head, or overview and key concepts only)");
+}
+
+// ---- 1.x note without gists or alignment; an overview without the three headings ----
+{
+  const old = [
+    "---",
+    'title: "Old"',
+    "---",
+    "# Old",
+    "",
+    "<!-- alt2obs:overview start -->",
+    "자유 형식 요약이다. [[A|에이]]를 다룬다.",
+    "<!-- alt2obs:overview end -->",
+    "",
+    "## 📚 슬라이드 1",
+    "<!-- alt2obs:slide:1 hash:11111111 start -->",
+    "## 소제목\n\n- **첫 불릿:** 첫 문장이다. 둘째 문장이다.",
+    "<!-- alt2obs:slide:1 hash:11111111 end -->",
+    "",
+    "## 📚 슬라이드 2",
+    "<!-- alt2obs:slide:2 hash:22222222 start -->",
+    "",
+    "<!-- alt2obs:slide:2 hash:22222222 end -->",
+    "",
+    "## 📚 슬라이드 3",
+    "<!-- alt2obs:slide:3 hash:33333333 start -->",
+    "가".repeat(120),
+    "<!-- alt2obs:slide:3 hash:33333333 end -->",
+  ].join("\n");
+  const s = await m.buildBriefScript("V/S/Old.md", old);
+  const b = m.bodyOf(await m.composeBrief(s, null, TODAY));
+  assert.equal(b, `# Old brief\n\n## 개요\n자유 형식 요약이다. 에이를 다룬다.\n\n## 슬라이드 지도\n- 1 첫 불릿: 첫 문장이다.\n- 3 ${"가".repeat(70)}\n`, "no times without an alignment; an empty slide is left out; the fallback is cut to 70 characters");
+  assert.equal(m.unwrapWikilinks("[[A]] [[B|b]] [[C\\|c]] [[D#h|d]] ![[x.png]] ![a](b.png)"), "A b c d  ");
+  console.log("PASS: 1.x note without gists or alignment (first sentence, empty slide left out), free-form overview, wikilink forms");
+}
+
+// ---- hashes, user edits, AI sections carried over (spec 4.3, 4.4) ----
+{
+  const script = await m.buildBriefScript(NOTE, slideNote());
+  const again = await m.buildBriefScript(NOTE, slideNote());
+  assert.equal(again.sourceHash, script.sourceHash, "the same note: the same source hash");
+  const changedGist = await m.buildBriefScript(NOTE, slideNote({ gist14: "바뀐 요지다." }));
+  assert.notEqual(changedGist.sourceHash, script.sourceHash, "a gist changed: another source hash");
+  const changedOverview = await m.buildBriefScript(NOTE, slideNote({ overviewExtra: " 한 문장 더." }));
+  assert.notEqual(changedOverview.sourceHash, script.sourceHash, "the overview changed");
+  const realigned = await m.buildBriefScript(NOTE, slideNote().replace("16:1739-1800", "16:1739-1900"));
+  assert.notEqual(realigned.sourceHash, script.sourceHash, "the alignment changed");
+
+  const first = await m.planBriefUpdate(null, script, { today: TODAY });
+  assert.equal(first.action, "write");
+  assert.equal(await m.isEditedBrief(first.text), false);
+  assert.deepEqual(await m.planBriefUpdate(first.text, again, { today: "2026-11-01" }), { action: "keep", reason: "same" }, "unchanged source: the file is not touched");
+  assert.equal(await m.briefStatus(first.text, again), "ok");
+  assert.equal(await m.briefStatus(first.text, changedGist), "outdated");
+  assert.equal(await m.briefStatus(null, script), "missing");
+
+  // The user edits the body: kept; the panel says "edited", or "edited-stale" once the note changed.
+  const edited = first.text.replace("## 핵심 개념", "## 핵심 개념\n- 내가 더한 줄");
+  assert.equal(await m.isEditedBrief(edited), true);
+  assert.equal(await m.briefStatus(edited, again), "edited");
+  assert.equal(await m.briefStatus(edited, changedGist), "edited-stale");
+  assert.deepEqual(await m.planBriefUpdate(edited, changedGist, { today: TODAY }), { action: "keep", reason: "edited" }, "an import never overwrites the user's brief");
+  const forced = await m.planBriefUpdate(edited, changedGist, { today: TODAY, force: true });
+  assert.equal(forced.action, "write", "새로 만들기 (after the user confirms) overwrites");
+  assert.doesNotMatch(forced.text, /내가 더한 줄/);
+  // Only the body counts: Obsidian rewriting the frontmatter is not an edit; line ends and trailing space are not either.
+  assert.equal(await m.isEditedBrief(first.text.replace('alt2obs_brief: 1', 'alt2obs_brief: 1\ncssclasses: []')), false);
+  assert.equal(await m.isEditedBrief(first.text.replace(/\n/g, "\r\n") + "\n\n"), false);
+  assert.equal(await m.isEditedBrief("# 내 파일\n"), true, "a file that is not a brief counts as the user's");
+
+  // AI sections (phase 2 writes them) are carried over when only the script part changes.
+  const ai = "## 강조점\n- [33:10] 슬라이드 17: 작은 수끼리 먼저 더한다.\n\n## 헷갈리기 쉬운 점\n- 평가 순서와 유도 순서는 다르다.";
+  const withAi = await m.composeBrief(script, { sections: ai, hash: "3b10c2d4", part: '{status: "ok", model: "claude-haiku-5-5", input: 4120, output: 760}' }, TODAY);
+  assert.equal(await m.isEditedBrief(withAi), false);
+  assert.equal(m.aiSectionsOf(m.bodyOf(withAi)), ai);
+  const next = await m.planBriefUpdate(withAi, changedGist, { today: TODAY });
+  assert.equal(next.action, "write");
+  const nfm = m.readFrontmatter(next.text);
+  assert.deepEqual([nfm.ai_hash, nfm.ai_part, nfm.source_hash], ["3b10c2d4", '{status: "ok", model: "claude-haiku-5-5", input: 4120, output: 760}', changedGist.sourceHash]);
+  assert.ok(m.bodyOf(next.text).endsWith(`## 핵심 개념\n- **Leftmost Derivation:** 가장 왼쪽 Nonterminal (비단말)부터 바꾸는 유도다.\n\n${ai}\n`), "script part rebuilt, AI sections after it as they were");
+  assert.match(m.bodyOf(next.text), /- 14 \[26:26~28:38\] 바뀐 요지다\./);
+  // The chat body: no frontmatter, no title.
+  assert.ok(m.briefChatBody(withAi).startsWith("## 개요\nParse tree와"));
+  console.log("PASS: source/AI/body hashes, unchanged source left alone, user edits detected and kept (forced rebuild overwrites), AI sections carried with ai_hash and ai_part");
+}
+
+// ---- size cap: gists cut to 40 characters past 4000 tokens ----
+{
+  const slides = Array.from({ length: 120 }, (_, i) => {
+    const n = i + 1;
+    return [`## 📚 슬라이드 ${n}`, `<!-- alt2obs:slide:${n} hash:${String(n).padStart(8, "c")} start -->`, "해설.", m.formatSlideMeta(null, `${n}번 슬라이드의 요지는 이렇게 아주 길게 이어지는 한 문장으로 쓰여 있어서 마흔 자를 훌쩍 넘는다.`), `<!-- alt2obs:slide:${n} hash:${String(n).padStart(8, "c")} end -->`].join("\n");
+  });
+  const big = ["---", 'title: "Big"', "---", "# Big", "", ...slides].join("\n");
+  const script = await m.buildBriefScript("V/S/Lectures/Big.md", big);
+  assert.ok(m.estimateTextTokens(m.renderBriefBody(script, "", null)) > m.BRIEF_TOKEN_CAP, "the full body is over the cap");
+  const body = m.bodyOf(await m.composeBrief(script, null, TODAY));
+  const line = body.split("\n").find((l) => l.startsWith("- 1 "));
+  assert.equal(line, `- 1 ${Array.from("1번 슬라이드의 요지는 이렇게 아주 길게 이어지는 한 문장으로 쓰여 있어서 마흔 자를 훌쩍 넘는다.").slice(0, 40).join("").trim()}`);
+  console.log("PASS: a brief over 4000 tokens cuts its slide map gists to 40 characters");
+}
+
+// ---- the store: write on import, subject brief, lecture order (spec 4.4) ----
+{
+  const files = new Map();
+  const writes = [];
+  const store = {
+    read: async (p) => (files.has(p) ? files.get(p) : null),
+    write: async (p, t) => void (writes.push(p), files.set(p, t)),
+    list: async (folder) => [...files.keys()].filter((p) => p.startsWith(folder + "/") && !p.slice(folder.length + 1).includes("/") && p.endsWith(".md")),
+  };
+  const L = (n) => `Alt2Obsidian/CSED423/Lectures/L${n}.md`;
+  files.set(L(5), slideNote());
+  files.set(L(10), slideNote().replace('alt_created: "2026-09-30"', 'alt_created: "2026-10-20"'));
+  files.set(L(4), slideNote().replace('alt_created: "2026-09-30"', 'alt_created: "2026-09-23"').replace("### 개요\nParse tree", "### 개요\nLexer와 Parser의 역할을 나눈다. 그 다음 문장. Parse tree"));
+  const r5 = await m.updateLectureBrief(store, L(5), { today: TODAY });
+  assert.deepEqual(r5, { path: "Alt2Obsidian/CSED423/Briefs/L5 brief.md", result: "written" });
+  assert.equal(m.briefPathForNote(L(5)), r5.path);
+  assert.equal(m.briefPathForNote("Alt2Obsidian/CSED311/old.md"), "Alt2Obsidian/CSED311/Briefs/old brief.md", "1.x layout: Briefs/ under the subject folder");
+  assert.equal(m.subjectBriefPath("Alt2Obsidian/CSED423", "CSED423"), "Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md");
+  assert.equal(m.chatsFolderForNote(L(5)), "Alt2Obsidian/CSED423/Chats");
+  assert.ok(m.SUBJECT_SUBDIRS.includes("Briefs") && m.SUBJECT_SUBDIRS.includes("Chats"), "the 1.x migration leaves Briefs/ and Chats/ alone");
+  await m.updateLectureBrief(store, L(10), { today: TODAY });
+  await m.updateLectureBrief(store, L(4), { today: TODAY });
+  const subject = files.get("Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md");
+  assert.equal(
+    m.bodyOf(subject),
+    "# CSED423 subject brief\n\n" +
+      "- L4 (2026-09-23, 슬라이드 3장): Lexer와 Parser의 역할을 나눈다.\n" +
+      "- L5 (2026-09-30, 슬라이드 3장): Parse tree와 Derivation 순서가 평가에 주는 영향을 다룬다.\n" +
+      "- L10 (2026-10-20, 슬라이드 3장): Parse tree와 Derivation 순서가 평가에 주는 영향을 다룬다.\n",
+    "by alt_created; the first sentence of each 개요"
+  );
+  assert.deepEqual(Object.keys(m.readFrontmatter(subject)), ["alt2obs_subject_brief", "subject", "body_hash", "built"]);
+
+  // Importing again without a change writes nothing.
+  writes.length = 0;
+  assert.deepEqual(await m.updateLectureBrief(store, L(5), { today: "2026-11-02" }), { path: r5.path, result: "same" });
+  assert.deepEqual(writes, [], "no write, no call");
+  // The note changed: the brief and the subject brief are written again.
+  files.set(L(5), slideNote({ gist14: "새 요지다.", overviewExtra: "" }).replace("Parse tree와 [[Derivation", "Derivation 순서를 본다. Parse tree와 [[Derivation"));
+  await m.updateLectureBrief(store, L(5), { today: TODAY });
+  assert.deepEqual(writes, [r5.path, "Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md"]);
+  assert.match(m.bodyOf(files.get("Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md")), /- L5 \(2026-09-30, 슬라이드 3장\): Derivation 순서를 본다\./);
+  // The user edits the subject brief: it is never overwritten.
+  const ownSubject = files.get("Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md") + "- 내 줄\n";
+  files.set("Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md", ownSubject);
+  files.set(L(10), files.get(L(10)).replace("Rightmost Derivation은", "바뀐 Rightmost Derivation은"));
+  writes.length = 0;
+  await m.updateLectureBrief(store, L(10), { today: TODAY });
+  assert.deepEqual(writes, ["Alt2Obsidian/CSED423/Briefs/L10 brief.md"], "the edited subject brief is kept");
+  // The lecture brief the user edited is kept on an import too; the state says so.
+  const own = files.get(r5.path).replace("## 흐름", "## 흐름\n- 내 메모");
+  files.set(r5.path, own);
+  files.set(L(5), files.get(L(5)).replace("새 요지다.", "또 바뀐 요지다."));
+  assert.equal((await m.updateLectureBrief(store, L(5), { today: TODAY })).result, "edited");
+  assert.equal(files.get(r5.path), own);
+  const state = await m.readLectureBrief(store, L(5));
+  assert.equal(state.status, "edited-stale");
+  assert.match(state.body, /^## 개요/);
+  await assert.rejects(m.readLectureBrief(store, L(9)), /강의 노트를 찾지 못했습니다/, "a note that is not there");
+  console.log("PASS: brief store: Briefs/<lecture> brief.md, subject brief by lecture order with one line each, unchanged import writes nothing, user edits kept (lecture and subject brief)");
+}
+
+// ---- lecture order, neighbours; briefs are not lecture notes ----
+{
+  const list = [{ name: "L10" }, { name: "L2" }, { name: "L1" }];
+  assert.deepEqual(m.orderLectures(list).map((l) => l.name), ["L1", "L2", "L10"], "natural order by name");
+  const dated = [{ name: "B", altCreated: "2026-09-02" }, { name: "A", altCreated: "2026-09-09" }];
+  assert.deepEqual(m.orderLectures(dated).map((l) => l.name), ["B", "A"], "by alt_created when every lecture has it");
+  assert.deepEqual(m.neighbourLectures("L2", list), { prev: "L1", next: "L10" });
+  assert.deepEqual(m.neighbourLectures("L1", list), { prev: null, next: "L2" });
+  const briefFm = m.readFrontmatter(await m.composeBrief(await m.buildBriefScript(NOTE, slideNote()), null, TODAY));
+  assert.equal(m.isBriefFrontmatter(briefFm), true);
+  assert.equal(m.isLectureFrontmatter(briefFm), false, "a brief carries alt_local_id but is not a lecture note");
+  assert.equal(m.isLectureNote(briefFm, "<!-- alt2obs:slide:1 hash:aaaaaaaa start -->"), false);
+  assert.equal(m.isLectureNote({ alt_local_id: "x" }, null), true);
+  assert.equal(m.isLectureNote({}, "<!-- alt2obs:section:2 hash:bbbbbbbb start -->"), true, "section markers");
+  assert.equal(m.isLectureNote({ title: "x" }, "plain"), false);
+  console.log("PASS: lecture order (alt_created or natural name order), previous and next lecture, briefs never count as lecture notes");
+}
