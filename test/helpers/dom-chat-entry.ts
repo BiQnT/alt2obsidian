@@ -134,6 +134,10 @@ async function main() {
     chatOtherBrief: async (l: any) => (calls.push({ otherBrief: l.name }), "## 개요\nL4 브리프 본문"),
     chatSlideImage: async (l: any, n: number) => (calls.push({ image: `${l.name}:${n}` }), { pageNum: n, mimeType: "image/jpeg", base64: "AAAA" }),
     noteSelection: () => selection,
+    saveChatMemo: async (target: any, question: string, answer: string, shorten: boolean) => {
+      calls.push({ memo: { target, question, answer: answer.slice(0, 9), shorten } });
+      if (shorten) throw new Error("브리프 모델이 없습니다");
+    },
     lectureChoices: () => [
       { path: L4, name: "L4", subject: "CSED423" },
       { path: L5, name: "L5", subject: "CSED423" },
@@ -274,6 +278,15 @@ async function main() {
   await sleep(50);
   log.push({ step: "chips navigate", gone: calls.filter((c) => c.go).map((c) => `${c.go}:${c.n ?? c.ms}`), role: a.querySelector(".alt-to-obs-chat-cite.is-slide")!.getAttribute("role"), outsideRole: a.querySelector(".alt-to-obs-chat-cite.is-outside")!.getAttribute("role") });
 
+  // ---- 메모에 저장 (spec 5.9): the question's first focus slide, as it is or cut to three lines ----
+  const noticesBeforeMemo = ((window as any).__notices ?? []).length;
+  button("메모에 저장", a.closest(".alt-to-obs-chat-turn")!).click();
+  const memoMenu = (Menu as any).shown;
+  memoMenu.items[0].click();
+  memoMenu.items[1].click();
+  await until("both memo saves", () => calls.filter((c) => c.memo).length === 2 && ((window as any).__notices ?? []).length >= noticesBeforeMemo + 3);
+  log.push({ step: "memo", items: memoMenu.items.map((i: any) => i.title), saved: calls.filter((c) => c.memo).map((c) => c.memo), notices: ((window as any).__notices ?? []).slice(noticesBeforeMemo) });
+
   // ---- closing the panel does not stop an answer (spec 5.4); a panel opened again shows it ----
   const original = answer;
   const slow = { ...answer, pieces: ["닫아도 ", "계속 ", "쓴다 [슬라이드 17]."] };
@@ -314,7 +327,7 @@ async function main() {
   button("보내기", root().querySelector(".alt-to-obs-chat-composer")!).click();
   await until("the fourth answer", () => calls.filter((c) => c.run).length === 4 && !root().querySelector(".alt-to-obs-chat-a.is-streaming"));
   const third = calls.filter((c) => c.run).pop().run.user as string;
-  log.push({ step: "stopped", answers: text(".alt-to-obs-chat-a").map((t) => t!.slice(0, 12)), history: third.split("[이번 자료]")[0], hasStopped: third.includes("더 길게") });
+  log.push({ step: "stopped", memoButtons: text(".alt-to-obs-chat-actions button").filter((t) => t === "메모에 저장").length, answers: text(".alt-to-obs-chat-a").map((t) => t!.slice(0, 12)), history: third.split("[이번 자료]")[0], hasStopped: third.includes("더 길게") });
 
   // ---- Enter, then 다시 생성 while the question is being prepared: one run; the input keeps its focus ----
   materialDelay = 150;

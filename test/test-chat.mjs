@@ -4,7 +4,9 @@
  * lines (30 seconds or 200 characters, cleaned, capped by overlap), the
  * earlier conversation folded to 3,000 tokens, the estimate, the slide
  * range input, the "+ 자료 추가" plan (range and checks, the 8-slide limit,
- * the estimate), the grounding marks of an answer, the threads (LRU and the
+ * the estimate), "메모에 저장" (the memo callout filled, appended to or
+ * made, CRLF kept, kept by a re-import), the grounding marks of an answer,
+ * the threads (LRU and the
  * "슬라이드 N으로 이동" dividers) and the note parts the panel reads.
  * No tokens, no obsidian.
  * Run: node test/test-chat.mjs
@@ -393,6 +395,49 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.equal(m.quoteOf("  a\r\nb  "), "a\nb", "a quote is trimmed, line ends made LF");
   assert.equal(Array.from(m.quoteOf("가".repeat(2000))).length, m.QUOTE_MAX_CHARS, "cut at 1,500 characters");
   console.log("PASS: + 자료 추가: checks and a typed range together without the current slide, numbers outside the deck said, 8 added slides at most (every lecture's), row tokens with the toggles (image about 1.1k, off by default), time marks with the uncertain ?, quotes cut at 1,500 characters");
+}
+
+// ---- 메모에 저장 (spec 5.9) ----
+{
+  const slide = (n, body, after) => [`## 📚 슬라이드 ${n}`, "", `<!-- alt2obs:slide:${n} hash:0000000${n} start -->`, body, `<!-- alt2obs:slide:${n} hash:0000000${n} end -->`, "", ...after].join("\n");
+  const note = (s2After, body2 = "슬라이드 2 해설.") => ["---", 'title: "L5"', "---", "# L5", "", slide(1, "슬라이드 1 해설.", ["> [!note] 내 메모", "> "]), "", slide(2, body2, s2After), "", slide(3, "슬라이드 3 해설.", ["> [!note] 내 메모", "> "]), ""].join("\n");
+  const entry = { question: "왜 작은 수부터\n더해?", answer: "정밀도를 지키기 때문이다 [슬라이드 2].\n\n큰 수에 더하면 사라진다.", date: "2026-10-29" };
+  const lines = ["> **Q.** 왜 작은 수부터 더해?", "> **A.** 정밀도를 지키기 때문이다 [슬라이드 2].", ">", "> 큰 수에 더하면 사라진다. (질문 2026-10-29)"];
+  assert.deepEqual(m.memoEntryLines(entry), lines, "Q on one line, A's first line, the rest behind > (blank as >), the date at the end");
+  assert.deepEqual(m.memoEntryLines({ question: "q", answer: "코드:\n```js\nx\n```", date: "2026-10-29" }).slice(-2), ["> ```", "> (질문 2026-10-29)"], "a closing fence stays alone on its line");
+
+  const empty = note(["> [!note] 내 메모", "> "]);
+  const filled = m.insertMemo(empty, { unit: "slide", num: 2 }, entry);
+  assert.equal(filled, note(["> [!note] 내 메모", ...lines]), "an empty callout: its blank line becomes the entry");
+  const kept = note(["> [!note] 내 메모", "> 시험 범위", "", "내가 쓴 글"]);
+  assert.equal(m.insertMemo(kept, { unit: "slide", num: 2 }, entry), note(["> [!note] 내 메모", "> 시험 범위", ">", ...lines, "", "내가 쓴 글"]), "text in the callout: appended after a > line");
+  assert.equal(m.insertMemo(note(["내가 쓴 글"]), { unit: "slide", num: 2 }, entry), note(["> [!note] 내 메모", ...lines, "", "내가 쓴 글"]), "no callout: made after the end marker and a blank line");
+  const bare = note([]).replace("<!-- alt2obs:slide:2 hash:00000002 end -->\n\n", "<!-- alt2obs:slide:2 hash:00000002 end -->\n");
+  assert.ok(m.insertMemo(bare, { unit: "slide", num: 2 }, entry).includes(["<!-- alt2obs:slide:2 hash:00000002 end -->", "", "> [!note] 내 메모", ...lines, "", "## 📚 슬라이드 3"].join("\n")), "a blank line before the next heading too");
+  const twice = m.insertMemo(filled, { unit: "slide", num: 2 }, { ...entry, question: "또?" });
+  const entryText = (q) => [`**Q.** ${q}`, "**A.** 정밀도를 지키기 때문이다 [슬라이드 2].", "", "큰 수에 더하면 사라진다. (질문 2026-10-29)"].join("\n");
+  const after2 = (t) => t.split("<!-- alt2obs:slide:2 hash:00000002 end -->")[1].split("## 📚 슬라이드 3")[0];
+  assert.equal(m.memoText(after2(twice)), `${entryText("왜 작은 수부터 더해?")}\n\n${entryText("또?")}`, "a second save adds a second entry; the panel reads both as the memo");
+  // The managed blocks never change; slide 1 and 3 never change.
+  const managed = (t) => [...t.matchAll(/start -->\n([\s\S]*?)\n<!--/g)].map((x) => x[1]);
+  assert.deepEqual(managed(twice), managed(empty));
+  assert.equal(twice.split("## 📚 슬라이드 3")[1], empty.split("## 📚 슬라이드 3")[1]);
+  // The last slide: its free space ends at the failure list.
+  const last = m.insertMemo(note(["> [!note] 내 메모", "> "]) + "<!-- alt2obs:failures start -->\n## ⚠️ 처리 실패\n<!-- alt2obs:failures end -->\n", { unit: "slide", num: 3 }, entry);
+  assert.ok(last.includes(["<!-- alt2obs:slide:3 hash:00000003 end -->", "", "> [!note] 내 메모", ...lines].join("\n")));
+  // CRLF notes stay CRLF.
+  const crlf = m.insertMemo(empty.replace(/\n/g, "\r\n"), { unit: "slide", num: 2 }, entry);
+  assert.equal(crlf, filled.replace(/\n/g, "\r\n"));
+  // A transcript section.
+  const sections = ["## ⏱ 구간 2 [12:00~24:00]", "", "<!-- alt2obs:section:2 hash:abcdef12 start -->", "요약", "<!-- alt2obs:section:2 hash:abcdef12 end -->", "", "> [!note] 내 메모", ">", ""].join("\n");
+  assert.equal(m.insertMemo(sections, { unit: "section", num: 2 }, entry), sections.replace("> [!note] 내 메모\n>\n", ["> [!note] 내 메모", ...lines, ""].join("\n")));
+  assert.equal(m.insertMemo(empty, { unit: "slide", num: 9 }, entry), null, "a slide not in the note");
+  assert.equal(m.insertMemo(empty, { unit: "section", num: 2 }, entry), null);
+  // A re-import (mergeNote) keeps what was saved.
+  const merged = m.mergeNote(twice, note(["> [!note] 내 메모", "> "], "다시 만든 슬라이드 2 해설.")).merged;
+  assert.ok(merged.includes("다시 만든 슬라이드 2 해설."), "the commentary is replaced");
+  assert.equal(after2(merged), after2(twice), "the saved memo stays under its slide");
+  console.log("PASS: 메모에 저장: an empty memo callout filled, one with text appended to after >, a missing one made after the end marker; managed blocks and other slides untouched; CRLF kept; sections too; a re-import (mergeNote) keeps it");
 }
 
 // ---- note parts the panel reads ----

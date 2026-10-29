@@ -846,11 +846,48 @@ try {
     if (savedCodex.detection) plugin.data.cliDetection.codex = savedCodex.detection;
     delete process.env.FAKE_CLI_TEXT;
     assert.deepEqual(plugin.lectureChoices().map((c) => [c.name, c.subject]), [["Lec7 Caches", "CSED311"]]);
+    // 메모에 저장 (spec 5.9): as it is (no call) or cut to three lines by the brief task (one call); a re-import keeps both.
+    const memoAt = { notePath: record.path, unit: "slide", num: 2 };
+    const callsBeforeMemo = s.calls().length;
+    await plugin.saveChatMemo(memoAt, "캐시가 뭐야?", "캐시는 가까운 저장소다 [슬라이드 2].\n\n자주 쓰는 데이터를 둔다.", false);
+    assert.equal(s.calls().length, callsBeforeMemo, "답변 그대로: no call");
+    process.env.FAKE_CLI_TEXT = "캐시는 가까운 저장소다 [슬라이드 2].\n자주 쓰는 데이터를 둔다.\n접근이 빨라진다.";
+    const usageBeforeMemo = plugin.data.usageTotals.calls;
+    await plugin.saveChatMemo(memoAt, "캐시가 뭐야?", "아주 긴 답 [슬라이드 2].", true);
+    delete process.env.FAKE_CLI_TEXT;
+    assert.equal(s.calls().length, callsBeforeMemo + 1, "세 줄로 줄여서: one call");
+    const memoCall = s.calls()[callsBeforeMemo];
+    assert.ok(memoCall.stdin.includes("[질문]\n캐시가 뭐야?\n\n[답]\n아주 긴 답 [슬라이드 2]."), "prompts/chat-memo.md with the question and the answer");
+    assert.equal(plugin.data.settings.tasks.brief.model, "haiku");
+    assert.equal(memoCall.argv[memoCall.argv.indexOf("--model") + 1], "haiku", "the brief task's model");
+    assert.equal(plugin.data.usageTotals.calls, usageBeforeMemo + 1, "its usage counted");
+    const today = new Date().toISOString().slice(0, 10);
+    const savedMemo = [
+      "> [!note] 내 메모",
+      "> 내 메모 유지",
+      ">",
+      "> **Q.** 캐시가 뭐야?",
+      "> **A.** 캐시는 가까운 저장소다 [슬라이드 2].",
+      ">",
+      `> 자주 쓰는 데이터를 둔다. (질문 ${today})`,
+      ">",
+      "> **Q.** 캐시가 뭐야?",
+      "> **A.** 캐시는 가까운 저장소다 [슬라이드 2].",
+      "> 자주 쓰는 데이터를 둔다.",
+      `> 접근이 빨라진다. (질문 ${today})`,
+      "",
+      "## 📚 슬라이드 3",
+    ].join("\n");
+    assert.ok(files.get(record.path).includes(savedMemo), "both saved in slide 2's memo, after what was there");
+    assert.equal((await plugin.chatMaterial(lecture, 2)).memo.split("**Q.**").length, 3, "the panel reads them as the memo");
+    await assert.rejects(plugin.saveChatMemo({ ...memoAt, num: 99 }, "q", "a", false), /슬라이드 99의 메모 자리를 찾지 못했습니다/);
+    await plugin.runCliImport(await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311"), { onConfirmUpdate: async () => true });
+    assert.ok(files.get(record.path).includes(savedMemo), "a re-import keeps the saved memo");
     // After unload no question is sent.
     const gone = await makePlugin(undefined);
     gone.plugin.onunload();
     await assert.rejects(gone.plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }), /플러그인이 꺼져/);
-    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, the + 자료 추가 slide list, another lecture's brief built in memory, the editor's right-click items, a streamed chat call on the chat task (usage counted, not as a lecture), error kinds, nothing sent after unload");
+    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, the + 자료 추가 slide list, another lecture's brief built in memory, the editor's right-click items, 메모에 저장 (kept by a re-import), a streamed chat call on the chat task (usage counted, not as a lecture), error kinds, nothing sent after unload");
   }
 
   // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).

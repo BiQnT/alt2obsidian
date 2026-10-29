@@ -128,8 +128,9 @@ import { commentaryText, fmString, isBriefFrontmatter, memoText, parseLectureNot
 import { aiOf, briefChatBody, buildBriefScript, composeBrief, isEditedBrief, neighbourLectures, subjectOfNote } from "./brief/lectureBrief";
 import { ChatBriefState, ChatLecture, ChatView, SlideMaterial } from "./ui/ChatView";
 import { ChatPanelController, VIEW_TYPE_CHAT } from "./ui/chatPanel";
-import { ChatErrorInfo, ChatRunRequest, ChatRunResult, ThreadStore } from "./chat/threads";
+import { ChatErrorInfo, ChatMemoTarget, ChatRunRequest, ChatRunResult, ThreadStore } from "./chat/threads";
 import { formatTranscriptLines, segmentsInSpans, TEXTLESS_PAGE_CHARS, TimedText, transcriptLines } from "./chat/contextPack";
+import { insertMemo } from "./chat/memoSave";
 import { SLIDE_TEXT_STANDIN_TOKENS, SlideRow } from "./chat/addMaterial";
 import { isAuthError, isUsageLimitError } from "./llm/cli/CliProviderBase";
 import { renderPrompt } from "./prompts/render";
@@ -142,6 +143,7 @@ import lectureNoteEnhanceMaterialTemplate from "../prompts/lecture-note-enhance-
 import lectureNoteFromMaterialTemplate from "../prompts/lecture-note-from-material.md";
 import lectureNoteSystemTemplate from "../prompts/lecture-note.system.md";
 import subjectDetectionTemplate from "../prompts/subject-detection.md";
+import chatMemoTemplate from "../prompts/chat-memo.md";
 
 /** A CLI import after prep and estimate, before any LLM call. */
 export interface PreparedImport {
@@ -2314,6 +2316,43 @@ export default class Alt2ObsPlugin extends Plugin {
     if (view instanceof SyncedViewerView) return view.getSelectedText();
     if (view instanceof MarkdownView) return view.editor.getSelection();
     return "";
+  }
+
+  /**
+   * "메모에 저장" (spec 5.9): the answer as it is (no tokens), or cut to
+   * three lines by the brief task's model (one call, its usage in the
+   * totals), in the memo callout of the slide the question was about.
+   */
+  async saveChatMemo(target: ChatMemoTarget, question: string, answer: string, shorten: boolean): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(target.notePath);
+    if (!(file instanceof TFile)) throw new Error(`강의 노트를 찾지 못했습니다: ${target.notePath}`);
+    const text = shorten ? await this.threeLineMemo(question, answer) : answer;
+    let found = true;
+    await this.app.vault.process(file, (note) => {
+      const next = insertMemo(note, target, { question, answer: text, date: formatDate() });
+      found = next !== null;
+      return next ?? note;
+    });
+    if (!found) throw new Error(`노트에서 ${target.unit === "slide" ? "슬라이드" : "구간"} ${target.num}의 메모 자리를 찾지 못했습니다.`);
+  }
+
+  private async threeLineMemo(question: string, answer: string): Promise<string> {
+    const task = this.data.settings.tasks.brief;
+    if (!isCliProvider(task.provider)) throw new Error("세 줄로 줄일 LLM이 설정되어 있지 않습니다. 설정의 '작업별 모델'에서 '챗봇 브리프'를 고르세요.");
+    const job = createJobDir();
+    const usage = new UsageTracker();
+    const controller = new AbortController();
+    this.activeJobs.add(controller);
+    try {
+      const llm = await this.providerFor("brief", job, usage, controller.signal, task);
+      const text = (await llm.generateText(renderPrompt(chatMemoTemplate, { question, answer }), { signal: controller.signal })).trim();
+      if (!text) throw new Error("모델이 빈 답을 돌려줬습니다.");
+      return text;
+    } finally {
+      this.activeJobs.delete(controller);
+      removeJobDir(job);
+      if (usage.total().calls > 0) await this.recordUsage(usage, false).catch((e) => console.warn("[Alt2Obs] usage record failed:", e));
+    }
   }
 
   /** The plugin's settings tab (Obsidian's settings window has no public API for this). */

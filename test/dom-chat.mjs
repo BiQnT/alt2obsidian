@@ -8,11 +8,13 @@
  * with a slide range, the panel follows the viewer's slide (and 📌 stops
  * it), chips turn material on and off, Enter does not send while a Korean
  * syllable is composed, the answer streams as text and then renders as
- * Markdown with grounding chips (none inside code), a slide change puts a
+ * Markdown with grounding chips (none inside code) and "메모에 저장"
+ * (as it is or cut to three lines), a slide change puts a
  * divider in the thread, a stopped answer stays marked and is not sent
  * again, the error cards, the per-question cap asked in the panel, "+ 자료
  * 추가" (this lecture's slides, another lecture with its brief, the
- * note's selection as a quote) and the brief cards (missing, edited and
+ * note's selection as a quote), the right-click questions (pinned on a
+ * slide, a selection as a quote) and the brief cards (missing, edited and
  * stale).
  *
  * Needs a Chromium binary, so it is not part of `npm test`:
@@ -189,6 +191,16 @@ assert.deepEqual(nav.gone, ["slide:17", `time:${29 * 60_000 + 10_000}`, "slide:1
 assert.deepEqual([nav.role, nav.outsideRole], ["button", null]);
 console.log("PASS: grounding chips navigate: slide chips to the slide, time chips to the transcript time");
 
+// 메모에 저장 (spec 5.9).
+const memo = at("memo");
+assert.deepEqual(memo.items, ["답변 그대로 · 토큰 0", "세 줄로 줄여서 · 브리프 모델 1회"]);
+assert.deepEqual(memo.saved, [
+  { target: { notePath: "Alt2Obsidian/CSED423/Lectures/L5.md", unit: "slide", num: 17 }, question: "왜 작은 수부터 더해?", answer: "부동소수점 덧셈은", shorten: false },
+  { target: { notePath: "Alt2Obsidian/CSED423/Lectures/L5.md", unit: "slide", num: 17 }, question: "왜 작은 수부터 더해?", answer: "부동소수점 덧셈은", shorten: true },
+], "the slide the question was about, the question and the whole answer");
+assert.deepEqual(memo.notices, ["답변을 세 줄로 줄여 슬라이드 17 메모에 저장합니다...", "슬라이드 17 메모에 저장했습니다.", "메모에 저장하지 못했습니다: 브리프 모델이 없습니다"]);
+console.log("PASS: 메모에 저장: 답변 그대로 (토큰 0) or 세 줄로 줄여서 into the memo of the question's slide, a failure said in a notice");
+
 // A run outlives the panel (spec 5.4).
 const outlived = at("outlived the panel");
 assert.equal(outlived.aborted, false, "closing the panel does not stop the answer");
@@ -203,6 +215,7 @@ assert.match(moved.chip, /^📄 슬라이드 18 · 따라가는 중/);
 const stopped = at("stopped");
 assert.equal(stopped.answers[2], "받은 부분", "the partial answer stays");
 assert.equal(stopped.hasStopped, false, "a stopped turn is not in the earlier conversation");
+assert.equal(stopped.memoButtons, 3, "메모에 저장 under the three finished answers, not the stopped one");
 assert.match(stopped.history, /^\[이전 대화\]\nQ \(슬라이드 17 기준\): 왜 작은 수부터 더해\?\nA: 부동소수점 덧셈은/);
 console.log("PASS: a followed slide change puts a divider in the thread; a stopped answer stays as (중지됨) and is left out of the next question's history");
 

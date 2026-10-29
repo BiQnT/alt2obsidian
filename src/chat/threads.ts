@@ -15,6 +15,10 @@
 
 import type { EffortLevel, ImageInput, LLMUsage, ProviderId, TaskLLMSetting } from "../types";
 import type { HistoryTurn } from "./contextPack";
+import type { MemoTarget } from "./memoSave";
+
+/** The note and unit whose memo "메모에 저장" writes. */
+export type ChatMemoTarget = MemoTarget & { notePath: string };
 
 export const MAX_THREADS = 10;
 
@@ -62,6 +66,8 @@ export interface ChatTurn {
   label: string;
   /** The slide the question was about (the conversation's place for the dividers), null for none. */
   slide: number | null;
+  /** Where "메모에 저장" writes: the question's first focus slide (spec 5.9); none without one. */
+  memoTarget?: ChatMemoTarget;
   answer: string;
   status: "streaming" | "done" | "stopped" | "error";
   error?: ChatErrorInfo;

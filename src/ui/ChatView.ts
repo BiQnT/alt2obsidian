@@ -48,7 +48,7 @@ import {
   TimedText,
   transcriptLines,
 } from "../chat/contextPack";
-import { ChatErrorInfo, ChatThread, ChatTurn, historyOf, moveThreadTo, newTurnId, ThreadEvent, ThreadStore, TurnRunner, turnsOf } from "../chat/threads";
+import { ChatErrorInfo, ChatMemoTarget, ChatThread, ChatTurn, historyOf, moveThreadTo, newTurnId, ThreadEvent, ThreadStore, TurnRunner, turnsOf } from "../chat/threads";
 import { defaultTaskSetting, estimateEffort, isCliProvider, ModelCatalog, modelName } from "../settings/llmSettings";
 import { renderModelPicker } from "./modelPicker";
 import { AddRequest, renderAddPopover } from "./addMaterialPopover";
@@ -125,6 +125,8 @@ export interface ChatHost extends TurnRunner {
   chatSlideImage(lecture: ChatLecture, slide: number): Promise<ImageInput | null>;
   /** The text selected in the note the reader is on (the viewer's note pane or an editor), "" for none. */
   noteSelection(): string;
+  /** "메모에 저장": the answer as it is, or cut to three lines (`shorten`, the brief task's model), in the unit's memo callout. */
+  saveChatMemo(target: ChatMemoTarget, question: string, answer: string, shorten: boolean): Promise<void>;
   openSettings(): void;
   openLectureViewer(notePath: string): Promise<void>;
   /** A slide chip (spec 5.5): the slide in the lecture's Synced Viewer (opened if needed), else its heading in the note. */
@@ -1107,6 +1109,16 @@ export class ChatView extends ItemView {
     const again = actions.createEl("button", { text: "다시 생성" });
     again.disabled = !!this.runningTurn();
     again.addEventListener("click", () => this.rerun(turn));
+    const target = turn.memoTarget;
+    if (target && turn.status === "done" && turn.answer.trim()) {
+      const save = actions.createEl("button", { text: "메모에 저장" });
+      save.addEventListener("click", (evt) => {
+        const menu = new Menu();
+        menu.addItem((i) => i.setTitle("답변 그대로 · 토큰 0").onClick(() => void this.saveMemo(target, turn, false)));
+        menu.addItem((i) => i.setTitle("세 줄로 줄여서 · 브리프 모델 1회").onClick(() => void this.saveMemo(target, turn, true)));
+        menu.showAtMouseEvent(evt);
+      });
+    }
     if (turn.usage && turn.provider) {
       const u = turn.usage;
       const model = turn.model ? modelName(turn.provider, turn.model, this.host.modelCatalog()) : "CLI 기본 모델";
@@ -1114,6 +1126,17 @@ export class ChatView extends ItemView {
         cls: "alt-to-obs-chat-usage",
         text: `${model} · ${turn.effort || "CLI 기본값"} · 입력 ${k(u.inputTokens)} (캐시 ${k(u.cachedInputTokens)}) · 출력 ${k(u.outputTokens)}`,
       });
+    }
+  }
+
+  private async saveMemo(target: ChatMemoTarget, turn: ChatTurn, shorten: boolean): Promise<void> {
+    const where = `${target.unit === "slide" ? "슬라이드" : "구간"} ${target.num}`;
+    if (shorten) new Notice(`답변을 세 줄로 줄여 ${where} 메모에 저장합니다...`);
+    try {
+      await this.host.saveChatMemo(target, turn.question, turn.answer, shorten);
+      new Notice(`${where} 메모에 저장했습니다.`);
+    } catch (e) {
+      new Notice(`메모에 저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -1311,11 +1334,13 @@ export class ChatView extends ItemView {
         thread.items.push({ kind: "note", text: `앞 대화 ${pack.folded}개를 줄였습니다` });
         thread.folded = pack.folded;
       }
+      const first = this.focusTargets().find((t) => this.materials.has(this.materialKey(t.slide, t.lecture)));
       const turn: ChatTurn = {
         id: newTurnId(),
         question,
         label: materialLabel(focus, this.chips.brief && !!this.brief?.body),
         slide: this.currentSlide(),
+        memoTarget: first ? { notePath: first.lecture.notePath, unit: "slide", num: first.slide } : undefined,
         answer: "",
         status: "streaming",
         request: { task, system: pack.system, user: pack.user, images },
