@@ -149,7 +149,7 @@ for (const r of results) {
   // A block row (notice, cards, model note, help) is the block, full width.
   assert.equal(r.blocks.length, r.path === "new" ? 4 : 0, `${at}: block rows`);
   for (const b of r.blocks) assert.ok(b.childW >= b.w - 40 - 2, `${at}: the block spans its row (${b.childW} of ${b.w}px)`);
-  assert.equal(r.catalogReads, 1, `${at}: the model list is read once for the four task rows`);
+  assert.equal(r.catalogReads, 1, `${at}: the model list is read once for the task rows`);
 }
 console.log(`PASS: settings tab under Obsidian 1.14 setting rules at panes of ${WIDTHS.join(", ")}px, drawn by display() and from the definitions: no collapsed description, CLI card descriptions span the card, no empty gaps (the plain Setting control collapses to ${results[0].controlDescW}px)`);
 

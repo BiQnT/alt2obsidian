@@ -11,8 +11,10 @@ export type ProviderId = "claude-cli" | "codex-cli";
  * Tasks with their own provider, model and effort (spec 4.2). `alignment`
  * is the optional LLM check of low-confidence transcript alignment (off =
  * "none", the default); `verification` judges the user's notes (spec 4.6).
+ * 2.1.0: `chat` answers the question panel, `brief` writes the AI part of
+ * the lecture brief (2.1.0 spec 4.5, 7.2).
  */
-export type TaskId = "commentary" | "concepts" | "alignment" | "verification";
+export type TaskId = "commentary" | "concepts" | "alignment" | "verification" | "chat" | "brief";
 
 /** "" = the CLI's own default. Mapped per CLI (Claude `--effort`, Codex `model_reasoning_effort`). */
 export type EffortLevel = "" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -43,12 +45,19 @@ export interface GenerationOptions {
   onlyChangedSlides: boolean;
 }
 
+/**
+ * The lecture brief an import writes (2.1.0 spec 4.4): none, the script part
+ * only (no tokens), or the script part with the AI emphasis part.
+ */
+export type BriefMode = "off" | "script" | "ai";
+
 export interface Alt2ObsSettings {
   baseFolderPath: string;
   language: "ko" | "en";
   /**
    * 2 since 2.0.0-beta.1, 3 since 2.0.0-beta.4 (CLI providers only, empty
-   * model and effort filled with the task defaults). Missing = 1.x data.
+   * model and effort filled with the task defaults), 4 since 2.1.0 (the
+   * `chat` and `brief` tasks). Missing = 1.x data.
    */
   settingsVersion: number;
   /** Absolute path overrides. "" = auto-detect (spec 4.2 rule 1). */
@@ -79,7 +88,16 @@ export interface Alt2ObsSettings {
    * in a normal tab opens the Synced Viewer for the pair instead.
    */
   openPdfInViewer: boolean;
+  /** "가져올 때 챗봇 브리프 만들기" (2.1.0 spec 8). */
+  briefMode: BriefMode;
+  /** "질문당 토큰 상한": a question estimated above this (input plus output) is confirmed in the panel first. */
+  chatTokenCap: number;
+  /** "질문에 내 메모 포함": the memo chip starts on. */
+  chatIncludeMemo: boolean;
 }
+
+/** Lowest "질문당 토큰 상한" the settings accept. */
+export const MIN_CHAT_TOKEN_CAP = 2000;
 
 export const DEFAULT_GENERATION: GenerationOptions = {
   batchSize: 8,
@@ -101,12 +119,16 @@ export const TASK_DEFAULTS: Record<ProviderId, Record<TaskId, { model: string; e
     concepts: { model: "haiku", effort: "low" },
     alignment: { model: "haiku", effort: "low" },
     verification: { model: "sonnet", effort: "medium" },
+    chat: { model: "sonnet", effort: "low" },
+    brief: { model: "haiku", effort: "low" },
   },
   "codex-cli": {
     commentary: { model: "", effort: "medium" },
     concepts: { model: "", effort: "low" },
     alignment: { model: "", effort: "low" },
     verification: { model: "", effort: "medium" },
+    chat: { model: "", effort: "low" },
+    brief: { model: "", effort: "low" },
   },
 };
 
@@ -116,6 +138,8 @@ export const CLAUDE_TASK_DEFAULTS: Record<TaskId, TaskLLMSetting> = {
   concepts: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].concepts },
   alignment: { provider: "none", model: "", effort: "" },
   verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification },
+  chat: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].chat },
+  brief: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].brief },
 };
 
 export const DEFAULT_SETTINGS: Alt2ObsSettings = {
@@ -123,7 +147,7 @@ export const DEFAULT_SETTINGS: Alt2ObsSettings = {
   // vaults and the Skill keep writing to the same place.
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
-  settingsVersion: 3,
+  settingsVersion: 4,
   claudePath: "",
   codexPath: "",
   cliTimeoutSec: 300,
@@ -135,6 +159,9 @@ export const DEFAULT_SETTINGS: Alt2ObsSettings = {
   notionFetchTool: "",
   hideManagedComments: true,
   openPdfInViewer: true,
+  briefMode: "ai",
+  chatTokenCap: 20000,
+  chatIncludeMemo: true,
 };
 
 /** 1.x exam period tag. Exam summaries are gone (spec G5); old records may still carry it. */
@@ -328,6 +355,12 @@ export interface CliDetection {
   featuresOk?: boolean;
   /** Older than the tested version, with every flag present. */
   warning?: string;
+  /**
+   * The optional flags its help lists (OPTIONAL_CLI_FEATURES, e.g. Claude's
+   * `--include-partial-messages` for streamed answers). Missing on data from
+   * before the check: the CLI is looked up again once.
+   */
+  optionalFeatures?: string[];
 }
 
 export interface PluginData {
@@ -428,6 +461,18 @@ export interface TextCallOptions {
   signal?: AbortSignal;
 }
 
+/** A streamed text call (the question panel, 2.1.0 spec 7.1). */
+export interface StreamTextOptions {
+  systemPrompt?: string;
+  images?: ImageInput[];
+  signal?: AbortSignal;
+  /**
+   * Each piece of the answer as it arrives. A provider that cannot stream
+   * calls it once with the whole answer when the call ends.
+   */
+  onDelta(text: string): void;
+}
+
 export interface JsonCallOptions {
   systemPrompt?: string;
   /** JSON Schema the CLI enforces (Claude `--json-schema`, Codex `--output-schema`). */
@@ -452,6 +497,8 @@ export interface LLMProvider {
     options?: JsonCallOptions
   ): Promise<T>;
   estimateTokens(text: string): number;
+  /** Text call whose answer arrives in pieces (`onDelta`); resolves with the whole answer. */
+  streamText?(prompt: string, options: StreamTextOptions): Promise<string>;
   /** Releases temp files (CLI providers). */
   dispose?(): void;
 }
