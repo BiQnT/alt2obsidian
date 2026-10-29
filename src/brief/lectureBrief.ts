@@ -5,7 +5,7 @@
 //
 //   ---
 //   alt2obs_brief: 1
-//   lecture: "<note path>"   subject, alt_local_id, kind
+//   lecture: "<note path>"   subject, lecture_alt_local_id, kind
 //   source_hash: "<8 hex>"   what the script part was built from
 //   ai_hash: ""              input of the AI part ("" without one)
 //   ai_part: {status: "none"}
@@ -130,7 +130,11 @@ export async function buildBriefScript(notePath: string, noteText: string): Prom
   // A lecture-level note: overview and key concepts only (spec 4.2).
   if (parts.kind === "lecture") ov.flow = "";
   const map: MapEntry[] = parts.units
-    .map((u) => ({ num: u.num, range: unitRange(parts.kind, u, alignment), text: (u.gist ?? firstSentence(commentaryText(u.managed), FALLBACK_GIST_CHARS)).replace(/\s+/g, " ").trim() }))
+    .map((u) => ({
+      num: u.num,
+      range: unitRange(parts.kind, u, alignment),
+      text: (u.gist !== null ? unwrapWikilinks(u.gist) : firstSentence(commentaryText(u.managed), FALLBACK_GIST_CHARS)).replace(/\s+/g, " ").trim(),
+    }))
     .filter((e) => e.text.length > 0);
   const source = [
     `alt2obs_brief:${BRIEF_FORMAT_VERSION}`,
@@ -202,7 +206,8 @@ export async function composeBrief(script: BriefScript, ai: CarriedAi | null, to
     "alt2obs_brief: 1",
     `lecture: ${JSON.stringify(script.lecture)}`,
     `subject: ${JSON.stringify(script.subject)}`,
-    `alt_local_id: ${JSON.stringify(script.altLocalId)}`,
+    // Never `alt_local_id`: that key finds the lecture note (imports, the Skill's lookup, Dataview).
+    `lecture_alt_local_id: ${JSON.stringify(script.altLocalId)}`,
     `kind: ${JSON.stringify(script.kind)}`,
     `source_hash: ${JSON.stringify(script.sourceHash)}`,
     `ai_hash: ${JSON.stringify(ai?.hash ?? "")}`,
@@ -245,7 +250,10 @@ export type BriefDecision = { action: "write"; text: string } | { action: "keep"
  * when the source did not change; the script part again with the old AI
  * sections when it did; nothing for a brief the user edited. `force` (the
  * user asked to rebuild) writes in every case; an edited brief's AI
- * sections are not carried then (they are the user's text).
+ * sections are not carried then (they are the user's text). Otherwise the
+ * AI part's frontmatter (ai_hash, ai_part) is carried even without
+ * sections, so an AI part with nothing to say or a failed one is not made
+ * again for nothing.
  */
 export async function planBriefUpdate(existing: string | null, script: BriefScript, opts: { today: string; force?: boolean }): Promise<BriefDecision> {
   if (existing === null) return { action: "write", text: await composeBrief(script, null, opts.today) };
@@ -253,8 +261,8 @@ export async function planBriefUpdate(existing: string | null, script: BriefScri
   if (edited && !opts.force) return { action: "keep", reason: "edited" };
   const fm = readFrontmatter(existing);
   if (!opts.force && fmString(fm, "source_hash") === script.sourceHash) return { action: "keep", reason: "same" };
-  const sections = edited ? "" : aiSectionsOf(bodyOf(existing));
-  const ai: CarriedAi | null = sections ? { sections, hash: fmString(fm, "ai_hash"), part: fmString(fm, "ai_part") } : null;
+  // The AI part goes along as it is (sections, hash and status, even an empty or failed one), unless the user edited the brief.
+  const ai: CarriedAi | null = edited ? null : { sections: aiSectionsOf(bodyOf(existing)), hash: fmString(fm, "ai_hash"), part: fmString(fm, "ai_part") };
   return { action: "write", text: await composeBrief(script, ai, opts.today) };
 }
 

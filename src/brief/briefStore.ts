@@ -77,10 +77,10 @@ export async function updateSubjectBrief(files: BriefFiles, notePath: string, su
   const folder = briefPathForNote(notePath).replace(/\/?[^/]*$/, "");
   const entries: SubjectBriefEntry[] = [];
   for (const path of await files.list(folder)) {
-    if (path === target || path.endsWith(" subject brief.md")) continue;
     const text = await files.read(path);
     if (!text) continue;
     const fm = readFrontmatter(text);
+    // Lecture briefs only (the subject brief has alt2obs_subject_brief instead).
     const lecture = fm.alt2obs_brief !== undefined ? fmString(fm, "lecture") : "";
     const note = lecture ? await files.read(lecture) : null;
     if (!note) continue;

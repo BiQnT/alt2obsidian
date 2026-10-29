@@ -47,10 +47,11 @@ export interface LectureNoteParts {
 const FRONTMATTER = /^\uFEFF?---\n([\s\S]*?)\n---(?:\n|$)/;
 
 /**
- * `key: value` lines of the frontmatter (JSON string values decoded, other
- * values as written, a `"..."` that is not JSON without its quotes). Enough
- * for the scalar keys the plugin writes; a list or a nested mapping is
- * kept as its text.
+ * `key: value` lines of the frontmatter (JSON string values decoded, a
+ * `"..."` that is not JSON without its quotes, a single-quoted YAML scalar
+ * unquoted with its doubled quotes made single, as Obsidian's Properties
+ * writes them, other values as written). Enough for the scalar keys the
+ * plugin writes; a list or a nested mapping is kept as its text.
  */
 export function readFrontmatter(text: string): Record<string, unknown> {
   const block = toLf(text).match(FRONTMATTER);
@@ -67,7 +68,7 @@ export function readFrontmatter(text: string): Record<string, unknown> {
       } catch {
         v = raw.replace(/^"(.*)"$/, "$1");
       }
-    }
+    } else if (/^'.*'$/.test(raw)) v = raw.slice(1, -1).replace(/''/g, "'");
     fm[m[1]] = v;
   }
   return fm;

@@ -74,9 +74,11 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   const fm = m.readFrontmatter(text);
   assert.deepEqual(
     Object.keys(fm),
-    ["alt2obs_brief", "lecture", "subject", "alt_local_id", "kind", "source_hash", "ai_hash", "ai_part", "body_hash", "built", "size_tokens"],
+    ["alt2obs_brief", "lecture", "subject", "lecture_alt_local_id", "kind", "source_hash", "ai_hash", "ai_part", "body_hash", "built", "size_tokens"],
     "the frontmatter keys of spec 4.2, in order"
   );
+  assert.equal(fm.lecture_alt_local_id, "01a0a896-9b8d-76da-bc0f-02710d511217");
+  assert.ok(!/^alt_local_id:/m.test(text), "never alt_local_id: that key finds the lecture note (imports, the Skill, Dataview)");
   assert.deepEqual([fm.alt2obs_brief, fm.lecture, fm.kind, fm.ai_hash, fm.ai_part, fm.built], ["1", NOTE, "slides", "", '{status: "none"}', TODAY]);
   assert.match(fm.source_hash, /^[0-9a-f]{8}$/);
   assert.match(fm.body_hash, /^[0-9a-f]{8}$/);
@@ -202,6 +204,11 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   const b = m.bodyOf(await m.composeBrief(s, null, TODAY));
   assert.equal(b, `# Old brief\n\n## 개요\n자유 형식 요약이다. 에이를 다룬다.\n\n## 슬라이드 지도\n- 1 첫 불릿: 첫 문장이다.\n- 3 ${"가".repeat(70)}\n`, "no times without an alignment; an empty slide is left out; the fallback is cut to 70 characters");
   assert.equal(m.unwrapWikilinks("[[A]] [[B|b]] [[C\\|c]] [[D#h|d]] ![[x.png]] ![a](b.png)"), "A b c d  ");
+  // Obsidian's Properties writes single-quoted scalars.
+  assert.deepEqual(m.readFrontmatter("---\nsubject: 'CSED''423'\nalt_alignment: '1:0-30 2:30-60?'\nn: 3\n---\nx"), { subject: "CSED'423", alt_alignment: "1:0-30 2:30-60?", n: "3" });
+  // A gist with a link (a model may write one) is unwrapped too.
+  const linked = old.replace("<!-- alt2obs:slide:2 hash:22222222 start -->\n", `<!-- alt2obs:slide:2 hash:22222222 start -->\n본문\n\n${m.formatSlideMeta(null, "[[Pipeline (파이프라인)|Pipeline]]의 단계를 나눈다.")}\n`);
+  assert.match(m.bodyOf(await m.composeBrief(await m.buildBriefScript("V/S/Old.md", linked), null, TODAY)), /\n- 2 Pipeline의 단계를 나눈다\.\n/);
   console.log("PASS: 1.x note without gists or alignment (first sentence, empty slide left out), free-form overview, wikilink forms");
 }
 
@@ -250,6 +257,10 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.deepEqual([nfm.ai_hash, nfm.ai_part, nfm.source_hash], ["3b10c2d4", '{status: "ok", model: "claude-haiku-5-5", input: 4120, output: 760}', changedGist.sourceHash]);
   assert.ok(m.bodyOf(next.text).endsWith(`## 핵심 개념\n- **Leftmost Derivation:** 가장 왼쪽 Nonterminal (비단말)부터 바꾸는 유도다.\n\n${ai}\n`), "script part rebuilt, AI sections after it as they were");
   assert.match(m.bodyOf(next.text), /- 14 \[26:26~28:38\] 바뀐 요지다\./);
+  // An AI part that found nothing (or failed) has no sections: its hash and status still go along.
+  const failed = await m.composeBrief(script, { sections: "", hash: "77aa77aa", part: '{status: "failed", model: "claude-haiku-5-5"}' }, TODAY);
+  const kept = m.readFrontmatter((await m.planBriefUpdate(failed, changedGist, { today: TODAY })).text);
+  assert.deepEqual([kept.ai_hash, kept.ai_part], ["77aa77aa", '{status: "failed", model: "claude-haiku-5-5"}'], "ai_hash and ai_part carried without sections");
   // The chat body: no frontmatter, no title.
   assert.ok(m.briefChatBody(withAi).startsWith("## 개요\nParse tree와"));
   console.log("PASS: source/AI/body hashes, unchanged source left alone, user edits detected and kept (forced rebuild overwrites), AI sections carried with ai_hash and ai_part");
@@ -303,6 +314,13 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   );
   assert.deepEqual(Object.keys(m.readFrontmatter(subject)), ["alt2obs_subject_brief", "subject", "body_hash", "built"]);
 
+  // A lecture whose name ends in " subject" is still a lecture: the frontmatter decides, not the file name.
+  files.set("Alt2Obsidian/CSED423/Lectures/Intro subject.md", slideNote().replace('alt_created: "2026-09-30"', 'alt_created: "2026-09-01"'));
+  await m.updateLectureBrief(store, "Alt2Obsidian/CSED423/Lectures/Intro subject.md", { today: TODAY });
+  assert.match(m.bodyOf(files.get("Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md")), /^- Intro subject \(2026-09-01, 슬라이드 3장\):/m);
+  files.delete("Alt2Obsidian/CSED423/Lectures/Intro subject.md");
+  files.delete("Alt2Obsidian/CSED423/Briefs/Intro subject brief.md");
+  await m.updateSubjectBrief(store, L(5), "CSED423", TODAY);
   // Importing again without a change writes nothing.
   writes.length = 0;
   assert.deepEqual(await m.updateLectureBrief(store, L(5), { today: "2026-11-02" }), { path: r5.path, result: "same" });
@@ -342,7 +360,8 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.deepEqual(m.neighbourLectures("L1", list), { prev: null, next: "L2" });
   const briefFm = m.readFrontmatter(await m.composeBrief(await m.buildBriefScript(NOTE, slideNote()), null, TODAY));
   assert.equal(m.isBriefFrontmatter(briefFm), true);
-  assert.equal(m.isLectureFrontmatter(briefFm), false, "a brief carries alt_local_id but is not a lecture note");
+  assert.equal(m.isLectureFrontmatter(briefFm), false, "a brief is not a lecture note");
+  assert.equal(m.isLectureFrontmatter({ ...briefFm, alt_local_id: "x" }), false, "not even with alt_local_id (a brief written before the key was renamed)");
   assert.equal(m.isLectureNote(briefFm, "<!-- alt2obs:slide:1 hash:aaaaaaaa start -->"), false);
   assert.equal(m.isLectureNote({ alt_local_id: "x" }, null), true);
   assert.equal(m.isLectureNote({}, "<!-- alt2obs:section:2 hash:bbbbbbbb start -->"), true, "section markers");
