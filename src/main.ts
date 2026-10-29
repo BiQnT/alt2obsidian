@@ -974,6 +974,7 @@ export default class Alt2ObsPlugin extends Plugin {
     return createTaskProvider(setting, {
       settings: this.data.settings,
       resolveBin: (name) => this.resolveBin(name),
+      cliFeatures: (name) => this.data.cliDetection[name]?.optionalFeatures ?? [],
       workDir,
       usage,
       signal,
@@ -2203,7 +2204,13 @@ export default class Alt2ObsPlugin extends Plugin {
         checkFeatures: true,
         readVersion: (bin) => readCliVersion(bin),
       });
-      const detection: CliDetection = { path: resolved.path, version: resolved.version ?? "", detectedAt: new Date().toISOString(), featuresOk: true };
+      const detection: CliDetection = {
+        path: resolved.path,
+        version: resolved.version ?? "",
+        detectedAt: new Date().toISOString(),
+        featuresOk: true,
+        optionalFeatures: resolved.optional ?? [],
+      };
       if (resolved.warning) detection.warning = resolved.warning;
       this.data.cliDetection[name] = detection;
       delete this.cliErrors[name];
@@ -2244,8 +2251,8 @@ export default class Alt2ObsPlugin extends Plugin {
   async resolveBin(name: CliName): Promise<string> {
     const configured = (name === "claude" ? this.data.settings.claudePath : this.data.settings.codexPath).trim();
     const cached = this.data.cliDetection[name];
-    // A cached path from before the feature check is checked again.
-    if (cached && (!configured || configured === cached.path) && isExecutable(cached.path) && cached.featuresOk) return cached.path;
+    // A cached path from before the feature check (or the optional feature check of 2.1.0) is checked again.
+    if (cached && (!configured || configured === cached.path) && isExecutable(cached.path) && cached.featuresOk && cached.optionalFeatures) return cached.path;
     const found = await this.detectCli(name, !!cached && !cached.featuresOk);
     if (!found) throw new Error(this.cliErrors[name] || cliNotFoundMessage(name));
     return found.path;

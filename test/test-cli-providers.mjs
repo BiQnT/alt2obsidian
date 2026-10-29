@@ -200,7 +200,7 @@ const quiet = async (fn) => {
     // The login shell finds the one missing a flag first (like /opt/homebrew/bin before nvm): skipped.
     process.env.FAKE_SHELL_RESULT = lacking;
     const r = await m.resolveCliBinary("claude", { ...opts, extraDirs: [join(dir, "nvm")] });
-    assert.deepEqual(r, { path: cur, source: "common-path", version: "2.1.283 (Claude Code)" });
+    assert.deepEqual(r, { path: cur, source: "common-path", version: "2.1.283 (Claude Code)", optional: ["--include-partial-messages"] });
     assert.equal((await m.resolveCliBinary("claude", { ...opts, cachedPath: lacking, extraDirs: [join(dir, "nvm"), join(dir, "local")] })).path, newer, "the newest usable one wins");
     // Older than tested but every flag present: used, with a warning only.
     const soft = await m.resolveCliBinary("claude", { ...opts, extraDirs: [join(dir, "npm")] });
@@ -385,4 +385,123 @@ for (const [label, Provider, bin] of [
   assert.deepEqual(x.usage, { calls: 1, inputTokens: 50, cachedInputTokens: 20, outputTokens: 5, imagesSent: 0, costUsd: 0 });
   assert.throws(() => m.parseCodexEvents('{"type":"turn.failed","error":{"message":"quota"}}'), /quota/);
   console.log("PASS: Claude JSON result and Codex JSONL parsing (usage with cache reads); a raw \\| in a JSON string is repaired, other invalid escapes still fail");
+}
+
+// ---- streamed answers (2.1.0 spec 7.1) ----
+
+// runCli's line callback: every stdout line as it arrives, the last piece without a line break at the end.
+{
+  const lines = [];
+  const out = await m.runCli({
+    bin: process.execPath,
+    args: ["-e", "process.stdout.write('a\\r\\nb'); setTimeout(() => process.stdout.write('c\\nd\\n\\ne'), 50)"],
+    onStdoutLine: (l) => lines.push(l),
+  });
+  assert.deepEqual(lines, ["a", "bc", "d", "", "e"], "pieces joined into lines, CR dropped, the tail at close");
+  assert.equal(out.stdout, "a\r\nbc\nd\n\ne", "the whole stdout is still collected");
+  const quietLines = [];
+  await quiet(() => m.runCli({ bin: process.execPath, args: ["-e", "console.log('x'); console.log('y')"], onStdoutLine: (l) => (quietLines.push(l), l === "x" && (() => { throw new Error("listener"); })()) }));
+  assert.deepEqual(quietLines, ["x", "y"], "a listener error does not stop the run");
+  console.log("PASS: runCli hands stdout over line by line (CRLF, a split line, the unterminated tail) and survives a listener error");
+}
+
+// The stream_event line format of Claude Code 2.1.312; everything else is not answer text.
+{
+  const real = '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"아"}},"session_id":"s","parent_tool_use_id":null,"uuid":"u","api_message_id":"m"}';
+  assert.equal(m.streamTextDelta(real), "아");
+  assert.equal(m.streamTextDelta('{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"x"}}}'), null, "thinking pieces are not the answer");
+  assert.equal(m.streamTextDelta('{"type":"stream_event","event":{"type":"message_start"}}'), null);
+  assert.equal(m.streamTextDelta('{"type":"result","result":"stream_event"}'), null);
+  assert.equal(m.streamTextDelta("not json stream_event"), null);
+  // The flag is optional: listed in the help, or not.
+  assert.deepEqual(m.presentOptionalFeatures("claude", "  --include-partial-messages  Include partial message chunks"), ["--include-partial-messages"]);
+  assert.deepEqual(m.presentOptionalFeatures("claude", "  --include-partial-messages-v2\n  --verbose"), [], "a longer flag is not this one");
+  assert.deepEqual(m.presentOptionalFeatures("codex", "anything"), []);
+  assert.ok(!m.REQUIRED_CLI_FEATURES.claude.includes(m.PARTIAL_MESSAGES_FLAG), "not a required feature: an older CLI still works");
+  assert.ok(m.buildClaudeArgs({ model: "", effort: "", partialMessages: true }).includes("--include-partial-messages"));
+  assert.ok(!m.buildClaudeArgs({ model: "", effort: "" }).includes("--include-partial-messages"));
+  console.log("PASS: stream_event text pieces parsed (thinking and other events ignored); --include-partial-messages is an optional help feature");
+}
+
+// The lookup records the optional flags of the CLI it picks.
+{
+  const s = fakeSession("ok");
+  try {
+    const found = await m.resolveCliBinary("claude", { configuredPath: FAKE_CLAUDE, checkFeatures: true });
+    assert.deepEqual(found.optional, ["--include-partial-messages"], "listed in the fake's help");
+    process.env.FAKE_CLAUDE_NO_PARTIAL = "1";
+    const older = await m.resolveCliBinary("claude", { configuredPath: FAKE_CLAUDE, checkFeatures: true });
+    assert.equal(older.optional, undefined, "an older help without it: no optional features, still usable");
+    console.log("PASS: CLI lookup records --include-partial-messages when the help lists it");
+  } finally {
+    delete process.env.FAKE_CLAUDE_NO_PARTIAL;
+    s.cleanup();
+  }
+}
+
+// Claude streamText: pieces in order, then the final text, usage and model from the result line as before.
+{
+  const s = fakeSession("ok");
+  const job = m.createJobDir();
+  const usage = new m.UsageTracker();
+  const answer = "슬라이드 17의 **Leftmost Derivation**은 x - (2 * y)로 평가된다 [슬라이드 17]. 시각은 [29:10]이다.";
+  process.env.FAKE_CLI_TEXT = answer;
+  const make = (features) => new m.ClaudeCliProvider({ bin: FAKE_CLAUDE, model: "sonnet", effort: "low", timeoutMs: 20000, workDir: job, usage, task: "chat", features });
+  try {
+    const pieces = [];
+    const text = await make([m.PARTIAL_MESSAGES_FLAG]).streamText("질문", { systemPrompt: "SYS", onDelta: (t) => pieces.push(t) });
+    assert.equal(text, answer);
+    assert.ok(pieces.length > 5, `several pieces (${pieces.length})`);
+    assert.equal(pieces.join(""), answer, "the pieces in order make the answer");
+    const call = s.calls()[0];
+    assert.ok(call.argv.includes("--include-partial-messages"), "the flag is passed");
+    assert.equal(call.argv[call.argv.indexOf("--system-prompt") + 1], "SYS");
+    const rec = usage.entries()[0];
+    assert.deepEqual([rec.task, rec.resolvedModel, rec.outputTokens], ["chat", "claude-sonnet-5-5", 100], "usage and the model from the result line");
+
+    // Without the optional feature: no flag, one onDelta with the whole answer at the end.
+    const whole = [];
+    const text2 = await make([]).streamText("질문", { onDelta: (t) => whole.push(t) });
+    assert.equal(text2, answer);
+    assert.deepEqual(whole, [answer], "one piece: the whole answer");
+    assert.ok(!s.calls()[1].argv.includes("--include-partial-messages"), "the flag is not passed when the help lacks it");
+    console.log("PASS: Claude streamText streams text_delta pieces in order; final text, usage and model from the result; without the feature one onDelta at the end");
+
+    // Stop while streaming: the pieces so far arrived, the call is aborted and the process group killed.
+    process.env.FAKE_CLI_MODE = "streamhang";
+    const ctrl = new AbortController();
+    const got = [];
+    const p = make([m.PARTIAL_MESSAGES_FLAG]).streamText("질문", { signal: ctrl.signal, onDelta: (t) => got.push(t) });
+    for (let i = 0; i < 100 && got.length < 2; i++) await sleep(50);
+    assert.deepEqual(got, Array.from(answer).slice(0, 8).join("").match(/.{1,4}/gu), "two pieces before the stop");
+    ctrl.abort();
+    await assert.rejects(p, (e) => m.isAbortError(e));
+    await sleep(300);
+    for (const pid of s.pids()) assert.ok(!isAlive(pid), `pid ${pid} killed on stop`);
+    console.log("PASS: stopping a streamed answer keeps the pieces received and kills the CLI");
+  } finally {
+    delete process.env.FAKE_CLI_TEXT;
+    m.removeJobDir(job);
+    s.cleanup();
+  }
+}
+
+// Codex: no partial answer; streamText calls onDelta once with the whole answer.
+{
+  const s = fakeSession("ok");
+  const job = m.createJobDir();
+  process.env.FAKE_CLI_TEXT = "Codex 답변이다 [슬라이드 3].";
+  try {
+    const p = new m.CodexCliProvider({ bin: FAKE_CODEX, model: "", effort: "low", timeoutMs: 20000, workDir: job, task: "chat", features: [] });
+    const pieces = [];
+    const text = await p.streamText("질문", { systemPrompt: "SYS", onDelta: (t) => pieces.push(t) });
+    assert.equal(text, "Codex 답변이다 [슬라이드 3].");
+    assert.deepEqual(pieces, [text]);
+    assert.match(s.calls()[0].stdin, /^Use only the content in this message\..*\nSYS\n\n질문$/s, "instructions lead the stdin prompt");
+    console.log("PASS: Codex streamText falls back to one onDelta with the whole answer");
+  } finally {
+    delete process.env.FAKE_CLI_TEXT;
+    m.removeJobDir(job);
+    s.cleanup();
+  }
 }

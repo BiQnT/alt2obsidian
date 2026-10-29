@@ -9,8 +9,15 @@
 //   FAKE_CLI_MODE     comma-separated: ok | drop:<page> | dropalways:<page> |
 //                     short:<page> | hang | limit | badjson | textlimit |
 //                     crash | loggedout | hangbig:<n> (hang when the batch has more than n slides) |
-//                     dropsection:<n> | dropsectionalways:<n> (transcript section summaries)
+//                     dropsection:<n> | dropsectionalways:<n> (transcript section summaries) |
+//                     streamhang (claude with --include-partial-messages: two text pieces, then hang)
 //   FAKE_CLI_PIDFILE  (hang) the fake and its child write their pids here
+//   FAKE_CLI_TEXT     the answer of a call without a schema (default: a short overview)
+//   FAKE_CLAUDE_NO_PARTIAL=1  `claude --help` does not list --include-partial-messages
+//
+// claude with --include-partial-messages prints the answer as stream_event
+// text_delta lines (a few characters each, the format of Claude Code
+// 2.1.312) before the usual assistant and result events.
 
 "use strict";
 const fs = require("fs");
@@ -124,7 +131,7 @@ function answer(stdin, schema) {
   } else if (schema) {
     result = { ok: true };
   } else {
-    result = `## 개요\n- 요약 텍스트 (호출 ${state.calls})`;
+    result = process.env.FAKE_CLI_TEXT ?? `## 개요\n- 요약 텍스트 (호출 ${state.calls})`;
   }
   writeState(state);
   const inputTokens = Math.ceil(stdin.length / 3);
@@ -155,7 +162,7 @@ function log(entry) {
 
 // ---- claude ----
 
-const CLAUDE_BOOL = new Set(["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]);
+const CLAUDE_BOOL = new Set(["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands", "--include-partial-messages"]);
 const CLAUDE_VALUE = new Set(["--input-format", "--output-format", "--setting-sources", "--system-prompt", "--tools", "--model", "--effort", "--permission-mode", "--allowedTools", "--disallowedTools", "--settings", "--mcp-config"]);
 
 // Notion MCP (FAKE_NOTION_MCP=connected|connector|failed|none, default none).
@@ -242,7 +249,8 @@ function runClaude() {
       "Usage: claude [options]\n  -p, --print\n  --safe-mode\n  --setting-sources <sources>\n  --strict-mcp-config\n  --mcp-config <configs...>\n" +
         "  --disable-slash-commands\n  --no-session-persistence\n  --system-prompt <prompt>\n  --effort <level>\n  --model <model>\n  --tools <tools...>\n" +
         '  --permission-mode <mode> (choices: "acceptEdits", "dontAsk", "plan")\n  --input-format <format> "text", "stream-json"\n  --output-format <format>\n' +
-        "  --settings <file-or-json>\n  --allowedTools, --allowed-tools <tools...>\n  --disallowedTools, --disallowed-tools <tools...>\n  --verbose\n"
+        "  --settings <file-or-json>\n  --allowedTools, --allowed-tools <tools...>\n  --disallowedTools, --disallowed-tools <tools...>\n  --verbose\n" +
+        (process.env.FAKE_CLAUDE_NO_PARTIAL === "1" ? "" : "  --include-partial-messages  Include partial message chunks as they arrive\n")
     );
     return;
   }
@@ -319,6 +327,7 @@ function runClaude() {
     process.stderr.write("internal error\n");
     process.exit(3);
   }
+  if (flags["--include-partial-messages"] && (notion || schema)) fail("--include-partial-messages is only for streamed text calls");
   const a = answer(stdin, schema);
   if (notion) for (const ev of notionEvents(flags["--allowedTools"], stdin)) emit(ev);
   const text = notion
@@ -330,6 +339,24 @@ function runClaude() {
     : typeof a.result === "string"
       ? a.result
       : "```json\n" + JSON.stringify(a.result) + "\n```";
+  if (flags["--include-partial-messages"]) {
+    const stream = (event) => emit({ type: "stream_event", event, session_id: "fake", parent_tool_use_id: null, uuid: "u", api_message_id: "m" });
+    stream({ type: "message_start", message: { model: modelName } });
+    stream({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } });
+    stream({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "생각 중" } });
+    stream({ type: "content_block_stop", index: 0 });
+    stream({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } });
+    const chars = Array.from(text);
+    const pieces = [];
+    for (let i = 0; i < chars.length; i += 4) pieces.push(chars.slice(i, i + 4).join(""));
+    for (let i = 0; i < pieces.length; i++) {
+      if (ms.includes("streamhang") && i === 2) return hang();
+      stream({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: pieces[i] } });
+    }
+    stream({ type: "content_block_stop", index: 1 });
+    stream({ type: "message_delta", delta: { stop_reason: "end_turn" } });
+    stream({ type: "message_stop" });
+  }
   emit({ type: "assistant", message: { content: [{ type: "text", text }] } });
   emit({
     type: "result",

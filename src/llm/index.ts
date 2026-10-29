@@ -12,6 +12,8 @@ export interface TaskProviderContext {
   usage: UsageTracker;
   signal?: AbortSignal;
   task: string;
+  /** Optional flags the CLI's help lists (read after `resolveBin`, which may look the CLI up again). */
+  cliFeatures?(name: CliName): string[];
 }
 
 /** Provider for one task's settings (spec 4.2 per-task table). */
@@ -21,8 +23,10 @@ export async function createTaskProvider(task: TaskLLMSetting, ctx: TaskProvider
   switch (task.provider) {
     case "claude-cli":
     case "codex-cli": {
+      const name: CliName = task.provider === "claude-cli" ? "claude" : "codex";
       const config = {
-        bin: await ctx.resolveBin(task.provider === "claude-cli" ? "claude" : "codex"),
+        bin: await ctx.resolveBin(name),
+        features: ctx.cliFeatures?.(name) ?? [],
         model: task.model.trim(),
         effort: task.effort,
         timeoutMs,
