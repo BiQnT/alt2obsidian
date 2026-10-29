@@ -418,7 +418,7 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.match(input.user, /^강의: L5\n과목: CSED423\n강의 길이: 01:44\n\n\[슬라이드별 요지\]\n14: 같은 문장 x - 2 \* y도/);
   assert.ok(input.user.endsWith("Remember the precedence rule."));
   assert.match(input.system, /JSON 객체 하나만 답한다/);
-  assert.ok(!/[–—]/.test(input.system + input.user), "no dashes in the prompt");
+  assert.ok(!/[\u2013\u2014]/.test(input.system + input.user), "no dashes in the prompt");
   assert.equal(input.lengthMs, at(104));
   assert.equal(input.units, 16);
   assert.equal((await m.aiInputFor(script, transcript)).hash, input.hash, "the same input: the same ai_hash");
