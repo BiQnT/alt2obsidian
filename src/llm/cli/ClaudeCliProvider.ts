@@ -26,7 +26,9 @@
 //                                   "content_block_delta","delta":{"type":
 //                                   "text_delta","text":...}}}` lines while the
 //                                   answer is written (format of 2.1.312);
-//                                   the result event at the end is unchanged
+//                                   the result event at the end is unchanged.
+//                                   A message_start after some text (the CLI
+//                                   retried the turn) starts the answer over
 // `--json-schema` is not used: Claude answers it through an extra tool turn
 // that re-sends the whole prompt (measured: 2 turns instead of 1). The
 // answer format is stated in the prompt and validated in code instead.
@@ -78,13 +80,25 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
  * line (thinking pieces, block starts and stops, the final events).
  */
 export function streamTextDelta(line: string): string | null {
+  return streamEvent(line)?.text ?? null;
+}
+
+/** True for the `message_start` stream event: a new model message begins. */
+export function isMessageStart(line: string): boolean {
+  return streamEvent(line)?.start === true;
+}
+
+/** A stream_event line read: its text piece, or that a message starts; null for any other line. */
+function streamEvent(line: string): { text?: string; start?: boolean } | null {
   const t = line.trim();
   if (!t.startsWith("{") || !t.includes('"stream_event"')) return null;
   try {
     const ev = JSON.parse(t) as { type?: unknown; event?: { type?: unknown; delta?: { type?: unknown; text?: unknown } } } | null;
-    if (ev?.type !== "stream_event" || ev.event?.type !== "content_block_delta") return null;
+    if (ev?.type !== "stream_event") return null;
+    if (ev.event?.type === "message_start") return { start: true };
+    if (ev.event?.type !== "content_block_delta") return null;
     const delta = ev.event.delta;
-    return delta?.type === "text_delta" && typeof delta.text === "string" ? delta.text : null;
+    return delta?.type === "text_delta" && typeof delta.text === "string" ? { text: delta.text } : null;
   } catch {
     return null;
   }
@@ -229,6 +243,8 @@ export class ClaudeCliProvider extends CliProviderBase {
   protected async invoke(call: CliCall): Promise<CliCallResult> {
     const onDelta = call.onDelta;
     const stream = !!onDelta && (this.config.features ?? []).includes(PARTIAL_MESSAGES_FLAG);
+    /** Some text of the current message has arrived. */
+    let started = false;
     const args = buildClaudeArgs({ model: this.config.model, effort: this.config.effort, systemPrompt: call.systemPrompt, partialMessages: stream });
     try {
       const out = await runCli({
@@ -241,7 +257,13 @@ export class ClaudeCliProvider extends CliProviderBase {
         onStdoutLine: stream
           ? (line) => {
               const piece = streamTextDelta(line);
-              if (piece) onDelta?.(piece);
+              if (piece) {
+                started = true;
+                onDelta?.(piece);
+              } else if (started && isMessageStart(line)) {
+                started = false;
+                call.onReset?.();
+              }
             }
           : undefined,
       });

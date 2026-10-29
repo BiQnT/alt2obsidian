@@ -471,6 +471,8 @@ export interface StreamTextOptions {
    * calls it once with the whole answer when the call ends.
    */
   onDelta(text: string): void;
+  /** The answer starts over (the CLI retried the turn mid-stream): drop the pieces so far. */
+  onReset?(): void;
 }
 
 export interface JsonCallOptions {

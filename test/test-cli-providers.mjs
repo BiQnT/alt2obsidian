@@ -467,6 +467,16 @@ for (const [label, Provider, bin] of [
     assert.ok(!s.calls()[1].argv.includes("--include-partial-messages"), "the flag is not passed when the help lacks it");
     console.log("PASS: Claude streamText streams text_delta pieces in order; final text, usage and model from the result; without the feature one onDelta at the end");
 
+    // The CLI retries the turn mid-stream (a new message_start after some text): the answer starts over.
+    process.env.FAKE_CLI_MODE = "streamretry";
+    let shown = "";
+    let resets = 0;
+    const retried = await make([m.PARTIAL_MESSAGES_FLAG]).streamText("질문", { onDelta: (t) => (shown += t), onReset: () => ((shown = ""), resets++) });
+    assert.equal(retried, answer);
+    assert.deepEqual([shown, resets], [answer, 1], "the first try's pieces dropped once, then the answer");
+    assert.ok(m.isMessageStart('{"type":"stream_event","event":{"type":"message_start","message":{}}}') && !m.isMessageStart('{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}}'));
+    console.log("PASS: a message_start after streamed text starts the answer over (onReset)");
+
     // Stop while streaming: the pieces so far arrived, the call is aborted and the process group killed.
     process.env.FAKE_CLI_MODE = "streamhang";
     const ctrl = new AbortController();

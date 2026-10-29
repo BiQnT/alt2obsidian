@@ -47,6 +47,8 @@ export interface CliCall {
   signal?: AbortSignal;
   /** Pieces of the answer as they arrive (only a provider that streams calls it). */
   onDelta?: (text: string) => void;
+  /** The streamed answer starts over (a new message after some pieces). */
+  onReset?: () => void;
 }
 
 export interface CliCallResult {
@@ -225,6 +227,10 @@ export abstract class CliProviderBase implements LLMProvider {
         if (!text) return;
         streamed = true;
         options.onDelta(text);
+      },
+      onReset: () => {
+        streamed = false;
+        options.onReset?.();
       },
     });
     const text = res.text.trim();

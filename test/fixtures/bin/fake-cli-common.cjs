@@ -10,7 +10,8 @@
 //                     short:<page> | hang | limit | badjson | textlimit |
 //                     crash | loggedout | hangbig:<n> (hang when the batch has more than n slides) |
 //                     dropsection:<n> | dropsectionalways:<n> (transcript section summaries) |
-//                     streamhang (claude with --include-partial-messages: two text pieces, then hang)
+//                     streamhang (claude with --include-partial-messages: two text pieces, then hang) |
+//                     streamretry (two text pieces of a first try, then a new message_start and the answer)
 //   FAKE_CLI_PIDFILE  (hang) the fake and its child write their pids here
 //   FAKE_CLI_TEXT     the answer of a call without a schema (default: a short overview)
 //   FAKE_CLAUDE_NO_PARTIAL=1  `claude --help` does not list --include-partial-messages
@@ -346,6 +347,11 @@ function runClaude() {
     stream({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "생각 중" } });
     stream({ type: "content_block_stop", index: 0 });
     stream({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } });
+    if (ms.includes("streamretry")) {
+      for (const piece of ["첫 시도 ", "조각"]) stream({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: piece } });
+      stream({ type: "message_start", message: { model: modelName } });
+      stream({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+    }
     const chars = Array.from(text);
     const pieces = [];
     for (let i = 0; i < chars.length; i += 4) pieces.push(chars.slice(i, i + 4).join(""));
