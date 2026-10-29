@@ -374,3 +374,134 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.equal(m.isLectureNote({ title: "x" }, "plain"), false);
   console.log("PASS: lecture order (alt_created or natural name order), previous and next lecture, briefs never count as lecture notes");
 }
+
+// ---- the AI part (spec 4.5): candidates, the prompt, the checked answer, the store's reuse rules ----
+{
+  const at = (sec) => sec * 1000;
+  const seg = (sec, text) => ({ startMs: at(sec), endMs: at(sec) + 4000, text });
+  const transcript = [
+    seg(0, "오늘은 parse tree를 봅니다."),
+    seg(10, "음 이건 그냥 설명입니다."),
+    seg(20, "앞 문장입니다."),
+    seg(30, "이 부분은 시험에 꼭 나옵니다."),
+    seg(40, "뒤 문장입니다."),
+    seg(50, "다른 이야기입니다."),
+    seg(60, "또 다른 이야기입니다."),
+    seg(70, "왜 왼쪽부터 유도하죠?"),
+    seg(80, "그 다음 이야기입니다."),
+    seg(90, "더 다른 이야기입니다."),
+    seg(100, "Remember the precedence rule."),
+  ];
+  const spans = [{ slide: 14, startMs: 0, endMs: at(60), low: false }, { slide: 15, startMs: at(60), endMs: at(120), low: false }];
+  const cands = m.pickCandidates(transcript, spans);
+  assert.deepEqual(
+    cands.map(m.formatCandidate),
+    [
+      "[00:20] (슬라이드 14) 앞 문장입니다. 이 부분은 시험에 꼭 나옵니다. 뒤 문장입니다.",
+      "[01:00] (슬라이드 15) 또 다른 이야기입니다. 왜 왼쪽부터 유도하죠? 그 다음 이야기입니다. 더 다른 이야기입니다. Remember the precedence rule.",
+    ],
+    "a keyword or a question mark, with the sentences around it, touching stretches merged; time and aligned slide in front"
+  );
+  assert.deepEqual(m.pickCandidates(transcript, []).map((c) => c.slide), [null, null], "no alignment: no slide label");
+  // The cap takes from both ends in turn, so the whole lecture is covered; the result is in time order.
+  const many = Array.from({ length: 60 }, (_, i) => seg(i * 60, `${i}번째 중요한 내용입니다 ${"가".repeat(80)}.`));
+  const capped = m.pickCandidates(many, [], 1000);
+  assert.ok(capped.length > 0 && capped.map(m.formatCandidate).join("\n").length <= 1000);
+  assert.ok(m.pickCandidates(many, []).every((c) => c.text.length <= 400), "a long run of candidates is cut into stretches of 400 characters");
+  assert.ok(capped[0].startMs === 0 && capped[capped.length - 1].startMs > at(50 * 60), "the first and the last stretches both made it");
+  assert.deepEqual(capped.map((c) => c.startMs), [...capped.map((c) => c.startMs)].sort((a, b) => a - b));
+  // No candidate: no input, no call.
+  assert.equal(await m.briefAiInput({ title: "L5", subject: "S", kind: "slides", map: [], units: 0, transcript: [seg(0, "평범한 이야기입니다.")], spans: [] }), null);
+
+  const script = await m.buildBriefScript(NOTE, slideNote());
+  const input = await m.aiInputFor(script, transcript);
+  assert.match(input.user, /^강의: L5\n과목: CSED423\n강의 길이: 01:44\n\n\[슬라이드별 요지\]\n14: 같은 문장 x - 2 \* y도/);
+  assert.ok(input.user.endsWith("Remember the precedence rule."));
+  assert.match(input.system, /JSON 객체 하나만 답한다/);
+  assert.ok(!/[–—]/.test(input.system + input.user), "no dashes in the prompt");
+  assert.equal(input.lengthMs, at(104));
+  assert.equal(input.units, 16);
+  assert.equal((await m.aiInputFor(script, transcript)).hash, input.hash, "the same input: the same ai_hash");
+  assert.notEqual((await m.aiInputFor(script, transcript.slice(0, 6))).hash, input.hash, "other candidates: another ai_hash");
+
+  // The checked answer.
+  const raw = {
+    one_line: "Derivation 순서가 평가 순서를 정한다는 내용을 다루는 강의로, 이 문장은 여든 자를 넘기려고 일부러 길게 늘여 쓴 문장이다 가나다라마바사",
+    emphasis: [
+      { t: "00:30", slide: 14, text: "유도 순서가 시험에 나온다고 했다." },
+      { t: "1:00:00", slide: 14, text: "강의 길이를 넘는 시각이다." },
+      { t: "xx", slide: 14, text: "읽을 수 없는 시각이다." },
+      { t: "00:20", slide: 99, text: "덱 밖 슬라이드는 null이 된다." },
+      { t: "00:20", slide: null, text: "앞 문장입니다. 이 부분은 시험에 꼭 나옵니다. 그대로다." },
+      ...Array.from({ length: 8 }, (_, i) => ({ t: "00:40", slide: 15, text: `강조점 ${i}다.` })),
+    ],
+    qa: [{ t: "01:10", q: "왜 왼쪽부터 유도하는가?", a: "곱셈을 먼저 묶어야 해서다." }, { t: "01:10", q: "x", a: "" }],
+    pitfalls: ["유도 순서와 평가 순서를 헷갈리기 쉽다." + "가".repeat(120), 3],
+  };
+  const ai = m.validateBriefAi(raw, input);
+  assert.equal(Array.from(ai.oneLine).length, 80, "one_line cut to 80 characters");
+  assert.deepEqual(ai.emphasis.slice(0, 2), [{ t: "00:30", slide: 14, text: "유도 순서가 시험에 나온다고 했다." }, { t: "00:20", slide: null, text: "덱 밖 슬라이드는 null이 된다." }], "past the lecture or unreadable: dropped; a copy of a candidate: dropped; a slide outside the deck: null");
+  assert.equal(ai.emphasis.length, 6, "6 at most");
+  assert.deepEqual(ai.qa, [{ t: "01:10", q: "왜 왼쪽부터 유도하는가?", a: "곱셈을 먼저 묶어야 해서다." }], "an empty answer drops the item");
+  assert.equal(ai.pitfalls.length, 1);
+  assert.equal(Array.from(ai.pitfalls[0]).length, 100, "texts cut to 100 characters");
+  assert.equal(m.copiesCandidate("이 부분은 시험에 꼭 나옵니다. 뒤 문장입", input.candidateText), true, "more than 20 identical characters");
+  assert.equal(m.copiesCandidate("이 부분은 시험에 꼭 나옵", input.candidateText), false);
+  assert.throws(() => m.validateBriefAi([1], input), /JSON 객체가 아닙니다/, "not an object: asked once more");
+  assert.deepEqual(m.validateBriefAi({}, input), { oneLine: "", emphasis: [], qa: [], pitfalls: [] }, "empty lists are fine");
+  assert.equal(
+    m.renderAiSections(ai, "slides").split("\n").slice(0, 3).join("\n"),
+    "## 강조점\n- [00:30] 슬라이드 14: 유도 순서가 시험에 나온다고 했다.\n- [00:20] 덱 밖 슬라이드는 null이 된다."
+  );
+  assert.equal(m.renderAiSections({ oneLine: "", emphasis: [], qa: [], pitfalls: [] }, "slides"), "", "nothing: no section");
+
+  // The store: made, reused, retried after a failure, carried over a script change, none without candidates.
+  const files = new Map([[NOTE, slideNote()]]);
+  const store = { read: async (p) => files.get(p) ?? null, write: async (p, t) => void files.set(p, t), list: async () => [] };
+  let calls = 0;
+  let fail = false;
+  const step = (segs) => ({
+    transcript: segs,
+    run: async (prompt, validate) => {
+      calls++;
+      if (fail) throw new Error("usage limit");
+      assert.equal(prompt.user, input.user);
+      return { ai: validate(raw), model: "claude-haiku-5-5", input: 4120, output: 760 };
+    },
+  });
+  const BRIEF = "Alt2Obsidian/CSED423/Briefs/L5 brief.md";
+  const r1 = await m.updateLectureBrief(store, NOTE, { today: TODAY, ai: step(transcript) });
+  assert.deepEqual([r1.result, r1.ai, calls], ["written", "ok", 1]);
+  const made = files.get(BRIEF);
+  assert.match(made, /^ai_hash: "[0-9a-f]{8}"$/m);
+  assert.match(made, /^ai_part: \{status: "ok", model: "claude-haiku-5-5", input: 4120, output: 760\}$/m);
+  assert.match(made, /^one_line: "Derivation 순서가/m);
+  assert.equal(m.oneLineOf(made), ai.oneLine, "the subject brief takes one_line");
+  assert.match(m.bodyOf(made), /\n## 강조점\n- \[00:30\] 슬라이드 14: /);
+  assert.equal(await m.isEditedBrief(made), false);
+  const r2 = await m.updateLectureBrief(store, NOTE, { today: TODAY, ai: step(transcript) });
+  assert.deepEqual([r2.result, r2.ai, calls], ["same", "reused", 1], "same input, a good part: no call, no write");
+  // Only the overview changed: the script part again, the AI part carried, no call.
+  files.set(NOTE, slideNote({ overviewExtra: " 한 문장 더." }));
+  const r3 = await m.updateLectureBrief(store, NOTE, { today: TODAY, ai: step(transcript) });
+  assert.deepEqual([r3.result, r3.ai, calls], ["written", "reused", 1]);
+  assert.match(files.get(BRIEF), /한 문장 더\.[\s\S]*## 강조점\n- \[00:30\]/);
+  // Other candidates: a new call; it fails: the script part with ai_part failed (sections dropped), and the next run tries again.
+  fail = true;
+  const r4 = await m.updateLectureBrief(store, NOTE, { today: TODAY, ai: { ...step(transcript.slice(0, 6)), run: step([]).run } });
+  assert.deepEqual([r4.result, r4.ai, r4.aiError, calls], ["written", "failed", "usage limit", 2]);
+  assert.match(files.get(BRIEF), /^ai_part: \{status: "failed"\}$/m);
+  assert.ok(!/## 강조점/.test(files.get(BRIEF)));
+  fail = false;
+  const r5 = await m.updateLectureBrief(store, NOTE, { today: TODAY, ai: { transcript: transcript.slice(0, 6), run: async (p, v) => (calls++, { ai: v({ one_line: "다시 만든 줄이다", emphasis: [], qa: [], pitfalls: ["다시 만든 점이다."] }), model: "m", input: 1, output: 1 }) } });
+  assert.deepEqual([r5.ai, calls], ["ok", 3], "a failed part is made again");
+  // No candidate: ai_part none, no call.
+  const r6 = await m.updateLectureBrief(store, NOTE, { today: TODAY, ai: step([seg(0, "평범한 이야기입니다.")]) });
+  assert.deepEqual([r6.ai, calls], ["none", 3]);
+  assert.match(files.get(BRIEF), /^ai_part: \{status: "none"\}$/m);
+  // A brief the user edited: no call at all.
+  files.set(BRIEF, files.get(BRIEF) + "\n내가 쓴 줄\n");
+  const r7 = await m.updateLectureBrief(store, NOTE, { today: TODAY, ai: step(transcript) });
+  assert.deepEqual([r7.result, calls], ["edited", 3]);
+  console.log("PASS: brief AI part: candidates (keywords, questions, neighbours, merged, [mm:ss] and slide, both ends under the cap), the prompt and ai_hash, the checked answer (time, slide, copy, caps), sections and one_line, reuse, retry after a failure, none without candidates, no call for an edited brief");
+}

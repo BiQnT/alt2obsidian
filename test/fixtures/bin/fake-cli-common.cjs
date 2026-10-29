@@ -11,7 +11,9 @@
 //                     crash | loggedout | hangbig:<n> (hang when the batch has more than n slides) |
 //                     dropsection:<n> | dropsectionalways:<n> (transcript section summaries) |
 //                     streamhang (claude with --include-partial-messages: two text pieces, then hang) |
-//                     streamretry (two text pieces of a first try, then a new message_start and the answer)
+//                     streamretry (two text pieces of a first try, then a new message_start and the answer) |
+//                     brieffail (the lecture brief's AI call crashes) | briefcopy (its answer also copies a
+//                     candidate, names a slide past the deck and a time past the lecture)
 //   FAKE_CLI_PIDFILE  (hang) the fake and its child write their pids here
 //   FAKE_CLI_TEXT     the answer of a call without a schema (default: a short overview)
 //   FAKE_CLAUDE_NO_PARTIAL=1  `claude --help` does not list --include-partial-messages
@@ -102,6 +104,20 @@ function answer(stdin, schema) {
       ],
       tags: ["cache", "memory"],
     };
+  } else if (schema && schema.properties && schema.properties.emphasis) {
+    // The lecture brief's AI part: one emphasis per candidate stretch (two at most), a question, a pitfall.
+    const cands = [...stdin.matchAll(/^\[(\d+:\d{2}(?::\d{2})?)\](?: \(슬라이드 (\d+)\))? (.*)$/gm)];
+    result = {
+      one_line: "캐시와 캐시 일관성을 다루는 강의다",
+      emphasis: cands.slice(0, 2).map((c, i) => ({ t: c[1], slide: c[2] ? Number(c[2]) : null, text: `강조점 ${i + 1}: 교수님이 짚은 내용을 바꿔 쓴 문장이다` })),
+      qa: cands.length > 0 ? [{ t: cands[0][1], q: "캐시는 왜 빠른가?", a: "프로세서 가까이 있는 작은 메모리라서 빠르다." }] : [],
+      pitfalls: ["캐시 일관성과 캐시 적중률을 헷갈리기 쉽다."],
+    };
+    if (ms.includes("briefcopy") && cands.length > 0) {
+      result.emphasis.push({ t: cands[0][1], slide: 999, text: "슬라이드 번호가 덱 밖이다" });
+      result.emphasis.push({ t: "9:59:59", slide: null, text: "강의 길이를 넘는 시각이다" });
+      result.emphasis.push({ t: cands[0][1], slide: null, text: cands[0][3].slice(0, 40) });
+    }
   } else if (schema && schema.properties && schema.properties.parts) {
     // Alignment check: move every part to its first candidate that is not the current guess.
     const parts = [];
@@ -324,7 +340,7 @@ function runClaude() {
     emit({ type: "result", subtype: "success", is_error: true, result: "Not logged in. Please run /login" });
     process.exit(1);
   }
-  if (ms.includes("crash")) {
+  if (ms.includes("crash") || (ms.includes("brieffail") && schema && schema.properties && schema.properties.emphasis)) {
     process.stderr.write("internal error\n");
     process.exit(3);
   }
@@ -439,7 +455,7 @@ function runCodex() {
     emit({ type: "turn.failed", error: { message: "You've hit your usage limit. Try again later." } });
     process.exit(1);
   }
-  if (ms.includes("crash")) {
+  if (ms.includes("crash") || (ms.includes("brieffail") && schema && schema.properties && schema.properties.emphasis)) {
     process.stderr.write("internal error\n");
     process.exit(3);
   }

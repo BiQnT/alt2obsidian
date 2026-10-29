@@ -25,6 +25,27 @@ interface LocalItem {
   el?: HTMLElement;
 }
 
+/** The estimate's "챗봇 브리프" row (2.1.0 spec 4.5): its call, or why it makes none. */
+function briefRow(prepared: PreparedImport): string {
+  const b = prepared.estimate.brief;
+  switch (prepared.brief?.state) {
+    case "call":
+      return b ? `챗봇 브리프: 강조점 호출 ${b.calls}회 · 입력 약 ${compactTokens(b.inputTokens)} · 출력 약 ${compactTokens(b.outputTokens)}` : "챗봇 브리프: 브리프 작업에 LLM이 없어 스크립트 부분만 (토큰 0)";
+    case "unchanged":
+      return "챗봇 브리프: 강조점의 입력이 그대로라 호출 없음 (기존 강조점 유지)";
+    case "edited":
+      return "챗봇 브리프: 직접 고친 브리프라 그대로 둠 (토큰 0)";
+    case "no-candidates":
+      return "챗봇 브리프: 전사에 강조점 후보 문장이 없어 스크립트 부분만 (토큰 0)";
+    case "no-transcript":
+      return "챗봇 브리프: 시각이 있는 전사가 없어 스크립트 부분만 (토큰 0)";
+    case "script":
+      return "챗봇 브리프: 스크립트 부분만 (토큰 0, 설정)";
+    default:
+      return "챗봇 브리프: 만들지 않음 (설정)";
+  }
+}
+
 function formatLectureDate(date: string | null): string {
   const m = date?.match(/^\d{4}-(\d{2})-(\d{2})/);
   return m ? `${Number(m[1])}월 ${Number(m[2])}일` : "날짜 없음";
@@ -904,6 +925,7 @@ export class Alt2ObsSidebarView extends ItemView {
     const controller = new AbortController();
     this.runController = controller;
     const view = this.showRunPanel(prepared, () => controller.abort());
+    const warnings: string[] = [];
     try {
       const result = await this.plugin.runCliImport(prepared, {
         signal: controller.signal,
@@ -913,9 +935,14 @@ export class Alt2ObsSidebarView extends ItemView {
         onModel: (task, model) => view.model(task, model),
         onProgress: (stage) => view.detail(stage),
         onConfirmUpdate: (summary) => this.confirmUpdate(summary),
+        onWarning: (text) => {
+          warnings.push(text);
+          view.detail(text);
+        },
       });
       this.hideCliPanel();
       await this.afterImport(result);
+      for (const w of warnings) this.showNotice(w);
     } catch (e) {
       this.hideCliPanel();
       if (controller.signal.aborted) {
@@ -991,6 +1018,8 @@ export class Alt2ObsSidebarView extends ItemView {
           : prepared.transcriptPlan
             ? [["commentary", "구간 요약·전체 요약 모델"], ["concepts", "개념 추출 모델"]]
             : [["commentary", "요약 모델"], ["concepts", "개념 추출 모델"]];
+        // The lecture brief's AI part (2.1.0 spec 4.5) when it makes a call.
+        if (prepared.brief?.state === "call") pickers.push(["brief", "브리프 모델"]);
         for (const [task, label] of pickers) {
           renderModelPicker(models, {
             task,
@@ -1048,6 +1077,7 @@ export class Alt2ObsSidebarView extends ItemView {
         } else {
           rows.createEl("li", { text: "Alt 요약과 메모로 강의 노트를 만듭니다 (PDF와 전사가 없음)." });
         }
+        rows.createEl("li", { cls: "alt-to-obs-brief-row", text: briefRow(prepared) });
         rows.createEl("li", {
           cls: "alt-to-obs-muted",
           text: "추정치입니다. 출력 토큰은 effort에 따라 늘려 잡고(medium 기준), 모델에 따라서는 바꾸지 않습니다. 재시도는 포함하지 않습니다.",
@@ -1109,10 +1139,11 @@ export class Alt2ObsSidebarView extends ItemView {
     const detail = panel.createDiv({ cls: "alt-to-obs-progress-text" });
     // The models of this run: as chosen, then as the CLI reports them (an alias becomes its full id).
     const catalog = this.plugin.modelCatalog();
-    const labels: Partial<Record<string, string>> = { commentary: "해설", concepts: "개념", alignment: "정렬 확인" };
+    const labels: Partial<Record<string, string>> = { commentary: "해설", concepts: "개념", alignment: "정렬 확인", brief: "브리프" };
     const used = new Map<string, string>();
     const align = this.plugin.runTask(prepared, "alignment");
     const tasks: TaskId[] = align.provider !== "none" && (prepared.alignment?.lowSpans.length ?? 0) > 0 ? ["commentary", "concepts", "alignment"] : ["commentary", "concepts"];
+    if (prepared.brief?.state === "call") tasks.push("brief");
     for (const task of tasks) {
       const t = this.plugin.runTask(prepared, task);
       used.set(task, `${describeModel(t.provider, t.model, catalog)} · ${describeEffort(t.effort)}`);

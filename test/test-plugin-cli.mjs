@@ -20,6 +20,16 @@ console.log = console.warn = () => {};
 const { default: Plugin, TFile, TFolder, insertFrontmatterLine, notices, SyncedViewerView, VIEW_TYPE_SYNCED_VIEWER } = await importTs("test/helpers/plugin-entry.ts");
 Object.assign(console, quiet);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Runs fn with console.warn silenced (an expected failure logs one). */
+async function quietWarn(fn) {
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.warn = warn;
+  }
+}
 const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 /** Frontmatter of a stored note: `key: "value"` lines and the tags list. */
@@ -905,6 +915,78 @@ try {
     // The brief's slide map carries the aligned times.
     assert.match(localBrief, /\n- 2 \[\d{2}:\d{2}~\d{2}:\d{2}\??\] 슬라이드 2의 요지\n/);
     console.log("PASS: local import: aligned chunks, alt_local_id and alt_alignment frontmatter, no merge into a same-titled URL note, transcript cached; the brief keys the id as lecture_alt_local_id");
+
+    // The lecture brief's AI part (2.1.0 spec 4.5): a transcript where the professor stresses things.
+    {
+      const stressed = talk.map((t, i) => (i === 10 ? "이 부분은 시험에 꼭 나옵니다" : i === 30 ? "질문 있나요? 캐시 일관성이 왜 필요하죠?" : t));
+      const briefBundle = () => ({ ...bundle("local-brief"), title: "Lec8 Coherence", transcript: stressed.map((t, i) => seg(i, t)) });
+      const pvb = plugin.previewFromBundle(briefBundle());
+      const n0 = s.calls().length;
+      const prepB = await plugin.prepareCliImport("", pvb, "CSED311");
+      assert.equal(prepB.brief.state, "call", "transcript with candidates: the brief makes a call");
+      assert.equal(prepB.estimate.brief.calls, 1);
+      assert.ok(prepB.estimate.brief.inputTokens > 300 && prepB.estimate.brief.outputTokens === Math.round(800 * 0.78), "input from the real prompt, output 800 times the low effort factor");
+      const withoutBrief = plugin.withRunChoice(prepB, "brief", { provider: "codex-cli", model: "", effort: "high" });
+      assert.equal(withoutBrief.estimate.brief.outputTokens, Math.round(800 * 1.3), "the brief model picker changes the estimate");
+      const totals = { ...plugin.data.usageTotals };
+      const recB = await plugin.runCliImport(prepB);
+      assert.equal(s.calls().length - n0, prepB.estimate.calls, "the estimate counted the brief call");
+      const briefCall = s.calls().slice(n0).find((c) => c.stdin.includes("[후보 문장]"));
+      assert.ok(briefCall, "one brief call");
+      assert.equal(briefCall.argv[briefCall.argv.indexOf("--model") + 1], "haiku", "the brief task's model");
+      assert.match(briefCall.stdin, /\n\[00:45\] \(슬라이드 \d+\) [^\n]*시험에 꼭 나옵니다\n/, "the candidate with the sentence before it, its time and slide");
+      const b = files.get("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md");
+      assert.match(b, /^ai_part: \{status: "ok", model: "claude-haiku-5-5", input: \d+, output: \d+\}$/m);
+      assert.match(b, /^ai_hash: "[0-9a-f]{8}"$/m);
+      assert.match(b, /^one_line: "캐시와 캐시 일관성을 다루는 강의다"$/m);
+      assert.match(b, /\n## 강조점\n- \[00:4\d\] (슬라이드 \d+: )?강조점 1: /);
+      assert.match(b, /\n## 강의 중 질문\n- \[\d\d:\d\d\] Q\. 캐시는 왜 빠른가\? A\. /);
+      assert.match(b, /\n## 헷갈리기 쉬운 점\n- 캐시 일관성과/);
+      assert.ok(!files.get(recB.path).includes("[후보 문장]") && !/alt2obs_usage: [^\n]*calls: (\d+)/.exec(files.get(recB.path))[1].includes("x"), "the note's usage is the note's");
+      assert.equal(/alt2obs_usage: \{[^}]*calls: (\d+)/.exec(files.get(recB.path))[1], String(prepB.estimate.calls - 1), "alt2obs_usage counts the note's calls, not the brief's");
+      assert.equal(plugin.data.usageTotals.calls, totals.calls + prepB.estimate.calls, "the plugin totals count the brief call");
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/CSED311 subject brief.md"), /- Lec8 Coherence \(2026-04-21, 슬라이드 8장\): 캐시와 캐시 일관성을 다루는 강의다/, "one_line in the subject brief");
+      // Re-import: every slide unchanged, the AI input the same: no call, the brief untouched.
+      const again = await plugin.prepareCliImport("", plugin.previewFromBundle(briefBundle()), "CSED311");
+      assert.equal(again.brief.state, "unchanged");
+      assert.equal(again.estimate.brief, undefined);
+      const n1 = s.calls().length;
+      await plugin.runCliImport(again, { onConfirmUpdate: async () => true });
+      assert.ok(!s.calls().slice(n1).some((c) => c.stdin.includes("[후보 문장]")), "no brief call");
+      // The overview changed (the fake numbers its calls): the script part is written again, the AI part carried as it was.
+      const aiPart = (t) => [/^ai_hash: .*$/m.exec(t)[0], /^ai_part: .*$/m.exec(t)[0], /^one_line: .*$/m.exec(t)[0], t.slice(t.indexOf("## 강조점"))];
+      assert.deepEqual(aiPart(files.get("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md")), aiPart(b), "the AI part stays");
+      // The brief call fails: the import still succeeds, the script part is written with ai_part failed and one warning.
+      process.env.FAKE_CLI_MODE = "brieffail";
+      const warnings = [];
+      const failing = await plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-2", title: "Lec9 Fail" }), "CSED311");
+      const recF = await quietWarn(() => plugin.runCliImport(failing, { onWarning: (w) => warnings.push(w) }));
+      assert.ok(files.has(recF.path), "the import succeeded");
+      const fb = files.get("Alt2Obsidian/CSED311/Briefs/Lec9 Fail brief.md");
+      assert.match(fb, /^ai_part: \{status: "failed"\}$/m);
+      assert.ok(!/## 강조점/.test(fb) && /## 슬라이드 지도/.test(fb), "the script part only");
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /챗봇 브리프의 강조점을 만들지 못해 스크립트 부분만 썼습니다/);
+      // Its next import tries the AI part again (a failed part is not reused).
+      process.env.FAKE_CLI_MODE = "ok";
+      const retry = await plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-2", title: "Lec9 Fail" }), "CSED311");
+      assert.equal(retry.brief.state, "call");
+      await plugin.runCliImport(retry, { onConfirmUpdate: async () => true });
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec9 Fail brief.md"), /^ai_part: \{status: "ok"/m);
+      // "스크립트만": no call, the script part.
+      plugin.data.settings.briefMode = "script";
+      const scriptOnly = await plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-3", title: "Lec10 Script" }), "CSED311");
+      assert.equal(scriptOnly.brief.state, "script");
+      const n2 = s.calls().length;
+      await plugin.runCliImport(scriptOnly);
+      assert.equal(s.calls().length - n2, scriptOnly.estimate.calls);
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec10 Script brief.md"), /^ai_part: \{status: "none"\}$/m);
+      plugin.data.settings.briefMode = "ai";
+      // Leave the vault and the transcript cache as the tests below expect them.
+      for (const k of [...files.keys()]) if (/Lec(8 Coherence|9 Fail|10 Script)/.test(k)) files.delete(k);
+      for (const f of readdirSync(cacheRoot, { recursive: true })) if (/local-brief/.test(String(f))) rmSync(join(cacheRoot, String(f)), { force: true });
+      console.log("PASS: brief AI part on import: candidates from the transcript, one call of the brief task counted in the estimate (row and model picker), sections and one_line written, usage in the totals not in the note; unchanged input reused; a failed call leaves the script part and one warning and is tried again; script mode makes no call");
+    }
 
     // Opening the lecture PDF opens the Synced Viewer for the pair (setting on by default).
     {

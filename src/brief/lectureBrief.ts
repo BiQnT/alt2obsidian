@@ -62,9 +62,15 @@ export interface MapEntry {
 export interface BriefScript {
   lecture: string;
   stem: string;
+  /** The note's title (frontmatter), else its stem. */
+  title: string;
   subject: string;
   altLocalId: string;
   kind: LectureNoteKind;
+  /** Slides (or sections) of the note. */
+  units: number;
+  /** The note's alignment as written ("" without one). */
+  alignment: string;
   sourceHash: string;
   overview: string;
   flow: string;
@@ -151,9 +157,12 @@ export async function buildBriefScript(notePath: string, noteText: string): Prom
   return {
     lecture: notePath,
     stem: stemOf(notePath),
+    title: fmString(fm, "title") || stemOf(notePath),
     subject: subjectOfNote(notePath, fm),
     altLocalId: fmString(fm, "alt_local_id"),
     kind: parts.kind,
+    units: parts.units.reduce((n, u) => Math.max(n, u.num), 0),
+    alignment: alignmentValue,
     sourceHash: await shortHash(source),
     ...ov,
     map,
@@ -196,6 +205,18 @@ export interface CarriedAi {
   hash: string;
   /** `ai_part` as written, e.g. `{status: "ok", model: "claude-haiku-5-5", input: 4120, output: 760}`. */
   part: string;
+  /** `one_line` for the subject brief ("" without one). */
+  oneLine?: string;
+}
+
+/** The AI part a brief file holds now (its sections and frontmatter values). */
+export function aiOf(text: string): CarriedAi {
+  const fm = readFrontmatter(text);
+  return { sections: aiSectionsOf(bodyOf(text)), hash: fmString(fm, "ai_hash"), part: fmString(fm, "ai_part"), oneLine: fmString(fm, "one_line") };
+}
+
+function sameAi(a: CarriedAi, b: CarriedAi): boolean {
+  return a.sections.trim() === b.sections.trim() && a.hash === b.hash && a.part === b.part && (a.oneLine ?? "") === (b.oneLine ?? "");
 }
 
 const NO_AI_PART = '{status: "none"}';
@@ -216,6 +237,7 @@ export async function composeBrief(script: BriefScript, ai: CarriedAi | null, to
     `source_hash: ${JSON.stringify(script.sourceHash)}`,
     `ai_hash: ${JSON.stringify(ai?.hash ?? "")}`,
     `ai_part: ${ai?.part || NO_AI_PART}`,
+    ...(ai?.oneLine ? [`one_line: ${JSON.stringify(ai.oneLine)}`] : []),
     `body_hash: ${JSON.stringify(await briefBodyHash(body))}`,
     `built: ${JSON.stringify(today)}`,
     `size_tokens: ${estimateTextTokens(body)}`,
@@ -259,15 +281,20 @@ export type BriefDecision = { action: "write"; text: string } | { action: "keep"
  * sections, so an AI part with nothing to say or a failed one is not made
  * again for nothing.
  */
-export async function planBriefUpdate(existing: string | null, script: BriefScript, opts: { today: string; force?: boolean }): Promise<BriefDecision> {
-  if (existing === null) return { action: "write", text: await composeBrief(script, null, opts.today) };
+export async function planBriefUpdate(existing: string | null, script: BriefScript, opts: { today: string; force?: boolean; ai?: CarriedAi }): Promise<BriefDecision> {
+  if (existing === null) return { action: "write", text: await composeBrief(script, opts.ai ?? null, opts.today) };
   const edited = await isEditedBrief(existing);
   if (edited && !opts.force) return { action: "keep", reason: "edited" };
   const fm = readFrontmatter(existing);
-  if (!opts.force && fmString(fm, "source_hash") === script.sourceHash) return { action: "keep", reason: "same" };
-  // The AI part goes along as it is (sections, hash and status, even an empty or failed one), unless the user edited the brief.
-  const ai: CarriedAi | null = edited ? null : { sections: aiSectionsOf(bodyOf(existing)), hash: fmString(fm, "ai_hash"), part: fmString(fm, "ai_part") };
-  return { action: "write", text: await composeBrief(script, ai, opts.today) };
+  const sameSource = fmString(fm, "source_hash") === script.sourceHash;
+  // A new AI part (`ai`): written unless the brief already holds exactly it.
+  if (opts.ai) {
+    if (!opts.force && sameSource && !edited && sameAi(aiOf(existing), opts.ai)) return { action: "keep", reason: "same" };
+    return { action: "write", text: await composeBrief(script, opts.ai, opts.today) };
+  }
+  if (!opts.force && sameSource) return { action: "keep", reason: "same" };
+  // The AI part goes along as it is (sections, hash, status and one line, even an empty or failed one), unless the user edited the brief.
+  return { action: "write", text: await composeBrief(script, edited ? null : aiOf(existing), opts.today) };
 }
 
 /** What the question panel sends of a brief: the body without the frontmatter and the `# ... brief` title (spec 6.1). */

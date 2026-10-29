@@ -99,7 +99,7 @@ import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
 import { pluginCacheDir } from "./sources/altPaths";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
-import { attachmentPathForNote, lecturePath, stemOf, subjectFolderOfNote, verificationPathForNote } from "./vault/layout";
+import { attachmentPathForNote, briefPathForNote, lecturePath, stemOf, subjectFolderOfNote, verificationPathForNote } from "./vault/layout";
 import {
   estimateVerification,
   mergeVerificationNote,
@@ -118,9 +118,10 @@ import { applyLayoutMigration, MigrationPlan, MigrationResult, planLayoutMigrati
 import { MigrationModal } from "./ui/MigrationModal";
 import { normalizeConcepts } from "./core/conceptNames";
 import { decidePdfOpen, isLectureFrontmatter, isLectureNote, lectureNoteForPdf } from "./ui/pdfOpen";
-import { BriefFiles, readLectureBrief, updateLectureBrief } from "./brief/briefStore";
+import { aiInputFor, BriefAiStep, BriefFiles, readLectureBrief, updateLectureBrief } from "./brief/briefStore";
+import { aiPartStatus, BRIEF_AI_OUTPUT_TOKENS, BRIEF_AI_SCHEMA, briefAiInput } from "./brief/briefAi";
 import { commentaryText, fmString, isBriefFrontmatter, memoText, parseLectureNote, readFrontmatter } from "./brief/lectureNote";
-import { neighbourLectures, subjectOfNote } from "./brief/lectureBrief";
+import { aiOf, buildBriefScript, isEditedBrief, neighbourLectures, subjectOfNote } from "./brief/lectureBrief";
 import { ChatBriefState, ChatLecture, ChatView, SlideMaterial } from "./ui/ChatView";
 import { ChatPanelController, VIEW_TYPE_CHAT } from "./ui/chatPanel";
 import { ChatErrorInfo, ChatRunRequest, ChatRunResult, ThreadStore } from "./chat/threads";
@@ -174,6 +175,20 @@ export interface PreparedImport {
    * not listed use the saved settings; the settings are never changed here.
    */
   overrides: Partial<Record<TaskId, TaskLLMSetting>>;
+  /** What the lecture brief's AI part will do (2.1.0 spec 4.5): the estimate's "챗봇 브리프" row. */
+  brief: BriefEstimatePlan;
+}
+
+/**
+ * The brief's AI part in an import estimate: a call (with the prompt it
+ * would send, regenerated gists counted as stand-ins), or why there is
+ * none: the setting (off, script only), no timestamped transcript, no
+ * candidate sentence, a brief the user edited, or the same input as the
+ * AI part already there.
+ */
+export interface BriefEstimatePlan {
+  state: "off" | "script" | "no-transcript" | "no-candidates" | "edited" | "unchanged" | "call";
+  promptText?: string;
 }
 
 /** A verification after claims, evidence and estimate, before any LLM call. */
@@ -205,6 +220,18 @@ export interface CliImportHooks {
   onModel?: (task: string, model: string) => void;
   onProgress?: (stage: string, percent: number) => void;
   onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
+  /** A step after the note was saved went wrong (the lecture brief's AI part): one line for the progress panel. */
+  onWarning?: (text: string) => void;
+}
+
+/** What the import's brief step needs from the run (spec 4.4, 4.5). */
+interface BriefStepContext {
+  /** The brief task of this run (the estimate panel's picker, else the setting). */
+  task: TaskLLMSetting;
+  /** The lecture's timestamped transcript from the import; null: read from the cache or Alt. */
+  transcript: TimedText[] | null;
+  signal?: AbortSignal;
+  onWarning?: (text: string) => void;
 }
 
 /**
@@ -225,6 +252,14 @@ type AltToObsRead =
   | { state: "missing" }
   | { state: "unreadable"; error: string; mtime: number | null }
   | { state: "ok"; data: Record<string, unknown>; mtime: number | null };
+
+/** The timestamped part of an import's transcript (local sources), null without one. */
+function timedTranscript(bundle: LectureBundle | undefined): TimedText[] | null {
+  const timed = (bundle?.transcript ?? [])
+    .filter((s) => s.startMs !== null && s.endMs !== null)
+    .map((s) => ({ startMs: s.startMs as number, endMs: s.endMs as number, text: s.text }));
+  return timed.length > 0 ? timed : null;
+}
 
 /** Saved data without the API keys of 1.x and 2.0.0-beta.3 (nothing reads them; they are not carried over). */
 function withoutLegacyKeys(data: Record<string, unknown>): Record<string, unknown> {
@@ -1027,7 +1062,8 @@ export default class Alt2ObsPlugin extends Plugin {
     onProgress?: (stage: string, percent: number) => void,
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>,
     signal?: AbortSignal,
-    notePathOverride?: string
+    notePathOverride?: string,
+    brief?: BriefStepContext
   ): Promise<ImportRecord> {
     const altData = preview.altData;
     const pdfDataPromise = this.downloadPdfForImport(preview);
@@ -1050,7 +1086,8 @@ export default class Alt2ObsPlugin extends Plugin {
         onProgress,
         onConfirmUpdate,
         signal,
-        notePathOverride ?? this.resolveNotePath(preview, subject)
+        notePathOverride ?? this.resolveNotePath(preview, subject),
+        brief
       );
     }
 
@@ -1162,6 +1199,7 @@ export default class Alt2ObsPlugin extends Plugin {
       onProgress,
       onConfirmUpdate,
       signal,
+      brief,
     });
   }
 
@@ -1183,6 +1221,8 @@ export default class Alt2ObsPlugin extends Plugin {
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>;
     /** A cancelled import must not write anything. */
     signal?: AbortSignal;
+    /** The brief step's run context (its model, the transcript). */
+    brief?: BriefStepContext;
   }): Promise<ImportRecord> {
     const { url, altData, subject, lectureMarkdown, conceptNotes, pdfData, onProgress, onConfirmUpdate, signal } = args;
     const vm = this.vaultManager!;
@@ -1218,7 +1258,7 @@ export default class Alt2ObsPlugin extends Plugin {
     for (const a of args.attachments ?? []) await vm.saveRawFile(a.data, a.path);
     await this.cacheTranscript(args.bundle).catch((e) => console.warn("[Alt2Obs] transcript cache write failed:", e));
     void this.pruneTranscriptCache(args.bundle ? [args.bundle.sourceId] : []).catch(() => undefined);
-    await this.writeBriefAfterImport(notePath, onProgress);
+    await this.writeBriefAfterImport(notePath, args.brief, onProgress);
 
     onProgress?.("완료!", 100);
 
@@ -1388,7 +1428,55 @@ export default class Alt2ObsPlugin extends Plugin {
     onProgress?.("예산 산정 완료", 100);
     const diagramPages = plan && settings.generation.saveKeyDiagrams ? selectKeyDiagrams(plan.slides, plan.scanned) : [];
     const altPdfIgnored = pdfSource === "attached" && !!altPdf;
-    return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, transcriptPlan, pdfSource, altPdfIgnored, context, fewerImages: false, alignment, slideTexts, diagramPages, overrides: {} });
+    const brief = await this.planBriefEstimate({ notePath, preview, subject, plan, transcriptPlan, alignment, existingNote });
+    return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, transcriptPlan, pdfSource, altPdfIgnored, context, fewerImages: false, alignment, slideTexts, diagramPages, overrides: {}, brief });
+  }
+
+  /**
+   * What the brief step of this import will cost (spec 4.5): one call with
+   * the prompt the run would send, or none (see BriefEstimatePlan). Gists
+   * of slides the run generates are not known yet: a stand-in of a gist's
+   * length is counted for each. With nothing generated the input is exact,
+   * so an AI part already made from it means no call.
+   */
+  private async planBriefEstimate(o: {
+    notePath: string;
+    preview: ImportPreview;
+    subject: string;
+    plan: DeckPlan | null;
+    transcriptPlan: TranscriptPlan | null;
+    alignment: LectureAlignment | null;
+    existingNote: string | null;
+  }): Promise<BriefEstimatePlan> {
+    const mode = this.data.settings.briefMode;
+    if (mode !== "ai") return { state: mode === "off" ? "off" : "script" };
+    const transcript = timedTranscript(o.preview.bundle);
+    if (!transcript) return { state: "no-transcript" };
+    const existingBrief = await this.briefFiles().read(briefPathForNote(o.notePath));
+    if (existingBrief !== null && (await isEditedBrief(existingBrief))) return { state: "edited" };
+    const old = o.existingNote ? await buildBriefScript(o.notePath, o.existingNote) : null;
+    const script = old ? { ...old, title: o.preview.altData.title, subject: o.subject, alignment: o.alignment?.value ?? "" } : null;
+    const generated = o.plan ? o.plan.slides.some((x) => x.mode === "llm") : o.transcriptPlan ? o.transcriptPlan.sections.some((x) => x.mode === "llm") : true;
+    if (!generated && script && existingBrief !== null) {
+      const exact = await aiInputFor(script, transcript);
+      const had = aiOf(existingBrief);
+      if (!exact) return { state: "no-candidates" };
+      if (had.hash === exact.hash && aiPartStatus(had.part) === "ok") return { state: "unchanged" };
+      return { state: "call", promptText: `${exact.system}\n\n${exact.user}` };
+    }
+    const units = o.plan ? o.plan.slides.length : o.transcriptPlan ? o.transcriptPlan.sections.length : 0;
+    const known = new Map((script?.map ?? []).map((e) => [e.num, e]));
+    const map = Array.from({ length: units }, (_, i) => known.get(i + 1) ?? { num: i + 1, range: "", text: "가".repeat(40) });
+    const input = await briefAiInput({
+      title: o.preview.altData.title,
+      subject: o.subject,
+      kind: o.plan ? "slides" : o.transcriptPlan ? "transcript" : "lecture",
+      map,
+      units,
+      transcript,
+      spans: parseAlignment(o.alignment?.value ?? ""),
+    });
+    return input ? { state: "call", promptText: `${input.system}\n\n${input.user}` } : { state: "no-candidates" };
   }
 
   /** Parsed frontmatter of a vault note, or null. */
@@ -1451,6 +1539,18 @@ export default class Alt2ObsPlugin extends Plugin {
     if (checkPrompt && alignmentTask.provider !== "none") {
       const check = estimateCalls([{ promptText: checkPrompt, images: 0, schema: true, outputTokens: 200 }], alignmentTask.provider, this.estimatedEffort(alignmentTask));
       estimate = { ...estimate, calls: estimate.calls + check.calls, inputTokens: estimate.inputTokens + check.inputTokens, outputTokens: estimate.outputTokens + check.outputTokens };
+    }
+    // The lecture brief's AI part (spec 4.5): one call, output 800 times the effort factor; counted in the cap.
+    const briefTask = this.runTask(p, "brief");
+    if (p.brief.state === "call" && p.brief.promptText && isCliProvider(briefTask.provider)) {
+      const b = estimateCalls([{ promptText: p.brief.promptText, images: 0, schema: true, outputTokens: BRIEF_AI_OUTPUT_TOKENS }], briefTask.provider, this.estimatedEffort(briefTask));
+      estimate = {
+        ...estimate,
+        calls: estimate.calls + b.calls,
+        inputTokens: estimate.inputTokens + b.inputTokens,
+        outputTokens: estimate.outputTokens + b.outputTokens,
+        brief: { calls: b.calls, inputTokens: b.inputTokens, outputTokens: b.outputTokens },
+      };
     }
     return { ...p, estimate, overCap: exceedsCap(estimate, this.data.settings.generation.tokenCapPerLecture) };
   }
@@ -1530,6 +1630,7 @@ export default class Alt2ObsPlugin extends Plugin {
     const signal = controller.signal;
     const commentaryTask = this.runTask(prepared, "commentary");
     const conceptTask = this.runTask(prepared, "concepts");
+    const brief: BriefStepContext = { task: this.runTask(prepared, "brief"), transcript: timedTranscript(prepared.preview.bundle), signal, onWarning: hooks.onWarning };
     try {
       const commentaryLlm = await this.providerFor("commentary", job, usage, signal, commentaryTask);
       const conceptLlm = await this.providerFor("concepts", job, usage, signal, conceptTask);
@@ -1538,13 +1639,13 @@ export default class Alt2ObsPlugin extends Plugin {
       const altData = preview.altData;
 
       if (prepared.transcriptPlan) {
-        return await this.runTranscriptImport(prepared, prepared.transcriptPlan, { commentaryLlm, conceptLlm, commentaryTask, usage, signal, hooks });
+        return await this.runTranscriptImport(prepared, prepared.transcriptPlan, { commentaryLlm, conceptLlm, commentaryTask, usage, signal, hooks, brief });
       }
 
       if (!plan || !pdfData) {
         // No PDF: 1.x lecture-level note, generated by the CLI provider.
         hooks.onStep?.("overview");
-        return await this.runLegacyImport(url, preview, subject, commentaryLlm, conceptLlm, hooks.onProgress, hooks.onConfirmUpdate, signal, prepared.notePath);
+        return await this.runLegacyImport(url, preview, subject, commentaryLlm, conceptLlm, hooks.onProgress, hooks.onConfirmUpdate, signal, prepared.notePath, brief);
       }
 
       // Optional LLM check of the uncertain alignment spans (spec 4.3 step 3).
@@ -1619,6 +1720,7 @@ export default class Alt2ObsPlugin extends Plugin {
         onProgress: hooks.onProgress,
         onConfirmUpdate: hooks.onConfirmUpdate,
         signal,
+        brief,
       });
     } finally {
       hooks.signal?.removeEventListener("abort", forward);
@@ -1638,7 +1740,7 @@ export default class Alt2ObsPlugin extends Plugin {
   private async runTranscriptImport(
     prepared: PreparedImport,
     plan: TranscriptPlan,
-    r: { commentaryLlm: ILLMProvider; conceptLlm: ILLMProvider; commentaryTask: TaskLLMSetting; usage: UsageTracker; signal: AbortSignal; hooks: CliImportHooks }
+    r: { commentaryLlm: ILLMProvider; conceptLlm: ILLMProvider; commentaryTask: TaskLLMSetting; usage: UsageTracker; signal: AbortSignal; hooks: CliImportHooks; brief: BriefStepContext }
   ): Promise<ImportRecord> {
     const { preview, subject, url } = prepared;
     const altData = preview.altData;
@@ -1691,6 +1793,7 @@ export default class Alt2ObsPlugin extends Plugin {
       onProgress: hooks.onProgress,
       onConfirmUpdate: hooks.onConfirmUpdate,
       signal,
+      brief: r.brief,
     });
   }
 
@@ -1719,18 +1822,63 @@ export default class Alt2ObsPlugin extends Plugin {
 
   /**
    * The import's brief step, after the note is saved (spec 4.4): the script
-   * part (no tokens) unless the setting "가져올 때 챗봇 브리프 만들기" is off.
-   * "AI 강조점 포함" adds the AI part in a later step; until then it builds
-   * the script part like "스크립트만". A failure never fails the import.
+   * part (no tokens) unless the setting "가져올 때 챗봇 브리프 만들기" is off;
+   * with "AI 강조점 포함" and a timestamped transcript, the AI part too (one
+   * call of the brief task when its input changed). A failure never fails
+   * the import: a failed AI part leaves the script part with
+   * ai_part.status "failed" and one warning line.
    */
-  private async writeBriefAfterImport(notePath: string, onProgress?: (stage: string, percent: number) => void): Promise<void> {
-    if (this.data.settings.briefMode === "off") return;
+  private async writeBriefAfterImport(notePath: string, ctx?: BriefStepContext, onProgress?: (stage: string, percent: number) => void): Promise<void> {
+    const mode = this.data.settings.briefMode;
+    if (mode === "off") return;
     try {
       onProgress?.("챗봇 브리프 만드는 중...", 98);
-      await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate() });
+      const ai = mode === "ai" ? await this.briefAiStep(notePath, ctx?.task ?? this.data.settings.tasks.brief, ctx?.transcript ?? null, ctx?.signal) : undefined;
+      const result = await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate(), ai });
+      if (result.ai === "failed") ctx?.onWarning?.(`챗봇 브리프의 강조점을 만들지 못해 스크립트 부분만 썼습니다: ${result.aiError ?? "알 수 없는 오류"}`);
     } catch (e) {
       console.warn("[Alt2Obs] lecture brief not written:", e);
+      ctx?.onWarning?.(`챗봇 브리프를 쓰지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
     }
+  }
+
+  /**
+   * The AI step of a lecture's brief: its timestamped transcript (the
+   * import's, else the cache or Alt) and one call of the brief task, its
+   * usage added to the plugin totals (never to the note's alt2obs_usage).
+   * Undefined without a transcript: the script part only.
+   */
+  async briefAiStep(notePath: string, task: TaskLLMSetting, transcript: TimedText[] | null, signal?: AbortSignal): Promise<BriefAiStep | undefined> {
+    if (!isCliProvider(task.provider)) return undefined;
+    let segments = transcript;
+    if (!segments || segments.length === 0) {
+      const id = fmString(this.frontmatterOf(notePath) ?? {}, "alt_local_id");
+      segments = id ? await this.loadTranscript(id) : null;
+    }
+    if (!segments || segments.length === 0) return undefined;
+    return {
+      transcript: segments,
+      run: async (prompt, validate) => {
+        const job = createJobDir();
+        const usage = new UsageTracker();
+        const controller = new AbortController();
+        const forward = () => controller.abort();
+        if (signal?.aborted) controller.abort();
+        signal?.addEventListener("abort", forward, { once: true });
+        this.activeJobs.add(controller);
+        try {
+          const llm = await this.providerFor("brief", job, usage, controller.signal, task);
+          const ai = await llm.generateJSON(prompt.user, validate, { systemPrompt: prompt.system, schema: BRIEF_AI_SCHEMA, signal: controller.signal });
+          const total = usage.total();
+          return { ai, model: usage.modelFor("brief") || task.model, input: total.inputTokens, output: total.outputTokens };
+        } finally {
+          signal?.removeEventListener("abort", forward);
+          this.activeJobs.delete(controller);
+          removeJobDir(job);
+          if (usage.total().calls > 0) await this.recordUsage(usage, false).catch((e) => console.warn("[Alt2Obs] usage record failed:", e));
+        }
+      },
+    };
   }
 
   /**
@@ -2671,7 +2819,8 @@ export default class Alt2ObsPlugin extends Plugin {
     onProgress?: (stage: string, percent: number) => void,
     onConfirmUpdate?: (summary: ImportUpdateSummary) => Promise<boolean>,
     signal?: AbortSignal,
-    notePath?: string
+    notePath?: string,
+    brief?: BriefStepContext
   ): Promise<ImportRecord> {
     onProgress?.("부분 노트 생성 중...", 50);
 
@@ -2718,7 +2867,7 @@ export default class Alt2ObsPlugin extends Plugin {
     if (pdfData) {
       pdfPath = await vm.saveRawFile(pdfData, notePath.replace(/\.md$/, ".pdf"));
     }
-    await this.writeBriefAfterImport(notePath, onProgress);
+    await this.writeBriefAfterImport(notePath, brief, onProgress);
 
     onProgress?.("완료!", 100);
 

@@ -87,6 +87,7 @@ const tellFiles = [
   "concept-extraction-gists.md",
   "concept-extraction-sections.md",
   "chat.system.md",
+  "lecture-brief.system.md",
 ];
 for (const file of tellFiles) assert.equal(tells(file), sharedTells, `${file} carries the shared list of AI tells`);
 console.log(`PASS: the commentary, section, overview, summary, lecture note, concept and question prompts share one list of AI tells (${tellFiles.length + 1} files)`);
