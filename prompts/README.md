@@ -44,6 +44,7 @@ Single source for every LLM prompt used by the Alt2Obs plugin (named Alt2Obsidia
 | `note-verify-transcript.system.md` | note verification of a lecture without slides (system): the evidence is STT transcript sections only | none |
 | `note-verify-missing-sections.md` | note verification of a lecture without slides: sections no claim covers, with their gist | `title`, `sections` |
 | `notion-fetch.md` | Notion MCP fetch (Claude CLI with only the Notion fetch tool): raw markdown or `UNCHANGED` | `url`, `cachedEdited` |
+| `chat.system.md` | the question panel (2.1.0): system prompt of every question, followed by the lecture brief (`src/chat/contextPack.ts`); the Codex prompt starts with it | none |
 | `alignment-check.md` | optional LLM check of low-confidence transcript alignment spans (task "전사 정렬 확인", off by default) | `title`, `parts` |
 
 ## Batched prompt order (CLI path, spec 5.3)

@@ -25,6 +25,7 @@ export class PluginSettingTab { constructor(app, plugin) { this.app = app; this.
 export class Setting {}
 export const requireApiVersion = () => true;
 export class Component {}
+export class Menu { addItem() { return this; } showAtMouseEvent() {} }
 export const MarkdownRenderer = { render: async () => {} };
 export const setIcon = () => {};
 export const editorLivePreviewField = null;

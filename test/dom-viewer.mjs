@@ -181,3 +181,17 @@ assert.deepEqual(ui("other note indexed"), ui("restored, not indexed"), "another
 assert.deepEqual(ui("note indexed"), { label: true, transcriptButton: true, titleBar: "L5 (Synced)", tab: "L5 (Synced)" }, "the note's metadata arrives: alignment label and transcript button");
 assert.match(at("transcript").text, /슬라이드 1 구간.*00:00 - 00:30.*\[00:01\]첫 문장/, "the transcript panel uses the alignment read late");
 console.log("PASS: Synced Viewer restored before the note is indexed: the alignment label and transcript button come with the note's metadata, the title bar and the tab name the note");
+
+// 2.1.0: the question panel button and the page event (spec 5.1, 5.2).
+const chat = at("chat");
+assert.deepEqual(chat.buttons.slice(-2), ["전사 패널", "💬 질문"], "💬 질문 right after 전사 패널");
+assert.deepEqual(chat.beforePair, { slide: null, events: 0 }, "no slide and no event before a PDF is shown");
+assert.ok(chat.events.every(([name, info]) => name === "alt2obsidian:slide-change" && info.mdPath === "note.md" && info.pdfPath === "deck.pdf"), "the event names the pair");
+const pages = chat.events.map(([, info]) => info.page);
+assert.equal(pages[0], 1, "page 1 once the PDF is shown");
+assert.equal(pages[pages.length - 1], 5, "then the page gone to");
+assert.ok(pages.every((p, i) => i === 0 || p !== pages[i - 1]), `one event per page change, never the same page twice in a row (${pages})`);
+assert.equal(chat.slide, 5, "getCurrentSlide()");
+assert.equal(chat.toggles, 1, "the button toggles the panel");
+assert.deepEqual([chat.activeWhenOpen, chat.activeAfter], [true, false], "is-active while the panel is open");
+console.log("PASS: Synced Viewer's 💬 질문 button toggles the question panel and shows it open (is-active); each page change is announced once with the pair; getCurrentSlide()");

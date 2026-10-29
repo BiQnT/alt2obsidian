@@ -1,8 +1,10 @@
 // Browser stand-in for the parts of the obsidian API the Synced Viewer, the
-// sidebar and the settings tab use (test/dom-viewer.mjs, test/dom-sidebar.mjs,
-// test/dom-settings.mjs). The
+// sidebar, the settings tab and the question panel use (test/dom-viewer.mjs,
+// test/dom-sidebar.mjs, test/dom-settings.mjs, test/dom-chat.mjs). The
 // markdown "renderer" handles what the layout needs: headings, paragraphs,
-// and HTML comment lines (dropped, like Obsidian's reading view). Setting
+// inline and fenced code, and HTML comment lines (dropped, like Obsidian's
+// reading view). Notices are kept in window.__notices, the last menu shown
+// in Menu.shown. Setting
 // builds the DOM Obsidian 1.14 builds (div.setting-item > div.setting-item-info
 // > name + description, then div.setting-item-control; a dropdown adds a
 // hidden measuring select), and its controls call their onChange/onClick
@@ -38,8 +40,22 @@ window.createEl = (tag, o) => {
   el.remove();
   return el;
 };
+window.createDiv = (o) => window.createEl("div", o);
+window.createFragment = () => document.createDocumentFragment();
+DocumentFragment.prototype.createEl = P.createEl;
+DocumentFragment.prototype.createSpan = P.createSpan;
 export class TFile { constructor(path) { this.path = path; } }
-export class Notice { constructor(m) { console.log("Notice", m); } }
+export class Notice { constructor(m) { (window.__notices ??= []).push(m); console.log("Notice", m); } }
+export class Menu {
+  constructor() { this.items = []; }
+  addItem(cb) {
+    const item = { title: "", setTitle(t) { this.title = t; return this; }, setIcon() { return this; }, onClick(f) { this.click = f; return this; } };
+    cb(item);
+    this.items.push(item);
+    return this;
+  }
+  showAtMouseEvent() { Menu.shown = this; }
+}
 export class Component { load() {} unload() {} }
 export class ItemView {
   constructor(leaf) {
@@ -59,7 +75,7 @@ export class ItemView {
   async setState() {}
 }
 export class WorkspaceLeaf {}
-function inline(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+function inline(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/`([^`\n]+)`/g, "<code>$1</code>"); }
 export const MarkdownRenderer = {
   // Enough markdown for layout: headings and paragraphs.
   async render(app, text, el) {
@@ -68,6 +84,11 @@ export const MarkdownRenderer = {
     for (const block of body.split(/\n{2,}/)) {
       const b = block.trim();
       if (!b) continue;
+      const fence = b.match(/^```[^\n]*\n([\s\S]*?)\n```$/);
+      if (fence) {
+        html.push(`<pre><code>${fence[1].replace(/&/g, "&amp;").replace(/</g, "&lt;")}</code></pre>`);
+        continue;
+      }
       const h = b.match(/^(#{1,6}) (.*)$/m);
       if (h && b.startsWith("#")) {
         html.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);

@@ -23,7 +23,7 @@ import { AltPublicUrlSource } from "./sources/AltPublicUrlSource";
 import { AltLocalSource, altUserDataDir, connectAltLocal, ConnectResult, inferSubject, LectureBundle } from "./sources";
 import { alignLecture, buildAlignmentCheckPrompt, checkAlignmentWithLlm, LectureAlignment } from "./pipeline/alignment";
 import { layoutAlignmentText } from "./core/prep/pageLayout";
-import { computeSlideHash } from "./core/slideHash";
+import { computeSlideHash, normalizePageText } from "./core/slideHash";
 import { hasMultiManagedMarkers, splitMultiManagedNote } from "./core/merge";
 import { isLinkCandidate, LectureKind, lectureKind, LocalNoteStatus, MissingPdfError, slideChangeCount, VaultNoteInfo } from "./core/noteStatus";
 import { hasSectionMarkers } from "./core/sections";
@@ -98,7 +98,7 @@ import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
 import { pluginCacheDir } from "./sources/altPaths";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
-import { attachmentPathForNote, lecturePath, verificationPathForNote } from "./vault/layout";
+import { attachmentPathForNote, lecturePath, stemOf, subjectFolderOfNote, verificationPathForNote } from "./vault/layout";
 import {
   estimateVerification,
   mergeVerificationNote,
@@ -112,13 +112,19 @@ import {
   VerifyProgress,
 } from "./verify/NoteVerifier";
 import { fetchNotionPage, NotionFetchProvider, NotionFetchResult } from "./verify/notionFetch";
-import { parseAlignment } from "./core/prep/TranscriptAligner";
+import { parseAlignment, spansForSlide } from "./core/prep/TranscriptAligner";
 import { applyLayoutMigration, MigrationPlan, MigrationResult, planLayoutMigration, VaultFileEntry } from "./vault/layoutMigration";
 import { MigrationModal } from "./ui/MigrationModal";
 import { normalizeConcepts } from "./core/conceptNames";
 import { decidePdfOpen, isLectureFrontmatter, isLectureNote, lectureNoteForPdf } from "./ui/pdfOpen";
 import { BriefFiles, readLectureBrief, updateLectureBrief } from "./brief/briefStore";
-import { isBriefFrontmatter, readFrontmatter } from "./brief/lectureNote";
+import { commentaryText, fmString, isBriefFrontmatter, memoText, parseLectureNote, readFrontmatter } from "./brief/lectureNote";
+import { neighbourLectures, subjectOfNote } from "./brief/lectureBrief";
+import { ChatBriefState, ChatLecture, ChatRunRequest, ChatRunResult, ChatView, SlideMaterial } from "./ui/ChatView";
+import { ChatPanelController, VIEW_TYPE_CHAT } from "./ui/chatPanel";
+import { ChatErrorInfo, ThreadStore } from "./chat/threads";
+import { segmentsInSpans, TEXTLESS_PAGE_CHARS, TimedText } from "./chat/contextPack";
+import { isAuthError, isUsageLimitError } from "./llm/cli/CliProviderBase";
 import { renderPrompt } from "./prompts/render";
 // The lecture-level note (no slide plan, no transcript sections) is the
 // whole body, so it gets the full-note prompts; the short summary-*.md
@@ -239,6 +245,10 @@ export default class Alt2ObsPlugin extends Plugin {
   /** Slide hashes of local PDFs by path + size + mtime (sidebar status). */
   private textCache = new Map<string, Array<string | null>>();
   private pageCountCache = new Map<string, number>();
+  /** Question threads by lecture note, kept while the plugin runs (2.1.0 spec 5.1). */
+  chatThreads = new ThreadStore();
+  /** Opens and closes the question panel. */
+  private chatPanel: ChatPanelController | null = null;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -264,9 +274,14 @@ export default class Alt2ObsPlugin extends Plugin {
         leaf,
         (id) => this.loadTranscript(id),
         () => this.data.settings.hideManagedComments,
-        (pdfPath) => this.openNativePdf(pdfPath)
+        (pdfPath) => this.openNativePdf(pdfPath),
+        { toggle: () => void this.toggleChatPanel(), isOpen: () => !!this.chatPanel?.isOpen() }
       );
     });
+
+    // The question panel (2.1.0 spec 5): on demand in the right sidebar.
+    this.chatPanel = new ChatPanelController(this.app.workspace, (open) => this.showChatOpen(open));
+    this.registerView(VIEW_TYPE_CHAT, (leaf) => new ChatView(leaf, this));
 
     // Attached PDF copies are tracked by path: follow renames and moves (spec 4.10).
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => void this.onVaultRename(file, oldPath).catch((e) => console.warn("[Alt2Obs] attach record update failed:", e))));
@@ -332,6 +347,12 @@ export default class Alt2ObsPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "toggle-question-panel",
+      name: "질문 패널 열기/닫기",
+      callback: () => void this.toggleChatPanel(),
+    });
+
+    this.addCommand({
       id: "rebuild-brief",
       name: "이 강의 브리프 다시 만들기",
       callback: () => void this.activeLectureNote().then((path) => this.rebuildBrief(path)).catch((e) => new Notice(`브리프를 만들지 못했습니다: ${e instanceof Error ? e.message : String(e)}`)),
@@ -346,6 +367,8 @@ export default class Alt2ObsPlugin extends Plugin {
       this.adoptAltToObsLeaves().catch((e) => console.warn("[Alt2Obs] 2.0.0 view tabs not converted:", e));
       this.applyCliDefaultOnce().catch((e) => console.warn("[Alt2Obs] CLI default check failed:", e));
       this.pruneAttachRecords().catch((e) => console.warn("[Alt2Obs] attach record prune failed:", e));
+      // The question panel opens only on demand: a panel restored with the layout goes.
+      this.chatPanel?.detachRestored();
       // Lecture PDFs opened from now on go to the Synced Viewer (setting
       // "강의 PDF를 열면 뷰어로 열기"). Registered after the layout is
       // restored, and the PDF tabs it restored are left as plain PDFs.
@@ -373,6 +396,7 @@ export default class Alt2ObsPlugin extends Plugin {
     // Kill running CLI processes; their finally blocks remove the temp folders.
     this.abortAllJobs();
     this.unloaded = true;
+    this.chatThreads.dropAll();
     this.localSource?.close?.();
     this.localSource = null;
     if (this.pdfWorkerUrl) URL.revokeObjectURL(this.pdfWorkerUrl);
@@ -1711,6 +1735,8 @@ export default class Alt2ObsPlugin extends Plugin {
    * note of the active Synced Viewer. Null when neither is open.
    */
   private async activeLectureNote(): Promise<string | null> {
+    const chat = this.app.workspace.getActiveViewOfType(ChatView)?.lecturePath();
+    if (chat) return chat;
     const viewer = this.app.workspace.getActiveViewOfType(SyncedViewerView);
     const viewerNote = viewer?.getState().mdPath;
     if (typeof viewerNote === "string" && viewerNote) return viewerNote;
@@ -1745,7 +1771,209 @@ export default class Alt2ObsPlugin extends Plugin {
     }
     const result = await updateLectureBrief(files, notePath, { today: formatDate(), force: true });
     new Notice(`브리프를 다시 만들었습니다: ${result.path}`);
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
+      if (leaf.view instanceof ChatView && leaf.view.lecturePath() === notePath) void leaf.view.reloadBrief();
+    }
     return true;
+  }
+
+  // ---- question panel (2.1.0 spec 5, 6) ----
+
+  async toggleChatPanel(): Promise<void> {
+    await this.chatPanel?.toggle();
+  }
+
+  closeChatPanel(): void {
+    this.chatPanel?.close();
+  }
+
+  /** The panel's view closed: the right sidebar goes back to how it was (not while the plugin unloads). */
+  chatPanelClosed(leaf: WorkspaceLeaf): void {
+    if (!this.unloaded) this.chatPanel?.closed(leaf);
+  }
+
+  /** The viewers' "💬 질문" buttons show whether the panel is open. */
+  private showChatOpen(open: boolean): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_SYNCED_VIEWER)) {
+      if (leaf.view instanceof SyncedViewerView) leaf.view.setChatActive(open);
+    }
+  }
+
+  /** Transcripts the panel read, by Alt id (a few lectures, for this session). */
+  private chatTranscripts = new Map<string, Promise<TimedText[] | null>>();
+
+  private chatTranscript(altLocalId: string): Promise<TimedText[] | null> {
+    let found = this.chatTranscripts.get(altLocalId);
+    if (!found) {
+      found = this.loadTranscript(altLocalId);
+      // Not found now (Alt closed, cache cleared): asked again next time.
+      void found.then((t) => {
+        if (!t) this.chatTranscripts.delete(altLocalId);
+      });
+      this.chatTranscripts.set(altLocalId, found);
+      for (const key of Array.from(this.chatTranscripts.keys()).slice(0, Math.max(0, this.chatTranscripts.size - 3))) this.chatTranscripts.delete(key);
+    }
+    return found;
+  }
+
+  /** Page texts of a lecture PDF for the panel (lines kept), read once per file version. */
+  private chatPageTextCache = new Map<string, string[]>();
+
+  private async chatPageTexts(pdf: TFile): Promise<string[]> {
+    const key = `${pdf.path}:${pdf.stat?.mtime ?? 0}:${pdf.stat?.size ?? 0}`;
+    const cached = this.chatPageTextCache.get(key);
+    if (cached) return cached;
+    const layouts = await this.pdfProcessor!.getPageLayouts(await this.app.vault.readBinary(pdf));
+    const texts = layouts.map(layoutAlignmentText);
+    this.chatPageTextCache.clear();
+    this.chatPageTextCache.set(key, texts);
+    return texts;
+  }
+
+  /** The lecture of a note for the panel; null when the note is not a lecture note (spec 5.2). */
+  async chatLecture(notePath: string): Promise<ChatLecture | null> {
+    const file = this.app.vault.getAbstractFileByPath(notePath);
+    if (!(file instanceof TFile) || !/\.md$/i.test(notePath)) return null;
+    const text = await this.app.vault.cachedRead(file);
+    const parts = parseLectureNote(text);
+    const fm = parts.frontmatter;
+    if (!isLectureNote(fm, text)) return null;
+    const maxNum = parts.units.reduce((n, u) => Math.max(n, u.num), 0);
+    // The alignment's end until a slide's material reads the transcript (its end then counts).
+    const spans = parseAlignment(fm.alt_alignment);
+    const alignmentEnd = spans.length > 0 ? Math.max(...spans.map((s) => s.endMs)) : null;
+    const folder = notePath.replace(/\/?[^/]*$/, "");
+    const siblings = this.vaultLectureNotes()
+      .filter((v) => v.path.replace(/\/?[^/]*$/, "") === folder)
+      .map((v) => ({ name: stemOf(v.path), altCreated: v.altCreated }));
+    if (!siblings.some((l) => l.name === stemOf(notePath))) siblings.push({ name: stemOf(notePath), altCreated: fmString(fm, "alt_created") || undefined });
+    return {
+      notePath,
+      name: stemOf(notePath),
+      subject: subjectOfNote(notePath, fm),
+      kind: parts.kind,
+      pdfPath: parts.kind === "slides" ? this.siblingPdf(notePath)?.path ?? null : null,
+      slideCount: parts.kind === "slides" ? Math.max(maxNum, Number(fm.slide_count) || 0) : 0,
+      sectionCount: parts.kind === "transcript" ? maxNum : 0,
+      lengthMs: alignmentEnd,
+      neighbours: neighbourLectures(stemOf(notePath), siblings),
+    };
+  }
+
+  async chatBrief(notePath: string): Promise<ChatBriefState> {
+    const state = await readLectureBrief(this.briefFiles(), notePath);
+    return { status: state.status, body: state.body, path: state.path, sourceHash: state.script.sourceHash };
+  }
+
+  async buildChatBrief(notePath: string, force: boolean): Promise<void> {
+    await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate(), force });
+  }
+
+  /** One slide's material (spec 6.2): page text (or its image), commentary, memo, aligned transcript. */
+  async chatMaterial(lecture: ChatLecture, slide: number): Promise<SlideMaterial> {
+    const file = this.app.vault.getAbstractFileByPath(lecture.notePath);
+    if (!(file instanceof TFile)) throw new Error(`강의 노트를 찾지 못했습니다: ${lecture.notePath}`);
+    const parts = parseLectureNote(await this.app.vault.cachedRead(file));
+    const unit = parts.units.find((u) => u.num === slide);
+    const spans = spansForSlide(parseAlignment(parts.frontmatter.alt_alignment), slide);
+    let slideText = "";
+    let image: SlideMaterial["image"] = null;
+    const pdf = lecture.pdfPath ? this.app.vault.getAbstractFileByPath(lecture.pdfPath) : null;
+    if (pdf instanceof TFile && this.pdfProcessor) {
+      try {
+        slideText = (await this.chatPageTexts(pdf))[slide - 1] ?? "";
+        // A page without a text layer goes as an image (long edge 1024, JPEG 80).
+        if (normalizePageText(slideText).length < TEXTLESS_PAGE_CHARS) image = await this.pdfProcessor.renderPageJpeg(await this.app.vault.readBinary(pdf), slide);
+      } catch (e) {
+        console.warn("[Alt2Obs] slide text not read:", e);
+      }
+    }
+    const id = fmString(parts.frontmatter, "alt_local_id");
+    const transcript = id && spans.length > 0 ? (await this.chatTranscript(id)) ?? [] : [];
+    return {
+      slideText,
+      image,
+      commentary: unit ? commentaryText(unit.managed) : "",
+      memo: unit ? memoText(unit.after) : "",
+      segments: segmentsInSpans(transcript, spans),
+      spans,
+      transcriptEndMs: transcript.length > 0 ? Math.max(...transcript.map((s) => s.endMs)) : null,
+    };
+  }
+
+  /**
+   * One question (spec 5.4, 7.2): the chat task's CLI with the pack as
+   * system prompt and user message, streamed. Usage goes to the totals as
+   * the chat task (not a lecture) and the model it resolved is recorded.
+   */
+  async runChat(req: ChatRunRequest): Promise<ChatRunResult> {
+    const task = sanitizeTask(req.task, this.data.settings.tasks.chat);
+    if (!isCliProvider(task.provider)) throw new Error("질문에 쓸 LLM이 설정되어 있지 않습니다.");
+    // A CLI that cannot be found is its own error card.
+    try {
+      await this.resolveBin(task.provider === "claude-cli" ? "claude" : "codex");
+    } catch (e) {
+      throw e instanceof CliRunError ? e : new CliRunError("not-found", e instanceof Error ? e.message : String(e));
+    }
+    const job = createJobDir();
+    const usage = new UsageTracker();
+    const controller = new AbortController();
+    const forward = () => controller.abort();
+    if (req.signal.aborted) controller.abort();
+    req.signal.addEventListener("abort", forward, { once: true });
+    this.activeJobs.add(controller);
+    try {
+      const llm = await this.providerFor("chat", job, usage, controller.signal, task);
+      if (!llm.streamText) throw new Error(`${llm.name}: 질문 패널에 쓸 수 없는 프로바이더입니다.`);
+      const text = await llm.streamText(req.user, { systemPrompt: req.system, images: req.images, signal: controller.signal, onDelta: (piece) => req.onDelta(piece) });
+      const record = usage.entries().pop();
+      return { text, usage: usage.total(), model: record?.resolvedModel || record?.model || task.model };
+    } finally {
+      req.signal.removeEventListener("abort", forward);
+      this.activeJobs.delete(controller);
+      removeJobDir(job);
+      if (usage.total().calls > 0) await this.recordUsage(usage, false).catch((e) => console.warn("[Alt2Obs] usage record failed:", e));
+    }
+  }
+
+  /** Why a question failed, as the panel's error card shows it (spec 5.6). */
+  chatErrorInfo(e: unknown): ChatErrorInfo {
+    const message = e instanceof Error ? e.message : String(e);
+    if (isAuthError(e)) return { kind: "auth", message };
+    if (isUsageLimitError(e)) return { kind: "limit", message: (e instanceof CliRunError && e.cliError) || message };
+    if (e instanceof CliRunError && (e.kind === "not-found" || e.kind === "spawn")) return { kind: "missing", message };
+    if (e instanceof CliRunError && e.kind === "timeout") return { kind: "timeout", message };
+    return { kind: "other", message };
+  }
+
+  /** Lecture notes for the panel's "강의 없음" card, by subject and name. */
+  lectureChoices(): Array<{ path: string; name: string; subject: string }> {
+    return this.vaultLectureNotes()
+      .map((v) => ({ path: v.path, name: stemOf(v.path), subject: v.subject || subjectFolderOfNote(v.path).split("/").pop() || "" }))
+      .sort((a, b) => a.subject.localeCompare(b.subject, "ko") || a.name.localeCompare(b.name, "ko", { numeric: true }));
+  }
+
+  /** The plugin's settings tab (Obsidian's settings window has no public API for this). */
+  openSettings(): void {
+    const setting = (this.app as unknown as { setting?: { open(): void; openTabById(id: string): void } }).setting;
+    setting?.open();
+    setting?.openTabById(this.manifest.id);
+  }
+
+  /** "뷰어로 열기" of the panel: the lecture's Synced Viewer, or why there is none. */
+  async openLectureViewer(notePath: string): Promise<void> {
+    const pdf = this.siblingPdf(notePath);
+    if (!pdf || this.frontmatterOf(notePath)?.alt_kind === "transcript") {
+      await this.explainNoViewer(notePath);
+      return;
+    }
+    await this.openSyncedViewer(notePath, pdf.path);
+  }
+
+  /** A vault file in a new tab ("브리프 열기"). */
+  async openVaultFile(path: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) await this.app.workspace.getLeaf("tab").openFile(file);
   }
 
   // ---- lectures without slides: kind and attached PDF (spec 4.10) ----

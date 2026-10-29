@@ -86,9 +86,10 @@ const tellFiles = [
   "concept-extraction.md",
   "concept-extraction-gists.md",
   "concept-extraction-sections.md",
+  "chat.system.md",
 ];
 for (const file of tellFiles) assert.equal(tells(file), sharedTells, `${file} carries the shared list of AI tells`);
-console.log(`PASS: the commentary, section, overview, summary, lecture note and concept prompts share one list of AI tells (${tellFiles.length + 1} files)`);
+console.log(`PASS: the commentary, section, overview, summary, lecture note, concept and question prompts share one list of AI tells (${tellFiles.length + 1} files)`);
 
 // Two roles of the text written from the transcript or the PDF text: the Skill's
 // slide path puts a short overview above its per-slide commentary (summary-*.md,

@@ -131,6 +131,38 @@ async function main() {
   await sleep(100);
   log.push({ step: "transcript", text: restored.transcriptPanelEl.textContent });
   await restored.onClose();
+
+  // 2.1.0: the 💬 질문 button after 전사 패널, and the page event the question panel follows.
+  const events: Array<[string, unknown]> = [];
+  let toggles = 0;
+  let chatOpen = true;
+  const chatApp: any = { ...app, workspace: { trigger: (name: string, info: unknown) => events.push([name, info]) } };
+  const withChat: any = new (SyncedViewerView as any)({}, undefined, () => true, undefined, { toggle: () => toggles++, isOpen: () => chatOpen });
+  withChat.app = chatApp;
+  document.getElementById("host")!.replaceChildren(withChat.containerEl);
+  await withChat.onOpen();
+  const buttons = () => Array.from(withChat.toolbarEl.querySelectorAll("button")).map((b: any) => b.textContent);
+  const chatBtn = () => Array.from(withChat.toolbarEl.querySelectorAll("button")).find((b: any) => b.textContent === "💬 질문") as HTMLButtonElement;
+  const beforePair = { slide: withChat.getCurrentSlide(), events: events.length };
+  await withChat.openPair("note.md", "deck.pdf");
+  await sleep(300);
+  withChat.gotoPage(5);
+  withChat.gotoPage(5);
+  chatBtn().click();
+  const active = chatBtn().classList.contains("is-active");
+  chatOpen = false;
+  withChat.setChatActive(false);
+  log.push({
+    step: "chat",
+    buttons: buttons(),
+    beforePair,
+    events,
+    slide: withChat.getCurrentSlide(),
+    toggles,
+    activeWhenOpen: active,
+    activeAfter: chatBtn().classList.contains("is-active"),
+  });
+  await withChat.onClose();
   return log;
 }
 main().then(

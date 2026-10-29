@@ -24,6 +24,9 @@
 //   (find, select, annotation). Opening a lecture PDF normally turns that
 //   tab into this viewer (setting "강의 PDF를 열면 뷰어로 열기"); a tab
 //   opened with this button is left as a plain PDF.
+// - "💬 질문" (2.1.0) opens or closes the question panel; on every page
+//   change the viewer tells the workspace (SLIDE_CHANGE_EVENT), and the
+//   panel follows the current slide (getCurrentSlide()).
 
 import {
   ItemView,
@@ -34,11 +37,19 @@ import {
   Component,
   ViewStateResult,
 } from "obsidian";
+import type { Events } from "obsidian";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { parseAlignment, segmentInSpan, spansForSlide, StoredSpan } from "../core/prep/TranscriptAligner";
 import { headingForSlide, pickSlideHeadings, PROBE_SHARE, sectionAt } from "./viewerSync";
 import { stripManagedComments } from "../editor/managedComments";
+import { SLIDE_CHANGE_EVENT, SlideChangeInfo } from "./chatPanel";
+
+/** The question panel as the viewer's "💬 질문" button sees it. */
+export interface ChatToggle {
+  toggle(): void;
+  isOpen(): boolean;
+}
 
 /** Timestamped transcript of a local note (plugin cache, else Alt). */
 export type TranscriptLoader = (altLocalId: string) => Promise<Array<{ startMs: number; endMs: number; text: string }> | null>;
@@ -115,13 +126,18 @@ export class SyncedViewerView extends ItemView {
   private transcriptPanelEl: HTMLElement | null = null;
   private transcriptBtnEl: HTMLButtonElement | null = null;
   private syncModeEl: HTMLElement | null = null;
+  private chatBtnEl: HTMLButtonElement | null = null;
+  /** The last page the workspace was told about (pair and page), so each change is sent once. */
+  private lastSlideEvent: string | null = null;
   constructor(
     leaf: WorkspaceLeaf,
     private loadTranscript?: TranscriptLoader,
     /** Setting "관리 주석 숨기기": drop the alt2obs comment lines before rendering. */
     private hideManagedComments: () => boolean = () => true,
     /** "PDF만 보기": the plugin opens a plain PDF tab it will not turn back into this viewer. */
-    private openNativePdf?: (pdfPath: string) => Promise<void>
+    private openNativePdf?: (pdfPath: string) => Promise<void>,
+    /** "💬 질문": the question panel (2.1.0 spec 5.1). */
+    private chat?: ChatToggle
   ) {
     super(leaf);
   }
@@ -246,6 +262,14 @@ export class SyncedViewerView extends ItemView {
     this.transcriptBtnEl.onclick = () => void this.toggleTranscript();
     this.transcriptBtnEl.hide();
 
+    this.chatBtnEl = this.toolbarEl.createEl("button", {
+      text: "💬 질문",
+      attr: { title: "지금 슬라이드를 자료로 질문하는 패널을 열거나 닫습니다." },
+    });
+    this.chatBtnEl.onclick = () => this.chat?.toggle();
+    this.setChatActive(!!this.chat?.isOpen());
+    if (!this.chat) this.chatBtnEl.hide();
+
     this.pageInfoEl = this.toolbarEl.createDiv({ cls: "alt-to-obs-page-info" });
     this.updatePageInfo();
   }
@@ -368,7 +392,30 @@ export class SyncedViewerView extends ItemView {
     });
   }
 
+  /** "💬 질문" shows whether the question panel is open. */
+  setChatActive(open: boolean): void {
+    this.chatBtnEl?.toggleClass("is-active", open);
+  }
+
+  /** The slide (page) the viewer is on; null before a PDF is shown. */
+  getCurrentSlide(): number | null {
+    return this.totalPages > 0 ? this.currentPage : null;
+  }
+
+  /** Tells the workspace the page changed (once per page and pair), for the question panel. */
+  private announceSlide(): void {
+    const page = this.getCurrentSlide();
+    if (page === null) return;
+    const key = `${this.mdPath}\n${this.pdfPath}\n${page}`;
+    if (key === this.lastSlideEvent) return;
+    this.lastSlideEvent = key;
+    const info: SlideChangeInfo = { mdPath: this.mdPath, pdfPath: this.pdfPath, page };
+    const workspace = this.app.workspace as Partial<Events> | undefined;
+    if (typeof workspace?.trigger === "function") workspace.trigger(SLIDE_CHANGE_EVENT, info);
+  }
+
   private updatePageInfo(): void {
+    this.announceSlide();
     if (this.transcriptOpen) void this.renderTranscript();
     if (this.totalPages === 0) {
       this.pageInfoEl.setText("페이지 -");

@@ -610,6 +610,10 @@ try {
   assert.equal(await plugin.resolveBin("claude"), FAKE_CLAUDE);
   assert.equal(plugin.data.cliDetection.claude.version, "2.1.283 (Claude Code)", "a cached path from before the feature check is checked again");
   assert.equal(plugin.data.cliDetection.claude.featuresOk, true);
+  assert.deepEqual(plugin.data.cliDetection.claude.optionalFeatures, ["--include-partial-messages"], "the optional streaming flag is recorded");
+  delete plugin.data.cliDetection.claude.optionalFeatures;
+  await plugin.resolveBin("claude");
+  assert.deepEqual(plugin.data.cliDetection.claude.optionalFeatures, ["--include-partial-messages"], "data from before 2.1.0 is looked up again once");
   plugin.pdfProcessor = pdfStub;
   console.log("PASS: migration picks Claude CLI (logged in) else Codex CLI after free checks; Gemini/Ollama users are moved and told once");
 
@@ -718,6 +722,61 @@ try {
     assert.equal(plugin.resolveNotePath(pv, "CSED311"), "Alt2Obsidian/CSED311/Lectures/Old Lec.md");
   }
   console.log("PASS: re-import reuses all unchanged slides (2 calls), keeps the memo");
+
+  // The question panel's host (2.1.0 spec 5, 6): lecture, slide material, a streamed question, errors.
+  {
+    const lecture = await plugin.chatLecture(record.path);
+    assert.deepEqual(
+      { name: lecture.name, subject: lecture.subject, kind: lecture.kind, pdfPath: lecture.pdfPath, slideCount: lecture.slideCount, sectionCount: lecture.sectionCount },
+      { name: "Lec7 Caches", subject: "CSED311", kind: "slides", pdfPath: "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.pdf", slideCount: 8, sectionCount: 0 }
+    );
+    assert.equal(await plugin.chatLecture("Alt2Obsidian/CSED311/Briefs/Lec7 Caches brief.md"), null, "a brief is not a lecture");
+    assert.equal(await plugin.chatLecture("nowhere.md"), null);
+    const m7 = await plugin.chatMaterial(lecture, 7);
+    assert.equal(m7.slideText, TEXTS[6], "the page text as the PDF has it");
+    assert.equal(m7.image, null, "a page with text goes as text");
+    assert.match(m7.commentary, /^슬라이드 7 해설\. 캐시를 설명합니다\./, "the commentary, links unwrapped, no meta");
+    assert.ok(!/alt2obs:meta|\[\[/.test(m7.commentary));
+    assert.equal(m7.memo, "");
+    assert.deepEqual([m7.segments, m7.spans, m7.transcriptEndMs], [[], [], null], "no alignment: no transcript");
+    const m4 = await plugin.chatMaterial(lecture, 4);
+    assert.equal(m4.image?.pageNum, 4, "a page without a text layer goes as an image");
+    assert.equal((await plugin.chatMaterial(lecture, 2)).memo, "내 메모 유지", "the memo callout's text (slide 2's, kept by the re-import)");
+
+    const totals = { ...plugin.data.usageTotals };
+    process.env.FAKE_CLI_TEXT = "캐시는 자주 쓰는 데이터를 가까이 둔다 [슬라이드 2].";
+    const pieces = [];
+    const before = s.calls().length;
+    const res = await plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "SYS", user: "[질문]\n캐시가 뭐야?", images: [], signal: new AbortController().signal, onDelta: (t) => pieces.push(t) });
+    assert.equal(res.text, process.env.FAKE_CLI_TEXT);
+    assert.ok(pieces.length > 3 && pieces.join("") === res.text, "streamed in pieces");
+    assert.equal(res.model, "claude-sonnet-5-5");
+    const call = s.calls()[before];
+    assert.ok(call.argv.includes("--include-partial-messages") && call.argv[call.argv.indexOf("--model") + 1] === "sonnet" && call.argv[call.argv.indexOf("--effort") + 1] === "low");
+    assert.equal(call.argv[call.argv.indexOf("--system-prompt") + 1], "SYS");
+    assert.equal(plugin.data.usageTotals.calls, totals.calls + 1);
+    assert.equal(plugin.data.usageTotals.lectures, totals.lectures, "a question is not a lecture");
+    assert.equal(plugin.data.resolvedModels["claude-cli:sonnet"].id, "claude-sonnet-5-5");
+    for (const [mode, kind] of [["loggedout", "auth"], ["limit", "limit"]]) {
+      process.env.FAKE_CLI_MODE = mode;
+      const err = await plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }).catch((e) => e);
+      assert.equal(plugin.chatErrorInfo(err).kind, kind, mode);
+    }
+    assert.equal(plugin.chatErrorInfo(await plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }).catch((e) => e)).message, "Claude usage limit reached. Your limit resets at 5pm.", "the CLI's sentence");
+    process.env.FAKE_CLI_MODE = "ok";
+    // A CLI that cannot be found is its own card.
+    const savedCodex = { path: plugin.data.settings.codexPath, detection: plugin.data.cliDetection.codex };
+    plugin.data.settings.codexPath = "/nonexistent/codex";
+    delete plugin.data.cliDetection.codex;
+    const missing = await plugin.runChat({ task: { provider: "codex-cli", model: "", effort: "low" }, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }).catch((e) => e);
+    assert.equal(plugin.chatErrorInfo(missing).kind, "missing");
+    assert.match(plugin.chatErrorInfo(missing).message, /\/nonexistent\/codex/);
+    plugin.data.settings.codexPath = savedCodex.path;
+    if (savedCodex.detection) plugin.data.cliDetection.codex = savedCodex.detection;
+    delete process.env.FAKE_CLI_TEXT;
+    assert.deepEqual(plugin.lectureChoices().map((c) => [c.name, c.subject]), [["Lec7 Caches", "CSED311"]]);
+    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, a streamed chat call on the chat task (usage counted, not as a lecture), error kinds");
+  }
 
   // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).
   {

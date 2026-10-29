@@ -1,0 +1,1020 @@
+// Question panel (2.1.0 spec 5): questions about the lecture the reader is
+// on, answered from the lecture brief and the material of the current
+// slide, so the whole lecture is never sent (spec 6).
+//
+// - The lecture is the note of the Synced Viewer last made active, or a
+//   lecture note open in an editor; activating the panel itself or another
+//   kind of tab changes nothing. The slide follows the viewer's page
+//   (SLIDE_CHANGE_EVENT, getCurrentSlide()) or the heading above the
+//   editor's cursor, read when a tab is activated, when the input gets
+//   focus and when a question is sent. 📌 pins it.
+// - Chips choose what goes with the question (brief, slide, transcript,
+//   memo) and show their estimated tokens; the input row shows the whole
+//   estimate and asks in the panel before sending past "질문당 토큰 상한".
+// - The answer streams in as plain text (redrawn once per animation frame),
+//   then is rendered as Markdown with its grounding marks as chips (spec
+//   5.5; they only show what they point at until navigation comes).
+// - Threads live in the plugin (ThreadStore): closing the panel keeps them.
+//
+// Everything that touches the vault, the PDF or a CLI goes through
+// ChatHost (the plugin), so the view runs in a browser test as it is.
+
+import { ItemView, MarkdownRenderer, Menu, Notice, WorkspaceLeaf } from "obsidian";
+import type { Events } from "obsidian";
+import type { Alt2ObsSettings, CliName, ImageInput, LLMUsage, TaskId, TaskLLMSetting } from "../types";
+import type { BriefStatus } from "../brief/lectureBrief";
+import { alignedRange } from "../brief/lectureBrief";
+import type { LectureNoteKind } from "../brief/lectureNote";
+import { unitAtLine } from "../brief/lectureNote";
+import { estimateTextTokens } from "../core/budget/estimate";
+import type { StoredSpan } from "../core/prep/TranscriptAligner";
+import { formatClock } from "../core/sections";
+import { parseCitations } from "../chat/citations";
+import {
+  buildChatPack,
+  ChatPack,
+  estimateChat,
+  FocusUnit,
+  formatTranscriptLines,
+  materialLabel,
+  parseSlideRange,
+  TimedText,
+  transcriptLines,
+} from "../chat/contextPack";
+import { ChatErrorInfo, ChatRequest, ChatThread, ChatTurn, historyOf, moveThreadTo, newTurnId, ThreadStore } from "../chat/threads";
+import { defaultTaskSetting, estimateEffort, isCliProvider, ModelCatalog, modelName } from "../settings/llmSettings";
+import { renderModelPicker } from "./modelPicker";
+import { SLIDE_CHANGE_EVENT, SlideChangeInfo, VIEW_TYPE_CHAT } from "./chatPanel";
+import chatSystemPrompt from "../../prompts/chat.system.md";
+
+/** A lecture note as the panel uses it. */
+export interface ChatLecture {
+  notePath: string;
+  /** The note's name (its stem). */
+  name: string;
+  subject: string;
+  kind: LectureNoteKind;
+  /** The lecture PDF next to the note, null without one. */
+  pdfPath: string | null;
+  /** Slides a `[슬라이드 N]` may name (0 for a note without slides). */
+  slideCount: number;
+  /** Transcript sections a `[구간 N]` may name. */
+  sectionCount: number;
+  /** The transcript's last end, else the alignment's; null when neither is known. */
+  lengthMs: number | null;
+  neighbours: { prev: string | null; next: string | null };
+}
+
+/** One slide's material, read once per slide. */
+export interface SlideMaterial {
+  slideText: string;
+  /** The page as a JPEG when it has no text layer (spec 6.2), else null. */
+  image: ImageInput | null;
+  commentary: string;
+  memo: string;
+  /** The transcript segments aligned to the slide (empty: no alignment or no transcript). */
+  segments: TimedText[];
+  /** The slide's aligned spans. */
+  spans: StoredSpan[];
+  /** The end of the lecture's transcript when it was read for this slide, else null. */
+  transcriptEndMs: number | null;
+}
+
+export interface ChatBriefState {
+  status: BriefStatus;
+  /** What a question sends; null without a file. */
+  body: string | null;
+  path: string;
+  /** The note's current source hash ("내 수정 유지" is remembered for it). */
+  sourceHash: string;
+}
+
+export interface ChatRunRequest extends ChatRequest {
+  signal: AbortSignal;
+  onDelta(text: string): void;
+}
+
+export interface ChatRunResult {
+  text: string;
+  usage: LLMUsage;
+  /** The model the CLI reported (an alias as its full id), else the one asked for. */
+  model: string;
+}
+
+/** What the panel needs from the plugin. */
+export interface ChatHost {
+  data: { settings: Alt2ObsSettings; cliDetection: Partial<Record<CliName, unknown>> };
+  chatThreads: ThreadStore;
+  modelCatalog(): ModelCatalog;
+  saveTaskDefault(task: TaskId, setting: TaskLLMSetting): Promise<void>;
+  /** The lecture of a note, null when it is not a lecture note. */
+  chatLecture(notePath: string): Promise<ChatLecture | null>;
+  chatBrief(notePath: string): Promise<ChatBriefState>;
+  /** The brief's script part (no tokens); `force` overwrites the user's edits. */
+  buildChatBrief(notePath: string, force: boolean): Promise<void>;
+  /** "브리프 다시 만들기" from the menu (asks first when the user edited it). */
+  rebuildBrief(notePath: string | null): Promise<boolean>;
+  chatMaterial(lecture: ChatLecture, slide: number): Promise<SlideMaterial>;
+  runChat(req: ChatRunRequest): Promise<ChatRunResult>;
+  chatErrorInfo(e: unknown): ChatErrorInfo;
+  /** Lecture notes for the "강의 없음" card. */
+  lectureChoices(): Array<{ path: string; name: string; subject: string }>;
+  openSettings(): void;
+  openLectureViewer(notePath: string): Promise<void>;
+  openVaultFile(path: string): Promise<void>;
+  closeChatPanel(): void;
+  chatPanelClosed(leaf: WorkspaceLeaf): void;
+}
+
+/** Quick questions (spec 5.3): the chip label and the question it sends. */
+const QUICK_QUESTIONS: Array<[string, string]> = [
+  ["더 쉽게", "더 쉽게 설명해줘"],
+  ["예시 하나", "예시를 하나 들어줘"],
+  ["시험에 나올 점", "이 내용에서 시험에 나올 만한 점을 짚어줘"],
+  ["앞 슬라이드와 연결", "앞 슬라이드 내용과 어떻게 이어지는지 설명해줘"],
+];
+
+/** Slides added besides the current one, at most (spec 5.7). */
+const MAX_EXTRA_SLIDES = 8;
+/** A chip's tooltip shows this much of what it sends. */
+const CHIP_TITLE_CHARS = 300;
+
+/** Briefs the user chose to keep as they are ("내 수정 유지"), by note and source, for this session. */
+const keptBriefs = new Set<string>();
+
+function k(n: number): string {
+  return `${(n / 1000).toFixed(1)}k`;
+}
+
+function clipTitle(text: string): string {
+  const chars = Array.from(text.trim());
+  return chars.length > CHIP_TITLE_CHARS ? `${chars.slice(0, CHIP_TITLE_CHARS).join("")}…` : chars.join("");
+}
+
+function clock(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** What one error kind says and how to fix it (spec 5.6). */
+function errorText(info: ChatErrorInfo): { title: string; fix: string } {
+  switch (info.kind) {
+    case "auth":
+      return { title: "로그인이 필요합니다", fix: "터미널에서 `claude`(또는 `codex login`)를 한 번 실행해 로그인한 뒤 다시 보내세요." };
+    case "limit":
+      return { title: "사용 한도에 걸렸습니다", fix: info.message };
+    case "missing":
+      return { title: "CLI를 찾지 못했습니다", fix: `설정 > LLM 연결에서 실행 파일 경로를 확인하거나 '다시 찾기'를 누르세요. (${info.message})` };
+    case "timeout":
+      return { title: "응답이 없어 중단했습니다", fix: "다시 보내거나 설정의 'CLI 호출 제한 시간'을 늘리세요." };
+    default:
+      return { title: "답을 받지 못했습니다", fix: info.message };
+  }
+}
+
+export class ChatView extends ItemView {
+  private lecture: ChatLecture | null = null;
+  private thread: ChatThread | null = null;
+  private brief: ChatBriefState | null = null;
+  /** The slide the viewer or the editor is on. */
+  private followed: number | null = null;
+  /** 📌: the slide the panel stays on (null: it follows). */
+  private pinned: number | null = null;
+  /** Slides added besides the current one ("강의 없음" range). */
+  private extraSlides: number[] = [];
+  private chips = { brief: true, slide: true, transcript: true, memo: true };
+  private materials = new Map<string, SlideMaterial>();
+  /** This run's model (the picker); the saved setting until changed. */
+  private runChoice: TaskLLMSetting;
+  private running: { controller: AbortController; turn: ChatTurn } | null = null;
+  /** A question waiting for "그래도 보내기" past the token cap. */
+  private capPending: string | null = null;
+  /** "새로 만들기" of a stale brief waits for its confirmation. */
+  private confirmRebuild = false;
+  /** Rendered turns by id, so a thread is drawn again without rendering every answer again. */
+  private turnEls = new Map<number, HTMLElement>();
+  /** Lecture switches in flight: only the last one applies. */
+  private switchSeq = 0;
+  /** Thread drawings in flight: one that waited on a rendering stops when a newer one started. */
+  private threadSeq = 0;
+  private estimateFrame = 0;
+
+  private headEl!: HTMLElement;
+  private cardsEl!: HTMLElement;
+  private chipsEl!: HTMLElement;
+  private threadEl!: HTMLElement;
+  private composerEl!: HTMLElement;
+  private inputEl!: HTMLTextAreaElement;
+  private capEl!: HTMLElement;
+  private modelEl!: HTMLElement;
+  private estimateEl!: HTMLElement;
+  private sendBtn!: HTMLButtonElement;
+
+  constructor(
+    leaf: WorkspaceLeaf,
+    private host: ChatHost
+  ) {
+    super(leaf);
+    this.runChoice = { ...host.data.settings.tasks.chat };
+    this.chips.memo = host.data.settings.chatIncludeMemo;
+  }
+
+  getViewType(): string {
+    return VIEW_TYPE_CHAT;
+  }
+
+  getDisplayText(): string {
+    return "강의 질문";
+  }
+
+  getIcon(): string {
+    return "message-circle";
+  }
+
+  /** Nothing is restored with the layout: the panel opens on demand (spec 5.1). */
+  getState(): Record<string, unknown> {
+    return {};
+  }
+
+  /** The lecture the panel is on, null for none. */
+  lecturePath(): string | null {
+    return this.lecture?.notePath ?? null;
+  }
+
+  async onOpen(): Promise<void> {
+    const root = this.containerEl.children[1] as HTMLElement;
+    root.empty();
+    root.addClass("alt-to-obs-chat");
+    this.headEl = root.createDiv({ cls: "alt-to-obs-chat-head" });
+    this.cardsEl = root.createDiv({ cls: "alt-to-obs-chat-cards" });
+    this.chipsEl = root.createDiv({ cls: "alt-to-obs-chat-chips" });
+    this.threadEl = root.createDiv({ cls: "alt-to-obs-chat-thread" });
+    this.composerEl = root.createDiv({ cls: "alt-to-obs-chat-composer" });
+    this.buildComposer();
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => void this.syncFromWorkspace()));
+    this.registerEvent((this.app.workspace as Events).on(SLIDE_CHANGE_EVENT, (info: unknown) => void this.onSlideChange(info as SlideChangeInfo)));
+    this.render();
+    await this.syncFromWorkspace();
+  }
+
+  async onClose(): Promise<void> {
+    // A running answer stops with the panel; what came stays in the thread as stopped.
+    this.running?.controller.abort();
+    if (this.estimateFrame) window.cancelAnimationFrame(this.estimateFrame);
+    this.host.chatPanelClosed(this.leaf);
+  }
+
+  // ---- the current lecture and slide (spec 5.2) ----
+
+  /** Reads the lecture and slide from the main area's most recent tab. */
+  async syncFromWorkspace(): Promise<void> {
+    const view = this.app.workspace.getMostRecentLeaf()?.view as unknown;
+    if (!view || view === this) return;
+    const v = view as {
+      getState?: () => Record<string, unknown>;
+      getCurrentSlide?: () => number | null;
+      getViewType?: () => string;
+      file?: { path: string; extension?: string } | null;
+      editor?: { getCursor(): { line: number }; getValue(): string };
+    };
+    if (typeof v.getCurrentSlide === "function" && typeof v.getState === "function") {
+      const md = v.getState().mdPath;
+      if (typeof md === "string" && md) await this.showLecture(md, v.getCurrentSlide());
+      return;
+    }
+    if (v.getViewType?.() === "markdown" && v.file && v.file.extension !== "pdf") {
+      let slide: number | null = null;
+      if (v.editor) {
+        const at = unitAtLine(v.editor.getValue(), v.editor.getCursor().line);
+        slide = at?.unit === "slide" ? at.num : null;
+      }
+      await this.showLecture(v.file.path, slide);
+    }
+  }
+
+  private async onSlideChange(info: SlideChangeInfo): Promise<void> {
+    if (!info?.mdPath) return;
+    if (info.mdPath === this.lecture?.notePath) this.follow(info.page);
+    else {
+      // Another pair loaded in the viewer the reader is on.
+      const recent = this.app.workspace.getMostRecentLeaf()?.view as { getState?: () => Record<string, unknown> } | undefined;
+      if (recent?.getState?.().mdPath === info.mdPath) await this.showLecture(info.mdPath, info.page);
+    }
+  }
+
+  /**
+   * The panel on a lecture (and slide). A note that is not a lecture note
+   * changes nothing: the last lecture stays.
+   */
+  async showLecture(notePath: string, slide: number | null, pinned: number[] = []): Promise<void> {
+    if (notePath === this.lecture?.notePath && pinned.length === 0) {
+      this.follow(slide);
+      return;
+    }
+    const seq = ++this.switchSeq;
+    const lecture = await this.host.chatLecture(notePath);
+    if (seq !== this.switchSeq || !lecture) return;
+    this.lecture = lecture;
+    this.thread = this.host.chatThreads.get(notePath);
+    this.materials.clear();
+    this.turnEls.clear();
+    this.followed = slide;
+    this.pinned = pinned[0] ?? null;
+    this.extraSlides = pinned.slice(1, 1 + MAX_EXTRA_SLIDES);
+    this.capPending = null;
+    this.confirmRebuild = false;
+    this.brief = null;
+    this.render();
+    await Promise.all([this.loadBrief(), this.loadMaterials()]);
+  }
+
+  /** The followed slide changed; a pinned panel stays where it is. */
+  private follow(slide: number | null): void {
+    if (slide === null || slide === this.followed) return;
+    this.followed = slide;
+    if (this.pinned !== null || !this.thread) return;
+    moveThreadTo(this.thread, slide);
+    void this.renderThread();
+    this.renderChips();
+    void this.loadMaterials();
+  }
+
+  /** The slide the question is about (pinned, else followed), null without one. */
+  private currentSlide(): number | null {
+    if (this.lecture?.kind !== "slides") return null;
+    return this.pinned ?? this.followed;
+  }
+
+  /** The slides a question sends: the current one, then the added ones (the slide chip on). */
+  private focusSlides(): number[] {
+    const current = this.currentSlide();
+    if (!this.chips.slide || current === null) return [];
+    return [current, ...this.extraSlides.filter((n) => n !== current)];
+  }
+
+  private materialKey(slide: number): string {
+    return `${this.lecture?.notePath}#${slide}`;
+  }
+
+  private async loadMaterials(): Promise<void> {
+    const lecture = this.lecture;
+    const current = this.currentSlide();
+    if (!lecture || current === null) return;
+    for (const slide of [current, ...this.extraSlides]) {
+      const key = this.materialKey(slide);
+      if (this.materials.has(key)) continue;
+      try {
+        const material = await this.host.chatMaterial(lecture, slide);
+        if (this.lecture !== lecture) return;
+        this.materials.set(key, material);
+        // The transcript's end, once read, is the lecture's length for the time marks (spec 5.5).
+        if (material.transcriptEndMs !== null) lecture.lengthMs = Math.max(lecture.lengthMs ?? 0, material.transcriptEndMs);
+      } catch (e) {
+        console.warn("[Alt2Obs] slide material not read:", e);
+      }
+    }
+    this.renderChips();
+  }
+
+  private async loadBrief(): Promise<void> {
+    const lecture = this.lecture;
+    if (!lecture) return;
+    try {
+      let brief = await this.host.chatBrief(lecture.notePath);
+      // The note changed and the brief is the plugin's own: rebuilt without asking (no tokens).
+      if (brief.status === "outdated") {
+        await this.host.buildChatBrief(lecture.notePath, false);
+        brief = await this.host.chatBrief(lecture.notePath);
+      }
+      if (this.lecture !== lecture) return;
+      this.brief = brief;
+    } catch (e) {
+      console.warn("[Alt2Obs] brief not read:", e);
+      if (this.lecture === lecture) this.brief = null;
+    }
+    this.renderHead();
+    this.renderCards();
+    this.renderChips();
+  }
+
+  /** The brief was rebuilt elsewhere (the command): read it again. */
+  async reloadBrief(): Promise<void> {
+    await this.loadBrief();
+  }
+
+  private briefStale(): boolean {
+    const b = this.brief;
+    return !!b && !!this.lecture && b.status === "edited-stale" && !keptBriefs.has(`${this.lecture.notePath}\n${b.sourceHash}`);
+  }
+
+  // ---- drawing ----
+
+  private render(): void {
+    this.renderHead();
+    this.renderCards();
+    this.renderChips();
+    void this.renderThread();
+    this.renderComposer();
+  }
+
+  private renderHead(): void {
+    const head = this.headEl;
+    head.empty();
+    const title = head.createDiv({ cls: "alt-to-obs-chat-title" });
+    title.createSpan({ text: "💬 강의 질문" });
+    if (this.lecture) title.createSpan({ cls: "alt-to-obs-chat-lecture", text: [this.lecture.subject, this.lecture.name].filter(Boolean).join(" · ") });
+    const actions = head.createDiv({ cls: "alt-to-obs-chat-head-actions" });
+    if (this.lecture) {
+      const fresh = actions.createEl("button", { text: "새 대화", attr: { title: "이 강의의 대화를 비웁니다" } });
+      fresh.addEventListener("click", () => this.newThread());
+    }
+    const menu = actions.createEl("button", { text: "⋯", cls: "alt-to-obs-chat-menu", attr: { "aria-label": "메뉴" } });
+    menu.addEventListener("click", (e) => this.openMenu(e));
+    const close = actions.createEl("button", { text: "×", cls: "alt-to-obs-chat-close", attr: { "aria-label": "닫기" } });
+    close.addEventListener("click", () => this.host.closeChatPanel());
+  }
+
+  private openMenu(e: MouseEvent): void {
+    const menu = new Menu();
+    const lecture = this.lecture;
+    const brief = this.brief;
+    if (lecture && brief && brief.status !== "missing") menu.addItem((i) => i.setTitle("브리프 열기").onClick(() => void this.host.openVaultFile(brief.path)));
+    if (lecture)
+      menu.addItem((i) =>
+        i.setTitle("브리프 다시 만들기").onClick(() => {
+          void this.host.rebuildBrief(lecture.notePath).then(async (done) => {
+            if (done) await this.loadBrief();
+          });
+        })
+      );
+    menu.addItem((i) => i.setTitle("설정 열기").onClick(() => this.host.openSettings()));
+    menu.showAtMouseEvent(e);
+  }
+
+  private newThread(): void {
+    if (!this.lecture) return;
+    this.running?.controller.abort();
+    this.host.chatThreads.clear(this.lecture.notePath);
+    this.turnEls.clear();
+    void this.renderThread();
+    this.renderChips();
+  }
+
+  private renderCards(): void {
+    const cards = this.cardsEl;
+    cards.empty();
+    const lecture = this.lecture;
+    if (!lecture || !this.brief) return;
+    if (this.brief.status === "missing") {
+      const card = cards.createDiv({ cls: "alt-to-obs-chat-card is-warning" });
+      card.createEl("strong", { text: "이 강의에는 브리프가 아직 없습니다" });
+      card.createEl("p", { text: "브리프는 질문마다 강의 전체 대신 보내는 요약입니다. 만들지 않아도 질문할 수 있습니다." });
+      const make = card.createEl("button", { text: "노트로 바로 만들기 · 토큰 0", cls: "mod-cta" });
+      make.addEventListener("click", () => void this.buildBrief(make, false));
+      return;
+    }
+    if (this.briefStale()) {
+      const card = cards.createDiv({ cls: "alt-to-obs-chat-card is-warning" });
+      card.createEl("strong", { text: "브리프가 노트보다 오래됐습니다" });
+      card.createEl("p", { text: "직접 고친 브리프인데 그 뒤에 노트가 바뀌었습니다. 고친 브리프를 그대로 쓰거나 노트로 새로 만들 수 있습니다." });
+      const row = card.createDiv({ cls: "alt-to-obs-chat-card-actions" });
+      if (this.confirmRebuild) {
+        row.createSpan({ cls: "alt-to-obs-muted", text: "고친 내용이 새로 만든 내용으로 바뀝니다." });
+        const yes = row.createEl("button", { text: "덮어쓰기", cls: "mod-warning" });
+        yes.addEventListener("click", () => void this.buildBrief(yes, true));
+        row.createEl("button", { text: "취소" }).addEventListener("click", () => {
+          this.confirmRebuild = false;
+          this.renderCards();
+        });
+      } else {
+        row.createEl("button", { text: "내 수정 유지" }).addEventListener("click", () => {
+          if (this.brief) keptBriefs.add(`${lecture.notePath}\n${this.brief.sourceHash}`);
+          this.renderCards();
+          this.renderChips();
+        });
+        row.createEl("button", { text: "새로 만들기" }).addEventListener("click", () => {
+          this.confirmRebuild = true;
+          this.renderCards();
+        });
+      }
+    }
+  }
+
+  private async buildBrief(button: HTMLButtonElement, force: boolean): Promise<void> {
+    const lecture = this.lecture;
+    if (!lecture) return;
+    button.disabled = true;
+    try {
+      await this.host.buildChatBrief(lecture.notePath, force);
+      this.confirmRebuild = false;
+      await this.loadBrief();
+    } catch (e) {
+      button.disabled = false;
+      new Notice(`브리프를 만들지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** One material chip: label, tokens, on/off (or disabled), its text in the tooltip. */
+  private chip(parent: HTMLElement, o: { text: string; tokens?: number; on?: boolean; disabled?: boolean; warning?: boolean; info?: boolean; title?: string; onClick?: () => void }): HTMLButtonElement {
+    const cls = ["alt-to-obs-chat-chip", o.disabled ? "is-disabled" : o.info ? "is-info" : o.on ? "is-on" : "is-off", o.warning ? "is-warning" : ""].filter(Boolean).join(" ");
+    const el = parent.createEl("button", { cls });
+    el.createSpan({ text: o.text });
+    if (o.tokens !== undefined && !o.disabled) el.createSpan({ cls: "alt-to-obs-chat-chip-tokens", text: k(o.tokens) });
+    if (o.title) el.setAttr("title", clipTitle(o.title));
+    el.disabled = !!o.disabled;
+    const click = o.onClick;
+    if (click) el.addEventListener("click", () => click());
+    return el;
+  }
+
+  private renderChips(): void {
+    const el = this.chipsEl;
+    el.empty();
+    const lecture = this.lecture;
+    if (!lecture) return;
+    const row = el.createDiv({ cls: "alt-to-obs-chat-chip-row" });
+    const brief = this.brief;
+    if (!brief) this.chip(row, { text: "📘 브리프 읽는 중", disabled: true });
+    else if (brief.status === "missing" || !brief.body) this.chip(row, { text: "📘 브리프 없음", warning: true, disabled: true });
+    else
+      this.chip(row, {
+        text: this.briefStale() ? "📘 브리프 오래됨" : "📘 브리프",
+        warning: this.briefStale(),
+        tokens: estimateTextTokens(brief.body),
+        on: this.chips.brief,
+        title: brief.body,
+        onClick: () => this.toggleChip("brief"),
+      });
+    const current = this.currentSlide();
+    if (current !== null) {
+      const m = this.materials.get(this.materialKey(current));
+      const slideText = m ? [m.slideText, m.commentary].filter(Boolean).join("\n\n") : "";
+      const group = row.createDiv({ cls: "alt-to-obs-chat-chip-group" });
+      this.chip(group, {
+        text: `📄 슬라이드 ${current}${this.pinned !== null ? "" : " · 따라가는 중"}`,
+        tokens: m ? estimateTextTokens(slideText) + (m.image ? 1060 : 0) : undefined,
+        on: this.chips.slide,
+        title: slideText || "읽는 중",
+        onClick: () => this.toggleChip("slide"),
+      });
+      const pin = group.createEl("button", {
+        text: "📌",
+        cls: `alt-to-obs-chat-pin${this.pinned !== null ? " is-active" : ""}`,
+        attr: { title: this.pinned !== null ? "고정 풀기 (지금 슬라이드를 따라감)" : "이 슬라이드에 고정" },
+      });
+      pin.addEventListener("click", () => this.togglePin());
+      for (const extra of this.extraSlides.filter((n) => n !== current)) {
+        const xm = this.materials.get(this.materialKey(extra));
+        const chip = this.chip(row, {
+          text: `📄 슬라이드 ${extra} ×`,
+          tokens: xm ? estimateTextTokens([xm.slideText, xm.commentary].join("\n\n")) : undefined,
+          on: this.chips.slide,
+          title: xm ? [xm.slideText, xm.commentary].join("\n\n") : "",
+          onClick: () => {
+            this.extraSlides = this.extraSlides.filter((n) => n !== extra);
+            this.renderChips();
+          },
+        });
+        chip.addClass("is-extra");
+      }
+      if (m && m.segments.length > 0) {
+        const lines = transcriptLines(m.segments, this.host.data.settings.generation.transcriptCapChars, m.slideText);
+        const span = `${formatClock(m.spans[0].startMs)}-${formatClock(m.spans[m.spans.length - 1].endMs)}`;
+        this.chip(row, { text: `🎙 전사 ${span}`, tokens: estimateTextTokens(formatTranscriptLines(lines)), on: this.chips.transcript, title: formatTranscriptLines(lines), onClick: () => this.toggleChip("transcript") });
+      } else if (m) this.chip(row, { text: "🎙 정렬된 전사 없음", disabled: true });
+      if (m && m.memo) this.chip(row, { text: "✏️ 내 메모", tokens: estimateTextTokens(m.memo), on: this.chips.memo, title: m.memo, onClick: () => this.toggleChip("memo") });
+      else if (m) this.chip(row, { text: "✏️ 비어 있음", disabled: true });
+    }
+    const history = this.thread ? historyOf(this.thread) : [];
+    if (history.length > 0) {
+      const text = history.map((h) => `Q: ${h.question}\nA: ${h.answer}`).join("\n\n");
+      this.chip(row, { text: `💬 이전 대화 ${history.length}`, tokens: Math.min(estimateTextTokens(text), 3000), info: true, title: text });
+    }
+    this.estimateEl = el.createDiv({ cls: "alt-to-obs-chat-estimate" });
+    this.renderEstimate();
+  }
+
+  private toggleChip(name: "brief" | "slide" | "transcript" | "memo"): void {
+    this.chips[name] = !this.chips[name];
+    this.renderChips();
+  }
+
+  private togglePin(): void {
+    if (this.pinned !== null) {
+      this.pinned = null;
+      if (this.thread) moveThreadTo(this.thread, this.followed);
+      void this.renderThread();
+    } else this.pinned = this.followed;
+    this.renderChips();
+    void this.loadMaterials();
+  }
+
+  /** The pack this question would send now (materials as read so far). */
+  private pack(question: string): { pack: ChatPack; images: ImageInput[]; focus: FocusUnit[] } {
+    const lecture = this.lecture!;
+    const settings = this.host.data.settings;
+    const focus: FocusUnit[] = [];
+    const images: ImageInput[] = [];
+    for (const num of this.focusSlides()) {
+      const m = this.materials.get(this.materialKey(num));
+      if (!m) continue;
+      focus.push({
+        lecture: lecture.name,
+        unit: "slide",
+        num,
+        range: alignedRange(m.spans),
+        slideText: m.image ? "" : m.slideText,
+        imageAttached: !!m.image,
+        commentary: m.commentary,
+        memo: this.chips.memo ? m.memo : "",
+        transcript: this.chips.transcript ? transcriptLines(m.segments, settings.generation.transcriptCapChars, `${m.slideText}\n${question}`) : [],
+      });
+      if (m.image) images.push(m.image);
+    }
+    const brief = this.chips.brief && this.brief?.body ? this.brief.body : null;
+    const pack = buildChatPack({
+      instructions: chatSystemPrompt,
+      subject: lecture.subject,
+      lecture: lecture.name,
+      neighbours: lecture.neighbours,
+      brief,
+      extraBriefs: [],
+      history: this.thread ? historyOf(this.thread) : [],
+      focus,
+      quote: null,
+      question,
+    });
+    return { pack, images, focus };
+  }
+
+  private renderEstimate(): void {
+    if (!this.estimateEl || !this.lecture) return;
+    const el = this.estimateEl;
+    el.empty();
+    const task = this.runChoice;
+    if (!isCliProvider(task.provider)) return;
+    const { pack, images } = this.pack(this.inputEl?.value ?? "");
+    const effort = estimateEffort(task.provider, task.model, task.effort, this.host.modelCatalog());
+    const est = estimateChat(pack, task.provider, effort, images.length);
+    const cached = this.thread && historyOf(this.thread).length > 0 && est.cached > 0 ? ` (캐시 약 ${k(est.cached)})` : "";
+    el.setText(`이번 질문 예상: 입력 약 ${k(est.input)}${cached} · 출력 약 ${k(est.output)}`);
+    el.toggleClass("is-over", est.input + est.output > this.host.data.settings.chatTokenCap);
+  }
+
+  private scheduleEstimate(): void {
+    if (this.estimateFrame) return;
+    this.estimateFrame = window.requestAnimationFrame(() => {
+      this.estimateFrame = 0;
+      this.renderEstimate();
+    });
+  }
+
+  /** The "강의 없음" card (spec 5.6): pick a lecture, an optional slide range, or a recent thread. */
+  private renderNoLecture(parent: HTMLElement): void {
+    const card = parent.createDiv({ cls: "alt-to-obs-chat-card is-empty" });
+    card.createEl("strong", { text: "열린 강의 노트가 없습니다" });
+    card.createEl("p", { text: "강의 노트나 synced viewer를 열거나 아래에서 강의를 고르세요. 슬라이드 범위를 비우면 브리프만 보냅니다." });
+    const choices = this.host.lectureChoices();
+    const subjects = Array.from(new Set(choices.map((c) => c.subject)));
+    const form = card.createDiv({ cls: "alt-to-obs-chat-pick" });
+    const subjectEl = form.createEl("select", { cls: "dropdown", attr: { "aria-label": "과목" } });
+    for (const s of subjects) subjectEl.createEl("option", { text: s || "(과목 없음)", attr: { value: s } });
+    const lectureEl = form.createEl("select", { cls: "dropdown", attr: { "aria-label": "강의" } });
+    const fill = () => {
+      lectureEl.empty();
+      for (const c of choices.filter((x) => x.subject === subjectEl.value)) lectureEl.createEl("option", { text: c.name, attr: { value: c.path } });
+    };
+    subjectEl.addEventListener("change", fill);
+    fill();
+    const rangeEl = form.createEl("input", { type: "text", placeholder: "슬라이드 범위 (예: 14-18, 23)", attr: { "aria-label": "슬라이드 범위" } });
+    const actions = card.createDiv({ cls: "alt-to-obs-chat-card-actions" });
+    const start = actions.createEl("button", { text: "이 강의로 시작", cls: "mod-cta" });
+    start.disabled = choices.length === 0;
+    start.addEventListener("click", () => void this.startWith(lectureEl.value, rangeEl.value));
+    const viewer = actions.createEl("button", { text: "뷰어로 열기" });
+    viewer.disabled = choices.length === 0;
+    viewer.addEventListener("click", () => void this.host.openLectureViewer(lectureEl.value));
+    if (choices.length === 0) card.createEl("p", { cls: "alt-to-obs-muted", text: "보관함에 가져온 강의 노트가 없습니다." });
+    const recent = this.host.chatThreads.recent();
+    if (recent.length > 0) {
+      const list = card.createDiv({ cls: "alt-to-obs-chat-recent" });
+      list.createDiv({ cls: "alt-to-obs-muted", text: "최근 대화" });
+      for (const t of recent) {
+        const turns = t.items.filter((i) => i.kind === "turn");
+        const last = turns[turns.length - 1];
+        const turn = last?.kind === "turn" ? last.turn : null;
+        const name = (t.notePath.split("/").pop() ?? t.notePath).replace(/\.md$/, "");
+        const text = [name, turn?.slide ? `슬라이드 ${turn.slide}` : "", turn ? clock(turn.at) : ""].filter(Boolean).join(" · ");
+        list.createEl("button", { text, cls: "alt-to-obs-chat-recent-item" }).addEventListener("click", () => void this.showLecture(t.notePath, turn?.slide ?? null));
+      }
+    }
+  }
+
+  private async startWith(notePath: string, range: string): Promise<void> {
+    if (!notePath) return;
+    const lecture = await this.host.chatLecture(notePath);
+    if (!lecture) return;
+    const { slides, ignored } = parseSlideRange(range, lecture.slideCount);
+    if (ignored.length > 0) new Notice(`슬라이드 수(${lecture.slideCount}장) 밖의 번호는 뺐습니다: ${ignored.join(", ")}`);
+    await this.showLecture(notePath, null, slides);
+  }
+
+  private async renderThread(): Promise<void> {
+    const seq = ++this.threadSeq;
+    const el = this.threadEl;
+    el.empty();
+    if (!this.lecture) {
+      this.renderNoLecture(el);
+      return;
+    }
+    const thread = this.thread;
+    if (!thread || thread.items.length === 0) {
+      const slide = this.currentSlide();
+      el.createDiv({ cls: "alt-to-obs-chat-hint", text: `자료: 강의 브리프${slide !== null ? `, 슬라이드 ${slide}` : ""}. 아래에 질문을 쓰거나 빠른 질문을 누르세요.` });
+      return;
+    }
+    for (const item of thread.items) {
+      if (item.kind === "divider") el.createDiv({ cls: "alt-to-obs-chat-divider", text: `슬라이드 ${item.slide}으로 이동` });
+      else if (item.kind === "note") el.createDiv({ cls: "alt-to-obs-chat-note", text: item.text });
+      else {
+        const cached = this.turnEls.get(item.turn.id);
+        if (cached) el.appendChild(cached);
+        else {
+          await this.renderTurn(item.turn, el);
+          if (seq !== this.threadSeq) return;
+        }
+      }
+    }
+    el.scrollTop = el.scrollHeight;
+  }
+
+  /** Draws a turn (in place of its old element, or at the end of `parent`). */
+  private async renderTurn(turn: ChatTurn, parent?: HTMLElement): Promise<HTMLElement> {
+    const old = this.turnEls.get(turn.id);
+    const el = createDiv({ cls: "alt-to-obs-chat-turn" });
+    el.dataset.turn = String(turn.id);
+    if (old?.parentElement) old.replaceWith(el);
+    else (parent ?? this.threadEl).appendChild(el);
+    this.turnEls.set(turn.id, el);
+    const q = el.createDiv({ cls: "alt-to-obs-chat-q" });
+    q.createDiv({ text: turn.question });
+    if (turn.label) q.createDiv({ cls: "alt-to-obs-chat-q-meta", text: turn.label });
+    const answer = el.createDiv({ cls: "alt-to-obs-chat-a" });
+    if (turn.status === "streaming") {
+      answer.addClass("is-streaming");
+      answer.setText(turn.answer);
+      el.createDiv({ cls: "alt-to-obs-chat-status", text: turn.answer ? "" : "답변 쓰는 중 · 0초" });
+      return el;
+    }
+    if (turn.answer.trim()) {
+      await MarkdownRenderer.render(this.app, turn.answer, answer, this.lecture?.notePath ?? "", this);
+      this.applyCitations(answer);
+    }
+    if (turn.status === "stopped") el.createDiv({ cls: "alt-to-obs-chat-status", text: "(중지됨)" });
+    if (turn.status === "error" && turn.error) this.renderError(el, turn, turn.error);
+    if (turn.status !== "error") this.renderActions(el, turn);
+    return el;
+  }
+
+  private renderActions(el: HTMLElement, turn: ChatTurn): void {
+    const actions = el.createDiv({ cls: "alt-to-obs-chat-actions" });
+    if (turn.answer.trim()) {
+      actions.createEl("button", { text: "복사" }).addEventListener("click", () => {
+        void navigator.clipboard.writeText(turn.answer).then(
+          () => new Notice("답변을 복사했습니다."),
+          () => new Notice("복사하지 못했습니다.")
+        );
+      });
+    }
+    const again = actions.createEl("button", { text: "다시 생성" });
+    again.disabled = !!this.running;
+    again.addEventListener("click", () => void this.runTurn(turn));
+    if (turn.usage && turn.provider) {
+      const u = turn.usage;
+      const model = turn.model ? modelName(turn.provider, turn.model, this.host.modelCatalog()) : "CLI 기본 모델";
+      el.createDiv({
+        cls: "alt-to-obs-chat-usage",
+        text: `${model} · ${turn.effort || "CLI 기본값"} · 입력 ${k(u.inputTokens)} (캐시 ${k(u.cachedInputTokens)}) · 출력 ${k(u.outputTokens)}`,
+      });
+    }
+  }
+
+  private renderError(el: HTMLElement, turn: ChatTurn, info: ChatErrorInfo): void {
+    const { title, fix } = errorText(info);
+    const card = el.createDiv({ cls: `alt-to-obs-chat-error is-${info.kind}` });
+    card.createEl("strong", { text: title });
+    card.createEl("p", { text: fix });
+    const actions = card.createDiv({ cls: "alt-to-obs-chat-card-actions" });
+    const retry = actions.createEl("button", { text: "다시 보내기", cls: "mod-cta" });
+    retry.disabled = !!this.running;
+    retry.addEventListener("click", () => void this.runTurn(turn));
+    const provider = turn.request.task.provider;
+    const other = provider === "claude-cli" ? "codex-cli" : "claude-cli";
+    if (this.host.data.cliDetection[other === "claude-cli" ? "claude" : "codex"]) {
+      const switchBtn = actions.createEl("button", { text: `${other === "claude-cli" ? "Claude" : "Codex"}로 보내기`, attr: { title: "다른 프로바이더로 보내기 (이번 질문만)" } });
+      switchBtn.disabled = !!this.running;
+      switchBtn.addEventListener("click", () => {
+        turn.request = { ...turn.request, task: defaultTaskSetting(other, "chat") };
+        void this.runTurn(turn);
+      });
+    }
+    actions.createEl("button", { text: "설정 열기" }).addEventListener("click", () => this.host.openSettings());
+  }
+
+  /** Grounding marks of a rendered answer as chips, never inside code (spec 5.5). */
+  private applyCitations(root: HTMLElement): void {
+    const lecture = this.lecture;
+    if (!lecture) return;
+    const limits = { slides: lecture.slideCount, sections: lecture.sectionCount, lengthMs: lecture.lengthMs };
+    const doc = root.ownerDocument;
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!(n.parentElement?.closest("code, pre"))) nodes.push(n as Text);
+    }
+    for (const node of nodes) {
+      const parts = parseCitations(node.data, limits);
+      if (parts.every((p) => p.kind === "text")) continue;
+      const frag = createFragment();
+      for (const p of parts) {
+        if (p.kind === "text") {
+          frag.appendChild(doc.createTextNode(p.text));
+          continue;
+        }
+        const [text, title] =
+          p.kind === "slide"
+            ? [`슬라이드 ${p.slides.length > 2 ? `${p.slides[0]}~${p.slides[p.slides.length - 1]}` : p.slides.join(", ")}`, `${lecture.name} · 슬라이드 ${p.slides.join(", ")}`]
+            : p.kind === "section"
+              ? [`구간 ${p.num}`, `${lecture.name} · 구간 ${p.num}`]
+              : p.kind === "time"
+                ? [`▶ ${formatClock(p.ms)}`, `전사 ${formatClock(p.ms)}`]
+                : ["강의 자료 밖", "강의 자료에 없는 일반 지식이나 예시"];
+        frag.createSpan({ cls: `alt-to-obs-chat-cite is-${p.kind}`, text, attr: { title } });
+      }
+      node.replaceWith(frag);
+    }
+  }
+
+  // ---- the input row ----
+
+  private buildComposer(): void {
+    const c = this.composerEl;
+    const quick = c.createDiv({ cls: "alt-to-obs-chat-quick" });
+    for (const [label, question] of QUICK_QUESTIONS) {
+      quick.createEl("button", { text: label, cls: "alt-to-obs-chat-quick-chip", attr: { title: question } }).addEventListener("click", () => void this.send(question));
+    }
+    this.capEl = c.createDiv({ cls: "alt-to-obs-chat-cap" });
+    this.inputEl = c.createEl("textarea", { cls: "alt-to-obs-chat-input", attr: { rows: "3", placeholder: "질문을 쓰세요 (Enter 보내기, Shift+Enter 줄바꿈)" } });
+    this.inputEl.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey) return;
+      // A Korean syllable still being composed: Enter ends the composition, it does not send.
+      if (e.isComposing || (e as { keyCode?: number }).keyCode === 229) return;
+      e.preventDefault();
+      void this.send(this.inputEl.value);
+    });
+    this.inputEl.addEventListener("input", () => this.scheduleEstimate());
+    // The editor's cursor has no event: it is read again when the input gets focus.
+    this.inputEl.addEventListener("focus", () => void this.syncFromWorkspace());
+    this.modelEl = c.createDiv({ cls: "alt-to-obs-chat-model" });
+    const row = c.createDiv({ cls: "alt-to-obs-chat-send-row" });
+    this.sendBtn = row.createEl("button", { cls: "mod-cta alt-to-obs-chat-send", text: "보내기" });
+    this.sendBtn.addEventListener("click", () => {
+      if (this.running) this.running.controller.abort();
+      else void this.send(this.inputEl.value);
+    });
+  }
+
+  private renderComposer(): void {
+    this.composerEl.toggle(!!this.lecture);
+    this.sendBtn.setText(this.running ? "중지" : "보내기");
+    this.sendBtn.toggleClass("mod-cta", !this.running);
+    this.sendBtn.toggleClass("mod-warning", !!this.running);
+    for (const b of Array.from(this.composerEl.querySelectorAll<HTMLButtonElement>(".alt-to-obs-chat-quick-chip"))) b.disabled = !!this.running;
+    this.renderModel();
+    this.renderCap();
+  }
+
+  private renderModel(): void {
+    this.modelEl.empty();
+    const settings = this.host.data.settings;
+    renderModelPicker(this.modelEl, {
+      task: "chat",
+      label: "질문 모델",
+      value: this.runChoice,
+      saved: settings.tasks.chat,
+      catalog: this.host.modelCatalog(),
+      recent: settings.recentModels,
+      disabled: !!this.running,
+      onChange: (next) => {
+        this.runChoice = next;
+        this.renderModel();
+        this.renderEstimate();
+      },
+      onSaveDefault: (next) => this.host.saveTaskDefault("chat", next),
+    });
+  }
+
+  private renderCap(): void {
+    const el = this.capEl;
+    el.empty();
+    el.toggle(this.capPending !== null);
+    if (this.capPending === null) return;
+    el.createSpan({ text: `예상 토큰이 질문당 상한(${k(this.host.data.settings.chatTokenCap)})을 넘습니다` });
+    const go = el.createEl("button", { text: "그래도 보내기", cls: "mod-warning" });
+    go.addEventListener("click", () => {
+      const question = this.capPending;
+      this.capPending = null;
+      if (question !== null) void this.send(question, true);
+    });
+    el.createEl("button", { text: "취소" }).addEventListener("click", () => {
+      this.capPending = null;
+      this.renderCap();
+    });
+  }
+
+  /** Sends a question (spec 5.4): the pack, the cap check, then the run. */
+  async send(text: string, overCapOk = false): Promise<void> {
+    const question = text.trim();
+    if (!question || this.running || !this.lecture || !this.thread) return;
+    await this.syncFromWorkspace();
+    await this.loadMaterials();
+    const task = { ...this.runChoice };
+    if (!isCliProvider(task.provider)) {
+      new Notice("질문에 쓸 LLM이 설정되어 있지 않습니다. 설정의 '작업별 모델'에서 '질문'을 고르세요.");
+      return;
+    }
+    const { pack, images, focus } = this.pack(question);
+    const effort = estimateEffort(task.provider, task.model, task.effort, this.host.modelCatalog());
+    const est = estimateChat(pack, task.provider, effort, images.length);
+    if (!overCapOk && est.input + est.output > this.host.data.settings.chatTokenCap) {
+      this.capPending = question;
+      this.renderCap();
+      return;
+    }
+    const thread = this.thread;
+    if (pack.folded > thread.folded) {
+      thread.items.push({ kind: "note", text: `앞 대화 ${pack.folded}개를 줄였습니다` });
+      thread.folded = pack.folded;
+    }
+    const turn: ChatTurn = {
+      id: newTurnId(),
+      question,
+      label: materialLabel(focus, this.chips.brief && !!this.brief?.body),
+      slide: this.currentSlide(),
+      answer: "",
+      status: "streaming",
+      request: { task, system: pack.system, user: pack.user, images },
+      at: Date.now(),
+    };
+    // The trailing divider is where this question is asked: it stays.
+    thread.items.push({ kind: "turn", turn });
+    this.inputEl.value = "";
+    await this.renderThread();
+    await this.runTurn(turn);
+  }
+
+  /** Runs (or runs again) a turn's request, streaming into its answer. */
+  private async runTurn(turn: ChatTurn): Promise<void> {
+    if (this.running) return;
+    const controller = new AbortController();
+    this.running = { controller, turn };
+    Object.assign(turn, { answer: "", status: "streaming", error: undefined, usage: undefined, model: undefined });
+    let el = await this.renderTurn(turn);
+    this.renderComposer();
+    const started = Date.now();
+    let frame = 0;
+    const draw = () => {
+      frame = 0;
+      el = this.turnEls.get(turn.id) ?? el;
+      el.querySelector(".alt-to-obs-chat-a")?.setText(turn.answer);
+      el.querySelector(".alt-to-obs-chat-status")?.setText("");
+    };
+    // No piece yet (Codex never sends one): how long it has been writing.
+    const timer = window.setInterval(() => {
+      if (turn.answer) return;
+      el = this.turnEls.get(turn.id) ?? el;
+      el.querySelector(".alt-to-obs-chat-status")?.setText(`답변 쓰는 중 · ${Math.round((Date.now() - started) / 1000)}초`);
+    }, 1000);
+    try {
+      const result = await this.host.runChat({
+        ...turn.request,
+        signal: controller.signal,
+        onDelta: (piece) => {
+          turn.answer += piece;
+          if (!frame) frame = window.requestAnimationFrame(draw);
+        },
+      });
+      Object.assign(turn, { answer: result.text, status: "done", usage: result.usage, model: result.model, provider: turn.request.task.provider, effort: turn.request.task.effort });
+    } catch (e) {
+      if (controller.signal.aborted) turn.status = "stopped";
+      else Object.assign(turn, { status: "error", error: this.host.chatErrorInfo(e) });
+    } finally {
+      window.clearInterval(timer);
+      if (frame) window.cancelAnimationFrame(frame);
+      this.running = null;
+    }
+    if (this.thread?.items.some((i) => i.kind === "turn" && i.turn === turn)) await this.renderTurn(turn);
+    this.renderComposer();
+    this.renderChips();
+  }
+}
