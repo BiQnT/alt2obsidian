@@ -504,6 +504,15 @@ async function deck(n, visualPages = []) {
   assert.deepEqual(own.tasks.chat, { provider: "claude-cli", model: "", effort: "" });
   assert.deepEqual([own.briefMode, own.chatTokenCap, own.chatIncludeMemo], ["script", 5000, false]);
   assert.deepEqual([m.TASK_LABELS.chat, m.TASK_LABELS.brief], ["질문", "챗봇 브리프"]);
+  // A table on a preset gets the new tasks the way the preset sets them.
+  const onQuality = m.migrateSettings({ ...v3, tasks: { ...v3.tasks, commentary: { provider: "claude-cli", model: "opus", effort: "high" } }, preset: "quality" }).settings;
+  assert.deepEqual([onQuality.tasks.chat, onQuality.tasks.brief], [{ provider: "claude-cli", model: "sonnet", effort: "medium" }, { provider: "claude-cli", model: "haiku", effort: "low" }], "품질: questions on sonnet medium");
+  const onSaving = m.migrateSettings({ ...v3, preset: "saving" }).settings;
+  assert.deepEqual(onSaving.tasks.chat, { provider: "codex-cli", model: "", effort: "low" }, "절약 on Codex: the Codex default model, low");
+  // A CLI default still pending from older data: chat and brief follow a moved commentary task.
+  assert.deepEqual(m.withTasksSinceV4(["commentary", "concepts"], claudeV3), ["commentary", "concepts", "chat", "brief"]);
+  assert.deepEqual(m.withTasksSinceV4(["concepts"], claudeV3), ["concepts"], "only with the commentary task");
+  assert.deepEqual(m.withTasksSinceV4(["commentary"], v4.settings), ["commentary"], "not tasks already on Codex");
   // 2.0.0 data (imported from alt-to-obs) goes through the same migration: the same result.
   const fromAltToObs = m.migrateSettings(JSON.parse(JSON.stringify(v3))).settings;
   assert.deepEqual(fromAltToObs.tasks, v4.settings.tasks);
