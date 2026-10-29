@@ -27,8 +27,13 @@ export const CANDIDATE_CAP_CHARS = 3000;
 const STRETCH_MAX_CHARS = 400;
 /** Expected output of the call at medium effort (the estimate, spec 4.5). */
 export const BRIEF_AI_OUTPUT_TOKENS = 800;
-/** Text that repeats a candidate for longer than this is dropped (spec C7). */
+/** A quoted span that repeats a candidate for longer than this is a copy (spec 4.5, C7). */
 const COPY_LIMIT = 20;
+/** So is unquoted text that repeats a candidate this long with this much Hangul in it (a shared English term is not a copy). */
+const COPY_WINDOW = 40;
+const COPY_WINDOW_HANGUL = 10;
+/** "...", '...' (not an apostrophe inside a word), “...”, ‘...’, 「...」, 『...』. */
+const QUOTED = /"([^"]*)"|(?<![A-Za-z])'([^'\n]*)'(?![A-Za-z])|“([^”]*)”|‘([^’]*)’|「([^」]*)」|『([^』]*)』/g;
 const ITEM_CHARS = 100;
 const ONE_LINE_CHARS = 80;
 const CAPS = { emphasis: 6, qa: 4, pitfalls: 4 };
@@ -181,12 +186,32 @@ function clean(v: unknown, max: number): string {
   return chars.slice(0, max).join("").trim();
 }
 
-/** True when the text repeats more than 20 characters of the candidates as they are. */
+/**
+ * True when the text copies the candidates (spec 4.5): a quoted span in it
+ * shares more than 20 identical characters with them, or a 40-character
+ * stretch outside quotes holding at least 10 Hangul characters is in them
+ * as it is.
+ */
 export function copiesCandidate(text: string, candidateText: string): boolean {
   const t = text.replace(/\s+/g, " ");
   const c = candidateText.replace(/\s+/g, " ");
-  for (let i = 0; i + COPY_LIMIT < t.length; i++) if (c.includes(t.slice(i, i + COPY_LIMIT + 1))) return true;
-  return false;
+  const shares = (part: string, len: number, counts: (window: string) => boolean) => {
+    for (let i = 0; i + len <= part.length; i++) {
+      const window = part.slice(i, i + len);
+      if (counts(window) && c.includes(window)) return true;
+    }
+    return false;
+  };
+  const outside: string[] = [];
+  let last = 0;
+  for (const m of t.matchAll(QUOTED)) {
+    const quoted = m.slice(1).find((g) => g !== undefined) ?? "";
+    if (shares(quoted, COPY_LIMIT + 1, () => true)) return true;
+    outside.push(t.slice(last, m.index));
+    last = (m.index ?? 0) + m[0].length;
+  }
+  outside.push(t.slice(last));
+  return outside.some((part) => shares(part, COPY_WINDOW, (w) => (w.match(/[가-힣]/g) ?? []).length >= COPY_WINDOW_HANGUL));
 }
 
 /**

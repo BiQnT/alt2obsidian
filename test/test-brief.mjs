@@ -432,7 +432,8 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
       { t: "1:00:00", slide: 14, text: "강의 길이를 넘는 시각이다." },
       { t: "xx", slide: 14, text: "읽을 수 없는 시각이다." },
       { t: "00:20", slide: 99, text: "덱 밖 슬라이드는 null이 된다." },
-      { t: "00:20", slide: null, text: "앞 문장입니다. 이 부분은 시험에 꼭 나옵니다. 그대로다." },
+      { t: "00:20", slide: null, text: "또 다른 이야기입니다. 왜 왼쪽부터 유도하죠? 그 다음 이야기입니다. 더 다른 말이다." },
+      { t: "00:25", slide: null, text: "교수님이 “앞 문장입니다. 이 부분은 시험에 꼭”이라고 했다." },
       ...Array.from({ length: 8 }, (_, i) => ({ t: "00:40", slide: 15, text: `강조점 ${i}다.` })),
     ],
     qa: [{ t: "01:10", q: "왜 왼쪽부터 유도하는가?", a: "곱셈을 먼저 묶어야 해서다." }, { t: "01:10", q: "x", a: "" }],
@@ -445,8 +446,17 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.deepEqual(ai.qa, [{ t: "01:10", q: "왜 왼쪽부터 유도하는가?", a: "곱셈을 먼저 묶어야 해서다." }], "an empty answer drops the item");
   assert.equal(ai.pitfalls.length, 1);
   assert.equal(Array.from(ai.pitfalls[0]).length, 100, "texts cut to 100 characters");
-  assert.equal(m.copiesCandidate("이 부분은 시험에 꼭 나옵니다. 뒤 문장입", input.candidateText), true, "more than 20 identical characters");
-  assert.equal(m.copiesCandidate("이 부분은 시험에 꼭 나옵", input.candidateText), false);
+  // A copy: a quoted span sharing more than 20 characters, or 40 unquoted characters with 10 Hangul in them.
+  assert.equal(m.copiesCandidate('그는 "이 부분은 시험에 꼭 나옵니다. 뒤 문장입"이라 했다', input.candidateText), true, "a quote sharing 21 characters");
+  assert.equal(m.copiesCandidate('그는 "이 부분은 시험에 꼭 나옵"이라 했다', input.candidateText), false, "20 are fine");
+  assert.equal(m.copiesCandidate("이 부분은 시험에 꼭 나옵니다. 뒤 문장입니다", input.candidateText), false, "unquoted, shorter than 40 characters");
+  assert.equal(m.copiesCandidate("또 다른 이야기입니다. 왜 왼쪽부터 유도하죠? 그 다음 이야기", input.candidateText), false, "34 unquoted characters");
+  assert.equal(m.copiesCandidate("또 다른 이야기입니다. 왜 왼쪽부터 유도하죠? 그 다음 이야기입니다. 더 다른", input.candidateText), true, "40 unquoted characters as they are");
+  assert.equal(m.copiesCandidate("Remember the precedence rule. Remember the precedence rule.", input.candidateText + " Remember the precedence rule. Remember the precedence rule."), false, "40 characters without 10 Hangul");
+  assert.equal(m.copiesCandidate("I don't say 'parse tree를 봅니다' twice", "오늘은 parse tree를 봅니다."), false, "an apostrophe opens no quote");
+  // The reviewer's case: an English term the transcript also uses is not a copy.
+  const tlb = { lengthMs: at(600), units: 20, candidateText: "[05:00] (슬라이드 3) 이제 Translation Lookaside Buffer를 쓰면 주소 변환이 빨라집니다." };
+  assert.deepEqual(m.validateBriefAi({ emphasis: [{ t: "05:00", slide: 3, text: "Translation Lookaside Buffer는 주소 변환 결과를 캐시한다." }], pitfalls: ["Translation Lookaside Buffer와 page table을 헷갈리기 쉽다."] }, tlb), { oneLine: "", emphasis: [{ t: "05:00", slide: 3, text: "Translation Lookaside Buffer는 주소 변환 결과를 캐시한다." }], qa: [], pitfalls: ["Translation Lookaside Buffer와 page table을 헷갈리기 쉽다."] });
   assert.throws(() => m.validateBriefAi([1], input), /JSON 객체가 아닙니다/, "not an object: asked once more");
   assert.deepEqual(m.validateBriefAi({}, input), { oneLine: "", emphasis: [], qa: [], pitfalls: [] }, "empty lists are fine");
   assert.equal(
