@@ -1,4 +1,5 @@
 import { editorLivePreviewField, MarkdownView, normalizePath, Plugin, Notice, WorkspaceLeaf } from "obsidian";
+import type { Editor, Menu } from "obsidian";
 import type { CodexModels, ModelCatalog, ModelInfo } from "./settings/llmSettings";
 import type { Extension } from "@codemirror/state";
 import { managedCommentHider } from "./editor/managedComments";
@@ -123,7 +124,7 @@ import { normalizeConcepts } from "./core/conceptNames";
 import { decidePdfOpen, isLectureFrontmatter, isLectureNote, lectureNoteForPdf } from "./ui/pdfOpen";
 import { aiInputFor, BriefAiStep, BriefFiles, readLectureBrief, updateLectureBrief } from "./brief/briefStore";
 import { aiPartStatus, BRIEF_AI_OUTPUT_TOKENS, BRIEF_AI_SCHEMA, briefAiInput } from "./brief/briefAi";
-import { commentaryText, fmString, isBriefFrontmatter, memoText, parseLectureNote, readFrontmatter } from "./brief/lectureNote";
+import { commentaryText, fmString, isBriefFrontmatter, memoText, parseLectureNote, readFrontmatter, unitAtLine } from "./brief/lectureNote";
 import { aiOf, briefChatBody, buildBriefScript, composeBrief, isEditedBrief, neighbourLectures, subjectOfNote } from "./brief/lectureBrief";
 import { ChatBriefState, ChatLecture, ChatView, SlideMaterial } from "./ui/ChatView";
 import { ChatPanelController, VIEW_TYPE_CHAT } from "./ui/chatPanel";
@@ -315,7 +316,12 @@ export default class Alt2ObsPlugin extends Plugin {
         (id) => this.loadTranscript(id),
         () => this.data.settings.hideManagedComments,
         (pdfPath) => this.openNativePdf(pdfPath),
-        { toggle: () => void this.toggleChatPanel(), isOpen: () => !!this.chatPanel?.isOpen() }
+        {
+          toggle: () => void this.toggleChatPanel(),
+          isOpen: () => !!this.chatPanel?.isOpen(),
+          askSlide: (mdPath, slide) => void this.askAboutSlide(mdPath, slide),
+          askSelection: (mdPath, slide, text) => void this.askAboutSelection(mdPath, slide, text),
+        }
       );
     });
 
@@ -415,6 +421,8 @@ export default class Alt2ObsPlugin extends Plugin {
       this.pruneAttachRecords().catch((e) => console.warn("[Alt2Obs] attach record prune failed:", e));
       // The question panel opens only on demand: a panel restored with the layout goes.
       this.chatPanel?.detachRestored();
+      // Right-click in a lecture note (2.1.0 spec 5.8).
+      this.registerEvent(this.app.workspace.on("editor-menu", (menu, editor, info) => this.addEditorChatItems(menu, editor, info.file)));
       // Lecture PDFs opened from now on go to the Synced Viewer (setting
       // "강의 PDF를 열면 뷰어로 열기"). Registered after the layout is
       // restored, and the PDF tabs it restored are left as plain PDFs.
@@ -1953,6 +1961,33 @@ export default class Alt2ObsPlugin extends Plugin {
 
   closeChatPanel(): void {
     this.chatPanel?.close();
+  }
+
+  /** The panel, opened (or shown) for a right-click item. */
+  private async openedChatView(): Promise<ChatView | null> {
+    await this.chatPanel?.open();
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)[0]?.view;
+    return view instanceof ChatView ? view : null;
+  }
+
+  /** "이 슬라이드에 질문" (spec 5.8): the panel on that lecture, pinned on the slide. */
+  async askAboutSlide(notePath: string, slide: number): Promise<void> {
+    await (await this.openedChatView())?.askAboutSlide(notePath, slide);
+  }
+
+  /** "선택한 내용으로 질문" (spec 5.8): the panel on that lecture with the text as a quote chip. */
+  async askAboutSelection(notePath: string, slide: number | null, text: string): Promise<void> {
+    await (await this.openedChatView())?.askAboutSelection(notePath, slide, text);
+  }
+
+  /** The editor's right-click items in a lecture note: the selection, the slide the cursor is in. */
+  addEditorChatItems(menu: Menu, editor: Editor, file: TFile | null): void {
+    if (!file || !isLectureNote(this.frontmatterOf(file.path), editor.getValue())) return;
+    const at = unitAtLine(editor.getValue(), editor.getCursor().line);
+    const slide = at?.unit === "slide" ? at.num : null;
+    const text = editor.getSelection();
+    if (text.trim()) menu.addItem((item) => item.setTitle("선택한 내용으로 질문").setIcon("message-circle").onClick(() => void this.askAboutSelection(file.path, slide, text)));
+    if (slide !== null) menu.addItem((item) => item.setTitle("이 슬라이드에 질문").setIcon("message-circle").onClick(() => void this.askAboutSlide(file.path, slide)));
   }
 
   /** The panel's view closed: the right sidebar goes back to how it was (ChatPanelController.dispose covers the unload). */

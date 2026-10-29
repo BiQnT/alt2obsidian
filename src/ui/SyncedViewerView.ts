@@ -35,6 +35,7 @@ import {
   MarkdownRenderer,
   Notice,
   Component,
+  Menu,
   ViewStateResult,
 } from "obsidian";
 import type { Events } from "obsidian";
@@ -45,10 +46,14 @@ import { headingForSlide, pickSlideHeadings, PROBE_SHARE, sectionAt } from "./vi
 import { stripManagedComments } from "../editor/managedComments";
 import { SLIDE_CHANGE_EVENT, SlideChangeInfo } from "./chatPanel";
 
-/** The question panel as the viewer's "💬 질문" button sees it. */
+/** The question panel as the viewer's "💬 질문" button and its right-click items see it. */
 export interface ChatToggle {
   toggle(): void;
   isOpen(): boolean;
+  /** "이 슬라이드에 질문": the panel open on the note, pinned on the slide. */
+  askSlide(mdPath: string, slide: number): void;
+  /** "선택한 내용으로 질문": the panel open on the note with the text as a quote. */
+  askSelection(mdPath: string, slide: number | null, text: string): void;
 }
 
 /** Timestamped transcript of a local note (plugin cache, else Alt). */
@@ -316,6 +321,25 @@ export class SyncedViewerView extends ItemView {
         if (this.guardUntil[pane] > Date.now()) this.guard(pane, 50, true);
       });
     }
+    // Right-click (2.1.0 spec 5.8): a page asks about its slide, a selection in the note about the text.
+    this.registerDomEvent(this.pdfPaneEl, "contextmenu", (evt) => {
+      const wrapper = evt.target instanceof Element ? evt.target.closest<HTMLElement>(".alt-to-obs-pdf-page-wrapper") : null;
+      const page = parseInt(wrapper?.dataset.pageNum ?? "", 10);
+      const mdPath = this.mdPath;
+      const chat = this.chat;
+      if (!chat || !mdPath || !(page > 0)) return;
+      evt.preventDefault();
+      new Menu().addItem((item) => item.setTitle("이 슬라이드에 질문").setIcon("message-circle").onClick(() => chat.askSlide(mdPath, page))).showAtMouseEvent(evt);
+    });
+    this.registerDomEvent(this.mdPaneEl, "contextmenu", (evt) => {
+      const text = this.mdSelection;
+      const mdPath = this.mdPath;
+      const chat = this.chat;
+      if (!chat || !mdPath || !text.trim()) return;
+      evt.preventDefault();
+      const slide = this.currentPage;
+      new Menu().addItem((item) => item.setTitle("선택한 내용으로 질문").setIcon("message-circle").onClick(() => chat.askSelection(mdPath, slide, text))).showAtMouseEvent(evt);
+    });
   }
 
   /** Alignment facts from the note's frontmatter (spec 4.9). */

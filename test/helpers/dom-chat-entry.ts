@@ -465,6 +465,27 @@ async function main() {
     quoteAfterRemove: text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("❝")),
   });
 
+  // ---- right-click questions (spec 5.8): pinned on a slide; a selection as the quote, the input focused ----
+  const chips = () => Array.from(root().querySelectorAll(".alt-to-obs-chat-chip"));
+  const label = (c: Element) => c.textContent!.slice(0, c.textContent!.length - (c.querySelector(".alt-to-obs-chat-chip-tokens")?.textContent?.length ?? 0));
+  const slideChip = () => chips().map(label).find((t) => t.startsWith("📄"));
+  const quoteChip = () => chips().find((c) => c.textContent!.startsWith("❝"))?.getAttribute("title");
+  const isPinned = () => root().querySelector(".alt-to-obs-chat-pin")!.classList.contains("is-active");
+  input.blur();
+  await view().askAboutSlide(L5, 12);
+  const sameSlide = { chip: slideChip(), pinned: isPinned(), focused: document.activeElement === input };
+  input.blur();
+  await view().askAboutSelection(L5, 12, "  인용할 문장  ");
+  const sameQuote = { quote: quoteChip(), focused: document.activeElement === input };
+  await view().askAboutSlide(L4, 5);
+  const otherSlide = { head: text(".alt-to-obs-chat-lecture")[0], chip: slideChip(), pinned: isPinned(), quote: quoteChip() ?? null };
+  await view().askAboutSelection(L5, 20, "다른 노트의 글");
+  const otherQuote = { head: text(".alt-to-obs-chat-lecture")[0], chip: slideChip(), quote: quoteChip() };
+  await view().askAboutSelection("notes/shopping.md", null, "강의 노트가 아닌 글");
+  const notLecture = { head: text(".alt-to-obs-chat-lecture")[0], quote: quoteChip() };
+  button("❝ 선택한 글 ×").click();
+  log.push({ step: "right-click questions", sameSlide, sameQuote, otherSlide, otherQuote, notLecture });
+
   // ---- the menu, and the × closes the panel ----
   button("⋯").click();
   const menu = (Menu as any).shown;

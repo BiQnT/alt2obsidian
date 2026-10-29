@@ -5,7 +5,7 @@ import { SyncedViewerView } from "../../src/ui/SyncedViewerView";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { createPdfWorkerUrl } from "../../src/pdf/pdfWorker";
 // @ts-ignore resolved to test/helpers/obsidian-browser-stub.js
-import { TFile } from "obsidian";
+import { Menu, TFile } from "obsidian";
 
 // The worker bundled into main.js, as the plugin sets it (src/main.ts).
 (pdfjsLib as any).GlobalWorkerOptions.workerSrc = createPdfWorkerUrl();
@@ -160,7 +160,13 @@ async function main() {
     { startMs: 65000, endMs: 69000, text: "슬라이드 3 이야기" },
   ];
   const navApp: any = { ...chatApp, workspace: { trigger: () => {} }, metadataCache: { getFileCache: () => ({ frontmatter: { alt_local_id: "nav", alt_alignment: "1:0-30 2:30-60 3:60-90" } }), on: () => ({}) } };
-  const nav: any = new (SyncedViewerView as any)({}, async () => navTranscript, () => true, undefined, { toggle: () => {}, isOpen: () => false });
+  const asked: unknown[] = [];
+  const nav: any = new (SyncedViewerView as any)({}, async () => navTranscript, () => true, undefined, {
+    toggle: () => {},
+    isOpen: () => false,
+    askSlide: (mdPath: string, slide: number) => asked.push(["slide", mdPath, slide]),
+    askSelection: (mdPath: string, slide: number, text: string) => asked.push(["selection", mdPath, slide, text]),
+  });
   nav.app = navApp;
   document.getElementById("host")!.appendChild(nav.containerEl);
   (nav.containerEl.children[1] as HTMLElement).style.height = "760px";
@@ -192,6 +198,21 @@ async function main() {
   const clearedInPane = await select(heading, true);
   log.push({ step: "selection", picked, heading: heading.textContent, keptOnPanelClick, clearedByOther, clearedInPane });
   outside.remove();
+  // Right-click (2.1.0 spec 5.8): a page asks about its slide; a selection in the note asks about the text.
+  const rightClick = (el: Element) => {
+    (Menu as any).shown = null;
+    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    el.dispatchEvent(evt);
+    const menu = (Menu as any).shown;
+    menu?.items[0]?.click();
+    return { items: menu ? menu.items.map((i: any) => i.title) : null, prevented: evt.defaultPrevented };
+  };
+  const onPage = rightClick(nav.pdfPaneEl.querySelector('.alt-to-obs-pdf-page-wrapper[data-page-num="2"] canvas') ?? nav.pdfPaneEl.querySelector('.alt-to-obs-pdf-page-wrapper[data-page-num="2"]'));
+  await select(heading, true);
+  const noSelection = rightClick(heading);
+  await select(heading, false);
+  const withSelection = rightClick(heading);
+  log.push({ step: "right-click", onPage, noSelection, withSelection, asked, current: nav.getCurrentSlide() });
   await nav.onClose();
 
   log.push({

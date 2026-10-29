@@ -791,6 +791,28 @@ try {
     assert.equal((await plugin.chatSlideImage(lecture, 7))?.pageNum, 7, "an added slide's image");
     assert.equal(await plugin.chatSlideImage({ ...lecture, pdfPath: null }, 7), null);
     assert.equal(plugin.noteSelection(), "", "no note open: no selection");
+    // The editor's right-click items (spec 5.8): in a lecture note only, the selection and the cursor's slide.
+    const fakeMenu = () => ({ items: [], addItem(cb) { const item = { title: "", setTitle(t) { this.title = t; return this; }, setIcon() { return this; }, onClick(f) { this.click = f; return this; } }; cb(item); this.items.push(item); return this; } });
+    const noteLines = files.get(record.path).split("\n");
+    const editorAt = (text, line, selection) => ({ getValue: () => text, getCursor: () => ({ line, ch: 0 }), getSelection: () => selection });
+    const line7 = noteLines.findIndex((l) => l.startsWith("## 📚 슬라이드 7")) + 1;
+    const askedFor = [];
+    const saved = { slide: plugin.askAboutSlide, selection: plugin.askAboutSelection };
+    plugin.askAboutSlide = async (...a) => void askedFor.push(["slide", ...a]);
+    plugin.askAboutSelection = async (...a) => void askedFor.push(["selection", ...a]);
+    let menu = fakeMenu();
+    plugin.addEditorChatItems(menu, editorAt(noteLines.join("\n"), line7, "캐시 라인"), { path: record.path });
+    assert.deepEqual(menu.items.map((i) => i.title), ["선택한 내용으로 질문", "이 슬라이드에 질문"]);
+    for (const item of menu.items) item.click();
+    assert.deepEqual(askedFor, [["selection", record.path, 7, "캐시 라인"], ["slide", record.path, 7]]);
+    menu = fakeMenu();
+    plugin.addEditorChatItems(menu, editorAt(noteLines.join("\n"), 0, ""), { path: record.path });
+    assert.deepEqual(menu.items.map((i) => i.title), [], "above the first slide, nothing selected: no item");
+    menu = fakeMenu();
+    plugin.addEditorChatItems(menu, editorAt("# 장보기\n우유", 1, "우유"), { path: "notes/shopping.md" });
+    assert.deepEqual(menu.items, [], "not a lecture note: no item");
+    plugin.askAboutSlide = saved.slide;
+    plugin.askAboutSelection = saved.selection;
 
     const totals = { ...plugin.data.usageTotals };
     process.env.FAKE_CLI_TEXT = "캐시는 자주 쓰는 데이터를 가까이 둔다 [슬라이드 2].";
@@ -828,7 +850,7 @@ try {
     const gone = await makePlugin(undefined);
     gone.plugin.onunload();
     await assert.rejects(gone.plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }), /플러그인이 꺼져/);
-    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, the + 자료 추가 slide list, another lecture's brief built in memory, a streamed chat call on the chat task (usage counted, not as a lecture), error kinds, nothing sent after unload");
+    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, the + 자료 추가 slide list, another lecture's brief built in memory, the editor's right-click items, a streamed chat call on the chat task (usage counted, not as a lecture), error kinds, nothing sent after unload");
   }
 
   // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).

@@ -52,7 +52,7 @@ import { ChatErrorInfo, ChatThread, ChatTurn, historyOf, moveThreadTo, newTurnId
 import { defaultTaskSetting, estimateEffort, isCliProvider, ModelCatalog, modelName } from "../settings/llmSettings";
 import { renderModelPicker } from "./modelPicker";
 import { AddRequest, renderAddPopover } from "./addMaterialPopover";
-import { DEFAULT_INCLUDE, IMAGE_TOKENS, IncludeOptions, MAX_ADDED_SLIDES, SlideRow } from "../chat/addMaterial";
+import { DEFAULT_INCLUDE, IMAGE_TOKENS, IncludeOptions, MAX_ADDED_SLIDES, quoteOf, SlideRow } from "../chat/addMaterial";
 import { SLIDE_CHANGE_EVENT, SlideChangeInfo, VIEW_TYPE_CHAT } from "./chatPanel";
 import chatSystemPrompt from "../../prompts/chat.system.md";
 
@@ -874,6 +874,28 @@ export class ChatView extends ItemView {
     }
     this.renderChips();
     await this.loadMaterials(false);
+  }
+
+  /** "선택한 내용으로 질문" (spec 5.8): the panel on that note (and slide), the text as the quote, the input focused. */
+  async askAboutSelection(notePath: string, slide: number | null, text: string): Promise<void> {
+    await this.showLecture(notePath, slide);
+    if (this.lecture?.notePath !== notePath) return;
+    this.quote = quoteOf(text) || null;
+    this.renderChips();
+    this.inputEl.focus();
+  }
+
+  /** "이 슬라이드에 질문" (spec 5.8): the panel on that lecture, pinned on that slide. */
+  async askAboutSlide(notePath: string, slide: number): Promise<void> {
+    if (notePath === this.lecture?.notePath) {
+      this.followed = this.followed ?? slide;
+      this.pinned = slide;
+      moveThreadTo(this.thread, slide);
+      this.renderChips();
+      void this.renderThread();
+      await this.loadMaterials(false);
+    } else await this.showLecture(notePath, slide, [slide]);
+    this.inputEl.focus();
   }
 
   private toggleChip(name: "brief" | "slide" | "transcript" | "memo"): void {
