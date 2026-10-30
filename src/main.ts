@@ -2432,8 +2432,8 @@ export default class Alt2ObsPlugin extends Plugin {
 
   /**
    * A time chip: the viewer's transcript at that time; without a viewer (no
-   * PDF), the heading of the slide aligned to it; in a summary note, the
-   * heading of the section that holds it.
+   * PDF), the heading of the slide aligned to it (a notice without one); in
+   * a summary note, the heading of the section that holds it.
    */
   async gotoTime(lecture: ChatLecture, ms: number): Promise<void> {
     if (lecture.kind === "slides") {
@@ -2446,6 +2446,7 @@ export default class Alt2ObsPlugin extends Plugin {
       const spans = parseAlignment(this.frontmatterOf(lecture.notePath)?.alt_alignment);
       const span = spans.find((x) => ms >= x.startMs && ms < x.endMs) ?? [...spans].reverse().find((x) => x.startMs <= ms);
       if (span) await this.openHeading(lecture.notePath, `📚 슬라이드 ${span.slide}`);
+      else new Notice(spans.length === 0 ? "이 강의에는 슬라이드와 전사의 정렬이 없어 그 시각의 슬라이드를 찾지 못했습니다." : "그 시각에 맞춘 슬라이드가 없습니다.");
       return;
     }
     const section = (await this.sectionHeadings(lecture.notePath)).find((h) => h.startMs !== null && h.endMs !== null && ms >= h.startMs && ms < h.endMs);

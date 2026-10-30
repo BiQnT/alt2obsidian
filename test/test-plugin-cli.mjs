@@ -1449,8 +1449,10 @@ try {
       for (const ms of [30_000, 42_000, 600_000]) await plugin.gotoTime(bareLec, ms);
       assert.deepEqual(opened.slice(3), [`${bare}#📚 슬라이드 2`, `${bare}#📚 슬라이드 2`, `${bare}#📚 슬라이드 3`], "the span that holds the time, else the last one that started before it");
       files.set(bare, "---\nalt_kind: slides\n---\n# L10 Bare\n");
+      const noticesBefore = notices.length;
       await plugin.gotoTime(bareLec, 30_000);
       assert.equal(opened.length, 6, "no alignment: nowhere to go");
+      assert.deepEqual(notices.slice(noticesBefore), ["이 강의에는 슬라이드와 전사의 정렬이 없어 그 시각의 슬라이드를 찾지 못했습니다."], "said in a notice");
       files.delete(bare);
       delete ws.openLinkText;
       delete ws.getLeavesOfType;
