@@ -410,7 +410,7 @@ Marks in an answer become chips: `[슬라이드 N]` (and lists and ranges such a
 - **메모에 저장** → **답변 그대로 · 토큰 0** (as it is, no tokens) or **세 줄로 줄여서 · 브리프 모델 1회** (cut to three lines, one call of the chatbot brief task) adds the question and the answer, dated, to the `> [!note] 내 메모` callout of the slide (or section) the question was about. A re-import keeps it.
 - **메모에 저장** → **대화 노트로 저장** (save as a chat note), or **대화 저장** in the panel's **⋯** menu, writes this lecture's conversation to `<subject>/Chats/<date> <lecture> <first question>.md`: each question as `## Q.`, what it sent (`> 자료: 슬라이드 17, 전사 29:06-35:56`) and the answer, whose slide marks become links to the slide headings. Saving the same conversation again replaces that note.
 
-What is saved is made safe first: HTML, embeds, Dataview inline queries and comments in an answer do not run in your vault.
+What is saved is made safe first: HTML, embeds, Dataview inline queries (with the prefixes set in Dataview too), comments and Templater commands (`<% %>`) in an answer do not run in your vault.
 
 ### In a summary note
 

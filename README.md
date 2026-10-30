@@ -77,13 +77,14 @@ Alt2Obs has no telemetry, analytics, ads or update checks. This is everything it
 
 ### Network use
 
-- **Anthropic (Claude Code) or OpenAI (Codex).** Commentary, summaries, concept extraction, the optional alignment check and note checking run your own CLI (`claude` or `codex`) as a child process. Each call sends its material to Anthropic or OpenAI under your account. The plugin itself sends nothing to these services. A call can include:
+- **Anthropic (Claude Code) or OpenAI (Codex).** Commentary, summaries, concept extraction, the optional alignment check, note checking, questions in the question panel, the AI part of lecture briefs and shortening an answer for a memo run your own CLI (`claude` or `codex`) as a child process. Each call sends its material to Anthropic or OpenAI under your account. The plugin itself sends nothing to these services. A call can include:
   - slide text, and slide images for diagram slides;
   - transcript excerpts, and Alt's summary and memo;
   - the lecture title and subject, concept names, and the tags already used by notes in that subject folder (including notes you wrote yourself);
   - for note checking, the sentences of your note with their evidence;
   - for a question in the question panel: the panel's instructions, the lecture brief (and the subject brief or other lectures' briefs when you add them), the text of the slides you send (the page as an image when it has no text, or when you add it so), their commentary, your memo, their part of the transcript, the text you selected, the earlier questions and answers about that lecture, and your question;
-  - for the AI part of a lecture brief: the lecture title, subject and length, each slide's one-line gist, and transcript sentences a script picked (around words such as 시험 and 중요, and questions), at most 3,000 characters.
+  - for the AI part of a lecture brief: the lecture title, subject and length, each slide's one-line gist, and transcript sentences a script picked (around words such as 시험 and 중요, and questions), at most 3,000 characters;
+  - for **세 줄로 줄여서** (cut to three lines) when saving an answer to a memo: that question and answer, sent to the model of the **챗봇 브리프** (chatbot brief) task.
 - **Notion (optional, note checking).** Fetching a Notion page is one Claude Code call that may use only the fetch tool of your Notion MCP server. Claude Code contacts Notion for the page and Anthropic for the model turn. The page URL and the page content reach Anthropic; the content arrives as that call's tool result.
 - **Other MCP servers (Notion only).** Before the fetch, `claude mcp list` checks the connection of every MCP server configured in Claude Code; this can start local servers and contact remote ones. When the Notion server cannot be passed to the call on its own (a claude.ai connector, or a server that is not a plain `https` address without headers), the fetch call also starts your other MCP servers, with their tools blocked.
 - **altalt.io and the slide link (optional, share link import).** The plugin downloads the Alt share page from altalt.io. It then downloads the slide PDF from the slide link on that page, as given. Today that link points to Alt's Cloudflare R2 storage (`*.r2.cloudflarestorage.com`); older Alt notes may point to Alt's earlier Supabase storage (`*.supabase.co`).
@@ -95,6 +96,7 @@ Alt2Obs has no telemetry, analytics, ads or update checks. This is everything it
 - Imports write the lecture note, its concept notes, key diagram images and the slide PDF into the save folder; note checking writes a verification note next to them.
 - **Lecture briefs:** `<subject>/Briefs/<lecture> brief.md` and `<subject>/Briefs/<subject> subject brief.md`, at import (unless **가져올 때 챗봇 브리프 만들기** is off) and by the brief commands and buttons. A brief holds no transcript text: its emphasis lines are rephrased, with their times, and a line that copies the transcript is dropped.
 - **The question panel** writes only when you ask it to: **대화 노트로 저장** or **대화 저장** writes the conversation to `<subject>/Chats/<date> <lecture> <question>.md`, and **메모에 저장** adds an answer to the slide's `> [!note] 내 메모` callout. Otherwise conversations are kept in memory only: closing the panel keeps them, disabling the plugin or quitting Obsidian drops them.
+- Model text it writes (a memo, a chat note, a brief's AI lines) is made safe first: HTML, image embeds, Dataview inline queries (with the prefixes set in Dataview too), comments and Templater commands (`<% %>`) in it do not run.
 
 ### Accounts and payment
 
