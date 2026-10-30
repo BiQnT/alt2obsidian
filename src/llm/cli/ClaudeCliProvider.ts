@@ -20,6 +20,15 @@
 //                                   auth and model selection work normally
 //   --disable-slash-commands        no skill listing in the prompt
 //   --model, --effort               per-task settings
+//   --include-partial-messages      (question panel, 2.1.0 spec 7.1, only when
+//                                   `claude --help` lists it) adds
+//                                   `{"type":"stream_event","event":{"type":
+//                                   "content_block_delta","delta":{"type":
+//                                   "text_delta","text":...}}}` lines while the
+//                                   answer is written (format of 2.1.312);
+//                                   the result event at the end is unchanged.
+//                                   A message_start after some text (the CLI
+//                                   retried the turn) starts the answer over
 // `--json-schema` is not used: Claude answers it through an extra tool turn
 // that re-sends the whole prompt (measured: 2 turns instead of 1). The
 // answer format is stated in the prompt and validated in code instead.
@@ -33,7 +42,12 @@ export interface ClaudeArgsInput {
   model: string;
   effort: string;
   systemPrompt?: string;
+  /** Stream the answer (`--include-partial-messages`). */
+  partialMessages?: boolean;
 }
+
+/** The streaming flag; used only when the CLI's help lists it (OPTIONAL_CLI_FEATURES). */
+export const PARTIAL_MESSAGES_FLAG = "--include-partial-messages";
 
 export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
   const args = [
@@ -56,7 +70,38 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
   ];
   if (input.model) args.push("--model", input.model);
   if (input.effort) args.push("--effort", input.effort);
+  if (input.partialMessages) args.push(PARTIAL_MESSAGES_FLAG);
   return args;
+}
+
+/**
+ * The answer text of one stream-json line, when it is a text piece of a
+ * partial message (`stream_event` with a `text_delta`); null for every other
+ * line (thinking pieces, block starts and stops, the final events).
+ */
+export function streamTextDelta(line: string): string | null {
+  return streamEvent(line)?.text ?? null;
+}
+
+/** True for the `message_start` stream event: a new model message begins. */
+export function isMessageStart(line: string): boolean {
+  return streamEvent(line)?.start === true;
+}
+
+/** A stream_event line read: its text piece, or that a message starts; null for any other line. */
+function streamEvent(line: string): { text?: string; start?: boolean } | null {
+  const t = line.trim();
+  if (!t.startsWith("{") || !t.includes('"stream_event"')) return null;
+  try {
+    const ev = JSON.parse(t) as { type?: unknown; event?: { type?: unknown; delta?: { type?: unknown; text?: unknown } } } | null;
+    if (ev?.type !== "stream_event") return null;
+    if (ev.event?.type === "message_start") return { start: true };
+    if (ev.event?.type !== "content_block_delta") return null;
+    const delta = ev.event.delta;
+    return delta?.type === "text_delta" && typeof delta.text === "string" ? { text: delta.text } : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Appended last (after the per-call content) so the cached prefix stays identical. */
@@ -196,7 +241,11 @@ export class ClaudeCliProvider extends CliProviderBase {
   protected usesFiles = false;
 
   protected async invoke(call: CliCall): Promise<CliCallResult> {
-    const args = buildClaudeArgs({ model: this.config.model, effort: this.config.effort, systemPrompt: call.systemPrompt });
+    const onDelta = call.onDelta;
+    const stream = !!onDelta && (this.config.features ?? []).includes(PARTIAL_MESSAGES_FLAG);
+    /** Some text of the current message has arrived. */
+    let started = false;
+    const args = buildClaudeArgs({ model: this.config.model, effort: this.config.effort, systemPrompt: call.systemPrompt, partialMessages: stream });
     try {
       const out = await runCli({
         bin: this.config.bin,
@@ -205,6 +254,18 @@ export class ClaudeCliProvider extends CliProviderBase {
         cwd: this.config.workDir,
         timeoutMs: Math.round(this.config.timeoutMs * Math.max(1, call.timeoutScale ?? 1)),
         signal: call.signal,
+        onStdoutLine: stream
+          ? (line) => {
+              const piece = streamTextDelta(line);
+              if (piece) {
+                started = true;
+                onDelta?.(piece);
+              } else if (started && isMessageStart(line)) {
+                started = false;
+                call.onReset?.();
+              }
+            }
+          : undefined,
       });
       return parseClaudeOutput(out.stdout);
     } catch (e) {

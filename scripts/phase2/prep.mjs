@@ -866,27 +866,33 @@ var TASK_DEFAULTS = {
     commentary: { model: "sonnet", effort: "medium" },
     concepts: { model: "haiku", effort: "low" },
     alignment: { model: "haiku", effort: "low" },
-    verification: { model: "sonnet", effort: "medium" }
+    verification: { model: "sonnet", effort: "medium" },
+    chat: { model: "sonnet", effort: "low" },
+    brief: { model: "haiku", effort: "low" }
   },
   "codex-cli": {
     commentary: { model: "", effort: "medium" },
     concepts: { model: "", effort: "low" },
     alignment: { model: "", effort: "low" },
-    verification: { model: "", effort: "medium" }
+    verification: { model: "", effort: "medium" },
+    chat: { model: "", effort: "low" },
+    brief: { model: "", effort: "low" }
   }
 };
 var CLAUDE_TASK_DEFAULTS = {
   commentary: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].commentary },
   concepts: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].concepts },
   alignment: { provider: "none", model: "", effort: "" },
-  verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification }
+  verification: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].verification },
+  chat: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].chat },
+  brief: { provider: "claude-cli", ...TASK_DEFAULTS["claude-cli"].brief }
 };
 var DEFAULT_SETTINGS = {
   // The folder name from before the rename to Alt2Obs (2.0.0): existing
   // vaults and the Skill keep writing to the same place.
   baseFolderPath: "Alt2Obsidian",
   language: "ko",
-  settingsVersion: 3,
+  settingsVersion: 4,
   claudePath: "",
   codexPath: "",
   cliTimeoutSec: 300,
@@ -897,7 +903,10 @@ var DEFAULT_SETTINGS = {
   altDataDir: "",
   notionFetchTool: "",
   hideManagedComments: true,
-  openPdfInViewer: true
+  openPdfInViewer: true,
+  briefMode: "ai",
+  chatTokenCap: 2e4,
+  chatIncludeMemo: true
 };
 var EMPTY_USAGE = {
   calls: 0,

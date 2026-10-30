@@ -104,6 +104,8 @@ export interface BudgetEstimate {
   /** Transcript summary note (spec 4.10): sections sent to the LLM, and reused unchanged. */
   sectionsGenerated?: number;
   sectionsReused?: number;
+  /** The lecture brief's AI part (2.1.0 spec 4.5), when it makes a call; already in the totals above. */
+  brief?: { calls: number; inputTokens: number; outputTokens: number };
 }
 
 /**

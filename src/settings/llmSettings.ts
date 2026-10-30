@@ -3,10 +3,12 @@
 
 import {
   Alt2ObsSettings,
+  BriefMode,
   CLAUDE_TASK_DEFAULTS,
   DEFAULT_GENERATION,
   DEFAULT_SETTINGS,
   EffortLevel,
+  MIN_CHAT_TOKEN_CAP,
   PresetId,
   ProviderId,
   TASK_DEFAULTS,
@@ -14,13 +16,26 @@ import {
   TaskLLMSetting,
 } from "../types";
 
-export const TASK_IDS: TaskId[] = ["commentary", "concepts", "alignment", "verification"];
+export const TASK_IDS: TaskId[] = ["commentary", "concepts", "alignment", "verification", "chat", "brief"];
 
 export const TASK_LABELS: Record<TaskId, string> = {
   commentary: "슬라이드 해설",
   concepts: "개념 추출",
   alignment: "전사 정렬 확인",
   verification: "노트 검증",
+  chat: "질문",
+  brief: "챗봇 브리프",
+};
+
+/** Tasks that settings version 4 (2.1.0) added: saved data before it has none. */
+const TASKS_SINCE_V4: TaskId[] = ["chat", "brief"];
+
+export const BRIEF_MODES: BriefMode[] = ["off", "script", "ai"];
+
+export const BRIEF_MODE_LABELS: Record<BriefMode, string> = {
+  off: "끔",
+  script: "스크립트만 (토큰 0)",
+  ai: "AI 강조점 포함",
 };
 
 /** The providers a task can use (the alignment check can also be "none"). */
@@ -47,7 +62,7 @@ export const LEGACY_KEY_FIELDS = ["apiKey", "geminiApiKey", "claudeApiKey"];
 /** Providers of 2.0.0-beta.3 and earlier that are gone; their tasks move to a CLI. */
 const REMOVED_PROVIDERS = ["gemini", "ollama"];
 
-const SETTINGS_VERSION = 3;
+const SETTINGS_VERSION = 4;
 
 export function isCliProvider(p: ProviderId | "none"): p is ProviderId {
   return p === "claude-cli" || p === "codex-cli";
@@ -114,6 +129,11 @@ export interface MigrationOutcome {
  * - Data before version 3: a CLI task with an empty model or effort gets the
  *   task default, so the table shows what actually runs (an empty value used
  *   to mean "whatever the CLI is set to"). "CLI 기본값" stays selectable.
+ * - Data before version 4 has no `chat` and `brief` tasks: they get the task
+ *   defaults of the commentary task's CLI (Codex defaults when it is on
+ *   Codex), or what the saved preset (절약, 품질) sets, and move to Codex
+ *   with the commentary task when it does. Not counted as filled. The brief
+ *   and question settings get their defaults.
  * Unknown keys (the 1.x Gemini key and model) are kept as they are.
  */
 export function migrateSettings(saved: unknown): MigrationOutcome {
@@ -128,6 +148,12 @@ export function migrateSettings(saved: unknown): MigrationOutcome {
     notionFetchTool: typeof raw.notionFetchTool === "string" ? raw.notionFetchTool.trim() : "",
     hideManagedComments: raw.hideManagedComments !== false,
     openPdfInViewer: raw.openPdfInViewer !== false,
+    briefMode: BRIEF_MODES.includes(raw.briefMode as BriefMode) ? (raw.briefMode as BriefMode) : DEFAULT_SETTINGS.briefMode,
+    chatTokenCap:
+      typeof raw.chatTokenCap === "number" && Number.isFinite(raw.chatTokenCap) && raw.chatTokenCap >= MIN_CHAT_TOKEN_CAP
+        ? Math.trunc(raw.chatTokenCap)
+        : DEFAULT_SETTINGS.chatTokenCap,
+    chatIncludeMemo: raw.chatIncludeMemo !== false,
   };
   const savedTasks = raw.tasks && typeof raw.tasks === "object" ? (raw.tasks as unknown as Record<string, unknown>) : null;
   if (!savedTasks) {
@@ -139,9 +165,11 @@ export function migrateSettings(saved: unknown): MigrationOutcome {
   const movedTasks: TaskId[] = [];
   const removedFrom = new Set<RemovedProvider>();
   const filled: FilledTask[] = [];
-  const before3 = typeof raw.settingsVersion !== "number" || raw.settingsVersion < SETTINGS_VERSION;
+  // Literal 3: the empty-value fill belongs to version 3 and never runs twice.
+  const before3 = typeof raw.settingsVersion !== "number" || raw.settingsVersion < 3;
   for (const id of TASK_IDS) {
     const rawTask = savedTasks[id] as { provider?: unknown } | undefined;
+    if (rawTask === undefined && TASKS_SINCE_V4.includes(id)) continue;
     if (rawTask && REMOVED_PROVIDERS.includes(String(rawTask.provider))) {
       settings.tasks[id] = defaultTaskSetting("claude-cli", id);
       movedTasks.push(id);
@@ -157,6 +185,16 @@ export function migrateSettings(saved: unknown): MigrationOutcome {
       if (change.model || change.effort) filled.push(change);
     }
     settings.tasks[id] = task;
+  }
+  for (const id of TASKS_SINCE_V4) {
+    if (savedTasks[id] !== undefined) continue;
+    const base = settings.tasks.commentary.provider;
+    const provider = isCliProvider(base) ? base : "claude-cli";
+    // A table on 절약 or 품질 gets the new tasks the way that preset sets them.
+    const preset = settings.preset === "saving" || settings.preset === "quality" ? settings.preset : null;
+    settings.tasks[id] = preset ? { provider, ...presetSetting(preset, id, provider) } : defaultTaskSetting(provider, id);
+    // A commentary task this migration put on the Claude CLI may still move to Codex: these follow it.
+    if (movedTasks.includes("commentary")) movedTasks.push(id);
   }
   return { settings, needsCliDefault: movedTasks.length > 0, movedTasks, removedFrom: Array.from(removedFrom), filled };
 }
@@ -230,13 +268,15 @@ export function removedProviderMessage(removedFrom: RemovedProvider[], cli: Prov
 
 /** Light model per CLI for the saving preset. Codex has no stable alias, so its default model is kept. */
 const LIGHT_MODEL: Partial<Record<ProviderId, string>> = { "claude-cli": "haiku" };
+const MID_MODEL: Partial<Record<ProviderId, string>> = { "claude-cli": "sonnet" };
 const TOP_MODEL: Partial<Record<ProviderId, string>> = { "claude-cli": "opus" };
 
 /**
  * Presets change model and effort, never the provider.
  * - saving: every task on the light model with low effort.
- * - quality: commentary and verification on the top model with high effort;
- *   concepts stay light.
+ * - quality: commentary and verification on the top model with high effort,
+ *   questions on the middle model with medium effort; concepts and the
+ *   brief stay light.
  * - custom: nothing changes (it is what any manual edit switches to).
  */
 export function applyPreset(settings: Alt2ObsSettings, preset: PresetId): void {
@@ -244,16 +284,28 @@ export function applyPreset(settings: Alt2ObsSettings, preset: PresetId): void {
   if (preset === "custom") return;
   for (const id of TASK_IDS) {
     const t = settings.tasks[id];
-    if (!isCliProvider(t.provider)) continue;
-    const heavy = id === "commentary" || id === "verification";
-    if (preset === "saving" || !heavy) {
-      t.model = LIGHT_MODEL[t.provider] ?? "";
-      t.effort = "low";
-    } else {
-      t.model = TOP_MODEL[t.provider] ?? "";
-      t.effort = "high";
-    }
+    if (isCliProvider(t.provider)) Object.assign(t, presetSetting(preset, id, t.provider));
   }
+}
+
+/** The model and effort a preset gives one task on a CLI. */
+export function presetSetting(preset: "saving" | "quality", id: TaskId, provider: ProviderId): { model: string; effort: EffortLevel } {
+  const heavy = id === "commentary" || id === "verification";
+  if (preset === "quality" && heavy) return { model: TOP_MODEL[provider] ?? "", effort: "high" };
+  if (preset === "quality" && id === "chat") return { model: MID_MODEL[provider] ?? "", effort: "medium" };
+  return { model: LIGHT_MODEL[provider] ?? "", effort: "low" };
+}
+
+/**
+ * The tasks a pending CLI default may still move to Codex, saved before
+ * version 4: when the commentary task is among them, the chat and brief
+ * tasks that version 4 just added on the Claude CLI go along with it.
+ */
+export function withTasksSinceV4(moved: TaskId[], settings: Alt2ObsSettings): TaskId[] {
+  if (!moved.includes("commentary")) return moved;
+  const out = [...moved];
+  for (const id of TASKS_SINCE_V4) if (!out.includes(id) && settings.tasks[id].provider === "claude-cli") out.push(id);
+  return out;
 }
 
 export function rememberModel(settings: Alt2ObsSettings, provider: ProviderId, model: string): void {

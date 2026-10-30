@@ -1,9 +1,10 @@
 import { App, Notice, PluginSettingTab, requireApiVersion, Setting } from "obsidian";
 import type { SettingControl, SettingDefinition, SettingDefinitionItem } from "obsidian";
 import type Alt2ObsPlugin from "../main";
-import { CliName, DEFAULT_GENERATION, DEFAULT_SETTINGS, EffortLevel, ImageRule, PresetId, ProviderId, TaskId } from "../types";
+import { BriefMode, CliName, DEFAULT_GENERATION, DEFAULT_SETTINGS, EffortLevel, ImageRule, MIN_CHAT_TOKEN_CAP, PresetId, ProviderId, TaskId } from "../types";
 import {
   applyPreset,
+  BRIEF_MODE_LABELS,
   defaultTaskSetting,
   describeDefault,
   effortChoices,
@@ -213,6 +214,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
       { heading: "LLM 연결", rows: this.connectionRows() },
       { heading: "작업별 모델", rows: this.taskRows() },
       { heading: "생성 옵션", rows: this.generationRows() },
+      { heading: "질문 (채팅)", rows: this.chatRows() },
       { heading: "사용량", rows: [this.usageRow()] },
       { heading: "보기", rows: this.viewRows() },
       { heading: "저장", rows: this.storageRows() },
@@ -378,6 +380,8 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     const notes: Partial<Record<TaskId, string>> = {
       alignment: "정렬은 스크립트로 항상 합니다. 프로바이더를 고르면 불확실한 구간만 한 번 더 확인합니다 (기본 끔).",
       verification: "사이드바 '노트 검증' 탭에서 씁니다. 주장 20개씩 판정합니다.",
+      chat: "질문 패널에서 씁니다. 패널에서 이번 질문의 모델만 바꿀 수도 있습니다.",
+      brief: "가져올 때 강의 브리프의 강조점을 만드는 데 씁니다 (강의당 1회, 아래 '질문 (채팅)'에서 끌 수 있음).",
     };
     // The model list, read once for the task rows drawn together and again
     // for the next drawing (Obsidian 1.13 may draw kept definitions again).
@@ -393,7 +397,7 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
       {
         name: "프리셋",
         desc:
-          "절약: 모든 작업에 경량 모델(Claude는 haiku)과 effort low. 품질: 해설과 검증에 상위 모델(Claude는 opus)과 effort high. " +
+          "절약: 모든 작업에 경량 모델(Claude는 haiku)과 effort low. 품질: 해설과 검증에 상위 모델(Claude는 opus)과 effort high, 질문에 중간 모델(Claude는 sonnet)과 effort medium. " +
           "프로바이더는 바꾸지 않습니다. 아래에서 직접 바꾸면 '사용자 지정'이 됩니다.",
         aliases: ["preset", "model", "effort"],
         control: {
@@ -618,6 +622,47 @@ export class Alt2ObsSettingsTab extends PluginSettingTab {
     ];
   }
 
+  // ---- question panel (2.1.0 spec 8) ----
+
+  private chatRows(): Row[] {
+    return [
+      {
+        name: "가져올 때 챗봇 브리프 만들기",
+        desc:
+          "질문 패널이 강의 전체 대신 보내는 요약 파일(과목 폴더 안 Briefs/<강의> brief.md)을 가져올 때 만듭니다. " +
+          "스크립트만: 노트의 개요, 흐름, 슬라이드별 요지와 시각으로 만들어 토큰이 들지 않습니다. " +
+          "AI 강조점 포함: 전사에서 교수님이 강조한 점과 강의 중 질문을 경량 모델로 한 번 더 뽑습니다.",
+        aliases: ["brief", "chat", "브리프"],
+        control: {
+          type: "dropdown",
+          key: "briefMode",
+          options: BRIEF_MODE_LABELS,
+          get: () => this.settings.briefMode,
+          set: (value) => (this.settings.briefMode = value as BriefMode),
+        },
+      },
+      {
+        name: "질문에 내 메모 포함",
+        desc: "질문 패널의 보내는 자료에서 지금 슬라이드의 '내 메모' 칸을 기본으로 켭니다. 패널에서 질문마다 끌 수 있습니다.",
+        aliases: ["chat", "memo", "메모"],
+        control: { type: "toggle", key: "chatIncludeMemo", get: () => this.settings.chatIncludeMemo, set: (value) => (this.settings.chatIncludeMemo = value) },
+      },
+      {
+        name: "질문당 토큰 상한",
+        desc: `질문 하나의 예상 입력+출력 토큰이 이 값을 넘으면 보내기 전에 패널에서 한 번 묻습니다. 최소 ${MIN_CHAT_TOKEN_CAP}.`,
+        aliases: ["chat", "token", "limit"],
+        control: {
+          type: "number",
+          key: "chatTokenCap",
+          min: MIN_CHAT_TOKEN_CAP,
+          defaultValue: DEFAULT_SETTINGS.chatTokenCap,
+          get: () => this.settings.chatTokenCap,
+          set: (n) => (this.settings.chatTokenCap = n),
+        },
+      },
+    ];
+  }
+
   // ---- usage ----
 
   private usageRow(): Row {
@@ -771,6 +816,8 @@ const TASK_ALIASES: Record<TaskId, string> = {
   concepts: "concepts",
   alignment: "transcript",
   verification: "verification",
+  chat: "chat",
+  brief: "brief",
 };
 
 /** A row as an Obsidian 1.13 definition. */

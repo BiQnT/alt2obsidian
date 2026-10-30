@@ -24,6 +24,9 @@
 //   (find, select, annotation). Opening a lecture PDF normally turns that
 //   tab into this viewer (setting "강의 PDF를 열면 뷰어로 열기"); a tab
 //   opened with this button is left as a plain PDF.
+// - "💬 질문" (2.1.0) opens or closes the question panel; on every page
+//   change the viewer tells the workspace (SLIDE_CHANGE_EVENT), and the
+//   panel follows the current slide (getCurrentSlide()).
 
 import {
   ItemView,
@@ -32,13 +35,26 @@ import {
   MarkdownRenderer,
   Notice,
   Component,
+  Menu,
   ViewStateResult,
 } from "obsidian";
+import type { Events } from "obsidian";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { parseAlignment, segmentInSpan, spansForSlide, StoredSpan } from "../core/prep/TranscriptAligner";
 import { headingForSlide, pickSlideHeadings, PROBE_SHARE, sectionAt } from "./viewerSync";
 import { stripManagedComments } from "../editor/managedComments";
+import { SLIDE_CHANGE_EVENT, SlideChangeInfo } from "./chatPanel";
+
+/** The question panel as the viewer's "💬 질문" button and its right-click items see it. */
+export interface ChatToggle {
+  toggle(): void;
+  isOpen(): boolean;
+  /** "이 슬라이드에 질문": the panel open on the note, pinned on the slide. */
+  askSlide(mdPath: string, slide: number): void;
+  /** "선택한 내용으로 질문": the panel open on the note with the text as a quote. */
+  askSelection(mdPath: string, slide: number | null, text: string): void;
+}
 
 /** Timestamped transcript of a local note (plugin cache, else Alt). */
 export type TranscriptLoader = (altLocalId: string) => Promise<Array<{ startMs: number; endMs: number; text: string }> | null>;
@@ -115,13 +131,20 @@ export class SyncedViewerView extends ItemView {
   private transcriptPanelEl: HTMLElement | null = null;
   private transcriptBtnEl: HTMLButtonElement | null = null;
   private syncModeEl: HTMLElement | null = null;
+  private chatBtnEl: HTMLButtonElement | null = null;
+  /** The last page the workspace was told about (pair and page), so each change is sent once. */
+  private lastSlideEvent: string | null = null;
+  /** Text last selected in the note pane, kept while focus is in the question panel. */
+  private mdSelection = "";
   constructor(
     leaf: WorkspaceLeaf,
     private loadTranscript?: TranscriptLoader,
     /** Setting "관리 주석 숨기기": drop the alt2obs comment lines before rendering. */
     private hideManagedComments: () => boolean = () => true,
     /** "PDF만 보기": the plugin opens a plain PDF tab it will not turn back into this viewer. */
-    private openNativePdf?: (pdfPath: string) => Promise<void>
+    private openNativePdf?: (pdfPath: string) => Promise<void>,
+    /** "💬 질문": the question panel (2.1.0 spec 5.1). */
+    private chat?: ChatToggle
   ) {
     super(leaf);
   }
@@ -246,6 +269,14 @@ export class SyncedViewerView extends ItemView {
     this.transcriptBtnEl.onclick = () => void this.toggleTranscript();
     this.transcriptBtnEl.hide();
 
+    this.chatBtnEl = this.toolbarEl.createEl("button", {
+      text: "💬 질문",
+      attr: { title: "지금 슬라이드를 자료로 질문하는 패널을 열거나 닫습니다." },
+    });
+    this.chatBtnEl.onclick = () => this.chat?.toggle();
+    this.setChatActive(!!this.chat?.isOpen());
+    if (!this.chat) this.chatBtnEl.hide();
+
     this.pageInfoEl = this.toolbarEl.createDiv({ cls: "alt-to-obs-page-info" });
     this.updatePageInfo();
   }
@@ -275,6 +306,14 @@ export class SyncedViewerView extends ItemView {
     this.mdPaneEl = column.createDiv({ cls: "alt-to-obs-md-pane" });
     this.transcriptPanelEl = column.createDiv({ cls: "alt-to-obs-transcript-panel" });
     this.transcriptPanelEl.hide();
+    // A click elsewhere (the panel's buttons) leaves it; a click in the note pane or a selection elsewhere clears it.
+    this.registerDomEvent(document, "selectionchange", () => {
+      const sel = document.getSelection();
+      if (!sel || !sel.anchorNode) return;
+      const inPane = this.mdPaneEl.contains(sel.anchorNode);
+      if (inPane && !sel.isCollapsed) this.mdSelection = sel.toString();
+      else if (inPane || !sel.isCollapsed) this.mdSelection = "";
+    });
     for (const pane of ["pdf", "md"] as Pane[]) {
       const el = this.paneEl(pane);
       this.registerDomEvent(el, "scroll", () => this.onPaneScroll(pane), { passive: true });
@@ -282,6 +321,34 @@ export class SyncedViewerView extends ItemView {
         if (this.guardUntil[pane] > Date.now()) this.guard(pane, 50, true);
       });
     }
+    // Right-click (2.1.0 spec 5.8): a page asks about its slide, a selection in the note about the text.
+    this.registerDomEvent(this.pdfPaneEl, "contextmenu", (evt) => {
+      const wrapper = evt.target instanceof Element ? evt.target.closest<HTMLElement>(".alt-to-obs-pdf-page-wrapper") : null;
+      const page = parseInt(wrapper?.dataset.pageNum ?? "", 10);
+      const mdPath = this.mdPath;
+      const chat = this.chat;
+      if (!chat || !mdPath || !(page > 0)) return;
+      evt.preventDefault();
+      new Menu().addItem((item) => item.setTitle("이 슬라이드에 질문").setIcon("message-circle").onClick(() => chat.askSlide(mdPath, page))).showAtMouseEvent(evt);
+    });
+    this.registerDomEvent(this.mdPaneEl, "contextmenu", (evt) => {
+      const text = this.mdSelection;
+      const mdPath = this.mdPath;
+      const chat = this.chat;
+      if (!chat || !mdPath || !text.trim()) return;
+      evt.preventDefault();
+      const slide = this.currentPage;
+      // This menu replaces the default one: it keeps 복사, so a right-click on a word is not a dead end.
+      new Menu()
+        .addItem((item) => item.setTitle("선택한 내용으로 질문").setIcon("message-circle").onClick(() => chat.askSelection(mdPath, slide, text)))
+        .addItem((item) =>
+          item
+            .setTitle("복사")
+            .setIcon("copy")
+            .onClick(() => void navigator.clipboard.writeText(text).catch(() => new Notice("복사하지 못했습니다.")))
+        )
+        .showAtMouseEvent(evt);
+    });
   }
 
   /** Alignment facts from the note's frontmatter (spec 4.9). */
@@ -353,6 +420,7 @@ export class SyncedViewerView extends ItemView {
     }
     for (const seg of segs) {
       const row = body.createDiv({ cls: "alt-to-obs-seg" });
+      row.dataset.ms = String(seg.startMs);
       row.createSpan({ cls: "alt-to-obs-seg-time", text: `[${mmss(seg.startMs)}]` });
       row.createSpan({ text: seg.text });
     }
@@ -368,7 +436,64 @@ export class SyncedViewerView extends ItemView {
     });
   }
 
+  /** Shows a slide in both panes (the question panel's slide chips, spec 5.5). */
+  gotoSlide(slide: number): void {
+    this.gotoPage(slide);
+  }
+
+  /**
+   * A transcript time (the question panel's time chips, spec 5.5): the
+   * slide aligned to it, the transcript panel open on it, its line scrolled
+   * into view and highlighted for a moment.
+   */
+  async showTranscriptAt(ms: number): Promise<void> {
+    const span = this.alignment.find((x) => ms >= x.startMs && ms < x.endMs) ?? [...this.alignment].reverse().find((x) => x.startMs <= ms);
+    if (span) this.gotoPage(span.slide);
+    if (!this.transcriptOpen) {
+      this.transcriptOpen = true;
+      this.transcriptBtnEl?.toggleClass("is-active", true);
+      this.transcriptPanelEl?.toggle(true);
+    }
+    await this.renderTranscript();
+    const rows = Array.from(this.transcriptPanelEl?.querySelectorAll<HTMLElement>(".alt-to-obs-seg") ?? []);
+    let line: HTMLElement | null = rows[0] ?? null;
+    for (const row of rows) if (Number(row.dataset.ms) <= ms) line = row;
+    if (!line) return;
+    line.scrollIntoView({ block: "center" });
+    line.addClass("is-flash");
+    const flashed = line;
+    window.setTimeout(() => flashed.removeClass("is-flash"), 2000);
+  }
+
+  /** The text selected in the note pane ("" for none). */
+  getSelectedText(): string {
+    return this.mdSelection;
+  }
+
+  /** "💬 질문" shows whether the question panel is open. */
+  setChatActive(open: boolean): void {
+    this.chatBtnEl?.toggleClass("is-active", open);
+  }
+
+  /** The slide (page) the viewer is on; null before a PDF is shown. */
+  getCurrentSlide(): number | null {
+    return this.totalPages > 0 ? this.currentPage : null;
+  }
+
+  /** Tells the workspace the page changed (once per page and pair), for the question panel. */
+  private announceSlide(): void {
+    const page = this.getCurrentSlide();
+    if (page === null) return;
+    const key = `${this.mdPath}\n${this.pdfPath}\n${page}`;
+    if (key === this.lastSlideEvent) return;
+    this.lastSlideEvent = key;
+    const info: SlideChangeInfo = { mdPath: this.mdPath, pdfPath: this.pdfPath, page };
+    const workspace = this.app.workspace as Partial<Events> | undefined;
+    if (typeof workspace?.trigger === "function") workspace.trigger(SLIDE_CHANGE_EVENT, info);
+  }
+
   private updatePageInfo(): void {
+    this.announceSlide();
     if (this.transcriptOpen) void this.renderTranscript();
     if (this.totalPages === 0) {
       this.pageInfoEl.setText("페이지 -");

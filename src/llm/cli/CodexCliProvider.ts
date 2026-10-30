@@ -33,6 +33,8 @@
 // ("LLM connection").
 // Codex has no system prompt flag, so the fixed instructions lead the stdin
 // prompt, which keeps the shared prefix identical across batches.
+// `codex exec --json` gives no partial answer: a streamed call (the question
+// panel) gets the whole answer at the end (CliProviderBase.streamText).
 
 import { readFileSync, unlinkSync } from "fs";
 import { join } from "path";

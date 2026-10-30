@@ -14,7 +14,7 @@ import { importTs } from "./helpers/bundle-ts.mjs";
 
 const { Alt2ObsSettingsTab, DEFAULT_SETTINGS, TASK_LABELS } = await importTs("test/helpers/settings-tab-entry.ts");
 
-const HEADINGS = [undefined, "LLM 연결", "작업별 모델", "생성 옵션", "사용량", "보기", "저장", "사용법"];
+const HEADINGS = [undefined, "LLM 연결", "작업별 모델", "생성 옵션", "질문 (채팅)", "사용량", "보기", "저장", "사용법"];
 const CONTROL_TYPES = new Set(["toggle", "dropdown", "text", "number"]);
 
 function makePlugin() {
@@ -94,7 +94,16 @@ const shape = (defs) =>
     }
   }
   for (const label of Object.values(TASK_LABELS)) assert.equal(typeof rows(defs).find((d) => d.name === label)?.render, "function", `task row ${label}`);
-  for (const name of ["실행 파일 경로", "프리셋", "누적 사용량", "저장 폴더", "Alt 데이터 폴더", "CLI 호출 제한 시간 (초)"]) assert.ok(names.has(name), name);
+  for (const name of ["실행 파일 경로", "프리셋", "누적 사용량", "저장 폴더", "Alt 데이터 폴더", "CLI 호출 제한 시간 (초)", "가져올 때 챗봇 브리프 만들기", "질문에 내 메모 포함", "질문당 토큰 상한"]) assert.ok(names.has(name), name);
+  // 2.1.0's question settings (spec 8): the brief mode, the memo default and the per-question cap (at least 2000).
+  const chatRows = defs.find((g) => g.heading === "질문 (채팅)").items;
+  assert.deepEqual(chatRows.map((d) => [d.name, d.control.type, d.control.key]), [
+    ["가져올 때 챗봇 브리프 만들기", "dropdown", "briefMode"],
+    ["질문에 내 메모 포함", "toggle", "chatIncludeMemo"],
+    ["질문당 토큰 상한", "number", "chatTokenCap"],
+  ]);
+  assert.deepEqual(chatRows[0].control.options, { off: "끔", script: "스크립트만 (토큰 0)", ai: "AI 강조점 포함" });
+  assert.deepEqual([chatRows[2].control.min, chatRows[2].control.defaultValue], [2000, 20000]);
   // From 1.13 on an emptied number field is its default: the transcript cap goes back to 1200 (2.0.2), and 0 stays allowed.
   const cap = rows(defs).find((d) => d.control?.key === "generation.transcriptCapChars")?.control;
   assert.deepEqual([cap?.min, cap?.defaultValue], [0, 1200], "transcript cap: minimum 0, default 1200");
@@ -115,7 +124,7 @@ const shape = (defs) =>
   const plugin = makePlugin();
   const tab = new Alt2ObsSettingsTab({}, plugin);
   const controls = rows(tab.getSettingDefinitions()).filter((d) => d.control).map((d) => d.control);
-  assert.equal(controls.length, 14);
+  assert.equal(controls.length, 17);
   const settings = () => plugin.data.settings;
   const write = async (key, value) => {
     plugin.calls.length = 0;
@@ -170,6 +179,8 @@ const shape = (defs) =>
   await refused("generation.imageRule", "never");
   await refused("language", "toString");
   await refused("preset", 3);
+  await refused("chatTokenCap", 1999);
+  await refused("briefMode", "always");
   await refused("no.such.key", 1);
   assert.equal(tab.getControlValue("no.such.key"), undefined);
   // Whole numbers: the old text field's "12.7", and a fraction that reaches setControlValue anyway (1.13's validate() refuses it first).

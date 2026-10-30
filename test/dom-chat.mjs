@@ -1,0 +1,389 @@
+/**
+ * DOM test: the question panel (src/ui/ChatView.ts, 2.1.0 spec 5) and its
+ * open/close controller (src/ui/chatPanel.ts) in a real headless Chromium,
+ * with the plugin's styles.css, a fake workspace and a fake plugin whose
+ * answer streams in pieces (test/helpers/dom-chat-entry.ts):
+ * opening and closing restore the right sidebar's collapsed state, a panel
+ * restored at startup is detached, the "강의 없음" card starts a lecture
+ * with a slide range, the panel follows the viewer's slide (and 📌 stops
+ * it), chips turn material on and off, Enter does not send while a Korean
+ * syllable is composed, the answer streams as text and then renders as
+ * Markdown with grounding chips (none inside code), the related slides
+ * under it (one added for the next question), "메모에 저장" (as it is or
+ * cut to three lines) and "대화 노트로 저장", a slide change puts a
+ * divider in the thread, a stopped answer stays marked and is not sent
+ * again, the error cards, the per-question cap asked in the panel, "+ 자료
+ * 추가" (this lecture's slides, another lecture with its brief, the
+ * note's selection as a quote), the right-click questions (pinned on a
+ * slide, a selection as a quote), the brief cards (missing, edited and
+ * stale), a Codex answer that comes at once (the clock and the note
+ * meanwhile), "과목 브리프 넣기" and the subject brief offered once for a
+ * question about other lectures, and a summary note whose focus is the
+ * transcript section above the editor's cursor (spec 9).
+ *
+ * Needs a Chromium binary, so it is not part of `npm test`:
+ *   npm run test:dom                 (finds Playwright's headless shell or Google Chrome)
+ *   ALT2OBS_CHROME=/path/to/chrome npm run test:dom
+ * Fails (does not skip) when no browser is found.
+ */
+
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { homedir, tmpdir } from "node:os";
+import { extname, join } from "node:path";
+import esbuild from "esbuild";
+import { repo } from "./helpers/bundle-ts.mjs";
+
+function findChrome() {
+  if (process.env.ALT2OBS_CHROME) return process.env.ALT2OBS_CHROME;
+  const pw = join(homedir(), "Library/Caches/ms-playwright");
+  if (existsSync(pw)) {
+    for (const d of readdirSync(pw).filter((n) => n.startsWith("chromium_headless_shell-")).sort().reverse()) {
+      for (const sub of readdirSync(join(pw, d))) {
+        const bin = join(pw, d, sub, "chrome-headless-shell");
+        if (existsSync(bin)) return bin;
+      }
+    }
+  }
+  const mac = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  return existsSync(mac) ? mac : null;
+}
+
+const chrome = findChrome();
+assert.ok(chrome, "no Chromium found: set ALT2OBS_CHROME");
+
+const dir = mkdtempSync(join(tmpdir(), "alt-to-obs-dom-chat-"));
+writeFileSync(join(dir, "styles.css"), readFileSync(join(repo, "styles.css")));
+writeFileSync(
+  join(dir, "index.html"),
+  '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="styles.css"><style>body{margin:0;width:420px}#host{height:800px}</style></head>' +
+    '<body><div id="host"></div><pre id="out">pending</pre><script type="module" src="./bundle.js"></script></body></html>'
+);
+await esbuild.build({
+  entryPoints: [join(repo, "test/helpers/dom-chat-entry.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  outfile: join(dir, "bundle.js"),
+  loader: { ".md": "text", ".css": "text" },
+  logLevel: "error",
+  plugins: [{ name: "obsidian-stub", setup: (b) => b.onResolve({ filter: /^obsidian$/ }, () => ({ path: join(repo, "test/helpers/obsidian-browser-stub.js") })) }],
+});
+
+const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+const server = createServer((req, res) => {
+  const file = join(dir, decodeURIComponent(new URL(req.url, "http://x").pathname));
+  if (!file.startsWith(dir) || !existsSync(file)) return void res.writeHead(404).end();
+  res.writeHead(200, { "content-type": types[extname(file)] ?? "application/octet-stream" }).end(readFileSync(file));
+});
+await new Promise((r) => server.listen(0, "127.0.0.1", r));
+const url = `http://127.0.0.1:${server.address().port}/index.html`;
+
+const port = 9300 + Math.floor(Math.random() * 500);
+const proc = spawn(chrome, ["--headless", `--remote-debugging-port=${port}`, "--window-size=1400,900", `--user-data-dir=${join(dir, "profile")}`, "about:blank"], { stdio: "ignore" });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let out = "pending";
+try {
+  let targets = null;
+  for (let i = 0; i < 100 && !targets; i++) {
+    try {
+      targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
+    } catch {
+      await sleep(100);
+    }
+  }
+  const page = targets.find((t) => t.type === "page");
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((r) => (ws.onopen = r));
+  let id = 0;
+  const pending = new Map();
+  ws.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (d.id && pending.has(d.id)) pending.get(d.id)(d), pending.delete(d.id);
+    else if (d.method === "Runtime.exceptionThrown") console.error("page exception:", d.params.exceptionDetails.exception?.description ?? d.params.exceptionDetails.text);
+  };
+  const send = (method, params = {}) => new Promise((r) => (pending.set(++id, r), ws.send(JSON.stringify({ id, method, params }))));
+  await send("Runtime.enable");
+  await send("Page.navigate", { url });
+  for (let i = 0; i < 240 && out === "pending"; i++) {
+    await sleep(250);
+    const r = await send("Runtime.evaluate", { expression: "document.getElementById('out')?.textContent ?? 'pending'" });
+    out = r.result?.result?.value ?? "pending";
+  }
+  ws.close();
+} finally {
+  proc.kill();
+  server.close();
+  await sleep(200);
+  rmSync(dir, { recursive: true, force: true });
+}
+
+assert.ok(!out.startsWith("ERROR") && out !== "pending", out);
+const steps = JSON.parse(out);
+const at = (name) => {
+  const s = steps.find((x) => x.step === name);
+  assert.ok(s, `step ${name}`);
+  return s;
+};
+
+// Open and close (spec 5.1).
+assert.deepEqual(at("opened (sidebar was collapsed)"), { step: "opened (sidebar was collapsed)", open: true, collapsed: false, events: [true] });
+assert.deepEqual(at("toggled closed"), { step: "toggled closed", open: false, collapsed: true, collapses: 1, events: [true, false] }, "closing collapses the sidebar again");
+assert.deepEqual(at("tab closed (sidebar was open)"), { step: "tab closed (sidebar was open)", open: false, collapsed: false, collapses: 1 }, "closing the tab itself: the open sidebar stays open");
+assert.deepEqual(at("restored and detached"), { step: "restored and detached", open: false, collapsed: false, collapses: 1, readBeforeReady: 0 }, "a restored panel reads nothing before the layout is ready, is detached, the sidebar left as it is");
+assert.deepEqual(at("deferred restored"), { step: "deferred restored", open: false, events: [false] }, "a restored tab that never showed its view still turns the buttons off");
+assert.deepEqual(at("double open"), { step: "double open", panels: 1, events: [true] }, "a double click opens one panel");
+console.log("PASS: question panel opens on demand in the right sidebar (once on a double click), closing (button, tab, ×) restores the sidebar's collapsed state, a restored panel reads nothing before the layout is ready and is detached then");
+
+// No lecture, then a lecture picked with a slide range (spec 5.6).
+const none = at("no lecture");
+assert.equal(none.card, "열린 강의 노트가 없습니다");
+assert.equal(none.composerShown, false, "no input without a lecture");
+assert.deepEqual(none.lectures, ["L4", "L5"]);
+const started = at("started with a range");
+assert.ok(started.chips.some((c) => c.startsWith("📄 슬라이드 14")) && !started.chips.some((c) => c.startsWith("📄 슬라이드 14 · 따라가는 중")), `slide 14 pinned (${started.chips})`);
+assert.ok(started.chips.some((c) => c.startsWith("📄 슬라이드 15 ×")), "slide 15 added, removable");
+assert.ok(started.notices.some((n) => n.includes("99")), "a number past the deck is left out and said");
+assert.equal(started.pinned, true);
+console.log("PASS: the 강의 없음 card lists the vault's lectures; starting with 14-15, 99 pins slide 14, adds 15 and leaves out 99 with a notice");
+
+// Following the viewer, chips (spec 5.2, 5.3).
+const following = at("following 17");
+assert.equal(following.head, "CSED423 · L5");
+for (const prefix of ["📘 브리프", "📄 슬라이드 17 · 따라가는 중", "🎙 전사 29:06-35:56", "✏️ 내 메모"]) {
+  assert.ok(following.chips.some((c) => c.startsWith(prefix) && c.endsWith("|is-on")), `${prefix} on (${following.chips})`);
+}
+assert.ok(following.chips.every((c) => !c.startsWith("📄 슬라이드 15")), "the added slide was removed with ×");
+assert.match(following.chips.find((c) => c.startsWith("📘")), /k\|is-on$/, "a chip shows its tokens");
+assert.equal(following.title, "## 개요\n부동소수점 덧셈을 다룬다.", "the chip's tooltip: what it sends");
+assert.match(following.estimate, /^이번 질문 예상: 입력 약 \d+\.\dk · 출력 약 0\.6k$/);
+assert.match(at("note edited").memo, /^✏️ 비어 있음\|is-disabled$/, "the note's memo emptied: its chip is read again");
+assert.match(at("chip toggles").off, /^🎙 전사.*\|is-off$/);
+assert.match(at("chip toggles").on, /^🎙 전사.*\|is-on$/);
+console.log("PASS: the panel follows the viewer's lecture and slide; brief, slide, transcript and memo chips with tokens and tooltips, toggled by a click and read again when the note changes");
+
+// Enter and the Korean composition (spec 5.3).
+assert.deepEqual(at("composing"), { step: "composing", runs: 0, value: "왜 작은 수부터 더해?" }, "Enter while composing (isComposing or keyCode 229) and Shift+Enter do not send");
+const streaming = at("streaming");
+assert.equal(streaming.runs, 1, "two Enters and a quick question while sending: one question");
+assert.equal(streaming.turns, 1);
+assert.equal(streaming.disabledWhileSending, true, "the input is disabled at once");
+assert.equal(streaming.streaming, true);
+assert.ok(streaming.partial.length > 0 && "부동소수점 덧셈은 작은 수부터 더한다 [슬라이드 17]. ".startsWith(streaming.partial.slice(0, 10)), `plain text while streaming (${streaming.partial})`);
+assert.equal(streaming.sendButton, "중지", "the send button stops while answering");
+assert.equal(streaming.cleared, "");
+const answered = at("answered");
+assert.deepEqual(answered.cites, ["is-slide:슬라이드 17", "is-time:▶ 29:10", "is-slide:슬라이드 16~18", "is-outside:강의 자료 밖"], "grounding marks as chips");
+assert.equal(answered.code, "[슬라이드 17]", "inline code keeps its text");
+assert.equal(answered.codeCites, 0, "no chip inside code");
+assert.equal(answered.plainMissing, true, "a slide past the deck stays text");
+assert.equal(answered.usage, "Sonnet 5.5 · low · 입력 5.1k (캐시 3.0k) · 출력 0.4k");
+assert.equal(answered.label, "슬라이드 17 기준");
+assert.equal(answered.system, "[강의 브리프: CSED423 · L5 (앞 강의: L4, 다음 강의: L6)]\n## 개요\n부동소수점 덧셈을 다룬다.", "the brief after the instructions in the system prompt");
+assert.deepEqual(answered.userHead, ["[이번 자료]", "## L5 · 슬라이드 17 [29:06~35:56]"]);
+assert.equal(answered.memoSent, true);
+assert.equal(answered.memoText, "시험 범위, 오늘 고친 메모", "the memo is read again at the send");
+assert.equal(answered.transcriptSent, true);
+assert.deepEqual(answered.task, { provider: "claude-cli", model: "sonnet", effort: "low" }, "the chat task's model");
+console.log("PASS: Enter sends (not while composing, not with Shift); the answer streams as text, then renders as Markdown with slide, time and outside chips (not in code); the usage line names the model");
+
+// Related slides (spec 5.11).
+const related = at("related slides");
+assert.deepEqual(related.before, ["관련 슬라이드 20 · 작은 수끼리 먼저 더해 정밀도를 지킨다|+ 자료에 추가", "관련 슬라이드 16 · 큰 수에 더하면 사라진다|+ 자료에 추가"], "the two best matches, the current slide 17 left out");
+assert.deepEqual([related.after[0], related.disabled], ["관련 슬라이드 20 · 작은 수끼리 먼저 더해 정밀도를 지킨다|자료에 있음", true]);
+assert.deepEqual([related.sentNothing, related.removed, related.corpus], [true, true, ["L5"]], "added for the next question only, nothing sent; removable with ×");
+console.log("PASS: related slides under the answer (BM25, no tokens): the two best matches not in the material, + 자료에 추가 adds one for the next question");
+
+// The chips go where they point (spec 5.5).
+const nav = at("chips navigate");
+assert.deepEqual(nav.gone, ["slide:17", `time:${29 * 60_000 + 10_000}`, "slide:16"], "a slide chip to its slide (a range to its first), a time chip to its time; the outside badge goes nowhere");
+assert.deepEqual([nav.role, nav.outsideRole], ["button", null]);
+assert.deepEqual(nav.keyed, [`time:${29 * 60_000 + 10_000}`, "slide:17"], "a focused chip goes with Enter or Space");
+assert.deepEqual(nav.prevented, [true, true, false], "Space does not scroll the panel; other keys are left alone");
+console.log("PASS: grounding chips navigate: slide chips to the slide, time chips to the transcript time; by click, Enter or Space");
+
+// What is copied from an answer has none of the sanitizer's zero-width spaces (review round 2, MEDIUM 3).
+const copy = at("copy without zero-width spaces");
+assert.deepEqual(copy.selection, { text: "#include <stdio.h>\nvector<int> v;\n", prevented: true }, "a selection: plain text without them, as selected");
+assert.deepEqual(copy.plain, { text: "", prevented: false }, "a selection without any: the browser copies as usual");
+assert.deepEqual(copy.button, ["#include <stdio.h>\nvector<int> v;"], "a code block's copy button: its code without them or its trailing newline, as Obsidian's button copies");
+assert.equal(copy.obsidianCopied, false, "instead of Obsidian's own handler");
+console.log("PASS: copying from an answer (a selection or a code block's copy button) leaves out the zero-width spaces, so copied code compiles");
+
+// 메모에 저장 (spec 5.9).
+const memo = at("memo");
+assert.deepEqual(memo.items, ["답변 그대로 · 토큰 0", "세 줄로 줄여서 · 브리프 모델 1회", "대화 노트로 저장"]);
+assert.deepEqual(memo.saved, [
+  { target: { notePath: "Alt2Obsidian/CSED423/Lectures/L5.md", unit: "slide", num: 17 }, question: "왜 작은 수부터 더해?", answer: "부동소수점 덧셈은", shorten: false },
+  { target: { notePath: "Alt2Obsidian/CSED423/Lectures/L5.md", unit: "slide", num: 17 }, question: "왜 작은 수부터 더해?", answer: "부동소수점 덧셈은", shorten: true },
+], "the slide the question was about, the question and the whole answer");
+assert.deepEqual(memo.notices, ["답변을 세 줄로 줄여 슬라이드 17 메모에 저장합니다...", "슬라이드 17 메모에 저장했습니다.", "메모에 저장하지 못했습니다: 브리프 모델이 없습니다"]);
+console.log("PASS: 메모에 저장: 답변 그대로 (토큰 0) or 세 줄로 줄여서 into the memo of the question's slide, a failure said in a notice");
+const chatNote = at("chat note");
+assert.deepEqual(chatNote.saved, { note: "Alt2Obsidian/CSED423/Lectures/L5.md", turns: [["왜 작은 수부터 더해?", "슬라이드 17, 전사 29:06-35:56"]] }, "the thread, with what each turn sent");
+assert.equal(chatNote.notice, "대화 노트를 저장했습니다: Alt2Obsidian/CSED423/Chats/2026-10-30 L5 왜 작은 수부터 더해?.md");
+console.log("PASS: 대화 노트로 저장 from the answer's menu saves the thread with what each turn sent");
+
+// A run outlives the panel (spec 5.4).
+const outlived = at("outlived the panel");
+assert.equal(outlived.aborted, false, "closing the panel does not stop the answer");
+assert.deepEqual(outlived.status, ["done", "done"]);
+assert.equal(outlived.answers[1], "닫아도 계속 쓴다 슬라", "the panel opened again shows the whole answer, rendered with its chips");
+console.log("PASS: closing the panel while answering leaves the run going in the thread; the panel opened again shows the finished answer");
+
+// Divider, stop (spec 5.2, 5.4).
+const moved = at("moved");
+assert.deepEqual(moved.dividers, ["슬라이드 18으로 이동"]);
+assert.match(moved.chip, /^📄 슬라이드 18 · 따라가는 중/);
+const stopped = at("stopped");
+assert.equal(stopped.answers[2], "받은 부분", "the partial answer stays");
+assert.equal(stopped.hasStopped, false, "a stopped turn is not in the earlier conversation");
+assert.equal(stopped.memoButtons, 3, "메모에 저장 under the three finished answers, not the stopped one");
+assert.match(stopped.history, /^\[이전 대화\]\nQ \(슬라이드 17 기준\): 왜 작은 수부터 더해\?\nA: 부동소수점 덧셈은/);
+console.log("PASS: a followed slide change puts a divider in the thread; a stopped answer stays as (중지됨) and is left out of the next question's history");
+
+// One run per thread, also while a question is being prepared; the input keeps its focus.
+const prep = at("regenerate while sending");
+assert.equal(prep.runs, 1, "다시 생성 during the preparation of a question starts nothing");
+assert.equal(prep.last, "준비 중에 다시 생성?");
+assert.equal(prep.focused, true, "the input has its focus back after the send");
+console.log("PASS: 다시 생성 while a question is being prepared starts no second run; the input gets its focus back after a send");
+
+// Error cards (spec 5.6).
+const errors = at("errors");
+const card = (kind) => errors.cards.find((c) => c.kind === kind);
+assert.equal(card("auth").title, "로그인이 필요합니다");
+assert.match(card("auth").fix, /터미널에서 `claude`\(또는 `codex login`\)를 한 번 실행해 로그인한 뒤 다시 보내세요/);
+assert.equal(card("limit").fix, "Claude usage limit reached. Your limit resets at 5pm.", "the CLI's own sentence");
+assert.match(card("missing").fix, /설정 > LLM 연결/);
+assert.equal(card("timeout").title, "응답이 없어 중단했습니다");
+assert.equal(card("other").fix, "boom");
+for (const c of errors.cards) assert.deepEqual(c.buttons, ["다시 보내기", "Codex로 보내기", "설정 열기"], `${c.kind}: buttons`);
+assert.deepEqual(errors.retried, { provider: "codex-cli", model: "", effort: "low" }, "the other provider with its chat defaults");
+assert.equal(errors.settingsOpened, true);
+assert.match(errors.codexFirst, /^답변 쓰는 중 · \d초 · Codex는 답을 다 쓴 뒤 한 번에 보여줍니다$/, "Codex: no pieces, said so");
+assert.match(errors.codexTicked, /^답변 쓰는 중 · [1-9]초 · /, "the elapsed time goes on");
+console.log("PASS: error cards for login, usage limit, missing CLI, timeout and others, with retry, the other provider and the settings");
+
+// The brief unreadable now: the last state stays (review M4).
+assert.match(at("brief unreadable").chip, /^📘 브리프\d/);
+assert.equal(at("brief unreadable").sentBrief, true, "the last brief that could be read is sent");
+
+// The cap (spec 5.4).
+const cap = at("over the cap");
+assert.ok(cap.liveBeforeClear > 0 && cap.liveAfterClear === 0, `새 대화 unloads every answer's render component (${cap.liveBeforeClear} to ${cap.liveAfterClear})`);
+assert.equal(cap.threadGone, true, "새 대화 drops the thread");
+assert.equal(cap.runs, 0, "nothing sent past the cap");
+assert.match(cap.cap, /질문당 상한\(2\.0k\)을 넘습니다그래도 보내기취소/);
+console.log("PASS: a question past 질문당 토큰 상한 is confirmed in the panel (그래도 보내기 / 취소) before it is sent");
+
+// Brief cards (spec 5.6).
+const missing = at("brief missing");
+assert.equal(missing.card, "이 강의에는 브리프가 아직 없습니다");
+assert.match(missing.chip, /^📘 브리프 없음/);
+assert.equal(missing.head, "CSED423 · L4", "the other lecture's own thread");
+assert.equal(missing.thread, 0);
+assert.deepEqual(missing.built, { build: "Alt2Obsidian/CSED423/Lectures/L4.md", force: false }, "노트로 바로 만들기: the script part, no tokens");
+assert.deepEqual(missing.buttons, ["노트로 바로 만들기 · 토큰 0", "강조점까지 만들기 · 약 2.4k"], "with a transcript: 강조점까지 만들기 and its estimate");
+assert.match(missing.chipAfter, /^📘 브리프\d/);
+const stale = at("brief stale");
+assert.match(stale.chip, /^📘 브리프 오래됨/);
+assert.deepEqual(stale.buttons, ["내 수정 유지", "새로 만들기"]);
+assert.deepEqual(stale.confirm, ["덮어쓰기", "취소"], "새로 만들기 asks first");
+assert.deepEqual(stale.rebuilt, { build: "Alt2Obsidian/CSED423/Lectures/L5.md", force: true });
+assert.equal(stale.thread, 1, "back on L5: its thread is still there");
+// + 자료 추가 (spec 5.7).
+const add = at("add material");
+const bare = (chip) => chip.replace(/\d+(\.\d+)?k$/, "");
+assert.deepEqual(add.tabs, ["이 강의", "다른 강의", "노트에서 선택한 글"]);
+assert.equal(add.typed.rows, 30);
+assert.deepEqual(add.typed.locked, [18], "the current slide is checked and locked");
+assert.deepEqual(add.typed.checked, [14, 15, 16, 18], "the typed range checks its slides");
+assert.equal(add.typed.note, "슬라이드 수 밖의 번호는 뺐습니다: 40");
+assert.equal(add.typed.summary, "3장 추가 · 약 1.8k 토큰");
+assert.deepEqual([add.typed.time15, add.typed.time16, add.typed.uncertain], ["26:26~28:38", "28:38~28:59?", 1], "times, the uncertain one with a yellow ?");
+assert.equal(add.typed.rangeKept, "14-16, 40", "a re-render of the chips keeps what is typed in the popover");
+assert.ok(add.typed.rereadWhileOpen, "the chips were read again while it was open");
+assert.equal(add.withImage, "3장 추가 · 약 5.0k 토큰", "the slide image adds about 1.1k a slide");
+assert.deepEqual(add.afterThis.chips.map(bare), ["📄 슬라이드 18 · 따라가는 중", "📄 슬라이드 14 ×", "📄 슬라이드 15 ×", "📄 슬라이드 16 ×"]);
+assert.deepEqual(add.afterThis.images, ["L5:14", "L5:15", "L5:16"], "their images are rendered");
+assert.ok(add.afterThis.closed, "추가 closes the popover");
+assert.equal(add.otherLecture, "Alt2Obsidian/CSED423/Lectures/L4.md", "다른 강의 lists the other lectures only");
+assert.equal(add.otherSummary, "브리프와 1장 추가 · 약 0.6k 토큰");
+assert.deepEqual(add.otherBriefRead, ["L4"]);
+assert.deepEqual(add.noSelection, { text: "노트(synced viewer의 노트 창이나 편집기)에서 글을 선택한 뒤 이 탭을 다시 여세요.", disabled: true });
+assert.equal(add.quoted, "선택한 문장입니다.\n둘째 줄", "the selection trimmed");
+assert.deepEqual(add.added.map(bare).slice(1), ["📄 슬라이드 14 ×", "📄 슬라이드 15 ×", "📄 슬라이드 16 ×", "📄 L4 · 슬라이드 2 ×", "📚 CSED423 과목 브리프 ×", "📚 L4 브리프 ×", "❝ 선택한 글 ×"]);
+assert.deepEqual(add.subjectOffer, { label: "과목 브리프 넣기", checked: false, disabled: false }, "다른 강의: 과목 브리프 넣기, off by default");
+assert.equal(add.subjectSummary, add.subjectSummaryExpected, "the subject brief's tokens in the estimate");
+assert.notEqual(add.subjectSummary.split("· ")[1], add.otherSummary.split("· ")[1]);
+assert.deepEqual([...new Set(add.subjectBriefRead)], ["Alt2Obsidian/CSED423/Lectures/L4.md"], "the subject of the lecture picked");
+assert.ok(add.subjectBriefSent, "the subject brief after the lecture brief, before the other lecture's brief (spec 6.2)");
+assert.deepEqual(add.headings, ["## L5 · 슬라이드 18", "## L5 · 슬라이드 14", "## L5 · 슬라이드 15", "## L5 · 슬라이드 16", "## L4 · 슬라이드 2"], "the current slide first, then the added ones");
+assert.equal(add.quoteSent, "> 선택한 문장입니다.\n> 둘째 줄", "the quote as [선택한 글]");
+assert.ok(add.otherBriefSent, "the other lecture's brief in the system prompt");
+assert.deepEqual(add.images, [14, 15, 16], "the added slides' images go with the question");
+assert.equal(add.quoteAfterRemove, false, "× takes the quote out");
+assert.deepEqual(add.otherCites, ["L4 슬라이드 2|L4 · 슬라이드 2", "슬라이드 14|L5 · 슬라이드 14"], "[L4 슬라이드 2] is the other lecture's chip, [L5 슬라이드 14] this lecture's");
+assert.equal(add.otherPlain, true, "a lecture the question did not send stays text");
+assert.deepEqual(add.otherGone, { go: "slide", note: "Alt2Obsidian/CSED423/Lectures/L4.md", n: 2 }, "the other lecture's chip goes to that lecture's slide");
+console.log("PASS: + 자료 추가: this lecture's list (range, locked current slide, uncertain times, image estimate), another lecture with its brief, the note's selection as a quote; all of it sent and removable with ×; the answer's [L4 슬라이드 N] goes to that lecture's slide and stays a chip after a lecture switch");
+const staleLists = at("stale slide lists");
+assert.deepEqual(staleLists.afterTab, { pickers: 1, adds: 1, summary: "브리프와 0장 추가 · 약 0.0k 토큰" }, "this lecture's list, still loading when 다른 강의 was picked, is not drawn under it");
+assert.deepEqual(staleLists.afterPick, staleLists.afterTab, "a lecture picked twice while its list loads: one list");
+assert.equal(staleLists.closed, true);
+assert.deepEqual(staleLists.subjectLocked, { label: "과목 브리프 넣기 (넣음)", checked: true, disabled: true }, "the subject brief in already: checked and locked");
+console.log("PASS: + 자료 추가: a slide list that arrives after the tab or the lecture changed is dropped");
+// Right-click questions (spec 5.8).
+const rc = at("right-click questions");
+assert.deepEqual(rc.sameSlide, { chip: "📄 슬라이드 12", pinned: true, focused: true }, "이 슬라이드에 질문: pinned on that slide, the input focused");
+assert.deepEqual(rc.sameQuote, { quote: "인용할 문장", focused: true }, "선택한 내용으로 질문: the quote chip");
+assert.deepEqual(rc.otherSlide, { head: "CSED423 · L4", chip: "📄 슬라이드 5", pinned: true, quote: null }, "another lecture: the panel moves there, pinned");
+assert.deepEqual(rc.otherQuote, { head: "CSED423 · L5", chip: "📄 슬라이드 20 · 따라가는 중", quote: "다른 노트의 글", cites: add.otherCites }, "back on L5: the other lecture's chip is drawn again from the turn");
+assert.deepEqual(rc.notLecture, { head: "CSED423 · L5", quote: "다른 노트의 글" }, "a note that is not a lecture changes nothing");
+console.log("PASS: right-click questions: 이 슬라이드에 질문 pins the panel on that slide (another lecture too), 선택한 내용으로 질문 puts the text in as a quote, the input focused");
+// A summary note (spec 9) and the subject brief offer (spec 5.10).
+const summary = at("summary note");
+assert.equal(summary.focus.head, "CSED423 · L9");
+assert.deepEqual(summary.focus.chips.map(bare), ["⏱ 구간 2 [12:03~24:00] · 따라가는 중", "🎙 전사 12:03-24:00", "✏️ 내 메모"], "the section above the cursor, its transcript and memo");
+assert.equal(summary.focus.pinTitle, "이 구간에 고정");
+assert.deepEqual(summary.offered, { text: "과목 브리프를 넣을까요? · 약 0.1k", buttons: ["넣기", "그냥 보내기"], runs: 0, input: "지난 강의랑 뭐가 달라?" }, "offered before sending; the question waits in the input");
+assert.equal(summary.sent.label, "구간 2 기준");
+assert.equal(summary.sent.unit, "## L9 · 구간 2 [12:03~24:00]\n### 요약\n구간 2 요약: 캐시를 다룬다.\n### 내 메모\n구간 메모\n### 전사\n[13:00] 캐시는 가까운 저장소입니다.", "the section: its summary, memo and transcript");
+assert.equal(summary.sent.subjectBrief, false, "그냥 보내기: without the subject brief");
+assert.deepEqual(summary.sent.cites, ["is-section:구간 2", "is-time:▶ 13:00"]);
+assert.equal(summary.sent.plain, true, "no slide chip in a summary note, no section past the last one");
+assert.deepEqual([summary.sent.related, summary.sent.corpus], [0, false], "no related slides without slides");
+assert.deepEqual(summary.gone, ["section:2", `time:${13 * 60_000}`], "[구간 N] and [mm:ss] go to the section's heading");
+assert.deepEqual(summary.once, { suggestShown: false, subjectBrief: false }, "offered once per lecture");
+assert.deepEqual(summary.memo, { target: { notePath: "Alt2Obsidian/CSED423/Lectures/L9.md", unit: "section", num: 2 }, notice: "구간 2 메모에 저장했습니다." }, "the section's memo");
+assert.deepEqual(summary.dividers, ["구간 3으로 이동"]);
+assert.equal(summary.pinnedTitle, "고정 풀기 (지금 구간을 따라감)");
+assert.equal(summary.pinned, "⏱ 구간 3 [24:00~36:00]", "pinned (no 따라가는 중): the cursor elsewhere changes nothing");
+const offer = at("subject brief offer");
+assert.deepEqual([offer.chip.replace(/\d+(\.\d+)?k$/, ""), offer.order, offer.hidden], ["📚 CSED423 과목 브리프 ×", true, true], "넣기: the subject brief chip, sent after the lecture brief");
+console.log("PASS: a summary note: the section above the cursor with its transcript and memo, section and time chips to its heading, its memo, dividers and 📌; the subject brief offered once for a question about other lectures (넣기 / 그냥 보내기)");
+
+const chipOff = at("related with the chip off");
+assert.deepEqual([chipOff.chipOff, chipOff.slideSent], [true, false], "the 📄 chip off: slide 17 is not sent");
+assert.match(chipOff.first, /^관련 슬라이드 17 · /, "so it may be a related slide");
+assert.deepEqual([chipOff.chipOn, chipOff.button, chipOff.added], [true, "자료에 있음", ["📄 슬라이드 17 · 따라가는 중"]], "adding it turns its chip on (no second chip)");
+console.log("PASS: related slides follow the material: with the 📄 chip off the current slide can be one, and + 자료에 추가 turns its chip back on");
+
+assert.deepEqual(at("menu").items, ["대화 저장", "브리프 열기", "브리프 다시 만들기", "설정 열기"]);
+const closed = at("closed with ×");
+assert.deepEqual([closed.open, closed.threadKept, closed.events], [false, true, [false]], "× closes the panel; the threads stay in the plugin");
+console.log("PASS: brief cards: missing (노트로 바로 만들기 · 토큰 0) and edited then stale (내 수정 유지 / 새로 만들기 with confirmation); the menu; × keeps the threads");
+
+// 모든 강의 브리프 만들기 (spec 4.6).
+const all = at("all briefs");
+assert.equal(all.planText, "브리프가 없거나 노트보다 오래된 강의 2개, 직접 고친 브리프 1개는 건너뜁니다. 강조점이 없거나 만들지 못한 브리프 1개는 강조점 포함일 때 강조점을 더합니다.");
+assert.deepEqual(all.planButtons, ["스크립트만 (토큰 0)", "강조점 포함 (예상 호출 2회 · 입력 약 4.8k · 출력 약 1.2k)", "취소"]);
+assert.deepEqual(all.withAi, [true]);
+assert.equal(all.runNotice, "브리프 3개를 만듭니다 (강조점 포함).", "강조점 포함 also builds the current brief without its AI part");
+assert.equal(all.summary, "만든 브리프 1개, 스크립트만 씀 (강조점 실패) 1개, 건너뜀 0개, 직접 고친 브리프 유지 1개, 실패 0개.", "a failed AI part that wrote the script part, and the edited briefs, have their own counts");
+assert.equal(all.aiOnlyText, "브리프가 없거나 노트보다 오래된 강의 0개. 강조점이 없거나 만들지 못한 브리프 1개는 강조점 포함일 때 강조점을 더합니다.");
+assert.deepEqual(all.aiOnlyButtons, [["스크립트만 (토큰 0)", true], ["강조점 포함 (예상 호출 1회 · 입력 약 2.4k · 출력 약 624)", false], ["취소", false]], "only briefs without their AI part: 스크립트만 has nothing to do");
+console.log("PASS: 모든 강의 브리프 만들기: counts (to build, without an AI part, edited to skip), script only or with the emphasis estimate, progress and the summary (스크립트만 씀 (강조점 실패), 직접 고친 브리프 유지)");

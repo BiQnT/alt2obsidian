@@ -13,6 +13,8 @@ Try the plugin on a copy of your vault first if you have a lot of existing lectu
 - [Importing a lecture](#importing-a-lecture)
 - [The generated notes](#the-generated-notes)
 - [Synced Viewer](#synced-viewer)
+- [Question panel](#question-panel)
+- [Lecture brief](#lecture-brief)
 - [Lectures without slides](#lectures-without-slides)
 - [Note verification](#note-verification)
 - [Migrating from older versions](#migrating-from-older-versions)
@@ -69,12 +71,14 @@ Under **작업별 모델** (models per task) each task has a provider, a model a
 | **개념 추출** (concept extraction) | concept notes; also the Notion page fetch when this task is on the Claude CLI | Claude CLI, `haiku`, effort low |
 | **전사 정렬 확인** (alignment check) | an optional check of uncertain transcript spans | **없음 (스크립트만)** (none, script only) |
 | **노트 검증** (note verification) | judging the claims of your notes | Claude CLI, `sonnet`, effort medium |
+| **질문** (questions) | the [question panel](#question-panel) | Claude CLI, `sonnet`, effort low |
+| **챗봇 브리프** (chatbot brief) | the AI part of [lecture briefs](#lecture-brief), and **세 줄로 줄여서** (cut to three lines) when saving an answer to a memo | Claude CLI, `haiku`, effort low |
 
 On the Codex CLI the model defaults to Codex's own default model, with the same efforts. Each row shows its recommended setting (권장) and, after a run, the model the CLI actually used (마지막 실행, last run).
 
 - **Model list.** Versioned entries such as `Opus 5.5 (claude-opus-5-5)` pass that exact id to the CLI, so you always get the same model. Aliases such as `sonnet` follow the CLI's latest model; the label shows what it pointed to on the last run, for example `sonnet (최신 Sonnet, 현재 Sonnet 5.5)`. The list comes from the model lists Claude Code and Codex keep on disk (no model call), or from a built-in list. **CLI 기본값** (CLI default) uses the CLI's own default model, and **직접 입력...** (enter manually) takes any other id.
 - **Effort** (reasoning effort). The list shows only the levels the chosen model supports (`low`, `medium`, `high`, `xhigh`, `max`, or **effort CLI 기본값**), plus the level already saved. Haiku 5.5, what `haiku` stands for now, lists every level. A model without effort levels, such as the older Haiku 4.5, offers only the CLI default and the saved level.
-- **프리셋** (preset): **절약** (saving) puts every task on the light model (Claude: `haiku`) with effort low. **품질** (quality) puts commentary and verification on the top model (Claude: `opus`) with effort high, and concepts (and the alignment check, if it is on a CLI) on the light model with effort low. Presets never change the provider. Any manual change switches to **사용자 지정** (custom).
+- **프리셋** (preset): **절약** (saving) puts every task on the light model (Claude: `haiku`) with effort low. **품질** (quality) puts commentary and verification on the top model (Claude: `opus`) with effort high, questions on the middle model (Claude: `sonnet`) with effort medium, and concepts, the chatbot brief (and the alignment check, if it is on a CLI) on the light model with effort low. Presets never change the provider. Any manual change switches to **사용자 지정** (custom).
 
 These are defaults. Before each import or verification you can change the model for that run only (see [the estimate panel](#the-estimate-panel)).
 
@@ -127,9 +131,10 @@ Before anything is sent, **가져오기 전 예상 사용량** (estimated usage 
 - slides generated and skipped (cover, contents and closing slides, duplicate animation steps, unchanged slides),
 - how much the transcript was compressed,
 - the alignment result (`전사 정렬: 슬라이드별 구간 N개`) and how many spans are uncertain,
-- key diagram images to save, and which PDF is used when it is an attached or saved one.
+- key diagram images to save, and which PDF is used when it is an attached or saved one,
+- the **챗봇 브리프** (chatbot brief) line: the call that makes the brief's AI part, or why there is none (see [Lecture brief](#lecture-brief)).
 
-Two model pickers let you change the provider, model and effort for this run: **해설·요약 모델** (commentary and summary model) and **개념 추출 모델** (concept model). For a summary note the first one is **구간 요약·전체 요약 모델** (section and overview model). The choice applies to this run only (이번 실행에만 씁니다); **기본값으로 저장** (save as default) writes it to the settings. The estimate is recalculated at once.
+Two model pickers let you change the provider, model and effort for this run: **해설·요약 모델** (commentary and summary model) and **개념 추출 모델** (concept model). For a summary note the first one is **구간 요약·전체 요약 모델** (section and overview model). When the brief makes a call, **브리프 모델** (brief model) is a third. The choice applies to this run only (이번 실행에만 씁니다); **기본값으로 저장** (save as default) writes it to the settings. The estimate is recalculated at once.
 
 The estimate scales output tokens with effort (medium is the baseline), does not change with the model, and leaves out retries. Then:
 
@@ -184,8 +189,13 @@ Alt2Obsidian/                      ← 저장 폴더 (save folder) setting
     │   └── Pipeline Hazard (파이프라인 해저드).md
     ├── Verification/
     │   └── CSED311 Lec7-pipelined-CPU verification.md
-    └── Attachments/
-        └── CSED311 Lec7-pipelined-CPU-12.png ← key diagram (optional)
+    ├── Attachments/
+    │   └── CSED311 Lec7-pipelined-CPU-12.png ← key diagram (optional)
+    ├── Briefs/
+    │   ├── CSED311 Lec7-pipelined-CPU brief.md ← lecture brief for the question panel
+    │   └── CSED311 subject brief.md
+    └── Chats/
+        └── 2026-10-30 CSED311 Lec7-pipelined-CPU 왜 stall이 생겨.md ← saved conversation (only when you save one)
 ```
 
 The default folder keeps its pre-2.0.0 name `Alt2Obsidian/`. Vaults made by 1.x keep lecture notes directly in the subject folder; see [Migrate the 1.x folder layout](#migrate-the-1x-folder-layout).
@@ -346,6 +356,106 @@ Scrolling either side moves the other to the same slide. Selecting a `[[wikilink
 
 A note without slides has no viewer. **뷰어로 열기** explains why and offers **PDF 첨부** (attach PDF).
 
+## Question panel
+
+Ask about the lecture you are studying without leaving Obsidian. The panel sends the [lecture brief](#lecture-brief) and the material of the slide you are on, never the whole lecture: a first question is about 5k input tokens. Answers come from the **질문** (questions) task.
+
+### Opening and closing
+
+- **💬 질문** in the Synced Viewer's toolbar, the command **질문 패널 열기/닫기** (open or close the question panel), or a right-click item (see [Right-click](#right-click)) opens the panel in the right sidebar. A collapsed sidebar is expanded, and collapsed again when the panel closes.
+- **💬 질문** again, **×** in the panel's header, the command, or closing the tab closes it. The panel is not restored when Obsidian starts.
+- Conversations live in the plugin's memory while it runs: one per lecture, the 10 most recent. Closing the panel neither drops a conversation nor stops an answer; open the panel again to see it. **새 대화** (new conversation) clears this lecture's conversation. Disabling the plugin or quitting Obsidian drops them all.
+
+### The lecture and the slide
+
+The panel is on the lecture of the Synced Viewer you used last, or of a lecture note open in an editor. It follows the viewer's page, or the `## 📚 슬라이드 N` heading above an editor's cursor (read when you switch tabs, select the question box or send). **📌** pins the current slide; select it again to follow. When the slide changes during a conversation, the thread shows **슬라이드 N으로 이동** (moved to slide N).
+
+Opened elsewhere, the panel shows **열린 강의 노트가 없습니다** (no lecture note open): pick a subject and a lecture, optionally a slide range such as `14-18, 23` (empty sends only the brief), then **이 강의로 시작** (start with this lecture) or **뷰어로 열기** (open in viewer). Recent conversations are listed under it.
+
+### What a question sends
+
+The chips above the conversation show what goes with the next question and its estimated tokens. Select a chip to turn it on or off; hover over it to see the first 300 characters of what it sends.
+
+- **📘 브리프**: the lecture brief. **브리프 없음** (no brief) and **브리프 오래됨** (brief out of date) come with a card, see [Lecture brief](#lecture-brief).
+- **📄 슬라이드 N · 따라가는 중** (following), or without the suffix when pinned: the slide's text from the PDF and its commentary. A page without a text layer goes as an image.
+- **🎙 전사 mm:ss-mm:ss**: the transcript aligned to the slide, cleaned and cut to **슬라이드당 전사 상한**. **정렬된 전사 없음** (no aligned transcript) when the note has no alignment or the transcript cannot be read.
+- **✏️ 내 메모**: your memo callout of that slide, on by default with **질문에 내 메모 포함**.
+- **💬 이전 대화 N** (earlier conversation): the finished questions and answers of this lecture. Past about 3,000 tokens the oldest become one line each, and the thread says **앞 대화 N개를 줄였습니다** (shortened N earlier turns).
+- What you added: slides, other lectures' briefs, the subject brief and a quote, each removed with its **×**.
+
+Under the chips is the estimate for this question: input (from the second question on, Claude also shows **캐시 약**, the part read from the prompt cache) and output. Codex's estimate includes the fixed tokens Codex adds to every call. Over **질문당 토큰 상한** (token cap per question) the panel asks **그래도 보내기 / 취소** (send anyway / cancel) before it sends.
+
+### + 자료 추가 (add material)
+
+- **이 강의** (this lecture): type a range (`14-18, 23` or `14~18`) or check slides in the list (gist, time, a yellow `?` for an uncertain time, tokens). Choose what added slides carry: slide text, commentary, transcript, memo, and the slide image (about 1.1k tokens a slide, off by default). Up to 8 added slides.
+- **다른 강의** (another lecture): pick a subject and a lecture. Its brief goes in as another lecture's brief (its file, or built in memory without writing anything), with the slides you check. **과목 브리프 넣기** (add the subject brief) adds the subject brief too.
+- **노트에서 선택한 글** (text selected in the note): the text selected in the viewer's note pane or an editor, as a quote (up to 1,500 characters).
+
+### Asking
+
+Type the question and press Enter (Shift+Enter for a new line; Enter while a Korean syllable is being composed does not send), or select a quick question: **더 쉽게** (simpler), **예시 하나** (one example), **시험에 나올 점** (what may be on the exam), **앞 슬라이드와 연결** (how it follows the previous slide). The model row under the box changes the model for this question only; **기본값으로 저장** saves it.
+
+A question about another lecture (`L4` when a lecture of the subject has that name, `3강`, `lec 3`, 지난 강의, 이전 강의, 다른 강의, 몇 강) while no subject brief is added first shows **과목 브리프를 넣을까요?** (add the subject brief?) with its tokens: **넣기** (add) or **그냥 보내기** (send as it is). This is asked once per lecture.
+
+Claude's answer appears as it is written, then is shown as formatted Markdown. Codex sends its answer only when it is done, so the panel shows **답변 쓰는 중 · N초** (writing, N seconds) with a note that Codex shows the answer at once. **중지** (stop), in place of **보내기** while an answer is written, ends the call; what came stays, marked **(중지됨)**, and is not sent with the next question.
+
+Under an answer: **복사** (copy the answer as written), **다시 생성** (regenerate with the same material), **메모에 저장** (see below) and the usage line, such as `Sonnet 5.5 · low · 입력 5.1k (캐시 3.0k) · 출력 0.4k`. **관련 슬라이드 N · <gist>** lists up to two slides of this lecture that match the question but were not sent (found by a script, no tokens); **+ 자료에 추가** (add to the material) adds one for your next question. Nothing is added by itself.
+
+### Citations
+
+Marks in an answer become chips: `[슬라이드 N]` (and lists and ranges such as `[슬라이드 14~16]`), `[L4 슬라이드 N]` for another lecture whose slides or brief the question sent, `[구간 N]`, and `[mm:ss]`. Select a chip, or focus it and press Enter or Space. A slide chip shows the slide in the lecture's Synced Viewer, opened if needed (without a PDF, the slide's heading in the note). A time chip opens the viewer's transcript panel at that time, or goes to the heading of the slide aligned to it or the section that holds it. **강의 자료 밖** (outside the lecture material) marks what the answer took from general knowledge. A mark past the last slide or the end of the recording stays text.
+
+### Saving an answer or the conversation
+
+- **메모에 저장** → **답변 그대로 · 토큰 0** (as it is, no tokens) or **세 줄로 줄여서 · 브리프 모델 1회** (cut to three lines, one call of the chatbot brief task) adds the question and the answer, dated, to the `> [!note] 내 메모` callout of the slide (or section) the question was about. A re-import keeps it.
+- **메모에 저장** → **대화 노트로 저장** (save as a chat note), or **대화 저장** in the panel's **⋯** menu, writes this lecture's conversation to `<subject>/Chats/<date> <lecture> <first question>.md`: each question as `## Q.`, what it sent (`> 자료: 슬라이드 17, 전사 29:06-35:56`) and the answer, whose slide marks become links to the slide headings. Saving the same conversation again replaces that note.
+
+What is saved is made safe first: HTML, embeds, Dataview inline queries (with the prefixes set in Dataview too), comments and Templater commands (`<% %>`) in an answer do not run in your vault.
+
+### In a summary note
+
+In a [summary note](#summary-notes) the focus is the `## ⏱ 구간 N` section above the editor's cursor, shown as **⏱ 구간 N [mm:ss~mm:ss]**. A question sends its summary, your memo and up to 1,500 characters of its transcript; `[구간 N]` and `[mm:ss]` chips go to the section's heading, and **메모에 저장** writes to the section's memo. Following, **📌** and **구간 N으로 이동** work as for slides.
+
+### Right-click
+
+- A page of the Synced Viewer's PDF: **이 슬라이드에 질문** (ask about this slide) opens the panel pinned on that slide.
+- Text selected in the viewer's note pane: **선택한 내용으로 질문** (ask about the selection) adds it as a quote and puts the cursor in the question box. This menu replaces the default one, so it has **복사** (copy) too.
+- An editor on a lecture note: **선택한 내용으로 질문** when text is selected, and **이 슬라이드에 질문** for the slide the cursor is in.
+
+## Lecture brief
+
+A brief is what the question panel sends instead of the whole lecture: `<subject>/Briefs/<lecture> brief.md`, a few thousand tokens.
+
+```markdown
+# CSED311 Lec7-pipelined-CPU brief
+
+## 개요
+## 흐름
+## 슬라이드 지도
+- 14 [26:26~28:38] Data hazard는 앞 명령의 결과를 다음 명령이 먼저 읽을 때 생긴다.
+## 핵심 개념
+## 강조점
+- [33:10] 슬라이드 17: forwarding으로도 load-use hazard는 한 사이클 stall이 남는다.
+## 강의 중 질문
+## 헷갈리기 쉬운 점
+```
+
+- **Script part** (overview, flow, the slide map with each slide's gist and time in the recording, key concepts), built from the note with no tokens. A summary note has a section map instead (구간 지도); a lecture-level note gets only the overview and the key concepts. Links are written as plain text, so briefs add no lines to the graph.
+- **AI part** (강조점, what the professor stressed; 강의 중 질문, questions asked in class; 헷갈리기 쉬운 점, points easy to confuse): one call of the **챗봇 브리프** task over transcript sentences a script picks (around words such as 시험 and 중요, and questions). Lines with a time past the lecture, and lines that copy the transcript, are dropped: no transcript text reaches the vault this way. Empty sections are left out.
+- **Subject brief**, `<subject>/Briefs/<subject> subject brief.md`: the subject's lectures with one line each, put together from the lecture briefs (no tokens) whenever one of them is written. The question panel adds it when you ask for it; without the file it is built in memory.
+- The lectures before and after this one are not stored; the panel works them out from the `Lectures/` folder when it sends a question.
+
+### When it is made
+
+- **On import**, by **가져올 때 챗봇 브리프 만들기** (make the chatbot brief on import): **끔** (off), **스크립트만 (토큰 0)** (script only) or **AI 강조점 포함** (with the AI emphasis, the default). The AI part needs the import's timestamped transcript (a lecture from the Alt app). A re-import whose transcript did not change makes no call, and a failed call leaves the script part with a warning. The import goes on either way.
+- **In the panel**, for a lecture imported before 2.1.0, the **이 강의에는 브리프가 아직 없습니다** (no brief yet) card offers **노트로 바로 만들기 · 토큰 0** (from the note, no tokens) and, when the transcript can be read, **강조점까지 만들기 · 약 Nk** (with the emphasis). You can ask without a brief too.
+- **Commands.** **모든 강의 브리프 만들기** (make all lecture briefs) finds the lecture notes whose brief is missing or older than the note (and current briefs without an AI part), says how many and how many you edited (skipped), and offers **스크립트만 (토큰 0)** or **강조점 포함** with its estimate; you can cancel between lectures. **이 강의 브리프 다시 만들기** (rebuild this lecture's brief) builds the script part of the lecture you are on again. The panel's **⋯** menu has **브리프 열기** (open the brief) and **브리프 다시 만들기** (rebuild the brief).
+- **The Skill** writes the same brief after its import (see [scripts/phase2/README.md](../scripts/phase2/README.md)).
+
+### Editing a brief
+
+You can edit a brief. The plugin sees that it was edited (its `body_hash` no longer matches) and never overwrites it on its own; the brief commands leave it alone unless you confirm. When the note changes after your edit, the panel shows **브리프 오래됨** with **내 수정 유지** (keep my edit) or **새로 만들기** (rebuild, after a confirmation). After deleting a brief, the panel shows the no-brief card again.
+
 ## Lectures without slides
 
 Many Alt lectures are a recording and a transcript only. You can make a summary note from the transcript, or attach the slide PDF and import the lecture like any slide lecture.
@@ -483,6 +593,9 @@ On Obsidian 1.13 and later the tab is drawn from setting definitions, so its set
 | **저장 폴더** (save folder) | Vault folder for lecture, concept and verification notes | `Alt2Obsidian` |
 | **Alt 데이터 폴더** (Alt data folder) | Alt's data folder, read only; empty means the default location | empty |
 | **개념 노트 언어** (concept note language) | **한국어** or **English** concept notes | 한국어 |
+| **질문 (채팅)** → **가져올 때 챗봇 브리프 만들기** (make the chatbot brief on import) | **끔**, **스크립트만 (토큰 0)** or **AI 강조점 포함** (see [Lecture brief](#lecture-brief)) | AI 강조점 포함 |
+| **질문 (채팅)** → **질문에 내 메모 포함** (include my memo in questions) | The **✏️ 내 메모** chip starts on | on |
+| **질문 (채팅)** → **질문당 토큰 상한** (token cap per question) | Ask in the panel before sending a question whose estimated input plus output is over it (minimum 2000) | 20000 |
 
 ## Troubleshooting
 
@@ -507,6 +620,16 @@ On Obsidian 1.13 and later the tab is drawn from setting definitions, so its set
 **The import does not start over the token cap, or stops at a usage limit.** The cap is checked against the estimate before the import starts; an import that has started is not stopped at it. Lower the effort, use **이미지 줄이기**, raise **강의당 토큰 상한**, or wait for your plan's limit to reset.
 
 **A lecture PDF opens as a plain PDF.** The PDF must be in the same folder as a lecture note with the same name, and **강의 PDF를 열면 뷰어로 열기** must be on. Tabs that were open at startup, and tabs opened with **PDF만 보기**, stay PDFs. While Alt2Obs 2.0.0 is also enabled, no PDF is turned into the viewer.
+
+**The question panel shows 브리프 없음 (no brief).** The lecture was imported before 2.1.0, or its brief was deleted. Select **노트로 바로 만들기 · 토큰 0** on the card, or run **모든 강의 브리프 만들기** for every lecture at once. You can also ask without a brief; the panel then sends only the slide's material.
+
+**The question panel shows 브리프 오래됨 (brief out of date).** You edited the brief and the note changed since. **내 수정 유지** keeps your brief for this session; **새로 만들기** replaces it with a new one after you confirm.
+
+**The transcript chip says 정렬된 전사 없음.** The note has no alignment (a lecture imported from a share link, or without timestamps), or the transcript is not in the cache and Alt could not be reached. Start Alt; the next question reads the transcript again.
+
+**An error card under a question.** The card names the cause: log in with `claude` (or `codex login`) in a terminal, wait for a usage limit to reset, check the CLI under **LLM 연결**, or raise **CLI 호출 제한 시간** after a timeout. **다시 보내기** (send again) asks again, and **Codex로 보내기** or **Claude로 보내기** sends this question with the other CLI when it is connected. Your question stays in the thread.
+
+**The question panel does not open at startup.** By design: it opens only when you call it, and a panel left open when Obsidian quit is closed at the next start.
 
 **I cannot type on some lines.** Those are hidden managed comment lines. Switch to Source mode to see them, or turn off **관리 주석 숨기기**.
 

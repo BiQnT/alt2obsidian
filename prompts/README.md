@@ -44,6 +44,10 @@ Single source for every LLM prompt used by the Alt2Obs plugin (named Alt2Obsidia
 | `note-verify-transcript.system.md` | note verification of a lecture without slides (system): the evidence is STT transcript sections only | none |
 | `note-verify-missing-sections.md` | note verification of a lecture without slides: sections no claim covers, with their gist | `title`, `sections` |
 | `notion-fetch.md` | Notion MCP fetch (Claude CLI with only the Notion fetch tool): raw markdown or `UNCHANGED` | `url`, `cachedEdited` |
+| `chat.system.md` | the question panel (2.1.0): system prompt of every question, followed by the lecture brief (`src/chat/contextPack.ts`); the Codex prompt starts with it | none |
+| `lecture-brief.system.md` | the lecture brief's AI part (2.1.0 spec 4.5): what the professor stressed, questions in class, points easy to confuse and one line, as JSON (`src/brief/briefAi.ts`; task "챗봇 브리프") | none |
+| `lecture-brief.user.md` | the brief's AI part: the lecture, its gists and the script-picked candidate sentences | `title`, `subject`, `duration`, `gists`, `candidates` |
+| `chat-memo.md` | the question panel's "메모에 저장 · 세 줄로 줄여서": an answer cut to three lines for the slide's memo, grounding marks kept (task "챗봇 브리프") | `question`, `answer` |
 | `alignment-check.md` | optional LLM check of low-confidence transcript alignment spans (task "전사 정렬 확인", off by default) | `title`, `parts` |
 
 ## Batched prompt order (CLI path, spec 5.3)

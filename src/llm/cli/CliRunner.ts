@@ -65,6 +65,12 @@ export interface CliRunRequest {
   signal?: AbortSignal;
   /** Extra environment variables on top of process.env. */
   env?: Record<string, string>;
+  /**
+   * Every stdout line as it arrives, without its line break; a last piece
+   * with no line break comes when the process closes. Streamed answers
+   * (2.1.0 spec 7.1). The whole stdout is still collected for the result.
+   */
+  onStdoutLine?: (line: string) => void;
   /** Defaults: process.platform and child_process.spawn (tests override both). */
   platform?: NodeJS.Platform;
   spawnFn?: SpawnFn;
@@ -246,6 +252,16 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
     let stdout = "";
     let stderr = "";
     let failure: CliRunError | null = null;
+    /** Stdout after the last line break, for onStdoutLine. */
+    let partialLine = "";
+    const emitLine = (line: string) => {
+      try {
+        req.onStdoutLine?.(line.replace(/\r$/, ""));
+      } catch (e) {
+        // A listener error must not stop the run; the result still parses.
+        console.warn("[Alt2Obs] stdout line listener failed:", e);
+      }
+    };
 
     const child = spawnFn(target.command, [...target.prefixArgs, ...req.args], {
       cwd: req.cwd,
@@ -299,6 +315,10 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       if (stdout.length < STDOUT_MAX) stdout += chunk;
+      if (!req.onStdoutLine) return;
+      const lines = (partialLine + chunk).split("\n");
+      partialLine = lines.pop() ?? "";
+      for (const line of lines) emitLine(line);
     });
     child.stderr?.on("data", (chunk: string) => {
       stderr = (stderr + chunk).slice(-STDERR_KEEP);
@@ -325,6 +345,8 @@ export function runCli(req: CliRunRequest): Promise<CliRunOutput> {
       );
     });
     child.on("close", (code: number | null) => {
+      if (req.onStdoutLine && partialLine && !settled) emitLine(partialLine);
+      partialLine = "";
       finish(() => {
         if (failure) {
           failure.stdout = stdout;
@@ -405,6 +427,8 @@ export interface ResolvedCli {
   version?: string;
   /** Older than the tested version although every flag is present: works, but untested. */
   warning?: string;
+  /** Optional features its help lists (only when features were checked and it lists any). */
+  optional?: string[];
 }
 
 /**
@@ -446,14 +470,34 @@ export const REQUIRED_CLI_FEATURES: Record<CliName, string[]> = {
   codex: ["--json", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--sandbox", "--cd", "--output-last-message", "--model", "--output-schema", "--config", "--image"],
 };
 
+/**
+ * Flags a provider uses only when the help lists them, without them it
+ * still works (2.1.0 spec 7.1): Claude's `--include-partial-messages`
+ * streams the answer in pieces; without it the answer comes at the end.
+ */
+export const OPTIONAL_CLI_FEATURES: Record<CliName, string[]> = {
+  claude: ["--include-partial-messages"],
+  codex: [],
+};
+
 /** Help command whose output lists the flags a provider uses. */
 export function helpArgs(name: CliName): string[] {
   return name === "claude" ? ["--help"] : ["exec", "--help"];
 }
 
+/** Whether the help text mentions a flag or value as a whole word. */
+function helpMentions(help: string, feature: string): boolean {
+  return new RegExp(`(^|[^\\w-])${feature.replace(/[-]/g, "\\-")}(?![\\w-])`).test(help);
+}
+
 /** Required features the help text does not mention (whole words). */
 export function missingCliFeatures(name: CliName, help: string): string[] {
-  return REQUIRED_CLI_FEATURES[name].filter((f) => !new RegExp(`(^|[^\\w-])${f.replace(/[-]/g, "\\-")}(?![\\w-])`).test(help));
+  return REQUIRED_CLI_FEATURES[name].filter((f) => !helpMentions(help, f));
+}
+
+/** Optional features the help text mentions (OPTIONAL_CLI_FEATURES). */
+export function presentOptionalFeatures(name: CliName, help: string): string[] {
+  return OPTIONAL_CLI_FEATURES[name].filter((f) => helpMentions(help, f));
 }
 
 export async function readCliHelp(bin: string, name: CliName, timeoutMs = 15_000): Promise<string> {
@@ -637,14 +681,15 @@ async function resolveNewest(name: CliName, opts: ResolveOptions): Promise<Resol
   const readHelp = opts.readHelp ?? ((bin: string, n: CliName) => readCliHelp(bin, n));
   const inspect = async (c: Omit<ResolvedCli, "version">) => {
     const [version, help] = await Promise.all([readVersion(c.path).catch(() => ""), readHelp(c.path, name).catch(() => "")]);
-    return { ...c, version, missing: help ? missingCliFeatures(name, help) : ["--help"] };
+    return { ...c, version, missing: help ? missingCliFeatures(name, help) : ["--help"], optional: help ? presentOptionalFeatures(name, help) : [] };
   };
   // A help text can omit a flag the CLI still has (help layouts change):
   // at or above the tested version that is only a warning, and the
   // unknown-option mapping at run time is the backstop.
   const usable = (c: { version: string; missing: string[] }) => c.missing.length === 0 || versionAtLeast(c.version, TESTED_CLI_VERSION[name]);
-  const finish = (c: Omit<ResolvedCli, "version"> & { version: string; missing: string[] }): ResolvedCli => {
+  const finish = (c: Omit<ResolvedCli, "version"> & { version: string; missing: string[]; optional: string[] }): ResolvedCli => {
     const out: ResolvedCli = { path: c.path, source: c.source, version: c.version };
+    if (c.optional.length > 0) out.optional = c.optional;
     if (c.missing.length > 0) out.warning = `${name} CLI ${c.version} 도움말에 ${c.missing.join(" ")} 옵션이 보이지 않지만, 시험한 버전 이상이라 그대로 씁니다. 실행 중 옵션 오류가 나면 업데이트하세요.`;
     else if (!versionAtLeast(c.version, TESTED_CLI_VERSION[name])) out.warning = cliUntestedWarning(name, c.version);
     return out;

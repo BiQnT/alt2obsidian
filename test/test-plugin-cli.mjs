@@ -17,9 +17,19 @@ import { FAKE_CLAUDE, FAKE_CODEX, fakeSession } from "./helpers/fake-cli.mjs";
 // pdfjs (bundled via PdfProcessor) warns about missing canvas polyfills on load.
 const quiet = { log: console.log, warn: console.warn };
 console.log = console.warn = () => {};
-const { default: Plugin, TFile, TFolder, insertFrontmatterLine, notices, SyncedViewerView, VIEW_TYPE_SYNCED_VIEWER } = await importTs("test/helpers/plugin-entry.ts");
+const { default: Plugin, MarkdownView, TFile, TFolder, insertFrontmatterLine, notices, SyncedViewerView, VIEW_TYPE_SYNCED_VIEWER } = await importTs("test/helpers/plugin-entry.ts");
 Object.assign(console, quiet);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Runs fn with console.warn silenced (an expected failure logs one). */
+async function quietWarn(fn) {
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.warn = warn;
+  }
+}
 const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 /** Frontmatter of a stored note: `key: "value"` lines and the tags list. */
@@ -573,6 +583,26 @@ try {
     assert.equal(beta4.plugin.data.settings.tasks.commentary.provider, "claude-cli", "nothing moved");
     const said = notices.slice(n1).join("\n");
     assert.ok(!said.includes("Codex CLI로 옮겼습니다") && said.includes("Claude CLI로 옮겼습니다") && said.includes("Codex CLI로 바꾸세요"), said);
+    // Data before version 4 saved with a CLI default still pending: chat and brief go to Codex with the commentary task.
+    const pendingV3 = await makePlugin({
+      settings: {
+        settingsVersion: 3,
+        tasks: {
+          commentary: { provider: "claude-cli", model: "sonnet", effort: "medium" },
+          concepts: { provider: "claude-cli", model: "haiku", effort: "low" },
+          alignment: { provider: "none", model: "", effort: "" },
+          verification: { provider: "claude-cli", model: "sonnet", effort: "medium" },
+        },
+      },
+      pendingCliDefault: true,
+      pendingMovedTasks: ["commentary", "concepts"],
+    });
+    assert.deepEqual(pendingV3.plugin.data.pendingMovedTasks, ["commentary", "concepts", "chat", "brief"]);
+    pendingV3.plugin.data.settings.claudePath = FAKE_CLAUDE;
+    pendingV3.plugin.data.settings.codexPath = FAKE_CODEX;
+    await pendingV3.plugin.applyCliDefaultOnce();
+    assert.deepEqual([pendingV3.plugin.data.settings.tasks.chat, pendingV3.plugin.data.settings.tasks.brief], [{ provider: "codex-cli", model: "", effort: "low" }, { provider: "codex-cli", model: "", effort: "low" }]);
+    assert.equal(pendingV3.plugin.data.settings.tasks.verification.provider, "claude-cli", "a task not pending stays");
     delete process.env.FAKE_CLAUDE_LOGGED_OUT;
     assert.equal(s.calls().length, 0, "the login check never calls a model");
   }
@@ -610,6 +640,10 @@ try {
   assert.equal(await plugin.resolveBin("claude"), FAKE_CLAUDE);
   assert.equal(plugin.data.cliDetection.claude.version, "2.1.283 (Claude Code)", "a cached path from before the feature check is checked again");
   assert.equal(plugin.data.cliDetection.claude.featuresOk, true);
+  assert.deepEqual(plugin.data.cliDetection.claude.optionalFeatures, ["--include-partial-messages"], "the optional streaming flag is recorded");
+  delete plugin.data.cliDetection.claude.optionalFeatures;
+  await plugin.resolveBin("claude");
+  assert.deepEqual(plugin.data.cliDetection.claude.optionalFeatures, ["--include-partial-messages"], "data from before 2.1.0 is looked up again once");
   plugin.pdfProcessor = pdfStub;
   console.log("PASS: migration picks Claude CLI (logged in) else Codex CLI after free checks; Gemini/Ollama users are moved and told once");
 
@@ -649,7 +683,17 @@ try {
   assert.equal(plugin.data.usageTotals.calls, lastUsage.calls);
   assert.deepEqual(plugin.data.settings.recentModels["claude-cli"], ["haiku", "sonnet"]);
   assert.equal(plugin.data.recentImports[0].path, record.path);
-  console.log(`PASS: CLI import writes the note (usage frontmatter, meta, tags), concepts and PDF; ${lastUsage.calls} calls recorded`);
+  // The lecture brief's script part after the note (2.1.0 spec 4.4): no call of its own.
+  const briefPath = "Alt2Obsidian/CSED311/Briefs/Lec7 Caches brief.md";
+  const brief = files.get(briefPath);
+  assert.ok(brief, "Briefs/<lecture> brief.md written by the import");
+  assert.match(brief, /^---\nalt2obs_brief: 1\nlecture: "Alt2Obsidian\/CSED311\/Lectures\/Lec7 Caches\.md"\nsubject: "CSED311"\n/);
+  assert.match(brief, /\n# Lec7 Caches brief\n\n## 개요\n[^]*## 슬라이드 지도\n- 1 [^\n]+\n- 2 슬라이드 2의 요지\n/);
+  assert.ok(files.has("Alt2Obsidian/CSED311/Briefs/CSED311 subject brief.md"), "the subject brief too");
+  assert.equal(s.calls().length, prepared.estimate.calls, "the brief made no model call");
+  assert.deepEqual(plugin.vaultLectureNotes().map((v) => v.path), [record.path], "the brief (it carries the Alt id) is not a lecture note");
+  assert.ok(!plugin.verifySourceFiles().includes(briefPath), "nor a note to verify");
+  console.log(`PASS: CLI import writes the note (usage frontmatter, meta, tags), concepts, PDF and the lecture brief; ${lastUsage.calls} calls recorded`);
 
   // Re-import of the same deck: every generated slide reused, memo kept.
   files.set(record.path, note.replace("> [!note] 내 메모\n> \n\n## 📚 슬라이드 3", "> [!note] 내 메모\n> 내 메모 유지\n\n## 📚 슬라이드 3"));
@@ -666,6 +710,31 @@ try {
   assert.equal((files.get(record.path).match(/^alt_id:/gm) ?? []).length, 1, "one alt_id line");
   assert.equal((files.get(record.path).match(/!\[\[[^\]]+\.png\]\]/g) ?? []).length, 1, "the diagram embed is not duplicated by a re-import");
   assert.equal([...files.keys()].filter((k) => k.includes("/Attachments/")).length, 1, "the image is replaced in place");
+  // The re-import wrote a new overview (the fake numbers its calls): the brief follows; the same source again leaves it alone.
+  const rebuilt = files.get(briefPath);
+  assert.notEqual(rebuilt, brief, "the overview changed: the brief is written again");
+  assert.match(rebuilt, /## 개요\n- 요약 텍스트 \(호출 \d+\)\n/);
+  await plugin.writeBriefAfterImport(record.path);
+  assert.equal(files.get(briefPath), rebuilt, "an unchanged source leaves the brief alone");
+  {
+    // A brief step that fails never fails the import; the setting "끔" skips it.
+    const warn = console.warn;
+    const warned = [];
+    console.warn = (...a) => warned.push(a.join(" "));
+    const realRead = plugin.briefFiles;
+    plugin.briefFiles = () => ({ ...realRead.call(plugin), read: async () => { throw new Error("disk gone"); } });
+    const n = s.calls().length;
+    await plugin.runCliImport(await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311"));
+    assert.ok(s.calls().length > n, "the import ran");
+    assert.ok(warned.some((w) => w.includes("lecture brief not written") && w.includes("disk gone")), "the failure is only logged");
+    plugin.briefFiles = realRead;
+    console.warn = warn;
+    plugin.data.settings.briefMode = "off";
+    files.delete(briefPath);
+    await plugin.runCliImport(await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311"));
+    assert.equal(files.has(briefPath), false, "brief mode off: no brief");
+    plugin.data.settings.briefMode = "ai";
+  }
   // A URL import of a lecture whose 1.x note was never migrated updates that note in place.
   {
     const legacy = "Alt2Obsidian/CSED311/Old Lec.md";
@@ -683,6 +752,221 @@ try {
     assert.equal(plugin.resolveNotePath(pv, "CSED311"), "Alt2Obsidian/CSED311/Lectures/Old Lec.md");
   }
   console.log("PASS: re-import reuses all unchanged slides (2 calls), keeps the memo");
+
+  // The question panel's host (2.1.0 spec 5, 6): lecture, slide material, a streamed question, errors.
+  {
+    const lecture = await plugin.chatLecture(record.path);
+    assert.deepEqual(
+      { name: lecture.name, subject: lecture.subject, kind: lecture.kind, pdfPath: lecture.pdfPath, slideCount: lecture.slideCount, sectionCount: lecture.sectionCount },
+      { name: "Lec7 Caches", subject: "CSED311", kind: "slides", pdfPath: "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.pdf", slideCount: 8, sectionCount: 0 }
+    );
+    assert.equal(await plugin.chatLecture("Alt2Obsidian/CSED311/Briefs/Lec7 Caches brief.md"), null, "a brief is not a lecture");
+    assert.equal(await plugin.chatLecture("nowhere.md"), null);
+    const m7 = await plugin.chatMaterial(lecture, 7);
+    assert.equal(m7.slideText, TEXTS[6], "the page text as the PDF has it");
+    assert.equal(m7.image, null, "a page with text goes as text");
+    assert.match(m7.commentary, /^슬라이드 7 해설\. 캐시를 설명합니다\./, "the commentary, links unwrapped, no meta");
+    assert.ok(!/alt2obs:meta|\[\[/.test(m7.commentary));
+    assert.equal(m7.memo, "");
+    assert.deepEqual([m7.segments, m7.spans, m7.transcriptEndMs], [[], [], null], "no alignment: no transcript");
+    const m4 = await plugin.chatMaterial(lecture, 4);
+    assert.equal(m4.image?.pageNum, 4, "a page without a text layer goes as an image");
+    assert.equal((await plugin.chatMaterial(lecture, 2)).memo, "내 메모 유지", "the memo callout's text (slide 2's, kept by the re-import)");
+    // "+ 자료 추가" (spec 5.7): the slide list, another lecture's brief (nothing written), an added slide's image.
+    const rows = await plugin.chatSlideList(lecture);
+    assert.deepEqual(rows.map((r) => r.num), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.equal(rows[6].gist, "슬라이드 7의 요지", "the gist of the slide map");
+    assert.ok(rows[6].tokens.commentary > 0 && rows[6].tokens.slideText > 0);
+    assert.equal(rows[3].tokens.slideText, 0, "page texts the panel read count as they are (a textless page: none)");
+    assert.deepEqual([rows[0].range, rows[0].tokens.transcript], ["", 0], "no alignment: no time, no transcript");
+    const otherBriefPath = "Alt2Obsidian/CSED311/Briefs/Lec7 Caches brief.md";
+    const savedBrief = files.get(otherBriefPath);
+    files.delete(otherBriefPath);
+    const other = await plugin.chatOtherBrief(lecture);
+    assert.match(other, /^## 개요/m);
+    assert.match(other, /^## 슬라이드 지도\n- 1 /m, "built in memory");
+    assert.ok(!/^---|alt2obs_brief|# Lec7 Caches brief/m.test(other), "the body only");
+    assert.equal(files.has(otherBriefPath), false, "nothing written");
+    if (savedBrief !== undefined) files.set(otherBriefPath, savedBrief);
+    // 과목 브리프 (spec 5.10): its file's body, else built in memory from the subject's lecture notes (nothing written).
+    const subjectBriefPath = "Alt2Obsidian/CSED311/Briefs/CSED311 subject brief.md";
+    const savedSubject = files.get(subjectBriefPath);
+    files.delete(subjectBriefPath);
+    const inMemory = await plugin.chatSubjectBrief(record.path);
+    assert.equal(inMemory.subject, "CSED311");
+    assert.match(inMemory.body, /^- Lec7 Caches \([^)]*슬라이드 8장\)/, "built in memory from the lecture notes");
+    assert.equal(files.has(subjectBriefPath), false, "nothing written");
+    files.set(subjectBriefPath, '---\nalt2obs_subject_brief: 1\nsubject: "CSED311"\n---\n# CSED311 subject brief\n\n- 내가 쓴 과목 브리프\n');
+    assert.deepEqual(await plugin.chatSubjectBrief(record.path), { subject: "CSED311", body: "- 내가 쓴 과목 브리프" }, "the file's body when there is one");
+    if (savedSubject !== undefined) files.set(subjectBriefPath, savedSubject);
+    else files.delete(subjectBriefPath);
+    // 관련 슬라이드 (spec 5.11): each slide's gist, commentary and the page text the panel has read (no PDF read for it).
+    const corpus = await plugin.chatSlideCorpus(lecture);
+    assert.deepEqual(corpus.map((d) => d.num), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.equal(corpus[6].gist, "슬라이드 7의 요지");
+    assert.ok(corpus[6].text.includes(m7.commentary) && corpus[6].text.includes(TEXTS[6]), "the commentary and the page text read before");
+    assert.deepEqual(await plugin.chatSlideCorpus({ ...lecture, kind: "transcript" }), [], "slides only");
+    assert.equal((await plugin.chatSlideImage(lecture, 7))?.pageNum, 7, "an added slide's image");
+    assert.equal(await plugin.chatSlideImage({ ...lecture, pdfPath: null }, 7), null);
+    assert.equal(plugin.noteSelection(), "", "no note open: no selection");
+    {
+      // An editor: its selection; reading mode (no editor selection): the window's, only when it is in the note.
+      const inNote = {};
+      let sel = { isCollapsed: false, anchorNode: inNote, toString: () => "읽기 모드에서 고른 글" };
+      let mode = "source";
+      const contentEl = { contains: (n) => n === inNote, ownerDocument: { getSelection: () => sel } };
+      const md = Object.assign(Object.create(MarkdownView.prototype), { getMode: () => mode, contentEl, editor: { getSelection: () => "편집기에서 고른 글" } });
+      const ws = plugin.app.workspace;
+      const had = Object.prototype.hasOwnProperty.call(ws, "getMostRecentLeaf") ? ws.getMostRecentLeaf : undefined;
+      ws.getMostRecentLeaf = () => ({ view: md });
+      assert.equal(plugin.noteSelection(), "편집기에서 고른 글", "an editor's selection");
+      mode = "preview";
+      assert.equal(plugin.noteSelection(), "읽기 모드에서 고른 글", "reading mode: the window's selection in the note");
+      sel = { ...sel, anchorNode: {} };
+      assert.equal(plugin.noteSelection(), "", "a selection outside the note does not count");
+      sel = { ...sel, anchorNode: inNote, isCollapsed: true };
+      assert.equal(plugin.noteSelection(), "", "a caret is no selection");
+      if (had) ws.getMostRecentLeaf = had;
+      else delete ws.getMostRecentLeaf;
+    }
+    // The editor's right-click items (spec 5.8): in a lecture note only, the selection and the cursor's slide.
+    const fakeMenu = () => ({ items: [], addItem(cb) { const item = { title: "", setTitle(t) { this.title = t; return this; }, setIcon() { return this; }, onClick(f) { this.click = f; return this; } }; cb(item); this.items.push(item); return this; } });
+    const noteLines = files.get(record.path).split("\n");
+    const editorAt = (text, line, selection) => ({ getValue: () => text, getCursor: () => ({ line, ch: 0 }), getSelection: () => selection });
+    const line7 = noteLines.findIndex((l) => l.startsWith("## 📚 슬라이드 7")) + 1;
+    const askedFor = [];
+    const saved = { slide: plugin.askAboutSlide, selection: plugin.askAboutSelection };
+    plugin.askAboutSlide = async (...a) => void askedFor.push(["slide", ...a]);
+    plugin.askAboutSelection = async (...a) => void askedFor.push(["selection", ...a]);
+    let menu = fakeMenu();
+    plugin.addEditorChatItems(menu, editorAt(noteLines.join("\n"), line7, "캐시 라인"), { path: record.path });
+    assert.deepEqual(menu.items.map((i) => i.title), ["선택한 내용으로 질문", "이 슬라이드에 질문"]);
+    for (const item of menu.items) item.click();
+    assert.deepEqual(askedFor, [["selection", record.path, 7, "캐시 라인"], ["slide", record.path, 7]]);
+    menu = fakeMenu();
+    plugin.addEditorChatItems(menu, editorAt(noteLines.join("\n"), 0, ""), { path: record.path });
+    assert.deepEqual(menu.items.map((i) => i.title), [], "above the first slide, nothing selected: no item");
+    menu = fakeMenu();
+    plugin.addEditorChatItems(menu, editorAt("# 장보기\n우유", 1, "우유"), { path: "notes/shopping.md" });
+    assert.deepEqual(menu.items, [], "not a lecture note: no item");
+    plugin.askAboutSlide = saved.slide;
+    plugin.askAboutSelection = saved.selection;
+
+    const totals = { ...plugin.data.usageTotals };
+    process.env.FAKE_CLI_TEXT = "캐시는 자주 쓰는 데이터를 가까이 둔다 [슬라이드 2].";
+    const pieces = [];
+    const before = s.calls().length;
+    const res = await plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "SYS", user: "[질문]\n캐시가 뭐야?", images: [], signal: new AbortController().signal, onDelta: (t) => pieces.push(t) });
+    assert.equal(res.text, process.env.FAKE_CLI_TEXT);
+    assert.ok(pieces.length > 3 && pieces.join("") === res.text, "streamed in pieces");
+    assert.equal(res.model, "claude-sonnet-5-5");
+    const call = s.calls()[before];
+    assert.ok(call.argv.includes("--include-partial-messages") && call.argv[call.argv.indexOf("--model") + 1] === "sonnet" && call.argv[call.argv.indexOf("--effort") + 1] === "low");
+    assert.equal(call.argv[call.argv.indexOf("--system-prompt") + 1], "SYS");
+    assert.equal(plugin.data.usageTotals.calls, totals.calls + 1);
+    assert.equal(plugin.data.usageTotals.lectures, totals.lectures, "a question is not a lecture");
+    assert.equal(plugin.data.resolvedModels["claude-cli:sonnet"].id, "claude-sonnet-5-5");
+    for (const [mode, kind] of [["loggedout", "auth"], ["limit", "limit"]]) {
+      process.env.FAKE_CLI_MODE = mode;
+      const err = await plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }).catch((e) => e);
+      assert.equal(plugin.chatErrorInfo(err).kind, kind, mode);
+    }
+    assert.equal(plugin.chatErrorInfo(await plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }).catch((e) => e)).message, "Claude usage limit reached. Your limit resets at 5pm.", "the CLI's sentence");
+    process.env.FAKE_CLI_MODE = "ok";
+    // A CLI that cannot be found is its own card.
+    const savedCodex = { path: plugin.data.settings.codexPath, detection: plugin.data.cliDetection.codex };
+    plugin.data.settings.codexPath = "/nonexistent/codex";
+    delete plugin.data.cliDetection.codex;
+    const missing = await plugin.runChat({ task: { provider: "codex-cli", model: "", effort: "low" }, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }).catch((e) => e);
+    assert.equal(plugin.chatErrorInfo(missing).kind, "missing");
+    assert.match(plugin.chatErrorInfo(missing).message, /\/nonexistent\/codex/);
+    plugin.data.settings.codexPath = savedCodex.path;
+    if (savedCodex.detection) plugin.data.cliDetection.codex = savedCodex.detection;
+    delete process.env.FAKE_CLI_TEXT;
+    assert.deepEqual(plugin.lectureChoices().map((c) => [c.name, c.subject]), [["Lec7 Caches", "CSED311"]]);
+    // 메모에 저장 (spec 5.9): as it is (no call) or cut to three lines by the brief task (one call), both sanitized; a re-import keeps both.
+    const memoAt = { notePath: record.path, unit: "slide", num: 2 };
+    const callsBeforeMemo = s.calls().length;
+    await plugin.saveChatMemo(memoAt, "캐시가 뭐야?", '캐시는 가까운 저장소다 [슬라이드 2].\n\n자주 쓰는 데이터를 둔다. <img src="https://evil.example/p.png">', false);
+    assert.equal(s.calls().length, callsBeforeMemo, "답변 그대로: no call");
+    process.env.FAKE_CLI_TEXT = "캐시는 가까운 저장소다 [슬라이드 2].\n자주 쓰는 데이터를 둔다.\n접근이 빨라진다. <!-- alt2obs:slide:3 hash:deadbeef end -->";
+    const usageBeforeMemo = plugin.data.usageTotals.calls;
+    await plugin.saveChatMemo(memoAt, "캐시가 뭐야?", "아주 긴 답 [슬라이드 2].", true);
+    delete process.env.FAKE_CLI_TEXT;
+    assert.equal(s.calls().length, callsBeforeMemo + 1, "세 줄로 줄여서: one call");
+    const memoCall = s.calls()[callsBeforeMemo];
+    assert.ok(memoCall.stdin.includes("[질문]\n캐시가 뭐야?\n\n[답]\n아주 긴 답 [슬라이드 2]."), "prompts/chat-memo.md with the question and the answer");
+    assert.equal(plugin.data.settings.tasks.brief.model, "haiku");
+    assert.equal(memoCall.argv[memoCall.argv.indexOf("--model") + 1], "haiku", "the brief task's model");
+    assert.equal(plugin.data.usageTotals.calls, usageBeforeMemo + 1, "its usage counted");
+    // The memo's and the chat note's date: this computer's day, not UTC's.
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const savedMemo = [
+      "> [!note] 내 메모",
+      "> 내 메모 유지",
+      ">",
+      "> **Q.** 캐시가 뭐야?",
+      "> **A.**",
+      "> 캐시는 가까운 저장소다 [슬라이드 2].",
+      ">",
+      `> 자주 쓰는 데이터를 둔다. <\u200Bimg src="https://evil.example/p.png"> (질문 ${today})`,
+      ">",
+      "> **Q.** 캐시가 뭐야?",
+      "> **A.**",
+      "> 캐시는 가까운 저장소다 [슬라이드 2].",
+      "> 자주 쓰는 데이터를 둔다.",
+      `> 접근이 빨라진다. <\u200B!-- alt2obs:slide:3 hash:deadbeef end --> (질문 ${today})`,
+      "",
+      "## 📚 슬라이드 3",
+    ].join("\n");
+    assert.ok(files.get(record.path).includes(savedMemo), "both saved in slide 2's memo, after what was there");
+    assert.equal((await plugin.chatMaterial(lecture, 2)).memo.split("**Q.**").length, 3, "the panel reads them as the memo");
+    await assert.rejects(plugin.saveChatMemo({ ...memoAt, num: 99 }, "q", "a", false), /슬라이드 99의 메모 자리를 찾지 못했습니다/);
+    // 대화 노트로 저장 (spec 5.9): the thread in the subject's Chats folder through the vault; saved again, the same file.
+    const chatTurn = (id, question, answer, status = "done") => ({
+      id,
+      question,
+      label: "슬라이드 2 기준",
+      material: "슬라이드 2",
+      slide: 2,
+      answer,
+      status,
+      request: { task: plugin.data.settings.tasks.chat, system: "", user: "", images: [] },
+      at: 0,
+      usage: { calls: 1, inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, imagesSent: 0, costUsd: 0 },
+      model: "claude-sonnet-5-5",
+    });
+    const thread = plugin.chatThreads.get(record.path);
+    thread.items.push({ kind: "turn", turn: chatTurn(9001, "캐시가 뭐야?", "가까운 저장소다 [슬라이드 2].") }, { kind: "turn", turn: chatTurn(9002, "실패한 질문", "", "error") });
+    const chatPath = await plugin.saveChatNote(thread, lecture);
+    assert.equal(chatPath, `Alt2Obsidian/CSED311/Chats/${today} Lec7 Caches 캐시가 뭐야.md`);
+    assert.ok(
+      files.get(chatPath).startsWith(`---\nsource: "alt2obsidian-chat"\nlecture: "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.md"\ndate: "${today}"\nmodel: "claude-sonnet-5-5"\nusage: {calls: 1, input: 100, cached: 40, output: 10}\n---\n`),
+      files.get(chatPath)
+    );
+    assert.ok(files.get(chatPath).includes("## Q. 캐시가 뭐야?\n> 자료: 슬라이드 2\n\n가까운 저장소다 [[Alt2Obsidian/CSED311/Lectures/Lec7 Caches#📚 슬라이드 2|슬라이드 2]]."));
+    assert.ok(!files.get(chatPath).includes("실패한 질문"), "a failed turn is not saved");
+    thread.items.push({ kind: "turn", turn: chatTurn(9003, "또?", "또 있다.") });
+    assert.equal(await plugin.saveChatNote(thread, lecture), chatPath, "saved again: the same file");
+    assert.equal((files.get(chatPath).match(/^## Q\. /gm) ?? []).length, 2, "with the new turn");
+    plugin.chatThreads.clear(record.path);
+    const nextThread = plugin.chatThreads.get(record.path);
+    nextThread.items.push({ kind: "turn", turn: chatTurn(9004, "캐시가 뭐야?", "다시 묻는다.") });
+    const nextPath = await plugin.saveChatNote(nextThread, lecture);
+    assert.equal(nextPath, `Alt2Obsidian/CSED311/Chats/${today} Lec7 Caches 캐시가 뭐야 2.md`, "another thread of the same name: 2");
+    await assert.rejects(plugin.saveChatNote(plugin.chatThreads.get("Alt2Obsidian/CSED311/Lectures/none.md"), lecture), /저장할 답이 아직 없습니다/);
+    for (const path of [record.path, "Alt2Obsidian/CSED311/Lectures/none.md"]) plugin.chatThreads.clear(path);
+    for (const path of [chatPath, nextPath]) files.delete(path);
+    await plugin.runCliImport(await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311"), { onConfirmUpdate: async () => true });
+    assert.ok(files.get(record.path).includes(savedMemo), "a re-import keeps the saved memo");
+    assert.deepEqual([...files.get(record.path).matchAll(/^## 📚 슬라이드 (\d+)$/gm)].map((x) => +x[1]), [1, 2, 3, 4, 5, 6, 7, 8], "and every slide where it was");
+    // After unload no question is sent.
+    const gone = await makePlugin(undefined);
+    gone.plugin.onunload();
+    await assert.rejects(gone.plugin.runChat({ task: plugin.data.settings.tasks.chat, system: "S", user: "Q", images: [], signal: new AbortController().signal, onDelta: () => {} }), /플러그인이 꺼져/);
+    console.log("PASS: question panel host: lecture and slide material from the note and its PDF, the + 자료 추가 slide list, another lecture's brief built in memory, the editor's right-click items, 메모에 저장 (kept by a re-import), a streamed chat call on the chat task (usage counted, not as a lecture), error kinds, nothing sent after unload");
+  }
 
   // Every slide fails: the note is not touched, the error says why, usage is still recorded (review H1, L1).
   {
@@ -779,7 +1063,179 @@ try {
     assert.deepEqual(await plugin.loadTranscript("local-1").then((t) => t[0]), { startMs: 0, endMs: 4800, text: talk[0] });
     const vault = plugin.vaultLectureNotes();
     assert.deepEqual(plugin.localNoteStatus({ id: "local-1", title: "Lec7 Caches", lectureDate: "2026-04-21" }, vault), { kind: "imported", path: rec.path, changed: null });
-    console.log("PASS: local import: aligned chunks, alt_local_id and alt_alignment frontmatter, no merge into a same-titled URL note, transcript cached");
+    // Its brief names the lecture's id under its own key: alt_local_id finds only the lecture note.
+    const localBrief = files.get("Alt2Obsidian/CSED311/Briefs/Lec7 Caches (2026-04-21) brief.md");
+    assert.match(localBrief, /^lecture_alt_local_id: "local-1"$/m);
+    assert.ok(!/^alt_local_id:/m.test(localBrief));
+    assert.equal(vault.filter((v) => v.altLocalId === "local-1").length, 1, "one lecture with this id");
+    // The brief's slide map carries the aligned times.
+    assert.match(localBrief, /\n- 2 \[\d{2}:\d{2}~\d{2}:\d{2}\??\] 슬라이드 2의 요지\n/);
+    console.log("PASS: local import: aligned chunks, alt_local_id and alt_alignment frontmatter, no merge into a same-titled URL note, transcript cached; the brief keys the id as lecture_alt_local_id");
+
+    // The lecture brief's AI part (2.1.0 spec 4.5): a transcript where the professor stresses things.
+    {
+      const stressed = talk.map((t, i) => (i === 10 ? "이 부분은 시험에 꼭 나옵니다" : i === 30 ? "질문 있나요? 캐시 일관성이 왜 필요하죠?" : t));
+      const briefBundle = () => ({ ...bundle("local-brief"), title: "Lec8 Coherence", transcript: stressed.map((t, i) => seg(i, t)) });
+      const pvb = plugin.previewFromBundle(briefBundle());
+      const n0 = s.calls().length;
+      const prepB = await plugin.prepareCliImport("", pvb, "CSED311");
+      assert.equal(prepB.brief.state, "call", "transcript with candidates: the brief makes a call");
+      assert.equal(prepB.estimate.brief.calls, 1);
+      assert.ok(prepB.estimate.brief.inputTokens > 300 && prepB.estimate.brief.outputTokens === Math.round(800 * 0.78), "input from the real prompt, output 800 times the low effort factor");
+      const withoutBrief = plugin.withRunChoice(prepB, "brief", { provider: "codex-cli", model: "", effort: "high" });
+      assert.equal(withoutBrief.estimate.brief.outputTokens, Math.round(800 * 1.3), "the brief model picker changes the estimate");
+      const totals = { ...plugin.data.usageTotals };
+      const recB = await plugin.runCliImport(prepB);
+      assert.equal(s.calls().length - n0, prepB.estimate.calls, "the estimate counted the brief call");
+      const briefCall = s.calls().slice(n0).find((c) => c.stdin.includes("[후보 문장]"));
+      assert.ok(briefCall, "one brief call");
+      assert.equal(briefCall.argv[briefCall.argv.indexOf("--model") + 1], "haiku", "the brief task's model");
+      assert.match(briefCall.stdin, /\n\[00:45\] \(슬라이드 \d+\) [^\n]*시험에 꼭 나옵니다\n/, "the candidate with the sentence before it, its time and slide");
+      const b = files.get("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md");
+      assert.match(b, /^ai_part: \{status: "ok", model: "claude-haiku-5-5", input: \d+, output: \d+\}$/m);
+      assert.match(b, /^ai_hash: "[0-9a-f]{8}"$/m);
+      assert.match(b, /^one_line: "캐시와 캐시 일관성을 다루는 강의다"$/m);
+      assert.match(b, /\n## 강조점\n- \[00:4\d\] (슬라이드 \d+: )?강조점 1: /);
+      assert.match(b, /\n## 강의 중 질문\n- \[\d\d:\d\d\] Q\. 캐시는 왜 빠른가\? A\. /);
+      assert.match(b, /\n## 헷갈리기 쉬운 점\n- 캐시 일관성과/);
+      assert.ok(!files.get(recB.path).includes("[후보 문장]") && !/alt2obs_usage: [^\n]*calls: (\d+)/.exec(files.get(recB.path))[1].includes("x"), "the note's usage is the note's");
+      assert.equal(/alt2obs_usage: \{[^}]*calls: (\d+)/.exec(files.get(recB.path))[1], String(prepB.estimate.calls - 1), "alt2obs_usage counts the note's calls, not the brief's");
+      assert.equal(plugin.data.usageTotals.calls, totals.calls + prepB.estimate.calls, "the plugin totals count the brief call");
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/CSED311 subject brief.md"), /- Lec8 Coherence \(2026-04-21, 슬라이드 8장\): 캐시와 캐시 일관성을 다루는 강의다/, "one_line in the subject brief");
+      // Re-import: every slide unchanged, the AI input the same: no call, the brief untouched.
+      const again = await plugin.prepareCliImport("", plugin.previewFromBundle(briefBundle()), "CSED311");
+      assert.equal(again.brief.state, "unchanged");
+      assert.equal(again.estimate.brief, undefined);
+      const n1 = s.calls().length;
+      await plugin.runCliImport(again, { onConfirmUpdate: async () => true });
+      assert.ok(!s.calls().slice(n1).some((c) => c.stdin.includes("[후보 문장]")), "no brief call");
+      // The overview changed (the fake numbers its calls): the script part is written again, the AI part carried as it was.
+      const aiPart = (t) => [/^ai_hash: .*$/m.exec(t)[0], /^ai_part: .*$/m.exec(t)[0], /^one_line: .*$/m.exec(t)[0], t.slice(t.indexOf("## 강조점"))];
+      assert.deepEqual(aiPart(files.get("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md")), aiPart(b), "the AI part stays");
+      // The brief call fails: the import still succeeds, the script part is written with ai_part failed and one warning.
+      process.env.FAKE_CLI_MODE = "brieffail";
+      const warnings = [];
+      const failing = await plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-2", title: "Lec9 Fail" }), "CSED311");
+      const recF = await quietWarn(() => plugin.runCliImport(failing, { onWarning: (w) => warnings.push(w) }));
+      assert.ok(files.has(recF.path), "the import succeeded");
+      const fb = files.get("Alt2Obsidian/CSED311/Briefs/Lec9 Fail brief.md");
+      assert.match(fb, /^ai_part: \{status: "failed"\}$/m);
+      assert.ok(!/## 강조점/.test(fb) && /## 슬라이드 지도/.test(fb), "the script part only");
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /챗봇 브리프의 강조점을 만들지 못해 스크립트 부분만 썼습니다/);
+      // Its next import tries the AI part again (a failed part is not reused).
+      process.env.FAKE_CLI_MODE = "ok";
+      const retry = await plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-2", title: "Lec9 Fail" }), "CSED311");
+      assert.equal(retry.brief.state, "call");
+      await plugin.runCliImport(retry, { onConfirmUpdate: async () => true });
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec9 Fail brief.md"), /^ai_part: \{status: "ok"/m);
+      // Dataview's own inline query prefix ("js:") and Templater commands are made safe in the AI part: on import and from the panel.
+      {
+        const zw = String.fromCharCode(0x200b);
+        const hadPlugins = Object.prototype.hasOwnProperty.call(plugin.app, "plugins") ? plugin.app.plugins : undefined;
+        plugin.app.plugins = { plugins: { dataview: { settings: { inlineQueryPrefix: "js:" } } } };
+        process.env.FAKE_CLI_MODE = "briefquery";
+        const queryImport = await plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-q", title: "Lec11 Query" }), "CSED311");
+        const recQ = await plugin.runCliImport(queryImport);
+        const qPath = "Alt2Obsidian/CSED311/Briefs/Lec11 Query brief.md";
+        const pitfall = `- \`${zw}js: dv.pages().length\` 와 <${zw}% tp.file.title %> 를 헷갈린다`;
+        assert.ok(files.get(qPath).includes(pitfall), "import: Dataview's prefix and <% broken");
+        files.delete(qPath);
+        await plugin.buildChatBrief(recQ.path, false, true);
+        assert.ok(files.get(qPath).includes(pitfall), "the panel's 강조점까지 만들기 too");
+        process.env.FAKE_CLI_MODE = "ok";
+        if (hadPlugins === undefined) delete plugin.app.plugins;
+        else plugin.app.plugins = hadPlugins;
+        files.delete(qPath);
+        files.delete(recQ.path);
+      }
+      // "스크립트만": no call, the script part.
+      plugin.data.settings.briefMode = "script";
+      const scriptOnly = await plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-3", title: "Lec10 Script" }), "CSED311");
+      assert.equal(scriptOnly.brief.state, "script");
+      const n2 = s.calls().length;
+      await plugin.runCliImport(scriptOnly);
+      assert.equal(s.calls().length - n2, scriptOnly.estimate.calls);
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec10 Script brief.md"), /^ai_part: \{status: "none"\}$/m);
+      plugin.data.settings.briefMode = "ai";
+      // "모든 강의 브리프 만들기" (spec 4.6): a missing brief is made (with the AI part), an edited one skipped,
+      // a current brief without its AI part (Lec10, made by "스크립트만") gets one with 강조점 포함 only.
+      const lec8Brief = "Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md";
+      const lec10Brief = "Alt2Obsidian/CSED311/Briefs/Lec10 Script brief.md";
+      files.delete(lec8Brief);
+      const failPath = "Alt2Obsidian/CSED311/Briefs/Lec9 Fail brief.md";
+      files.set(failPath, files.get(failPath) + "\n내가 고친 줄\n");
+      const allPlan = await plugin.planAllBriefs();
+      const lec8 = allPlan.todo.find((t) => t.notePath.endsWith("Lec8 Coherence.md"));
+      assert.deepEqual(lec8 && lec8.hasTranscript, true, "the lecture without a brief, with its cached transcript");
+      assert.ok(allPlan.edited.some((p) => p.endsWith("Lec9 Fail.md")), "the edited brief is counted to skip");
+      assert.deepEqual(allPlan.aiOnly.map((p) => p.split("/").pop()), ["Lec10 Script.md"], "the current brief without its AI part, with a cached transcript");
+      assert.ok(!allPlan.todo.some((t) => t.notePath.endsWith("Lec10 Script.md")), "it is not built again by 스크립트만");
+      assert.ok(allPlan.aiEstimate && allPlan.aiEstimate.calls >= 2, "its call is in the estimate");
+      const lec10Before = files.get(lec10Brief);
+      const n2b = s.calls().length;
+      const scriptRun = await plugin.buildAllBriefs({ ...allPlan, todo: [] }, false, { signal: new AbortController().signal, onProgress: () => {} });
+      assert.deepEqual([scriptRun.made, scriptRun.skipped, s.calls().length - n2b, files.get(lec10Brief)], [0, 0, 0, lec10Before], "스크립트만: nothing for a current brief");
+      const progress = [];
+      const n3 = s.calls().length;
+      const built = await plugin.buildAllBriefs(allPlan, true, { signal: new AbortController().signal, onProgress: (d, t) => progress.push(`${d}/${t}`) });
+      const total = allPlan.todo.length + allPlan.aiOnly.length;
+      assert.equal(built.made + built.failed, total);
+      assert.deepEqual([built.scriptOnly, built.skipped, built.edited], [0, 0, allPlan.edited.length], "the edited briefs have their own count");
+      assert.equal(s.calls().length - n3, allPlan.aiEstimate.calls, "one call per lecture with candidates");
+      assert.match(files.get(lec8Brief), /^ai_part: \{status: "ok"/m);
+      assert.match(files.get(lec10Brief), /^ai_part: \{status: "ok"/m, "강조점 포함 made the AI part of the current brief");
+      assert.match(files.get(failPath), /내가 고친 줄/, "the edited brief is left alone");
+      assert.equal(progress[progress.length - 1], `${total}/${total}`);
+      // The AI part fails: the script part is still written (스크립트만 씀 (강조점 실패), not 실패), and the next 강조점 포함 offers it again.
+      files.delete(lec8Brief);
+      process.env.FAKE_CLI_MODE = "brieffail";
+      const failRun = await quietWarn(async () => plugin.buildAllBriefs(await plugin.planAllBriefs(), true, { signal: new AbortController().signal, onProgress: () => {} }));
+      process.env.FAKE_CLI_MODE = "ok";
+      assert.deepEqual([failRun.scriptOnly, failRun.failed], [1, 0]);
+      assert.match(files.get(lec8Brief), /^ai_part: \{status: "failed"\}$/m);
+      const retryPlan = await plugin.planAllBriefs();
+      assert.ok(retryPlan.aiOnly.some((p) => p.endsWith("Lec8 Coherence.md")), "a current brief whose AI part failed is offered again");
+      await plugin.buildAllBriefs(retryPlan, true, { signal: new AbortController().signal, onProgress: () => {} });
+      assert.match(files.get(lec8Brief), /^ai_part: \{status: "ok"/m);
+      const stopped = new AbortController();
+      stopped.abort();
+      assert.equal((await plugin.buildAllBriefs(allPlan, false, { signal: stopped.signal, onProgress: () => {} })).cancelled, true, "cancel stops between lectures");
+      // The panel's 강조점까지 만들기: its estimate, then the build with the AI part.
+      files.delete("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md");
+      assert.ok((await plugin.briefAiEstimate("Alt2Obsidian/CSED311/Lectures/Lec8 Coherence.md")) > 500);
+      await plugin.buildChatBrief("Alt2Obsidian/CSED311/Lectures/Lec8 Coherence.md", false, true);
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md"), /^ai_part: \{status: "ok"/m);
+      assert.equal(await plugin.briefAiEstimate(recB.path.replace("Lec8 Coherence", "nowhere")), null);
+      // An import's brief step reads no transcript but the one its estimate planned with (none here),
+      // though Lec8's is in the cache: no call the estimate and the cap did not count.
+      files.delete(lec8Brief);
+      const n4 = s.calls().length;
+      await plugin.writeBriefAfterImport(recB.path, { task: plugin.data.settings.tasks.brief, transcript: null });
+      assert.equal(s.calls().length, n4, "no brief call");
+      assert.match(files.get(lec8Brief), /^ai_part: \{status: "none"\}$/m, "the script part only");
+      // An unexpected error in the brief estimate never stops the prepare step: the script part only, and no brief call at the run.
+      const realFiles = plugin.briefFiles;
+      plugin.briefFiles = () => ({
+        ...realFiles.call(plugin),
+        read: async (p) => {
+          if (p.includes("/Briefs/")) throw new Error("brief disk gone");
+          return realFiles.call(plugin).read(p);
+        },
+      });
+      const odd = await quietWarn(() => plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-4", title: "Lec11 Estimate" }), "CSED311"));
+      plugin.briefFiles = realFiles;
+      assert.deepEqual([odd.brief.state, odd.estimate.brief], ["script", undefined]);
+      const n5 = s.calls().length;
+      await plugin.runCliImport(odd);
+      assert.equal(s.calls().length - n5, odd.estimate.calls, "the estimated calls only");
+      assert.ok(!s.calls().slice(n5).some((c) => c.stdin.includes("[후보 문장]")), "no brief call");
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec11 Estimate brief.md"), /^ai_part: \{status: "none"\}$/m);
+      // Leave the vault and the transcript cache as the tests below expect them.
+      for (const k of [...files.keys()]) if (/Lec(8 Coherence|9 Fail|10 Script|11 Estimate)/.test(k)) files.delete(k);
+      for (const f of readdirSync(cacheRoot, { recursive: true })) if (/local-brief/.test(String(f))) rmSync(join(cacheRoot, String(f)), { force: true });
+      console.log("PASS: brief AI part on import: candidates from the transcript, one call of the brief task counted in the estimate (row and model picker), sections and one_line written, usage in the totals not in the note; unchanged input reused; a failed call leaves the script part and one warning and is tried again; script mode makes no call; 모든 강의 브리프 만들기 builds missing briefs, with 강조점 포함 also the AI part of current briefs without one, counts edited ones and a failed AI part (script part written) on their own; the panel's 강조점까지 만들기; an import makes no brief call its estimate did not plan (no other transcript, none after the estimate failed and fell back to the script part)");
+    }
 
     // Opening the lecture PDF opens the Synced Viewer for the pair (setting on by default).
     {
@@ -1044,6 +1500,48 @@ try {
     assert.equal(rec.pdfPath, undefined);
     assert.ok(!files.has("Alt2Obsidian/CSED423/Lectures/L9.pdf"));
     assert.equal(plugin.vaultLectureNotes().find((v) => v.path === notePath).kind, "transcript");
+    // Its brief: kind transcript, a section map with the heading times.
+    const summaryBrief = files.get(notePath.replace("/Lectures/", "/Briefs/").replace(/\.md$/, " brief.md"));
+    assert.match(summaryBrief, /^kind: "transcript"$/m);
+    assert.match(summaryBrief, /\n## 구간 지도\n- 구간 1 \[00:00~09:5\d\] 구간 1의 요지다\n/);
+    // The panel's chips in a summary note (spec 5.5): a section or a time goes to the section's heading.
+    {
+      const opened = [];
+      const ws = plugin.app.workspace;
+      Object.assign(ws, { openLinkText: async (t) => void opened.push(t), getLeavesOfType: () => [] });
+      const lec = await plugin.chatLecture(notePath);
+      assert.equal(lec.kind, "transcript");
+      // The panel's focus in a summary note (spec 9): a section's summary, memo and the transcript of its heading's range.
+      const clock = (t) => t.split(":").reduce((a, x) => a * 60 + Number(x), 0) * 1000;
+      const heads = [...files.get(notePath).matchAll(/^## ⏱ 구간 (\d+) \[([\d:]+)~([\d:]+)\]$/gm)].map((x) => ({ num: +x[1], startMs: clock(x[2]), endMs: clock(x[3]) }));
+      assert.equal(lec.sectionCount, heads.length);
+      assert.equal(lec.lengthMs, heads[heads.length - 1].endMs, "its length: the last section's end");
+      const sec = await plugin.chatMaterial(lec, 2);
+      assert.deepEqual(sec.spans, [{ slide: 2, startMs: heads[1].startMs, endMs: heads[1].endMs, low: false }]);
+      assert.ok(sec.commentary && !/alt2obs/.test(sec.commentary), "the section's summary without its meta and markers");
+      assert.deepEqual([sec.slideText, sec.image], ["", null]);
+      assert.ok(sec.segments.length > 0 && sec.segments.every((x) => x.startMs >= heads[1].startMs && x.startMs < heads[1].endMs), "the transcript of the range");
+      await plugin.gotoSection(lec, 2);
+      await plugin.gotoTime(lec, 30_000);
+      await plugin.gotoSlide({ ...lec, kind: "slides" }, 3);
+      assert.match(opened[0], new RegExp(`^${notePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}#⏱ 구간 2 \\d{2} \\d{2} \\d{2} \\d{2}$`), "the section's heading, as Obsidian links it");
+      assert.match(opened[1], /#⏱ 구간 1 00 00 /, "a time: the section that holds it");
+      assert.ok(opened[2].endsWith("#📚 슬라이드 3"), "no viewer: the slide's heading");
+      // A slide lecture without its PDF (no viewer): a time goes to the heading of the slide aligned to it.
+      const bare = "Alt2Obsidian/CSED423/Lectures/L10 Bare.md";
+      files.set(bare, '---\nalt_alignment: "1:0-20 2:20-40 3:45-60"\n---\n# L10 Bare\n\n## 📚 슬라이드 1\n\n## 📚 슬라이드 2\n\n## 📚 슬라이드 3\n');
+      const bareLec = { ...lec, notePath: bare, kind: "slides", pdfPath: null };
+      for (const ms of [30_000, 42_000, 600_000]) await plugin.gotoTime(bareLec, ms);
+      assert.deepEqual(opened.slice(3), [`${bare}#📚 슬라이드 2`, `${bare}#📚 슬라이드 2`, `${bare}#📚 슬라이드 3`], "the span that holds the time, else the last one that started before it");
+      files.set(bare, "---\nalt_kind: slides\n---\n# L10 Bare\n");
+      const noticesBefore = notices.length;
+      await plugin.gotoTime(bareLec, 30_000);
+      assert.equal(opened.length, 6, "no alignment: nowhere to go");
+      assert.deepEqual(notices.slice(noticesBefore), ["이 강의에는 슬라이드와 전사의 정렬이 없어 그 시각의 슬라이드를 찾지 못했습니다."], "said in a notice");
+      files.delete(bare);
+      delete ws.openLinkText;
+      delete ws.getLeavesOfType;
+    }
     // Re-import: every section unchanged (2 calls), the memo kept.
     files.set(notePath, note.replace(/(<!-- alt2obs:section:2 hash:[0-9a-f]{8} end -->\n\n> \[!note\] 내 메모\n> )/, "$1구간 2 메모"));
     const again = await plugin.prepareCliImport("", pv, "CSED423", undefined, { withoutPdf: "summary" });

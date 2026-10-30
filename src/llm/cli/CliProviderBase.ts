@@ -1,5 +1,7 @@
 // Shared part of the Claude and Codex CLI providers: temp files for images
-// and schemas, JSON parsing with one retry, usage reporting, cancel.
+// and schemas, JSON parsing with one retry, usage reporting, cancel, and
+// streamed text calls (a provider that cannot stream hands the whole answer
+// over once at the end).
 
 import { unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -10,6 +12,7 @@ import {
   LLMProvider,
   LLMUsage,
   ProviderId,
+  StreamTextOptions,
   TextCallOptions,
 } from "../../types";
 import { UsageTracker } from "../usage";
@@ -30,6 +33,8 @@ export interface CliProviderConfig {
   signal?: AbortSignal;
   /** Remove `workDir` on dispose(). Default true. */
   ownsWorkDir?: boolean;
+  /** Optional flags the CLI's help lists (OPTIONAL_CLI_FEATURES); [] or missing = none. */
+  features?: string[];
 }
 
 export interface CliCall {
@@ -40,6 +45,10 @@ export interface CliCall {
   schema?: Record<string, unknown>;
   images?: ImageInput[];
   signal?: AbortSignal;
+  /** Pieces of the answer as they arrive (only a provider that streams calls it). */
+  onDelta?: (text: string) => void;
+  /** The streamed answer starts over (a new message after some pieces). */
+  onReset?: () => void;
 }
 
 export interface CliCallResult {
@@ -200,6 +209,33 @@ export abstract class CliProviderBase implements LLMProvider {
   async generateText(prompt: string, options?: TextCallOptions): Promise<string> {
     const res = await this.call({ prompt, systemPrompt: options?.systemPrompt, signal: options?.signal });
     return res.text.trim();
+  }
+
+  /**
+   * Text call with the answer in pieces (2.1.0 spec 7.1). When the CLI
+   * cannot stream (Codex, or a Claude CLI without the flag), `onDelta` gets
+   * the whole answer once, after the call.
+   */
+  async streamText(prompt: string, options: StreamTextOptions): Promise<string> {
+    let streamed = false;
+    const res = await this.call({
+      prompt,
+      systemPrompt: options.systemPrompt,
+      images: options.images,
+      signal: options.signal,
+      onDelta: (text) => {
+        if (!text) return;
+        streamed = true;
+        options.onDelta(text);
+      },
+      onReset: () => {
+        streamed = false;
+        options.onReset?.();
+      },
+    });
+    const text = res.text.trim();
+    if (!streamed && text) options.onDelta(text);
+    return text;
   }
 
   /**

@@ -387,14 +387,17 @@ async function deck(n, visualPages = []) {
   const { settings, needsCliDefault, removedFrom, movedTasks } = m.migrateSettings(v1);
   assert.equal(needsCliDefault, true);
   assert.deepEqual(removedFrom, ["gemini"], "1.x users are told Gemini is gone");
-  assert.deepEqual(movedTasks, ["commentary", "concepts", "verification"], "the default table may still move to Codex");
+  assert.deepEqual(movedTasks, ["commentary", "concepts", "verification", "chat", "brief"], "the default table may still move to Codex");
   assert.deepEqual(m.migrateSettings({ provider: "ollama", baseFolderPath: "A" }).removedFrom, ["ollama"]);
   assert.deepEqual([settings.apiKey, settings.geminiModel, settings.baseFolderPath, settings.rateDelayMs], ["k1,k2", "gemma-3-27b-it", "Lectures", 6000], "unknown 1.x keys kept (rollback)");
   assert.deepEqual(settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.deepEqual(settings.tasks.concepts, { provider: "claude-cli", model: "haiku", effort: "low" });
   assert.deepEqual(settings.tasks.verification, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.equal(settings.tasks.alignment.provider, "none");
-  assert.equal(settings.settingsVersion, 3);
+  assert.deepEqual(settings.tasks.chat, { provider: "claude-cli", model: "sonnet", effort: "low" });
+  assert.deepEqual(settings.tasks.brief, { provider: "claude-cli", model: "haiku", effort: "low" });
+  assert.equal(settings.settingsVersion, 4);
+  assert.deepEqual([settings.briefMode, settings.chatTokenCap, settings.chatIncludeMemo], ["ai", 20000, true], "2.1.0 question settings at their defaults");
   assert.equal(settings.generation.batchSize, 8);
   assert.equal(settings.cliTimeoutSec, 300);
   const fresh = m.migrateSettings(undefined);
@@ -425,7 +428,7 @@ async function deck(n, visualPages = []) {
       verification: { provider: "codex-cli", model: "gpt-5.6-luna", effort: "high" },
     },
   });
-  assert.deepEqual([beta.needsCliDefault, beta.removedFrom.sort(), beta.movedTasks], [true, ["gemini", "ollama"], ["commentary", "concepts"]]);
+  assert.deepEqual([beta.needsCliDefault, beta.removedFrom.sort(), beta.movedTasks], [true, ["gemini", "ollama"], ["commentary", "concepts", "chat", "brief"]], "the new tasks follow the commentary task's move");
   assert.deepEqual(beta.settings.tasks.commentary, { provider: "claude-cli", model: "sonnet", effort: "medium" });
   assert.deepEqual(beta.settings.tasks.concepts, { provider: "claude-cli", model: "haiku", effort: "low" });
   assert.deepEqual(beta.settings.tasks.verification, { provider: "codex-cli", model: "gpt-5.6-luna", effort: "high" }, "a CLI task is kept");
@@ -438,6 +441,7 @@ async function deck(n, visualPages = []) {
   m.moveClaudeTasksToCodex(beta.settings, beta.movedTasks);
   assert.deepEqual(beta.settings.tasks.commentary, { provider: "codex-cli", model: "", effort: "medium" });
   assert.deepEqual(beta.settings.tasks.concepts, { provider: "codex-cli", model: "", effort: "low" });
+  assert.deepEqual(beta.settings.tasks.chat, { provider: "codex-cli", model: "", effort: "low" }, "the question task moves with the commentary");
   assert.deepEqual(beta.settings.tasks.alignment, { provider: "claude-cli", model: "haiku", effort: "low" }, "an explicit Claude task stays");
   const mixed = m.migrateSettings({ settingsVersion: 2, tasks: { commentary: { provider: "claude-cli", model: "opus", effort: "high" }, concepts: { provider: "gemini", model: "", effort: "" } } });
   assert.deepEqual(mixed.movedTasks, ["concepts"], "only the task moved off Gemini");
@@ -474,11 +478,52 @@ async function deck(n, visualPages = []) {
   assert.deepEqual(m.defaultTaskSetting("claude-cli", "alignment"), { provider: "claude-cli", model: "haiku", effort: "low" });
   assert.deepEqual(m.defaultTaskSetting("none", "alignment"), { provider: "none", model: "", effort: "" });
 
+  // Version 4 (2.1.0): version 3 data gets the chat and brief tasks with the defaults of the commentary task's CLI, once.
+  const v3 = {
+    settingsVersion: 3,
+    tasks: {
+      commentary: { provider: "codex-cli", model: "gpt-6-luna", effort: "high" },
+      concepts: { provider: "codex-cli", model: "", effort: "" },
+      alignment: { provider: "none", model: "", effort: "" },
+      verification: { provider: "claude-cli", model: "", effort: "" },
+    },
+    briefMode: "bogus",
+    chatTokenCap: 500,
+  };
+  const v4 = m.migrateSettings(v3);
+  assert.deepEqual([v4.needsCliDefault, v4.movedTasks, v4.filled], [false, [], []], "nothing moves, nothing counts as filled (no Notice)");
+  assert.deepEqual(v4.settings.tasks.chat, { provider: "codex-cli", model: "", effort: "low" }, "commentary on Codex: Codex defaults");
+  assert.deepEqual(v4.settings.tasks.brief, { provider: "codex-cli", model: "", effort: "low" });
+  assert.deepEqual(v4.settings.tasks.concepts, { provider: "codex-cli", model: "", effort: "" }, "version 3 empty values stay (the version 3 fill never runs twice)");
+  assert.deepEqual(v4.settings.tasks.verification, { provider: "claude-cli", model: "", effort: "" });
+  assert.deepEqual([v4.settings.settingsVersion, v4.settings.briefMode, v4.settings.chatTokenCap, v4.settings.chatIncludeMemo], [4, "ai", 20000, true], "unknown mode and a cap below 2000 fall back to the defaults");
+  const claudeV3 = m.migrateSettings({ settingsVersion: 3, tasks: { commentary: { provider: "claude-cli", model: "opus", effort: "high" } } }).settings;
+  assert.deepEqual([claudeV3.tasks.chat, claudeV3.tasks.brief], [{ provider: "claude-cli", model: "sonnet", effort: "low" }, { provider: "claude-cli", model: "haiku", effort: "low" }]);
+  // Version 4 data keeps its own choices, "CLI 기본값" included.
+  const own = m.migrateSettings({ ...v4.settings, tasks: { ...v4.settings.tasks, chat: { provider: "claude-cli", model: "", effort: "" } }, briefMode: "script", chatTokenCap: 5000, chatIncludeMemo: false }).settings;
+  assert.deepEqual(own.tasks.chat, { provider: "claude-cli", model: "", effort: "" });
+  assert.deepEqual([own.briefMode, own.chatTokenCap, own.chatIncludeMemo], ["script", 5000, false]);
+  assert.deepEqual([m.TASK_LABELS.chat, m.TASK_LABELS.brief], ["질문", "챗봇 브리프"]);
+  // A table on a preset gets the new tasks the way the preset sets them.
+  const onQuality = m.migrateSettings({ ...v3, tasks: { ...v3.tasks, commentary: { provider: "claude-cli", model: "opus", effort: "high" } }, preset: "quality" }).settings;
+  assert.deepEqual([onQuality.tasks.chat, onQuality.tasks.brief], [{ provider: "claude-cli", model: "sonnet", effort: "medium" }, { provider: "claude-cli", model: "haiku", effort: "low" }], "품질: questions on sonnet medium");
+  const onSaving = m.migrateSettings({ ...v3, preset: "saving" }).settings;
+  assert.deepEqual(onSaving.tasks.chat, { provider: "codex-cli", model: "", effort: "low" }, "절약 on Codex: the Codex default model, low");
+  // A CLI default still pending from older data: chat and brief follow a moved commentary task.
+  assert.deepEqual(m.withTasksSinceV4(["commentary", "concepts"], claudeV3), ["commentary", "concepts", "chat", "brief"]);
+  assert.deepEqual(m.withTasksSinceV4(["concepts"], claudeV3), ["concepts"], "only with the commentary task");
+  assert.deepEqual(m.withTasksSinceV4(["commentary"], v4.settings), ["commentary"], "not tasks already on Codex");
+  // 2.0.0 data (imported from alt-to-obs) goes through the same migration: the same result.
+  const fromAltToObs = m.migrateSettings(JSON.parse(JSON.stringify(v3))).settings;
+  assert.deepEqual(fromAltToObs.tasks, v4.settings.tasks);
+
   m.applyPreset(settings, "saving");
   assert.deepEqual([settings.tasks.commentary.model, settings.tasks.commentary.effort], ["haiku", "low"]);
+  assert.deepEqual([settings.tasks.chat.model, settings.tasks.chat.effort, settings.tasks.brief.model, settings.tasks.brief.effort], ["haiku", "low", "haiku", "low"], "saving: question and brief light");
   m.applyPreset(settings, "quality");
   assert.deepEqual([settings.tasks.commentary.model, settings.tasks.commentary.effort], ["opus", "high"]);
   assert.deepEqual([settings.tasks.concepts.model, settings.tasks.concepts.effort], ["haiku", "low"]);
+  assert.deepEqual([settings.tasks.chat.model, settings.tasks.chat.effort, settings.tasks.brief.model, settings.tasks.brief.effort], ["sonnet", "medium", "haiku", "low"], "quality: question on sonnet medium, brief light");
   settings.tasks.commentary.provider = "codex-cli";
   m.applyPreset(settings, "quality");
   assert.deepEqual([settings.tasks.commentary.model, settings.tasks.commentary.effort], ["", "high"], "Codex keeps its default model");
@@ -607,7 +652,7 @@ async function deck(n, visualPages = []) {
   assert.equal(m.describeDefault("claude-cli", "concepts"), "haiku · effort low");
   assert.equal(m.describeDefault("codex-cli", "commentary"), "CLI 기본 모델 · effort medium");
   assert.equal(m.describeDefault("none", "alignment"), "");
-  console.log("PASS: settings migration (Gemini/Ollama tasks to a CLI, empty model/effort to task defaults once, a 600 transcript cap to 1200), presets, recent models, unsafe values dropped");
+  console.log("PASS: settings migration (Gemini/Ollama tasks to a CLI, empty model/effort to task defaults once, a 600 transcript cap to 1200, version 4 chat and brief tasks and question settings), presets, recent models, unsafe values dropped");
 }
 
 // ---- key diagram selection and embed (spec 4.8) ----

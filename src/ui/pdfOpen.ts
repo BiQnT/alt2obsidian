@@ -2,6 +2,9 @@
 // 뷰어로 열기"). The decision is pure (no obsidian import) so it is unit
 // tested; the plugin wires it to the workspace "file-open" event.
 
+import { isBriefFrontmatter } from "../brief/lectureNote";
+import { hasSectionMarkers } from "../core/sections";
+
 /** Slide markers the plugin and the Skill write (src/core/merge.ts parses them). */
 const SLIDE_MARKER = /<!-- alt2obs:slide:\d+ hash:[0-9a-f]+ start -->/;
 
@@ -13,9 +16,13 @@ export interface NoteLookup {
   read(path: string): Promise<string>;
 }
 
-/** Frontmatter of a lecture note made by the plugin or the Skill (an Alt id, or the plugin as source). */
+/**
+ * Frontmatter of a lecture note made by the plugin or the Skill (an Alt id,
+ * or the plugin as source). A lecture brief (2.1.0) carries the Alt id too
+ * but is not a lecture note.
+ */
 export function isLectureFrontmatter(fm: Record<string, unknown> | null | undefined): boolean {
-  if (!fm) return false;
+  if (!fm || isBriefFrontmatter(fm)) return false;
   const str = (v: unknown) => typeof v === "string" && v.trim() !== "";
   const source = typeof fm.source === "string" ? fm.source : "";
   return str(fm.alt_id) || str(fm.alt_local_id) || source === "alt2obsidian" || source === "alt2obsidian-cc-skill";
@@ -41,6 +48,17 @@ export async function lectureNoteForPdf(pdfPath: string, notes: NoteLookup): Pro
   } catch {
     return null;
   }
+}
+
+/**
+ * A lecture note for the question panel (2.1.0 spec 5.2): lecture
+ * frontmatter, or the plugin's slide or transcript section markers in its
+ * text (`text` null: not read, the frontmatter decides). Never a brief.
+ */
+export function isLectureNote(fm: Record<string, unknown> | null | undefined, text: string | null): boolean {
+  if (isBriefFrontmatter(fm)) return false;
+  if (isLectureFrontmatter(fm)) return true;
+  return text !== null && (SLIDE_MARKER.test(text) || hasSectionMarkers(text));
 }
 
 export interface PdfOpenFacts {

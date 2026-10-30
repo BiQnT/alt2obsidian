@@ -19,12 +19,14 @@ export class Plugin {}
 export class Modal { constructor(app) { this.app = app; } }
 export class FuzzySuggestModal extends Modal { setPlaceholder() {} }
 export class ItemView {}
+export class MarkdownView {}
 // The settings tab (src/ui/SettingsTab.ts) as on Obsidian 1.13 and later:
 // its definitions and controls work without a DOM, and update() is counted.
 export class PluginSettingTab { constructor(app, plugin) { this.app = app; this.plugin = plugin; this.containerEl = { addClass() {} }; this.updates = 0; } update() { this.updates++; } }
 export class Setting {}
 export const requireApiVersion = () => true;
 export class Component {}
+export class Menu { addItem() { return this; } showAtMouseEvent() {} }
 export const MarkdownRenderer = { render: async () => {} };
 export const setIcon = () => {};
 export const editorLivePreviewField = null;

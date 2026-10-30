@@ -5,7 +5,7 @@ import { SyncedViewerView } from "../../src/ui/SyncedViewerView";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { createPdfWorkerUrl } from "../../src/pdf/pdfWorker";
 // @ts-ignore resolved to test/helpers/obsidian-browser-stub.js
-import { TFile } from "obsidian";
+import { Menu, TFile } from "obsidian";
 
 // The worker bundled into main.js, as the plugin sets it (src/main.ts).
 (pdfjsLib as any).GlobalWorkerOptions.workerSrc = createPdfWorkerUrl();
@@ -131,6 +131,108 @@ async function main() {
   await sleep(100);
   log.push({ step: "transcript", text: restored.transcriptPanelEl.textContent });
   await restored.onClose();
+
+  // 2.1.0: the 💬 질문 button after 전사 패널, and the page event the question panel follows.
+  const events: Array<[string, unknown]> = [];
+  let toggles = 0;
+  let chatOpen = true;
+  const chatApp: any = { ...app, workspace: { trigger: (name: string, info: unknown) => events.push([name, info]) } };
+  const withChat: any = new (SyncedViewerView as any)({}, undefined, () => true, undefined, { toggle: () => toggles++, isOpen: () => chatOpen });
+  withChat.app = chatApp;
+  document.getElementById("host")!.replaceChildren(withChat.containerEl);
+  await withChat.onOpen();
+  const buttons = () => Array.from(withChat.toolbarEl.querySelectorAll("button")).map((b: any) => b.textContent);
+  const chatBtn = () => Array.from(withChat.toolbarEl.querySelectorAll("button")).find((b: any) => b.textContent === "💬 질문") as HTMLButtonElement;
+  const beforePair = { slide: withChat.getCurrentSlide(), events: events.length };
+  await withChat.openPair("note.md", "deck.pdf");
+  await sleep(300);
+  withChat.gotoPage(5);
+  withChat.gotoPage(5);
+  chatBtn().click();
+  const active = chatBtn().classList.contains("is-active");
+  chatOpen = false;
+  withChat.setChatActive(false);
+  // The panel's time chip: the aligned slide, the transcript panel open on that line, highlighted.
+  const navTranscript = [
+    { startMs: 5000, endMs: 9000, text: "슬라이드 1 이야기" },
+    { startMs: 35000, endMs: 39000, text: "슬라이드 2 첫 줄" },
+    { startMs: 41000, endMs: 45000, text: "슬라이드 2 둘째 줄" },
+    { startMs: 65000, endMs: 69000, text: "슬라이드 3 이야기" },
+  ];
+  const navApp: any = { ...chatApp, workspace: { trigger: () => {} }, metadataCache: { getFileCache: () => ({ frontmatter: { alt_local_id: "nav", alt_alignment: "1:0-30 2:30-60 3:60-90" } }), on: () => ({}) } };
+  const asked: unknown[] = [];
+  const nav: any = new (SyncedViewerView as any)({}, async () => navTranscript, () => true, undefined, {
+    toggle: () => {},
+    isOpen: () => false,
+    askSlide: (mdPath: string, slide: number) => asked.push(["slide", mdPath, slide]),
+    askSelection: (mdPath: string, slide: number, text: string) => asked.push(["selection", mdPath, slide, text]),
+  });
+  nav.app = navApp;
+  document.getElementById("host")!.appendChild(nav.containerEl);
+  (nav.containerEl.children[1] as HTMLElement).style.height = "760px";
+  await nav.onOpen();
+  await nav.openPair("note.md", "deck.pdf");
+  await sleep(300);
+  await nav.showTranscriptAt(42000);
+  const flashed = nav.transcriptPanelEl.querySelector(".alt-to-obs-seg.is-flash");
+  log.push({ step: "time chip", page: nav.getCurrentSlide(), panelOpen: nav.transcriptOpen, flashed: flashed?.textContent ?? null, ms: flashed?.dataset.ms ?? null });
+  nav.gotoSlide(3);
+  log.push({ step: "slide chip", page: nav.getCurrentSlide() });
+  // The note pane's selection, kept while focus moves to the question panel ("노트에서 선택한 글").
+  const select = async (node: Node, collapsed: boolean) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    if (collapsed) range.collapse(true);
+    const sel = document.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    await sleep(30);
+    return nav.getSelectedText();
+  };
+  const heading = nav.mdPaneEl.querySelector("h2") as HTMLElement;
+  const outside = document.body.createDiv({ text: "패널 글" });
+  const picked = await select(heading, false);
+  const keptOnPanelClick = await select(outside, true);
+  const clearedByOther = await select(outside, false);
+  await select(heading, false);
+  const clearedInPane = await select(heading, true);
+  log.push({ step: "selection", picked, heading: heading.textContent, keptOnPanelClick, clearedByOther, clearedInPane });
+  outside.remove();
+  // Right-click (2.1.0 spec 5.8): a page asks about its slide; a selection in the note asks about the text.
+  const rightClick = (el: Element) => {
+    (Menu as any).shown = null;
+    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    el.dispatchEvent(evt);
+    const menu = (Menu as any).shown;
+    menu?.items[0]?.click();
+    return { items: menu ? menu.items.map((i: any) => i.title) : null, prevented: evt.defaultPrevented };
+  };
+  const onPage = rightClick(nav.pdfPaneEl.querySelector('.alt-to-obs-pdf-page-wrapper[data-page-num="2"] canvas') ?? nav.pdfPaneEl.querySelector('.alt-to-obs-pdf-page-wrapper[data-page-num="2"]'));
+  await select(heading, true);
+  const noSelection = rightClick(heading);
+  await select(heading, false);
+  const withSelection = rightClick(heading);
+  // Its 복사 copies the selection (the menu replaces the default one, which had it).
+  const copied: string[] = [];
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void copied.push(t) } });
+  (Menu as any).shown = null;
+  heading.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  (Menu as any).shown.items.find((i: any) => i.title === "복사").click();
+  await sleep(10);
+  log.push({ step: "right-click", onPage, noSelection, withSelection, asked, current: nav.getCurrentSlide(), copied });
+  await nav.onClose();
+
+  log.push({
+    step: "chat",
+    buttons: buttons(),
+    beforePair,
+    events,
+    slide: withChat.getCurrentSlide(),
+    toggles,
+    activeWhenOpen: active,
+    activeAfter: chatBtn().classList.contains("is-active"),
+  });
+  await withChat.onClose();
   return log;
 }
 main().then(

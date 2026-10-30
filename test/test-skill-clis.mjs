@@ -1,6 +1,7 @@
 /**
  * Test: the Skill CLIs lecture-material.mjs, overview-block.mjs,
- * link-concepts.mjs, prep.mjs, verify-prep.mjs and transcript-note.mjs produce
+ * link-concepts.mjs, prep.mjs, verify-prep.mjs, transcript-note.mjs and
+ * brief.mjs produce
  * exactly what the plugin code produces for the same input. (merge-note.mjs is covered by test-merge.mjs, slide-hashes.mjs
  * by test-slide-hash.mjs.)
  * Run: node test/test-skill-clis.mjs [pdfPath]
@@ -344,6 +345,111 @@ try {
     assert.match(vmd, /\[\[V\/S\/Lectures\/L9#⏱ 구간 \d \d\d \d\d \d\d \d\d\|L9 · 구간 \d\]\] \[\d\d:\d\d\]/);
     assert.throws(() => execFileSync("node", [join(repo, "scripts/phase2/verify-prep.mjs"), "prep", "-", vnote, "--lecture", "L9", "--out", join(dir, "tv2")], { stdio: "pipe" }), "no slides needs the timestamped transcript");
     console.log("PASS: verify-prep.mjs - (no slides) matches the plugin's section verification and links to the section headings");
+  }
+
+  // brief.mjs (spec 10): the plugin's brief code on the vault's files; the AI part answered by the session.
+  {
+    const b = await importTs("test/helpers/brief-entry.ts");
+    const vault = join(dir, "vault");
+    const rel = "Alt2Obsidian/CSED423/Lectures/L5.md";
+    const notePath = join(vault, ...rel.split("/"));
+    mkdirSync(join(vault, ".obsidian"), { recursive: true });
+    mkdirSync(join(vault, "Alt2Obsidian/CSED423/Lectures"), { recursive: true });
+    const slide = (n, body, gist) => [`## 📚 슬라이드 ${n}`, "", `<!-- alt2obs:slide:${n} hash:${String(n).padStart(8, "a")} start -->`, body, "", b.formatSlideMeta(null, gist), `<!-- alt2obs:slide:${n} hash:${String(n).padStart(8, "a")} end -->`, "", "> [!note] 내 메모", "> ", ""].join("\n");
+    const note = (gist2) =>
+      [
+        "---",
+        'title: "L5"',
+        'subject: "CSED423"',
+        'alt_local_id: "local-5"',
+        'alt_created: "2026-09-30"',
+        'alt_alignment: "1:0-600 2:600-1200"',
+        "---",
+        "# L5",
+        "",
+        "<!-- alt2obs:overview start -->",
+        "### 개요",
+        "부동소수점 덧셈의 정밀도를 다룬다.",
+        "<!-- alt2obs:overview end -->",
+        "",
+        // A Templater command in a gist: made safe in the written brief by the same code as the plugin's.
+        slide(1, "부동소수점 표현을 설명한다.", "부동소수점은 <% tp.file.title %> 부호, 지수, 가수로 나뉜다."),
+        slide(2, "작은 수부터 더한다.", gist2),
+      ].join("\n");
+    writeFileSync(notePath, note("작은 수끼리 먼저 더해야 정밀도를 지킨다."));
+    const transcript = [
+      { startMs: 10_000, endMs: 20_000, text: "부동소수점은 부호와 지수와 가수로 나뉩니다." },
+      { startMs: 600_000, endMs: 610_000, text: "이건 시험에 꼭 나옵니다. 작은 수부터 더해야 합니다." },
+      { startMs: 620_000, endMs: 630_000, text: "왜 작은 수부터 더할까요? 큰 수에 더하면 사라지기 때문입니다." },
+      { startMs: null, endMs: null, text: "시각 없는 조각" },
+    ];
+    const bundle = join(dir, "brief-bundle.json");
+    writeFileSync(bundle, JSON.stringify({ title: "L5", transcript }));
+    const memory = new Map([[rel, readFileSync(notePath, "utf8")]]);
+    const store = {
+      read: async (p) => memory.get(p) ?? null,
+      write: async (p, t) => void memory.set(p, t),
+      list: async (folder) => [...memory.keys()].filter((p) => p.startsWith(folder + "/") && !p.slice(folder.length + 1).includes("/")),
+    };
+    const today = new Date().toISOString().slice(0, 10);
+    const briefFile = join(vault, "Alt2Obsidian/CSED423/Briefs/L5 brief.md");
+    const subjectFile = join(vault, "Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md");
+
+    // build without a transcript: the script part, byte for byte the plugin's; the vault found from .obsidian.
+    const built = JSON.parse(cli("brief", ["build", "--note", notePath]));
+    assert.deepEqual(built, { brief: briefFile, result: "written", ai: null, aiReason: "no transcript" });
+    await b.updateLectureBrief(store, rel, { today });
+    assert.equal(readFileSync(briefFile, "utf8"), memory.get("Alt2Obsidian/CSED423/Briefs/L5 brief.md"), "the same brief as the plugin's");
+    assert.equal(readFileSync(subjectFile, "utf8"), memory.get("Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md"), "and the same subject brief");
+    assert.match(readFileSync(briefFile, "utf8"), /^lecture: "Alt2Obsidian\/CSED423\/Lectures\/L5\.md"$/m, "the note's vault path");
+    assert.ok(!readFileSync(briefFile, "utf8").includes("<%") && readFileSync(briefFile, "utf8").includes("<\u200B% tp.file.title"), "the gist's Templater command broken");
+
+    // build with the bundle: the AI part's input as the plugin builds it, beside the candidates (0600).
+    const out = join(dir, "brief-work", "cands.json");
+    const withAi = JSON.parse(cli("brief", ["build", "--note", rel, "--vault", vault, "--transcript", bundle, "--out-candidates", out]));
+    assert.equal(withAi.result, "same", "the brief is up to date: not written again");
+    const input = await b.aiInputFor(await b.buildBriefScript(rel, readFileSync(notePath, "utf8")), b.timedTranscript(transcript));
+    assert.deepEqual(withAi.ai, { candidates: out, system: join(dir, "brief-work", "cands.system.md"), user: join(dir, "brief-work", "cands.user.md"), count: input.candidates.length });
+    assert.equal(readFileSync(withAi.ai.system, "utf8"), `${input.system}\n\nJSON schema: ${JSON.stringify(b.BRIEF_AI_SCHEMA)}\n`, "the plugin's instructions, with the schema for the session");
+    assert.equal(readFileSync(withAi.ai.user, "utf8"), `${input.user}\n`, "the plugin's user prompt");
+    const saved = JSON.parse(readFileSync(out, "utf8"));
+    assert.deepEqual([saved.note, saved.hash, saved.candidateText, saved.lengthMs, saved.units], [rel, input.hash, input.candidateText, input.lengthMs, input.units]);
+    for (const f of [out, withAi.ai.system, withAi.ai.user]) assert.equal(statSync(f).mode & 0o777, 0o600, f);
+
+    // merge-ai: the session's answer checked like the plugin's, the AI sections written, ai_hash the plugin's.
+    const answer = {
+      one_line: "부동소수점 덧셈의 순서와 정밀도를 다룬다",
+      emphasis: [{ t: "10:00", slide: 2, text: "작은 수부터 더해야 정밀도를 지킨다고 강조했다" }, { t: "99:00", slide: 2, text: "강의 밖의 시각" }],
+      qa: [{ t: "10:20", q: "왜 작은 수부터 더하나?", a: "큰 수에 더하면 작은 수가 사라진다" }],
+      pitfalls: ["덧셈 순서가 결과를 바꾼다는 점", "`js: dv.x` 와 <% tp.file.title %> 를 헷갈린다"],
+    };
+    // Dataview's own prefixes, read from its settings in the vault like the plugin reads them from the app (a non-string ignored).
+    mkdirSync(join(vault, ".obsidian/plugins/dataview"), { recursive: true });
+    writeFileSync(join(vault, ".obsidian/plugins/dataview/data.json"), JSON.stringify({ inlineQueryPrefix: "js:", inlineJsQueryPrefix: 5 }));
+    const answerFile = join(dir, "brief-work", "answer.json");
+    writeFileSync(answerFile, "```json\n" + JSON.stringify(answer) + "\n```\n");
+    const merged = JSON.parse(cli("brief", ["merge-ai", "--note", notePath, "--ai", answerFile, "--candidates", out]));
+    assert.deepEqual(merged, { brief: briefFile, result: "written", kept: { emphasis: 1, qa: 1, pitfalls: 2, oneLine: true } }, "the time past the lecture dropped");
+    const zw = String.fromCharCode(0x200b);
+    assert.ok(readFileSync(briefFile, "utf8").includes(`- \`${zw}js: dv.x\` 와 <${zw}% tp.file.title %> 를 헷갈린다`), "Dataview's own prefix and a Templater command broken");
+    await b.updateLectureBrief(store, rel, { today, queryPrefixes: ["js:"], ai: { transcript: b.timedTranscript(transcript), run: async (_p, validate) => ({ ai: validate(answer), model: "", input: 0, output: 0 }) } });
+    const plugin = memory.get("Alt2Obsidian/CSED423/Briefs/L5 brief.md");
+    const skill = readFileSync(briefFile, "utf8");
+    assert.equal(b.bodyOf(skill), b.bodyOf(plugin), "the same body as the plugin's AI part");
+    assert.deepEqual([b.aiOf(skill).hash, b.aiOf(skill).oneLine], [b.aiOf(plugin).hash, b.aiOf(plugin).oneLine]);
+    assert.equal(b.aiOf(skill).part, '{status: "ok"}', "the session's tokens are unknown: the status only");
+    assert.match(readFileSync(subjectFile, "utf8"), /^- L5 \(2026-09-30, 슬라이드 2장\): 부동소수점 덧셈의 순서와 정밀도를 다룬다$/m, "the subject brief takes its one line");
+    // Built again from the same transcript: nothing to ask the session.
+    assert.deepEqual(JSON.parse(cli("brief", ["build", "--note", notePath, "--transcript", bundle, "--out-candidates", out])).aiReason, "same");
+    // The note changed since build: merge-ai refuses (build again first); a brief the user edited is kept.
+    writeFileSync(notePath, note("다른 요지다."));
+    assert.throws(() => execFileSync("node", [join(repo, "scripts/phase2/brief.mjs"), "merge-ai", "--note", notePath, "--ai", answerFile, "--candidates", out], { stdio: "pipe" }), /the note changed since build/);
+    writeFileSync(briefFile, readFileSync(briefFile, "utf8").replace("## 개요", "## 개요\n내 줄"));
+    const edited = JSON.parse(cli("brief", ["build", "--note", notePath, "--transcript", bundle, "--out-candidates", out]));
+    assert.deepEqual([edited.result, edited.ai, edited.aiReason], ["edited", null, "edited"]);
+    assert.match(readFileSync(briefFile, "utf8"), /## 개요\n내 줄/);
+    assert.throws(() => execFileSync("node", [join(repo, "scripts/phase2/brief.mjs"), "build", "--note", join(dir, "nowhere.md")], { stdio: "pipe" }), /no vault above the note/);
+    console.log("PASS: brief.mjs build writes the plugin's brief and subject brief (vault found from .obsidian) and the AI prompt the plugin renders; merge-ai checks the session's answer with the plugin's validator and writes the plugin's AI sections; no prompt for an AI part from the same input or an edited brief; a changed note is refused");
   }
 
   const deck = optionalRealDeck();

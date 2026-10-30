@@ -35,6 +35,12 @@ export function formatDate(date?: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** YYYY-MM-DD in this computer's time zone, for dates the user reads (formatDate is UTC: the day before in KST until 09:00). */
+export function formatLocalDate(date?: Date): string {
+  const d = date || new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function isAltUrl(url: string): boolean {
   try {
     const parsed = new URL(url);

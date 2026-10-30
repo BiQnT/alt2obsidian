@@ -9,8 +9,18 @@
 //   FAKE_CLI_MODE     comma-separated: ok | drop:<page> | dropalways:<page> |
 //                     short:<page> | hang | limit | badjson | textlimit |
 //                     crash | loggedout | hangbig:<n> (hang when the batch has more than n slides) |
-//                     dropsection:<n> | dropsectionalways:<n> (transcript section summaries)
+//                     dropsection:<n> | dropsectionalways:<n> (transcript section summaries) |
+//                     streamhang (claude with --include-partial-messages: two text pieces, then hang) |
+//                     streamretry (two text pieces of a first try, then a new message_start and the answer) |
+//                     brieffail (the lecture brief's AI call crashes) | briefcopy (its answer also copies a
+//                     candidate, names a slide past the deck and a time past the lecture)
 //   FAKE_CLI_PIDFILE  (hang) the fake and its child write their pids here
+//   FAKE_CLI_TEXT     the answer of a call without a schema (default: a short overview)
+//   FAKE_CLAUDE_NO_PARTIAL=1  `claude --help` does not list --include-partial-messages
+//
+// claude with --include-partial-messages prints the answer as stream_event
+// text_delta lines (a few characters each, the format of Claude Code
+// 2.1.312) before the usual assistant and result events.
 
 "use strict";
 const fs = require("fs");
@@ -94,6 +104,22 @@ function answer(stdin, schema) {
       ],
       tags: ["cache", "memory"],
     };
+  } else if (schema && schema.properties && schema.properties.emphasis) {
+    // The lecture brief's AI part: one emphasis per candidate stretch (two at most), a question, a pitfall.
+    const cands = [...stdin.matchAll(/^\[(\d+:\d{2}(?::\d{2})?)\](?: \(슬라이드 (\d+)\))? (.*)$/gm)];
+    result = {
+      one_line: "캐시와 캐시 일관성을 다루는 강의다",
+      emphasis: cands.slice(0, 2).map((c, i) => ({ t: c[1], slide: c[2] ? Number(c[2]) : null, text: `강조점 ${i + 1}: 교수님이 짚은 내용을 바꿔 쓴 문장이다` })),
+      qa: cands.length > 0 ? [{ t: cands[0][1], q: "캐시는 왜 빠른가?", a: "프로세서 가까이 있는 작은 메모리라서 빠르다." }] : [],
+      pitfalls: ["캐시 일관성과 캐시 적중률을 헷갈리기 쉽다."],
+    };
+    // A pitfall with an inline query under Dataview's own prefix ("js:") and a Templater command.
+    if (ms.includes("briefquery")) result.pitfalls.push("`js: dv.pages().length` 와 <% tp.file.title %> 를 헷갈린다");
+    if (ms.includes("briefcopy") && cands.length > 0) {
+      result.emphasis.push({ t: cands[0][1], slide: 999, text: "슬라이드 번호가 덱 밖이다" });
+      result.emphasis.push({ t: "9:59:59", slide: null, text: "강의 길이를 넘는 시각이다" });
+      result.emphasis.push({ t: cands[0][1], slide: null, text: cands[0][3].slice(0, 40) });
+    }
   } else if (schema && schema.properties && schema.properties.parts) {
     // Alignment check: move every part to its first candidate that is not the current guess.
     const parts = [];
@@ -124,7 +150,7 @@ function answer(stdin, schema) {
   } else if (schema) {
     result = { ok: true };
   } else {
-    result = `## 개요\n- 요약 텍스트 (호출 ${state.calls})`;
+    result = process.env.FAKE_CLI_TEXT ?? `## 개요\n- 요약 텍스트 (호출 ${state.calls})`;
   }
   writeState(state);
   const inputTokens = Math.ceil(stdin.length / 3);
@@ -155,7 +181,7 @@ function log(entry) {
 
 // ---- claude ----
 
-const CLAUDE_BOOL = new Set(["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands"]);
+const CLAUDE_BOOL = new Set(["-p", "--verbose", "--no-session-persistence", "--strict-mcp-config", "--safe-mode", "--disable-slash-commands", "--include-partial-messages"]);
 const CLAUDE_VALUE = new Set(["--input-format", "--output-format", "--setting-sources", "--system-prompt", "--tools", "--model", "--effort", "--permission-mode", "--allowedTools", "--disallowedTools", "--settings", "--mcp-config"]);
 
 // Notion MCP (FAKE_NOTION_MCP=connected|connector|failed|none, default none).
@@ -242,7 +268,8 @@ function runClaude() {
       "Usage: claude [options]\n  -p, --print\n  --safe-mode\n  --setting-sources <sources>\n  --strict-mcp-config\n  --mcp-config <configs...>\n" +
         "  --disable-slash-commands\n  --no-session-persistence\n  --system-prompt <prompt>\n  --effort <level>\n  --model <model>\n  --tools <tools...>\n" +
         '  --permission-mode <mode> (choices: "acceptEdits", "dontAsk", "plan")\n  --input-format <format> "text", "stream-json"\n  --output-format <format>\n' +
-        "  --settings <file-or-json>\n  --allowedTools, --allowed-tools <tools...>\n  --disallowedTools, --disallowed-tools <tools...>\n  --verbose\n"
+        "  --settings <file-or-json>\n  --allowedTools, --allowed-tools <tools...>\n  --disallowedTools, --disallowed-tools <tools...>\n  --verbose\n" +
+        (process.env.FAKE_CLAUDE_NO_PARTIAL === "1" ? "" : "  --include-partial-messages  Include partial message chunks as they arrive\n")
     );
     return;
   }
@@ -315,10 +342,11 @@ function runClaude() {
     emit({ type: "result", subtype: "success", is_error: true, result: "Not logged in. Please run /login" });
     process.exit(1);
   }
-  if (ms.includes("crash")) {
+  if (ms.includes("crash") || (ms.includes("brieffail") && schema && schema.properties && schema.properties.emphasis)) {
     process.stderr.write("internal error\n");
     process.exit(3);
   }
+  if (flags["--include-partial-messages"] && (notion || schema)) fail("--include-partial-messages is only for streamed text calls");
   const a = answer(stdin, schema);
   if (notion) for (const ev of notionEvents(flags["--allowedTools"], stdin)) emit(ev);
   const text = notion
@@ -330,6 +358,29 @@ function runClaude() {
     : typeof a.result === "string"
       ? a.result
       : "```json\n" + JSON.stringify(a.result) + "\n```";
+  if (flags["--include-partial-messages"]) {
+    const stream = (event) => emit({ type: "stream_event", event, session_id: "fake", parent_tool_use_id: null, uuid: "u", api_message_id: "m" });
+    stream({ type: "message_start", message: { model: modelName } });
+    stream({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } });
+    stream({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "생각 중" } });
+    stream({ type: "content_block_stop", index: 0 });
+    stream({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } });
+    if (ms.includes("streamretry")) {
+      for (const piece of ["첫 시도 ", "조각"]) stream({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: piece } });
+      stream({ type: "message_start", message: { model: modelName } });
+      stream({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+    }
+    const chars = Array.from(text);
+    const pieces = [];
+    for (let i = 0; i < chars.length; i += 4) pieces.push(chars.slice(i, i + 4).join(""));
+    for (let i = 0; i < pieces.length; i++) {
+      if (ms.includes("streamhang") && i === 2) return hang();
+      stream({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: pieces[i] } });
+    }
+    stream({ type: "content_block_stop", index: 1 });
+    stream({ type: "message_delta", delta: { stop_reason: "end_turn" } });
+    stream({ type: "message_stop" });
+  }
   emit({ type: "assistant", message: { content: [{ type: "text", text }] } });
   emit({
     type: "result",
@@ -406,7 +457,7 @@ function runCodex() {
     emit({ type: "turn.failed", error: { message: "You've hit your usage limit. Try again later." } });
     process.exit(1);
   }
-  if (ms.includes("crash")) {
+  if (ms.includes("crash") || (ms.includes("brieffail") && schema && schema.properties && schema.properties.emphasis)) {
     process.stderr.write("internal error\n");
     process.exit(3);
   }

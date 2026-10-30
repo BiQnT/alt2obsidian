@@ -31,7 +31,8 @@ async function main() {
     noteDetails: async (id: string) => (calls.details.push(id), { hasSlides: true, slidesTitle: id, pdfPath: `/alt/${id}.pdf`, transcriptMinutes: 100, timestamps: true }),
   };
   const prepared = {
-    estimate: { calls: 4, inputTokens: 120000, outputTokens: 30000, imagesSent: 3, slidesTotal: 30, slidesGenerated: 0, slidesTemplated: 0, slidesDeduped: 0, slidesReused: 30 },
+    estimate: { calls: 4, inputTokens: 120000, outputTokens: 30000, imagesSent: 3, slidesTotal: 30, slidesGenerated: 0, slidesTemplated: 0, slidesDeduped: 0, slidesReused: 30, brief: { calls: 1, inputTokens: 2400, outputTokens: 624 } },
+    brief: { state: "call" },
     plan: { transcriptChars: { before: 0, after: 0 }, scanned: false },
     transcriptPlan: null,
     notePath: L5,
@@ -44,7 +45,7 @@ async function main() {
     overCap: false,
   };
   const plugin: any = {
-    data: { settings: { tasks: { commentary: task, concepts: task, verification: task, alignment: { provider: "none", model: "", effort: "" } }, recentModels: {}, generation: { tokenCapPerLecture: 1000000 } }, recentImports: [] },
+    data: { settings: { tasks: { commentary: task, concepts: task, verification: task, brief: { provider: "claude-cli", model: "haiku", effort: "low" }, alignment: { provider: "none", model: "", effort: "" } }, recentModels: {}, generation: { tokenCapPerLecture: 1000000 } }, recentImports: [] },
     vaultManager: { getKnownSubjects: () => [] },
     notionFetchModel: () => ({ model: "haiku", effort: "low" }),
     modelCatalog: () => ({ claude: [], codex: { models: [], efforts: {} }, resolved: {} }),
@@ -65,7 +66,7 @@ async function main() {
     slideChanges: async (path: string) => (calls.compared.push(path), 0),
     previewLocal: async () => ({ altData: { title: "L5" }, bundle: { warnings: [] } }),
     prepareCliImport: async () => prepared,
-    runTask: () => task,
+    runTask: (_p: unknown, id: string) => (id === "brief" ? { provider: "claude-cli", model: "haiku", effort: "low" } : task),
     prepareVerification: async () => ({
       estimate: { claims: 12, judged: 10, inputTokens: 40000, outputTokens: 6000, contextEvidence: 0, unmatched: 0, likelyTrue: 0, uncoveredSlides: 2, calls: 2, unmatchedWarning: false },
       task,
@@ -129,6 +130,7 @@ async function main() {
     verifyInputs: visible(verifyPane),
   });
   log.push(where("local"));
+  log.push({ step: "brief row", row: panel.querySelector(".alt-to-obs-brief-row")?.textContent, picker: !!panel.querySelector('select[aria-label="브리프 모델 모델"]') });
   tab("노트 검증");
   log.push(where("verify"));
   // The verification estimate of the 노트 검증 tab.

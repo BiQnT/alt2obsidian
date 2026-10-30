@@ -26,6 +26,8 @@ The interface and the generated notes are in Korean, with academic terms kept in
 - **Commentary for every slide.** Your Claude Code or Codex CLI writes a section per slide from the slide text (plus the image, for diagram slides) and that slide's part of the transcript. Cover, contents and closing slides and repeated animation steps need no model call, and key diagrams can be saved as images into the note.
 - **Transcript matched to slides.** For lectures from the Alt app, a script matches the timestamped transcript to the slides, with no tokens spent, so each slide gets what was said while it was on screen.
 - **Synced Viewer.** The slide PDF and the note side by side, scrolling together. A transcript panel shows the current slide's part of the transcript with `[mm:ss]` times. Opening a lecture PDF opens the viewer.
+- **Ask about the lecture.** A question panel next to the Synced Viewer (**💬 질문**) answers questions about the slide you are on, from that slide's text, commentary, transcript and your memo plus a short brief of the lecture, so the whole lecture is never sent. Claude's answer appears as it is written, and its `[슬라이드 N]` and `[mm:ss]` marks take you to the slide or to that moment of the transcript. Add other slides, another lecture or text you selected; save an answer to the slide's memo, or the conversation as a note.
+- **Lecture briefs.** Each import also writes a short brief of the lecture for the question panel: overview, flow, one line per slide with its time in the recording, key concepts. The script builds it from the note without tokens; one call of a light model can add what the professor stressed, questions asked in class and points easy to confuse. A subject brief lists the subject's lectures, one line each.
 - **Lectures without slides.** A lecture with only a recording becomes a summary note with a section for about every 12 minutes, each point stamped with its `[mm:ss]` time. Or attach the lecture PDF and import it as a slide lecture.
 - **Check your own notes.** Compare notes you wrote (a file in the vault, pasted text, or a Notion page through your Notion MCP) with the slides and the transcript. Each claim gets a verdict with links to its evidence, and slides your notes left out are listed.
 - **Memo-safe re-import.** Your `> [!note] 내 메모` (my memo) callouts and anything you write outside the managed blocks stay when you import again, and memos follow their slide when slides are added, removed or reordered. Only changed slides are generated again.
@@ -75,16 +77,26 @@ Alt2Obs has no telemetry, analytics, ads or update checks. This is everything it
 
 ### Network use
 
-- **Anthropic (Claude Code) or OpenAI (Codex).** Commentary, summaries, concept extraction, the optional alignment check and note checking run your own CLI (`claude` or `codex`) as a child process. Each call sends its material to Anthropic or OpenAI under your account. The plugin itself sends nothing to these services. A call can include:
+- **Anthropic (Claude Code) or OpenAI (Codex).** Commentary, summaries, concept extraction, the optional alignment check, note checking, questions in the question panel, the AI part of lecture briefs and shortening an answer for a memo run your own CLI (`claude` or `codex`) as a child process. Each call sends its material to Anthropic or OpenAI under your account. The plugin itself sends nothing to these services. A call can include:
   - slide text, and slide images for diagram slides;
   - transcript excerpts, and Alt's summary and memo;
   - the lecture title and subject, concept names, and the tags already used by notes in that subject folder (including notes you wrote yourself);
-  - for note checking, the sentences of your note with their evidence.
+  - for note checking, the sentences of your note with their evidence;
+  - for a question in the question panel: the panel's instructions, the lecture brief (and the subject brief or other lectures' briefs when you add them), the text of the slides you send (the page as an image when it has no text, or when you add it so), their commentary, your memo, their part of the transcript, the text you selected, the earlier questions and answers about that lecture, and your question;
+  - for the AI part of a lecture brief: the lecture title, subject and length, each slide's one-line gist, and transcript sentences a script picked (around words such as 시험 and 중요, and questions), at most 3,000 characters;
+  - for **세 줄로 줄여서** (cut to three lines) when saving an answer to a memo: that question and answer, sent to the model of the **챗봇 브리프** (chatbot brief) task.
 - **Notion (optional, note checking).** Fetching a Notion page is one Claude Code call that may use only the fetch tool of your Notion MCP server. Claude Code contacts Notion for the page and Anthropic for the model turn. The page URL and the page content reach Anthropic; the content arrives as that call's tool result.
 - **Other MCP servers (Notion only).** Before the fetch, `claude mcp list` checks the connection of every MCP server configured in Claude Code; this can start local servers and contact remote ones. When the Notion server cannot be passed to the call on its own (a claude.ai connector, or a server that is not a plain `https` address without headers), the fetch call also starts your other MCP servers, with their tools blocked.
 - **altalt.io and the slide link (optional, share link import).** The plugin downloads the Alt share page from altalt.io. It then downloads the slide PDF from the slide link on that page, as given. Today that link points to Alt's Cloudflare R2 storage (`*.r2.cloudflarestorage.com`); older Alt notes may point to Alt's earlier Supabase storage (`*.supabase.co`).
 - **Alt's local API** is reached on 127.0.0.1, on this computer only.
 - The plugin makes no other connections. Claude Code and Codex may also contact their own services as their own settings allow.
+
+### What it writes in the vault
+
+- Imports write the lecture note, its concept notes, key diagram images and the slide PDF into the save folder; note checking writes a verification note next to them.
+- **Lecture briefs:** `<subject>/Briefs/<lecture> brief.md` and `<subject>/Briefs/<subject> subject brief.md`, at import (unless **가져올 때 챗봇 브리프 만들기** is off) and by the brief commands and buttons. A brief holds no transcript text: its emphasis lines are rephrased, with their times, and a line that copies the transcript is dropped.
+- **The question panel** writes only when you ask it to: **대화 노트로 저장** or **대화 저장** writes the conversation to `<subject>/Chats/<date> <lecture> <question>.md`, and **메모에 저장** adds an answer to the slide's `> [!note] 내 메모` callout. Otherwise conversations are kept in memory only: closing the panel keeps them, disabling the plugin or quitting Obsidian drops them.
+- Model text it writes (a memo, a chat note, a brief's AI lines) is made safe first: HTML, image embeds, Dataview inline queries (with the prefixes set in Dataview too), comments and Templater commands (`<% %>`) in it do not run.
 
 ### Accounts and payment
 
@@ -99,7 +111,7 @@ The plugin is free. Its main features need an LLM CLI login: a Claude account wi
 - **Alt's port.** Before the token is sent to Alt's local API, the plugin checks that the program listening there is Alt, run by you: `lsof` and `ps` (macOS), `/proc` (Linux), `netstat` and `tasklist` (Windows).
 - **Finding the CLIs.** The plugin runs your login shell as `$SHELL -ilc 'command -v claude'` (or `codex`; `/bin/zsh` when `$SHELL` is unset), which loads your shell startup files such as `.zshrc`. On Windows it runs `where`. It also looks in common install folders.
 - **Checking the CLIs** (no model calls): `--version`, `--help`, `claude auth status`, `codex login status`, and for Notion `claude mcp list` and `claude mcp get`.
-- **Running the CLIs.** Each call runs in a temp folder that is removed afterwards. On Windows an npm-installed CLI is started with `node.exe`, and a cancelled call is ended with `taskkill`.
+- **Running the CLIs.** Each call runs in a temp folder that is removed afterwards. A question in the question panel sends the earlier conversation itself and starts no CLI session (`--no-session-persistence` for Claude Code, `--ephemeral` for Codex), so the CLIs keep no copy of it. On Windows an npm-installed CLI is started with `node.exe`, and a cancelled call is ended with `taskkill`.
 - **What the CLIs may do.** Claude Code runs with all its tools turned off; the only exception is the Notion fetch call, which may use the Notion fetch tool and nothing else. Codex runs in its read-only sandbox, which can still read files your account can read. The prompt tells it to use only the material it is given, but choose Codex only if you accept that.
 - **Read for the model lists:** `~/.claude/cache/model-catalog/*-cc.json` (or under `$CLAUDE_CONFIG_DIR`) and `~/.codex/models_cache.json` (or under `$CODEX_HOME`).
 - **Read for the Notion MCP:** `~/.claude/plugins/installed_plugins.json` (or, without it, a walk of `~/.claude/plugins`), and a Claude Code plugin's `.mcp.json` and `.claude-plugin/plugin.json`. Claude Code may keep a large fetch result as a file under `~/.claude/projects/`; the plugin reads it but does not remove it.

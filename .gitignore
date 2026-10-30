@@ -1,5 +1,7 @@
 # Build output
 main.js
+# The PDF.js worker that older builds copied next to main.js (now bundled into it)
+/pdf.worker.min.mjs
 
 # Dependencies
 node_modules/

@@ -28,6 +28,14 @@ async function sha1Hex(input: string): Promise<string> {
 }
 
 /**
+ * The first 8 hex digits of a text's SHA-1: the slide hash rule for any
+ * text (the lecture brief's source, AI and body hashes, 2.1.0 spec 4.3).
+ */
+export async function shortHash(text: string): Promise<string> {
+  return (await sha1Hex(text)).slice(0, 8);
+}
+
+/**
  * 8-hex slide hash for 1-based `page`. `pageText` null means the text layer
  * could not be read; it is hashed like an image-only page.
  */

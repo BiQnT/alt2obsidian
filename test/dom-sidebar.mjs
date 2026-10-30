@@ -150,3 +150,7 @@ assert.deepEqual(at("url"), { importPanel: true, importText: true, verifyEstimat
 assert.deepEqual(at("local again"), at("local"), "back in the list tab as it was");
 assert.deepEqual(at("cancelled"), { importPanel: false }, "the pending choice survived the tab switches: 취소 ends the import");
 console.log("PASS: sidebar tabs: the import estimate panel shows in the import tabs only and keeps its pending choice; the verification estimate stays in 노트 검증");
+const briefRow = steps.find((x) => x.step === "brief row");
+assert.equal(briefRow.row, "챗봇 브리프: 강조점 호출 1회 · 입력 약 2.4k · 출력 약 624", "the estimate's 챗봇 브리프 row (2.1.0 spec 4.5)");
+assert.equal(briefRow.picker, true, "a 브리프 모델 picker when the brief makes a call");
+console.log("PASS: the import estimate shows the 챗봇 브리프 row and its model picker");
