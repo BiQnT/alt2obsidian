@@ -307,117 +307,158 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   console.log("PASS: a run belongs to the thread store: it streams into the turn with or without a listener, a reset starts the answer over, stop keeps the part, errors land in the turn, one run per thread, unload stops it and refuses new runs");
 }
 
-// ---- model output made safe before rendering (review L6) ----
+// ---- model output made safe before rendering (review L6): context-free transforms ----
 {
-  const answer = [
-    "답이다 [슬라이드 3].",
-    "```dataviewjs",
-    "dv.paragraph(app.vault.getFiles().length)",
-    "```",
-    "~~~ Dataview",
-    "LIST FROM #x",
-    "~~~",
-    "```python",
-    "print('![x](http://ok.example/a.png)')",
-    "```",
-    "인라인 `= this.file.name` 과 `$= dv.pages().length`, 그냥 `a = 1`.",
-    "그림 ![도표](https://evil.example/t.png \"t\") 와 ![](http://e.example/x.gif), 볼트 그림 ![[d.png]].",
-    '<img src="https://evil.example/p.png"> <iframe src="https://e.example"></iframe>',
-    "````js-engine",
-    "```",
-    "return 1",
-    "````",
-  ].join("\n");
-  const safe = m.safeAnswerMarkdown(answer).split("\n");
-  assert.equal(safe[1], "```text", "dataviewjs becomes a plain text fence");
-  assert.equal(safe[2], "dv.paragraph(app.vault.getFiles().length)", "its lines stay");
-  assert.equal(safe[4], "~~~text", "a tilde fence, any case");
-  assert.equal(safe[7], "```python", "other languages stay");
-  assert.equal(safe[8], "print('![x](http://ok.example/a.png)')", "nothing changes inside code");
   const zw = String.fromCharCode(0x200b);
-  assert.equal(safe[10], `인라인 \`${zw}= this.file.name\` 과 \`${zw}$= dv.pages().length\`, 그냥 \`a = 1\`.`, "inline Dataview queries defused, other code left");
-  assert.equal(safe[11], "그림 [도표](https://evil.example/t.png) 와 [http://e.example/x.gif](http://e.example/x.gif), 볼트 그림 ![[d.png]].", "remote images become links; vault embeds stay");
-  assert.equal(safe[12], '&lt;img src="https://evil.example/p.png"> &lt;iframe src="https://e.example">&lt;/iframe>', "raw media HTML shown as text");
-  assert.deepEqual(safe.slice(13), ["````text", "```", "return 1", "````"], "a longer fence keeps its inner backticks");
-  assert.equal(m.safeAnswerMarkdown("보통 답이다. **굵게** [슬라이드 2]"), "보통 답이다. **굵게** [슬라이드 2]", "plain answers unchanged");
-  // The reviewer's bypasses: fences inside quotes, callouts, lists and indents; any unknown language; raw <code>; reference images; CSS url().
-  const bypass = [
-    "> ```dataviewjs",
-    "> dv.paragraph(1)",
-    "> ```",
-    "> [!note] 콜아웃",
-    "> > ~~~DataviewJS",
-    "> > x",
-    "> > ~~~",
-    "- ```dataviewjs",
-    "  dv.paragraph(2)",
-    "  ```",
-    "    ```dataview",
-    "    LIST",
-    "    ```",
-    "```someplugin-runner",
-    "run()",
+  const nbsp = String.fromCharCode(0xa0);
+  const bare = (s) => s.split(zw).join("");
+  const safe = (s) => m.safeAnswerMarkdown(s);
+  // What a line's text is after its containers (quote marks, list markers, white space).
+  const CONTAINERS = /^(?:[^\S\n]*(?:>|(?:[-*+]|\d{1,9}[.)])(?=\s|$)))*[^\S\n]*/;
+  /** The output's invariants, which need no Markdown parser. */
+  const invariants = (name, input) => {
+    const out = safe(input);
+    assert.ok(!/<[A-Za-z!/?]/.test(out), `${name}: no < that opens a tag, comment or declaration (math has \\lt instead)`);
+    assert.ok(!out.includes("!["), `${name}: no ![`);
+    assert.ok(!/`\s*\$?=/.test(out), `${name}: no backtick followed by = or $= after white space`);
+    for (const line of out.split("\n")) {
+      const text = line.slice(line.match(CONTAINERS)[0].length);
+      assert.ok(!/^\$?=/.test(text), `${name}: no line whose text opens with = or $=: ${JSON.stringify(line)}`);
+      const fence = text.match(/^(`{3,}|~{3,})(.*)$/);
+      if (fence && !(fence[1][0] === "`" && fence[2].includes("`"))) {
+        const lang = fence[2].trim().split(/\s+/)[0] ?? "";
+        assert.ok(lang === "" || m.SAFE_LANGUAGES.has(lang.toLowerCase()), `${name}: fence language ${lang} is on the allow-list`);
+      }
+    }
+    // Nothing else changes: each line only gains zero-width spaces (\\lt for < in math), or is a fence relabeled `text`.
+    const inLines = input.replace(/\r\n?/g, "\n").split("\n");
+    const outLines = out.split("\n");
+    assert.equal(outLines.length, inLines.length, `${name}: no line added or removed`);
+    for (const [i, line] of outLines.entries()) {
+      const kept = bare(line).split("\\lt ").join("<") === inLines[i];
+      const relabeled = /(`{3,}|~{3,})text$/.test(line) && inLines[i].startsWith(line.slice(0, -4));
+      assert.ok(kept || relabeled, `${name}: line ${i} keeps its text: ${JSON.stringify(line)}`);
+    }
+    return out;
+  };
+  // Every input of the reviewer's reports (bypasses of the structure-guessing sanitizer), and the earlier ones.
+  const evil = '<img src="https://evil.example/x.png">';
+  const query = "`$= dv.paragraph(1)`";
+  const cases = {
+    known: "    ```\n```dataviewjs\ndv.paragraph(1)\n```",
+    crlf: "```dataviewjs\r\ndv.paragraph(1)\r\n```",
+    tabs: "\t```dataviewjs\ndv.x\n```\n-\t```dataviewjs\n\tdv.x\n\t```",
+    tilde: "~~~dataviewjs\ndv.x\n~~~",
+    nestedCallout: "> [!note]\n> > [!tip]\n> > ```dataviewjs\n> > dv.x\n> > ```",
+    listMixed: "- a\n \t```dataviewjs\n  dv.x\n  ```\n1. b\n   ```DataviewJS title\n   dv.x\n   ```",
+    entityLang: "```&#100;ataviewjs\ndv.x\n```",
+    upper: "```DATAVIEWJS\nx\n```",
+    query: "```query\ntag:#x\n```",
+    mermaid: "```mermaid\ngraph TD; A-->B\n```",
+    splitInline1: "text `$= dv.paragraph(1)\n`",
+    splitInline2: "text `= this.file.name\nmore`",
+    splitInlineNbsp: `text \`\n${nbsp}$= dv.paragraph(1)\``,
+    splitInlineSpace: "text `\n= this.file.name`",
+    rawCode: "<code>= this.file.name</code>",
+    imgCodeAlt: "![`x`](https://evil.example/x.png)",
+    imgRefCode: "![`r`]\n\n[`r`]: https://evil.example/x.png",
+    imgMultiline: "![a\nb](https://evil.example/x.png)",
+    imgUrlNextLine: "![a](\nhttps://evil.example/x.png)",
+    imgEntity: "![a](https&#58;//evil.example/x.png)",
+    imgEscape: "![a](https\\://evil.example/x.png)",
+    imgProtoRel: "![a](//evil.example/x.png)",
+    imgRefDef: "![a][r]\n\n[r]: https://evil.example/x.png",
+    nestedListFence: `- a\n  - b\n  \`\`\`text\n${evil}\n${query}`,
+    quoteInList: `- a\n  > \`\`\`text\n> ${evil}\n> ${query}`,
+    wideMarker: `-     a\n  \`\`\`text\n${evil}\n${query}`,
+    tabQuote: `> > \`\`\`text\n>\t\t> x\n> > ${evil}\n> > ${query}`,
+    backtickInfo: `\`\`\`js \`x\`\ncode\n\`\`\`\n${evil}\n${query}`,
+    closeTilde: `\`\`\`text\nx\n\`\`\`~\n${evil}\n${query}`,
+    indentedClose: `\`\`\`text\nx\n    \`\`\`\n${evil}`,
+    html: "<div onclick=x>hi</div>\n<b>ok</b> <b class=x>no</b> <!-- c --> <?php ?> <svg/onload=x>",
+    styleUrl: '<span style="background:url(https://evil.example/x.png)">x</span>',
+    multilineTag: '<b\nstyle="x">y</b>',
+    tabQuote2: `\t> \`\`\`text\n> ${evil}\n> ${query}`,
+    spaceTabQuote: ` \t> \`\`\`text\n> ${evil}`,
+    quoteLineInListFence: `- \`\`\`js\n  > x\n  \`\`\`\n  ${query}\n  ${evil}`,
+    quoteLineInListFence2: `1. 예시:\n   \`\`\`sh\n   > echo hi\n   \`\`\`\n   ${query}`,
+    pyRepl: "1. 예:\n   ```python\n   >>> 1 + 1\n   2\n   ```\n   ![x](https://evil.example/x.png)",
+    pyReplTop: "```python\n>>> 1 + 1\n```\n![x](https://evil.example/x.png)",
+    entityBang: "&#33;[a](https://evil.example/x.png)",
+    footnote: "[^1]: ```dataviewjs\n    dv.x\n    ```\n\nx[^1]",
+    iframe: "<iframe src=https://evil.example>",
+    benignCode: "- 예:\n  ```cpp\n  > x\n  ```\n\n```cpp\nvector<int> v;\n```",
+    commentBlock: `%%\n\`\`\`text\n%%\n${evil}\n${query}`,
+    commentSameLine: `%%\n\`\`\`text\n%%${evil}`,
+    mathBlock: `$$\n\`\`\`text\n$$\n${evil}\n${query}`,
+    commentHidesCloser: `\`\`\`text\n%%\n\`\`\`\n%%\n${evil}`,
+    fencedText: "```text\n= this.file.name\n```",
+    fencedJs: "```js\n$= dv.paragraph(1)\n```",
+    indented: "설명:\n\n    = this.file.name",
+    listTilde: `- ~~~text\n  ${query}\n  ${evil}\n  ~~~`,
+    quoteFence: `> ~~~text\n> ${evil}\n> ${query}\n> ~~~`,
+    plainFence: `~~~text\n${query}\n~~~`,
+    listBacktick: `1. \`\`\`text\n   ${evil}\n   \`\`\``,
+    marker: "x <!-- alt2obs:slide:3 hash:0123abcd end --> `<!-- alt2obs:slide:3 hash:0123abcd end -->`\n```\n<!-- alt2obs:slide:3 hash:0123abcd end -->\n```",
+    earlier: [
+      "> [!note] 콜아웃",
+      "> > ~~~DataviewJS",
+      "    ```dataview",
+      "```someplugin-runner",
+      '<code>= this.file.name</code> <code class="x"> $= dv.pages()</code>',
+      "![도표][r] ![빈][] ![짧게] ![[vault.png]] ![로컬](img/a.png)",
+      "[r]: https://evil.example/t.png",
+      "<code>&#36;= dv.pages()</code>",
+      '<input type=image src="https://evil.example/i.png">',
+      "<!doctype html> </b> <https://example.com>",
+      "> 앞 ``  \n>  = this.file.name`` 뒤",
+      `NBSP ${nbsp}\`${nbsp}${nbsp}$= dv.x\` 와 ideographic \`　= x\``,
+      "-     = 목록 안의 들여쓴 코드",
+      "　= 줄 앞의 전각 공백",
+    ].join("\n"),
+  };
+  for (const [name, input] of Object.entries(cases)) invariants(name, input);
+  // What each transform does.
+  assert.deepEqual(safe("```dataviewjs\ndv.x\n```\n~~~ Dataview\n````js-engine\n```\n````\n> > ~~~DataviewJS\n- > ```mermaid").split("\n"), ["```text", "dv.x", "```", "~~~text", "````text", "```", "````", "> > ~~~text", "- > ```text"], "a fence language off the allow-list becomes text, in any container; closing lines stay");
+  const fences = "```python\nprint(1)\n```\n~~~js\nx\n~~~\n```Python {.x}\ny\n```\n````md\n```\n````";
+  assert.equal(safe(fences), fences, "allow-listed fences unchanged");
+  assert.equal(safe("<img src=x> <!-- c --> </b> <?php ?> a < b, a<=b"), `<${zw}img src=x> <${zw}!-- c --> <${zw}/b> <${zw}?php ?> a < b, a<=b`, "a < that could open a tag gets a zero-width space; a < b stays");
+  assert.equal(safe("`vector<int>`\n```cpp\nvector<int> v;\n```"), `\`vector<${zw}int>\`\n\`\`\`cpp\nvector<${zw}int> v;\n\`\`\``, "in code too (invisible there)");
+  assert.equal(safe("![도표](https://e.example/t.png) ![[d.png]] ![r][x]"), `!${zw}[도표](https://e.example/t.png) !${zw}[[d.png]] !${zw}[r][x]`, "no image of any kind");
+  assert.equal(safe("인라인 `= this.file.name` 과 `$= dv.pages().length`, 그냥 `a = 1`."), `인라인 \`${zw}= this.file.name\` 과 \`${zw}$= dv.pages().length\`, 그냥 \`a = 1\`.`, "an inline Dataview query defused, other code left");
+  assert.deepEqual(safe("앞 `\n$= dv.pages().length` 뒤").split("\n"), ["앞 `", `${zw}$= dv.pages().length\` 뒤`], "a span across a line break");
+  assert.equal(safe(`앞 \`\n${nbsp}= x\``), `앞 \`\n${nbsp}${zw}= x\``, "across a line break and NBSP");
+  assert.deepEqual(safe("```text\n= this.file.name\n```\n> - = x\n    $= y").split("\n"), ["```text", `${zw}= this.file.name`, "```", `> - ${zw}= x`, `    ${zw}$= y`], "first on a line after its containers");
+  // Math: < becomes \lt (Obsidian's rules for $...$); a wrong guess is safe either way.
+  assert.equal(safe("$$\nx<y\n$$"), "$$\nx\\lt y\n$$", "a $$ block (the regression: it showed x&lt;y)");
+  assert.equal(safe("$$a<b$$ 와 $x<y$, $x < y$"), "$$a\\lt b$$ 와 $x\\lt y$, $x \\lt  y$", "inline and one-line math");
+  assert.equal(safe("$ x<y$ 와 $x<y $"), `$ x<${zw}y$ 와 $x<${zw}y $`, "a space after the opening $ or before the closing one: no math");
+  assert.equal(safe("$5<b>와 $6"), `$5<${zw}b>와 $6`, "a closing $ before a digit: no math (prices)");
+  // A normal answer looks the same: only zero-width spaces are added.
+  const normal = [
+    "**정밀도**를 지키려면 작은 수부터 더한다 [슬라이드 3].",
+    "",
+    "- 첫째: `a + b`가 먼저다",
+    "- 둘째: $x^2$ 이 커지면 $$e^{x}$$ 도 커진다",
+    "1. 순서를 지킨다",
+    "",
+    "| 연산 | 결과 |",
+    "|---|---|",
+    "| a < b | 참 |",
+    "",
+    "```python",
+    "if a < b and x <= y:",
+    "    print(f'{a}')",
     "```",
-    "```Python {.x}",
-    "print(1)",
-    "```",
-    '<code>= this.file.name</code> <code class="x"> $= dv.pages()</code> <code>a = 1</code>',
-    "![도표][r] ![빈][] ![짧게] ![[vault.png]] ![로컬](img/a.png)",
-    "[r]: https://evil.example/t.png",
-    '<span style="background:url(https://evil.example/b.png)">x</span> <div style=\'background: URL( "https://e.example" )\'>y</div>',
+    "",
+    "`std::vector<int>`도 같다. (강의 자료 밖)",
+    "> 인용 [12:30]",
   ].join("\n");
-  const out = m.safeAnswerMarkdown(bypass).split("\n");
-  assert.deepEqual(out.slice(0, 3), ["> ```text", "> dv.paragraph(1)", "> ```"], "a fence in a quote");
-  assert.equal(out[4], "> > ~~~text", "a fence in a nested quote or callout");
-  assert.deepEqual(out.slice(7, 10), ["- ```text", "  dv.paragraph(2)", "  ```"], "a fence in a list item");
-  assert.equal(out[10], "    ```text", "an indented fence");
-  assert.equal(out[13], "```text", "any language not on the allow-list");
-  assert.equal(out[16], "```Python {.x}", "allowed languages in any case, with attributes");
-  assert.equal(out[19], '&lt;code>= this.file.name&lt;/code> &lt;code class="x"> $= dv.pages()&lt;/code> &lt;code>a = 1&lt;/code>', "raw <code> is text");
-  assert.equal(out[20], "[도표][r] [빈][] [짧게] ![[vault.png]] ![로컬](img/a.png)", "reference and shortcut images become links; vault embeds and local images stay");
-  assert.equal(out[22], '&lt;span style="background:url(https://evil.example/b.png)">x&lt;/span> &lt;div style=\'background: URL( "https://e.example" )\'>y&lt;/div>', "tags with a style attribute are text");
-  // A fence opened in a quote ends with the quote: what follows is made safe again.
-  const leaked = m.safeAnswerMarkdown("> ```python\n> x\n\n![t](https://evil.example/z.png)").split("\n");
-  assert.equal(leaked[3], "[t](https://evil.example/z.png)", "a quote's unclosed fence does not shield later lines");
-  const listLeak = m.safeAnswerMarkdown("- ```python\n  x\nnext ![t](https://evil.example/z.png)").split("\n");
-  assert.equal(listLeak[2], "next [t](https://evil.example/z.png)", "nor does a list item's");
-  // An indented line is an indented code block (or paragraph text), not a fence opener: the next line opens a real fence.
-  assert.deepEqual(m.safeAnswerMarkdown("    ```\n```dataviewjs\ndv.paragraph(1)\n```").split("\n"), ["    ```", "```text", "dv.paragraph(1)", "```"], "a fence after an indented ``` line");
-  assert.equal(m.safeAnswerMarkdown("    ```\n![t](https://evil.example/z.png)").split("\n")[1], "[t](https://evil.example/z.png)", "an indented ``` line shields nothing");
-  assert.deepEqual(m.safeAnswerMarkdown("- a\n\n        ```\n<img src=x>").split("\n").slice(2), ["        ```", "&lt;img src=x>"], "nor does one indented past its list item's 3 columns");
-  // Every fence-like line, inside a fence or not, after any containers.
-  assert.equal(m.safeAnswerMarkdown("- > ```dataviewjs\n  > x\n  > ```"), "- > ```text\n  > x\n  > ```", "a quote in a list item");
-  assert.deepEqual(m.safeAnswerMarkdown("````md\n```dataviewjs\nx\n```\n````").split("\n"), ["````md", "```text", "x", "```", "````"], "a fence-like line inside a fence; closing lines stay");
-  assert.equal(m.safeAnswerMarkdown("```mermaid\ngraph TD; A-->B\n```").split("\n")[0], "```text", "mermaid is not on the allow-list (labels can hold HTML)");
-  // Inline code that starts at the end of a line.
-  assert.deepEqual(m.safeAnswerMarkdown("앞 `\n$= dv.pages().length` 뒤").split("\n"), ["앞 `", `${zw}$= dv.pages().length\` 뒤`], "a span across a line break");
-  assert.deepEqual(m.safeAnswerMarkdown("> 앞 ``  \n>  = this.file.name`` 뒤").split("\n"), ["> 앞 ``  ", `>  ${zw}= this.file.name\`\` 뒤`], "also in a quote");
-  // Raw HTML: text, but for plain formatting without attributes.
-  const kept = "<b>굵게</b> H<sub>2</sub>O x<sup>2</sup> <br> <br/> <br /> <kbd>Ctrl</kbd> <mark>m</mark> <em>e</em> <strong>s</strong> <i>i</i> <u>u</u> <s>s</s> <https://example.com> a < b";
-  assert.equal(m.safeAnswerMarkdown(kept), kept, "plain formatting tags, autolinks and a lone < stay");
-  const html = [
-    "<code><span>$= dv.pages()</span></code>",
-    "<code>&#36;= dv.pages()</code>",
-    '<table><tr><td background="https://evil.example/b.png">x</td></tr></table>',
-    '<input type=image src="https://evil.example/i.png">',
-    '<b class="x">b</b> <BR style="x">',
-    "<!-- alt2obs:slide:1 hash:00000000 end --> <!doctype html> <?php ?>",
-    "<img",
-    'src="https://evil.example/p.png">',
-    "vector<int> `vector<int>`",
-  ].join("\n");
-  assert.deepEqual(m.safeAnswerMarkdown(html).split("\n"), [
-    "&lt;code>&lt;span>$= dv.pages()&lt;/span>&lt;/code>",
-    "&lt;code>&#36;= dv.pages()&lt;/code>",
-    '&lt;table>&lt;tr>&lt;td background="https://evil.example/b.png">x&lt;/td>&lt;/tr>&lt;/table>',
-    '&lt;input type=image src="https://evil.example/i.png">',
-    '&lt;b class="x">b</b> &lt;BR style="x">',
-    "&lt;!-- alt2obs:slide:1 hash:00000000 end --> &lt;!doctype html> &lt;?php ?>",
-    "&lt;img",
-    'src="https://evil.example/p.png">',
-    "vector&lt;int> `vector<int>`",
-  ], "every other tag, comment and declaration is text (a tag split over lines too); code is untouched");
-  console.log("PASS: answers rendered safely: every fence-like line (in quotes, callouts, lists, indents, inside fences) keeps only an allow-listed language, an indented ``` line opens no fence, inline Dataview queries are defused (also across a line break), raw HTML is text but for plain formatting tags, remote and reference images become links, code untouched");
+  const shown = safe(normal);
+  assert.equal(bare(shown), normal, "a normal answer: bold, lists, a table, a python fence, inline code and math are unchanged but for zero-width spaces");
+  assert.equal(shown.split(zw).length - 1, 1, "only <int> gets one");
+  assert.equal(safe("보통 답이다. **굵게** [슬라이드 2]"), "보통 답이다. **굵게** [슬라이드 2]", "plain answers unchanged");
+  console.log("PASS: answers rendered safely by context-free transforms: fence languages off the allow-list become text on every fence-like line; < opening a tag, comment or declaration gets a zero-width space anywhere (\\lt in math); ![ never forms an image; = and $= at a line's start or after a backtick get a zero-width space; every reviewer bypass holds the invariants; a normal answer looks the same");
 }
 
 // ---- "+ 자료 추가" (spec 5.7) ----
@@ -456,8 +497,9 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   const slide = (n, body, after) => [`## 📚 슬라이드 ${n}`, "", `<!-- alt2obs:slide:${n} hash:0000000${n} start -->`, body, `<!-- alt2obs:slide:${n} hash:0000000${n} end -->`, "", ...after].join("\n");
   const note = (s2After, body2 = "슬라이드 2 해설.") => ["---", 'title: "L5"', "---", "# L5", "", slide(1, "슬라이드 1 해설.", ["> [!note] 내 메모", "> "]), "", slide(2, body2, s2After), "", slide(3, "슬라이드 3 해설.", ["> [!note] 내 메모", "> "]), ""].join("\n");
   const entry = { question: "왜 작은 수부터\n더해?", answer: "정밀도를 지키기 때문이다 [슬라이드 2].\n\n큰 수에 더하면 사라진다.", date: "2026-10-29" };
-  const lines = ["> **Q.** 왜 작은 수부터 더해?", "> **A.** 정밀도를 지키기 때문이다 [슬라이드 2].", ">", "> 큰 수에 더하면 사라진다. (질문 2026-10-29)"];
-  assert.deepEqual(m.memoEntryLines(entry), lines, "Q on one line, A's first line, the rest behind > (blank as >), the date at the end");
+  const lines = ["> **Q.** 왜 작은 수부터 더해?", "> **A.**", "> 정밀도를 지키기 때문이다 [슬라이드 2].", ">", "> 큰 수에 더하면 사라진다. (질문 2026-10-29)"];
+  assert.deepEqual(m.memoEntryLines(entry), lines, "Q on one line, A alone, the answer behind > (blank as >), the date at the end");
+  assert.deepEqual(m.memoEntryLines({ question: "q", answer: "- 첫째\n- 둘째", date: "2026-10-29" }).slice(1), ["> **A.**", "> - 첫째", "> - 둘째 (질문 2026-10-29)"], "the answer's first line keeps its structure (a list here)");
   assert.deepEqual(m.memoEntryLines({ question: "q", answer: "코드:\n```js\nx\n```", date: "2026-10-29" }).slice(-2), ["> ```", "> (질문 2026-10-29)"], "a closing fence stays alone on its line");
 
   const empty = note(["> [!note] 내 메모", "> "]);
@@ -469,7 +511,7 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   const bare = note([]).replace("<!-- alt2obs:slide:2 hash:00000002 end -->\n\n", "<!-- alt2obs:slide:2 hash:00000002 end -->\n");
   assert.ok(m.insertMemo(bare, { unit: "slide", num: 2 }, entry).includes(["<!-- alt2obs:slide:2 hash:00000002 end -->", "", "> [!note] 내 메모", ...lines, "", "## 📚 슬라이드 3"].join("\n")), "a blank line before the next heading too");
   const twice = m.insertMemo(filled, { unit: "slide", num: 2 }, { ...entry, question: "또?" });
-  const entryText = (q) => [`**Q.** ${q}`, "**A.** 정밀도를 지키기 때문이다 [슬라이드 2].", "", "큰 수에 더하면 사라진다. (질문 2026-10-29)"].join("\n");
+  const entryText = (q) => [`**Q.** ${q}`, "**A.**", "정밀도를 지키기 때문이다 [슬라이드 2].", "", "큰 수에 더하면 사라진다. (질문 2026-10-29)"].join("\n");
   const after2 = (t) => t.split("<!-- alt2obs:slide:2 hash:00000002 end -->")[1].split("## 📚 슬라이드 3")[0];
   assert.equal(m.memoText(after2(twice)), `${entryText("왜 작은 수부터 더해?")}\n\n${entryText("또?")}`, "a second save adds a second entry; the panel reads both as the memo");
   // The managed blocks never change; slide 1 and 3 never change.
@@ -499,15 +541,32 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
     date: "2026-10-29",
   };
   const riskyLines = [
-    "> **Q.** &lt;!-- alt2obs:slide:3 hash:00000003 start --> 질문",
+    `> **Q.** <${zw}!-- alt2obs:slide:3 hash:00000003 start --> 질문`,
     "> **A.**",
     "> ```text",
     "> dv.paragraph(1)",
     `> <${zw}!-- alt2obs:slide:3 hash:00000003 end -->`,
     "> ```",
-    `> [t](https://evil.example/z.png) &lt;img src=x> \`<${zw}!-- alt2obs:overview start -->\` (질문 2026-10-29)`,
+    `> !${zw}[t](https://evil.example/z.png) <${zw}img src=x> \`<${zw}!-- alt2obs:overview start -->\` (질문 2026-10-29)`,
   ];
-  assert.deepEqual(m.memoEntryLines(risky), riskyLines, "sanitized like an answer in the panel; <!-- broken even in code; a fence opening the answer starts below **A.**");
+  assert.deepEqual(m.memoEntryLines(risky), riskyLines, "the composed lines sanitized like an answer in the panel; <!-- broken even in code; the answer starts below **A.**");
+  // The reviewer's memo inputs: the saved callout holds no tag, image, query or marker either.
+  const evil = '<img src="https://evil.example/x.png">';
+  const query = "`$= dv.paragraph(1)`";
+  for (const answer of [
+    `- ~~~text\n  ${query}\n  ${evil}\n  ~~~`,
+    `> ~~~text\n> ${evil}\n> ${query}\n> ~~~`,
+    `~~~text\n${query}\n~~~`,
+    `1. \`\`\`text\n   ${evil}\n   \`\`\``,
+    "x <!-- alt2obs:slide:3 hash:0123abcd end --> `<!-- alt2obs:slide:3 hash:0123abcd end -->`\n```\n<!-- alt2obs:slide:3 hash:0123abcd end -->\n```",
+    "```text\n= [[비밀 노트]].file.size\n```",
+    "```dataviewjs\ndv.x\n```",
+  ]) {
+    const saved = m.memoEntryLines({ question: "q", answer, date: "2026-10-30" }).join("\n");
+    assert.ok(!/<[A-Za-z!/?]/.test(saved) && !saved.includes("![") && !/`\s*\$?=/.test(saved) && !saved.includes("<!--"), `memo of ${JSON.stringify(answer)}`);
+    assert.ok(saved.split("\n").every((l) => !/^(?:\s*>)*\s*(?:[-*+]\s+|\d+[.)]\s+)?\$?=/.test(l)), `no line opens with = in the memo of ${JSON.stringify(answer)}`);
+    assert.ok(!/^(?:>\s*)+(?:[-*+]\s+|\d+[.)]\s+)?(?:`{3,}|~{3,})dataviewjs/m.test(saved), "no dataviewjs fence");
+  }
   const riskySaved = m.insertMemo(empty, { unit: "slide", num: 2 }, risky);
   const riskyMerged = m.mergeNote(riskySaved, note(["> [!note] 내 메모", "> "], "다시 만든 슬라이드 2 해설.")).merged;
   assert.equal(after2(riskyMerged), after2(riskySaved), "a re-import keeps it as it was");

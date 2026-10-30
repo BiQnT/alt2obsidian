@@ -6,8 +6,9 @@
 // the end marker. The managed blocks are never touched, so a re-import
 // (mergeNote) keeps what was saved. What is saved is made safe first, as
 // the panel renders an answer (the note is rendered by every plugin and
-// kept), with no `<!--` left that a re-import could read as a marker. A
-// CRLF note stays CRLF. Pure: no obsidian import, unit-tested in Node.
+// kept), which also leaves no `<!--` that a re-import could read as a
+// marker. A CRLF note stays CRLF. Pure: no obsidian import, unit-tested in
+// Node.
 
 import { toLf } from "../core/merge";
 import { safeAnswerMarkdown } from "./safeMarkdown";
@@ -30,35 +31,21 @@ const MEMO_TITLE = "> [!note] 내 메모";
 const MEMO_CALLOUT = /^\s*>\s*\[!note\][^\n]*내 메모/;
 const UNIT_HEADING = /^## (?:📚 슬라이드|⏱ 구간) \d+/;
 
-const FENCE_LINE = /^\s*(`{3,}|~{3,})/;
-
-/**
- * Text as a memo keeps it: made safe as the panel renders an answer, and
- * `<!--` broken with a zero-width space, also inside code (a re-import
- * finds the plugin's markers anywhere in the note).
- */
-export function memoSafe(text: string): string {
-  return safeAnswerMarkdown(text).replace(/<!--/g, "<\u200B!--");
-}
-
 /**
  * The callout lines of one saved answer: `> **Q.** <question on one
- * line>`, `> **A.** <first answer line>` (alone on its line when the answer
- * opens with a code fence), the other answer lines behind `> ` (`>` for a
- * blank one), and ` (질문 YYYY-MM-DD)` at the end (on its own line after a
- * closing code fence, which must stay alone on its line).
+ * line>`, `> **A.**` alone on its line (the answer's first line keeps its
+ * structure: a fence, a list, a heading), the answer lines behind `> `
+ * (`>` for a blank one), and ` (질문 YYYY-MM-DD)` at the end (on its own
+ * line after a closing code fence, which must stay alone on its line).
+ * The lines as composed are made safe as the panel renders an answer.
  */
 export function memoEntryLines(e: MemoEntry): string[] {
-  const question = memoSafe(e.question.replace(/\s+/g, " ").trim());
-  const answer = memoSafe(toLf(e.answer).replace(/^\s*\n/, "").trimEnd()).split("\n");
-  const rest = (l: string) => (l.trim() ? `> ${l}` : ">");
-  const lines = FENCE_LINE.test(answer[0])
-    ? [`> **Q.** ${question}`, "> **A.**", ...answer.map(rest)]
-    : [`> **Q.** ${question}`, `> **A.** ${answer[0].trim()}`, ...answer.slice(1).map(rest)];
+  const answer = toLf(e.answer).replace(/^\s*\n/, "").trimEnd().split("\n");
+  const lines = [`> **Q.** ${e.question.replace(/\s+/g, " ").trim()}`, "> **A.**", ...answer.map((l) => (l.trim() ? `> ${l}` : ">"))];
   const stamp = `(질문 ${e.date})`;
-  if (/^\s*(`{3,}|~{3,})\s*$/.test(answer[answer.length - 1]) && lines.length > 2) lines.push(`> ${stamp}`);
+  if (/^\s*(`{3,}|~{3,})\s*$/.test(answer[answer.length - 1])) lines.push(`> ${stamp}`);
   else lines[lines.length - 1] += ` ${stamp}`;
-  return lines;
+  return safeAnswerMarkdown(lines.join("\n")).split("\n");
 }
 
 function headingOf(target: MemoTarget): RegExp {
