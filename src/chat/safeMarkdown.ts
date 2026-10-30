@@ -151,6 +151,16 @@ export function dataviewQueryPrefixes(app: unknown): string[] {
   return [settings?.inlineQueryPrefix, settings?.inlineJsQueryPrefix].filter((p): p is string => typeof p === "string" && p.trim() !== "");
 }
 
+/**
+ * Model text written into the vault (a saved memo, a brief's AI part):
+ * made safe as an answer is, and every `%%` broken too, as the note's own
+ * text before it may have left a block comment open that a `%%` in it
+ * would close (what follows would start a new block).
+ */
+export function safeNoteMarkdown(text: string, queryPrefixes: readonly string[] = []): string {
+  return safeAnswerMarkdown(text, queryPrefixes).replace(/%(?=%)/g, `%${ZW}`);
+}
+
 /** The answer made safe to render; `queryPrefixes` adds inline query prefixes to `=` and `$=` (Dataview's settings). */
 export function safeAnswerMarkdown(text: string, queryPrefixes: readonly string[] = []): string {
   const prefixes = new Set([...QUERY_PREFIXES, ...queryPrefixes.filter((p) => p.trim() !== "")]);

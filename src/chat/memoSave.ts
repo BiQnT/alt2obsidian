@@ -7,11 +7,12 @@
 // (mergeNote) keeps what was saved. What is saved is made safe first, as
 // the panel renders an answer (the note is rendered by every plugin and
 // kept), which also leaves no `<!--` that a re-import could read as a
-// marker. A CRLF note stays CRLF. Pure: no obsidian import, unit-tested in
+// marker, and with every `%%` broken (the user's memo above it may have
+// left a comment open). A CRLF note stays CRLF. Pure: no obsidian import, unit-tested in
 // Node.
 
 import { toLf } from "../core/merge";
-import { safeAnswerMarkdown } from "./safeMarkdown";
+import { safeNoteMarkdown } from "./safeMarkdown";
 
 /** The slide (or transcript section) whose memo gets the answer. */
 export interface MemoTarget {
@@ -37,7 +38,8 @@ const UNIT_HEADING = /^## (?:📚 슬라이드|⏱ 구간) \d+/;
  * structure: a fence, a list, a heading), the answer lines behind `> `
  * (`>` for a blank one), and ` (질문 YYYY-MM-DD)` at the end (on its own
  * line after a closing code fence, which must stay alone on its line).
- * The lines as composed are made safe as the panel renders an answer.
+ * The lines as composed are made safe as the panel renders an answer, and
+ * every `%%` in them is broken.
  */
 export function memoEntryLines(e: MemoEntry, queryPrefixes: readonly string[] = []): string[] {
   const answer = toLf(e.answer).replace(/^\s*\n/, "").trimEnd().split("\n");
@@ -45,7 +47,7 @@ export function memoEntryLines(e: MemoEntry, queryPrefixes: readonly string[] = 
   const stamp = `(질문 ${e.date})`;
   if (/^\s*(`{3,}|~{3,})\s*$/.test(answer[answer.length - 1])) lines.push(`> ${stamp}`);
   else lines[lines.length - 1] += ` ${stamp}`;
-  return safeAnswerMarkdown(lines.join("\n"), queryPrefixes).split("\n");
+  return safeNoteMarkdown(lines.join("\n"), queryPrefixes).split("\n");
 }
 
 function headingOf(target: MemoTarget): RegExp {

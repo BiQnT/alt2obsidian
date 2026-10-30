@@ -657,6 +657,15 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
     assert.ok(!/^(?:>\s*)+(?:[-*+]\s+|\d+[.)]\s+)?(?:`{3,}|~{3,})dataviewjs/m.test(saved), "no dataviewjs fence");
   }
   assert.equal(m.memoEntryLines({ question: "q", answer: "`dv: x`", date: "2026-10-30" }, ["dv:"])[2], `> \`${zw}dv: x\` (질문 2026-10-30)`, "Dataview's own prefixes too");
+  // The user's memo left a block comment open (review round 3): no %% in a saved entry closes it, mid-line either.
+  const openComment = ["## 📚 슬라이드 3", "해설 끝", "<!-- alt2obs:slide:3 hash:0000abcd end -->", "", "> [!note] 내 메모", "> %%", "> 나중에 정리", ""].join("\n");
+  for (const answer of ["x%%```dataview\nLIST\n```", "x%%~~~dataviewjs\ndv.paragraph(1)\n~~~", "x%%    = this.file.name", "100%%% 정답이다"]) {
+    const saved = m.insertMemo(openComment, { unit: "slide", num: 3 }, { question: "q%%", answer, date: "2026-10-30" });
+    const entry = saved.split("> 나중에 정리\n")[1];
+    assert.ok(entry.includes("> **A.**") && !entry.includes("%%"), `every %% broken in the entry for ${JSON.stringify(answer)}`);
+    assert.equal(entry.split(zw).join(""), ">\n" + m.memoEntryLines({ question: "q%%", answer, date: "2026-10-30" }).join("\n").split(zw).join("") + "\n", "appended after a > line; only zero-width spaces added");
+  }
+  assert.equal(m.safeNoteMarkdown("100%%% 와 `a%%b`"), `100%${zw}%${zw}% 와 \`a%${zw}%b\``, "a run of % too, and in code");
   const riskySaved = m.insertMemo(empty, { unit: "slide", num: 2 }, risky);
   const riskyMerged = m.mergeNote(riskySaved, note(["> [!note] 내 메모", "> "], "다시 만든 슬라이드 2 해설.")).merged;
   assert.equal(after2(riskyMerged), after2(riskySaved), "a re-import keeps it as it was");
