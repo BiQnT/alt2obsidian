@@ -133,9 +133,16 @@ interface OpenFence {
   contained: boolean;
 }
 
+/** A quote mark with its optional space or tab, as one `>` (">code" and "> code" are both in the quote). */
+function quoteMarks(text: string): string {
+  return text.replace(/>[ \t]?/g, ">");
+}
+
 /** The line is still in the fence's container: a quote's line keeps its `>`, a list item's its indentation (a blank line too). */
 function inContainer(line: string, f: OpenFence): boolean {
-  if (!f.contained || line.startsWith(f.cont) || line.trimEnd() === f.cont.trimEnd()) return true;
+  const l = quoteMarks(line);
+  const cont = quoteMarks(f.cont);
+  if (!f.contained || l.startsWith(cont) || l.trimEnd() === cont.trimEnd()) return true;
   return !line.trim() && !f.cont.includes(">");
 }
 

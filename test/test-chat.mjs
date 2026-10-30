@@ -781,6 +781,7 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.equal(lastBlock("- ```js\n  let a = 1;"), "- ```js\n  let a = 1;\n  ```\n\n(중지됨)\n", "in a list item: its indentation");
   assert.equal(lastBlock("1. 코드:\n   ```js\n   let a = 1;"), "1. 코드:\n   ```js\n   let a = 1;\n   ```\n\n(중지됨)\n", "an indented fence in an item");
   assert.equal(lastBlock("```js\nlet a = 1;"), "```js\nlet a = 1;\n```\n\n(중지됨)\n", "top level");
+  assert.equal(lastBlock("> ```js\n>code [슬라이드 2]\n> ```"), "> ```js\n>code [슬라이드 2]\n> ```\n\n(중지됨)\n", "a quote line without the space after > is still in the quote: its mark stays code");
   assert.equal(lastBlock("> ```js\n> x\n\n다음 [슬라이드 2]"), `> \`\`\`js\n> x\n\n다음 ${link(2)}\n\n(중지됨)\n`, "the quote ended, and its fence: nothing to close, the text after it linked");
   // What is written is made safe as a saved memo: no tag, image, inline query, block comment or marker.
   const zw = String.fromCharCode(0x200b);
