@@ -192,10 +192,11 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.deepEqual(m.parseCitations("[99:00]", { slides: 0, sections: 0, lengthMs: null }).map((p) => p.kind), ["time"], "unknown length: every time");
   assert.deepEqual(m.parseCitations("[슬라이드 5~2]", limits).map((p) => p.kind), ["text"], "a backwards range stays text");
   // Another lecture's slides (the question sent L4, 12 slides): `[L4 슬라이드 N]`, lists and ranges, the heading's `·` too.
-  const withOthers = { ...limits, name: "L5", lectures: [{ name: "L4", slides: 12 }, { name: "Lec 3 Pipelining", slides: 40 }] };
+  const L4 = { notePath: "A/CSED423/Lectures/L4.md", name: "L4", slides: 12 };
+  const withOthers = { ...limits, notePath: "A/CSED423/Lectures/L5.md", name: "L5", lectures: [L4, { notePath: "A/CSED423/Lectures/Lec 3 Pipelining.md", name: "Lec 3 Pipelining", slides: 40 }] };
   const other = m.parseCitations("[L4 슬라이드 3] [L4 슬라이드 2, 5~6] [L4 · 슬라이드 7] [Lec 3 Pipelining 슬라이드 33] [L5 슬라이드 25] [L4 슬라이드 13] [L3 슬라이드 1] [참고 슬라이드 2] [슬라이드 12]", withOthers);
   assert.deepEqual(
-    other.filter((p) => p.kind === "slide").map((p) => [p.lecture ?? null, p.slides]),
+    other.filter((p) => p.kind === "slide").map((p) => [p.lecture?.name ?? null, p.slides]),
     [
       ["L4", [3]],
       ["L4", [2, 5, 6]],
@@ -209,6 +210,20 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.ok(other.some((p) => p.kind === "text" && p.text.includes("[L4 슬라이드 13] [L3 슬라이드 1] [참고 슬라이드 2]")), "past that lecture's last slide, a lecture the question did not send, any other word: text");
   assert.equal(other.map((p) => p.text).join(""), "[L4 슬라이드 3] [L4 슬라이드 2, 5~6] [L4 · 슬라이드 7] [Lec 3 Pipelining 슬라이드 33] [L5 슬라이드 25] [L4 슬라이드 13] [L3 슬라이드 1] [참고 슬라이드 2] [슬라이드 12]");
   assert.deepEqual(m.parseCitations("[L4 슬라이드 3]", limits).map((p) => p.kind), ["text"], "no other lecture sent: text");
+  // Words before the lecture's name: the last run of words that names a sent lecture (or this one) counts.
+  const named = (t, l = withOthers) => m.parseCitations(t, l).filter((p) => p.kind === "slide").map((p) => [p.lecture?.notePath ?? null, p.slides[0]]);
+  assert.deepEqual(named("[CSED423 · L4 슬라이드 3] [다른 강의 L4 슬라이드 4] [L4 강의 슬라이드 5] [CSED423 Lec 3 Pipelining 슬라이드 6] [L4 아니고 L5 슬라이드 7]"), [
+    [L4.notePath, 3],
+    [L4.notePath, 4],
+    [L4.notePath, 5],
+    ["A/CSED423/Lectures/Lec 3 Pipelining.md", 6],
+    [null, 7],
+  ], "subject before it, words around it; the last name wins (L5, this lecture)");
+  // Two sent lectures of one name: the one in this lecture's subject folder.
+  const twin = { notePath: "A/CSED311/Lectures/L4.md", name: "L4", slides: 40 };
+  assert.deepEqual(named("[L4 슬라이드 3]", { ...withOthers, lectures: [twin, L4] }), [[L4.notePath, 3]], "same subject folder first");
+  assert.deepEqual(named("[L4 슬라이드 30]", { ...withOthers, lectures: [twin, L4] }), [], "its slide count decides (30 is past CSED423's L4)");
+  assert.deepEqual(named("[L4 슬라이드 30]", { ...withOthers, notePath: "A/EECS/L9.md", lectures: [twin, L4] }), [[twin.notePath, 30]], "no lecture of that name in the folder: the first sent");
   console.log("PASS: grounding marks: slide, list, range, section, mm:ss and h:mm:ss, outside badge; out-of-range marks stay text; [L4 슬라이드 N] for another lecture the question sent, by its slide count");
 }
 

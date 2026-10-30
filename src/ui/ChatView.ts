@@ -35,7 +35,7 @@ import { unitAtLine } from "../brief/lectureNote";
 import { estimateTextTokens } from "../core/budget/estimate";
 import type { StoredSpan } from "../core/prep/TranscriptAligner";
 import { formatClock } from "../core/sections";
-import { parseCitations } from "../chat/citations";
+import { CitedLecture, parseCitations } from "../chat/citations";
 import { safeAnswerMarkdown } from "../chat/safeMarkdown";
 import {
   buildChatPack,
@@ -1170,7 +1170,7 @@ export class ChatView extends ItemView {
   private applyCitations(root: HTMLElement, turn: ChatTurn): void {
     const lecture = this.lecture;
     if (!lecture) return;
-    const limits = { slides: lecture.slideCount, sections: lecture.sectionCount, lengthMs: lecture.lengthMs, name: lecture.name, lectures: turn.otherLectures ?? [] };
+    const limits = { slides: lecture.slideCount, sections: lecture.sectionCount, lengthMs: lecture.lengthMs, notePath: lecture.notePath, name: lecture.name, lectures: turn.otherLectures ?? [] };
     const doc = root.ownerDocument;
     const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const nodes: Text[] = [];
@@ -1188,7 +1188,7 @@ export class ChatView extends ItemView {
         }
         const [text, title] =
           p.kind === "slide"
-            ? [`${p.lecture ? `${p.lecture} ` : ""}슬라이드 ${p.slides.length > 2 ? `${p.slides[0]}~${p.slides[p.slides.length - 1]}` : p.slides.join(", ")}`, `${p.lecture ?? lecture.name} · 슬라이드 ${p.slides.join(", ")}`]
+            ? [`${p.lecture ? `${p.lecture.name} ` : ""}슬라이드 ${p.slides.length > 2 ? `${p.slides[0]}~${p.slides[p.slides.length - 1]}` : p.slides.join(", ")}`, `${p.lecture?.name ?? lecture.name} · 슬라이드 ${p.slides.join(", ")}`]
             : p.kind === "section"
               ? [`구간 ${p.num}`, `${lecture.name} · 구간 ${p.num}`]
               : p.kind === "time"
@@ -1198,7 +1198,7 @@ export class ChatView extends ItemView {
         // Where the mark points (spec 5.5); "강의 자료 밖" is only a badge.
         const go =
           p.kind === "slide"
-            ? () => this.gotoCitedSlide(lecture, turn, p.lecture, p.slides[0])
+            ? () => this.gotoCitedSlide(lecture, p.lecture, p.slides[0])
             : p.kind === "section"
               ? () => this.host.gotoSection(lecture, p.num)
               : p.kind === "time"
@@ -1222,11 +1222,10 @@ export class ChatView extends ItemView {
   }
 
   /** A slide chip: this lecture's slide, or one of another lecture the turn sent (its viewer, else its note's heading). */
-  private async gotoCitedSlide(lecture: ChatLecture, turn: ChatTurn, other: string | undefined, slide: number): Promise<void> {
+  private async gotoCitedSlide(lecture: ChatLecture, other: CitedLecture | undefined, slide: number): Promise<void> {
     if (!other) return this.host.gotoSlide(lecture, slide);
-    const cited = turn.otherLectures?.find((l) => l.name === other);
-    const of = cited ? await this.host.chatLecture(cited.notePath) : null;
-    if (!of) throw new Error(`강의 노트를 찾지 못했습니다: ${cited?.notePath ?? other}`);
+    const of = await this.host.chatLecture(other.notePath);
+    if (!of) throw new Error(`강의 노트를 찾지 못했습니다: ${other.notePath}`);
     await this.host.gotoSlide(of, slide);
   }
 
@@ -1356,7 +1355,7 @@ export class ChatView extends ItemView {
       const read = this.focusTargets().filter((t) => this.materials.has(this.materialKey(t.slide, t.lecture)));
       const first = read[0];
       // Other lectures whose slides or brief go with the question, kept on the turn for its `[L4 슬라이드 N]` chips.
-      const others = new Map<string, { notePath: string; name: string; slides: number }>();
+      const others = new Map<string, CitedLecture>();
       for (const of of [...read.map((t) => t.lecture), ...this.addedBriefs.filter((b) => b.body.trim()).map((b) => b.lecture)]) {
         if (of.notePath !== lecture.notePath) others.set(of.notePath, { notePath: of.notePath, name: of.name, slides: of.slideCount });
       }
