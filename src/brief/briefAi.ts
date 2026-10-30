@@ -27,8 +27,9 @@ export const CANDIDATE_CAP_CHARS = 3000;
 const STRETCH_MAX_CHARS = 400;
 /** Expected output of the call at medium effort (the estimate, spec 4.5). */
 export const BRIEF_AI_OUTPUT_TOKENS = 800;
-/** A quoted span that repeats a candidate for longer than this is a copy (spec 4.5, C7). */
+/** A quoted span that repeats a candidate for longer than this, with this much Hangul in it, is a copy (spec 4.5, C7). */
 const COPY_LIMIT = 20;
+const COPY_QUOTE_HANGUL = 5;
 /** So is unquoted text that repeats a candidate this long with this much Hangul in it (a shared English term is not a copy). */
 const COPY_WINDOW = 40;
 const COPY_WINDOW_HANGUL = 10;
@@ -188,9 +189,10 @@ function clean(v: unknown, max: number): string {
 
 /**
  * True when the text copies the candidates (spec 4.5): a quoted span in it
- * shares more than 20 identical characters with them, or a 40-character
- * stretch outside quotes holding at least 10 Hangul characters is in them
- * as it is.
+ * shares more than 20 identical characters holding at least 5 Hangul
+ * characters with them, or a 40-character stretch outside quotes holding
+ * at least 10 Hangul characters is in them as it is. A quoted English
+ * term alone ("Translation Lookaside Buffer") is not a copy.
  */
 export function copiesCandidate(text: string, candidateText: string): boolean {
   const t = text.replace(/\s+/g, " ");
@@ -202,16 +204,17 @@ export function copiesCandidate(text: string, candidateText: string): boolean {
     }
     return false;
   };
+  const hangul = (w: string) => (w.match(/[가-힣]/g) ?? []).length;
   const outside: string[] = [];
   let last = 0;
   for (const m of t.matchAll(QUOTED)) {
     const quoted = m.slice(1).find((g) => g !== undefined) ?? "";
-    if (shares(quoted, COPY_LIMIT + 1, () => true)) return true;
+    if (shares(quoted, COPY_LIMIT + 1, (w) => hangul(w) >= COPY_QUOTE_HANGUL)) return true;
     outside.push(t.slice(last, m.index));
     last = (m.index ?? 0) + m[0].length;
   }
   outside.push(t.slice(last));
-  return outside.some((part) => shares(part, COPY_WINDOW, (w) => (w.match(/[가-힣]/g) ?? []).length >= COPY_WINDOW_HANGUL));
+  return outside.some((part) => shares(part, COPY_WINDOW, (w) => hangul(w) >= COPY_WINDOW_HANGUL));
 }
 
 /**

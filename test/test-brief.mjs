@@ -454,8 +454,13 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.equal(m.copiesCandidate("또 다른 이야기입니다. 왜 왼쪽부터 유도하죠? 그 다음 이야기입니다. 더 다른", input.candidateText), true, "40 unquoted characters as they are");
   assert.equal(m.copiesCandidate("Remember the precedence rule. Remember the precedence rule.", input.candidateText + " Remember the precedence rule. Remember the precedence rule."), false, "40 characters without 10 Hangul");
   assert.equal(m.copiesCandidate("I don't say 'parse tree를 봅니다' twice", "오늘은 parse tree를 봅니다."), false, "an apostrophe opens no quote");
+  // A quoted English term shared with the transcript is no copy (fewer than 5 Hangul characters in the shared window).
   // The reviewer's case: an English term the transcript also uses is not a copy.
   const tlb = { lengthMs: at(600), units: 20, candidateText: "[05:00] (슬라이드 3) 이제 Translation Lookaside Buffer를 쓰면 주소 변환이 빨라집니다." };
+  // Quoted too (fewer than 5 Hangul characters in the shared window).
+  assert.equal(m.copiesCandidate('"Translation Lookaside Buffer"가 시험에 나온다고 강조했다.', tlb.candidateText), false, "a quoted term in straight quotes");
+  assert.equal(m.copiesCandidate("“Translation Lookaside Buffer”의 역할을 묻는다.", tlb.candidateText), false, "and in curly quotes");
+  assert.equal(m.copiesCandidate('"Lookaside Buffer를 쓰면 주소 변환이 빨라"라고 했다.', tlb.candidateText), true, "a quote that shares the sentence's Hangul is a copy");
   assert.deepEqual(m.validateBriefAi({ emphasis: [{ t: "05:00", slide: 3, text: "Translation Lookaside Buffer는 주소 변환 결과를 캐시한다." }], pitfalls: ["Translation Lookaside Buffer와 page table을 헷갈리기 쉽다."] }, tlb), { oneLine: "", emphasis: [{ t: "05:00", slide: 3, text: "Translation Lookaside Buffer는 주소 변환 결과를 캐시한다." }], qa: [], pitfalls: ["Translation Lookaside Buffer와 page table을 헷갈리기 쉽다."] });
   assert.throws(() => m.validateBriefAi([1], input), /JSON 객체가 아닙니다/, "not an object: asked once more");
   assert.deepEqual(m.validateBriefAi({}, input), { oneLine: "", emphasis: [], qa: [], pitfalls: [] }, "empty lists are fine");
