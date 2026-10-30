@@ -298,6 +298,11 @@ assert.deepEqual(add.otherCites, ["L4 슬라이드 2|L4 · 슬라이드 2", "슬
 assert.equal(add.otherPlain, true, "a lecture the question did not send stays text");
 assert.deepEqual(add.otherGone, { go: "slide", note: "Alt2Obsidian/CSED423/Lectures/L4.md", n: 2 }, "the other lecture's chip goes to that lecture's slide");
 console.log("PASS: + 자료 추가: this lecture's list (range, locked current slide, uncertain times, image estimate), another lecture with its brief, the note's selection as a quote; all of it sent and removable with ×; the answer's [L4 슬라이드 N] goes to that lecture's slide and stays a chip after a lecture switch");
+const staleLists = at("stale slide lists");
+assert.deepEqual(staleLists.afterTab, { pickers: 1, adds: 1, summary: "브리프와 0장 추가 · 약 0.0k 토큰" }, "this lecture's list, still loading when 다른 강의 was picked, is not drawn under it");
+assert.deepEqual(staleLists.afterPick, staleLists.afterTab, "a lecture picked twice while its list loads: one list");
+assert.equal(staleLists.closed, true);
+console.log("PASS: + 자료 추가: a slide list that arrives after the tab or the lecture changed is dropped");
 // Right-click questions (spec 5.8).
 const rc = at("right-click questions");
 assert.deepEqual(rc.sameSlide, { chip: "📄 슬라이드 12", pinned: true, focused: true }, "이 슬라이드에 질문: pinned on that slide, the input focused");

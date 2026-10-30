@@ -72,6 +72,7 @@ async function main() {
   let memo17 = "시험 범위";
   let selection = "";
   let materialDelay = 0;
+  let slideListDelay = 0;
   const calls: any[] = [];
   const settings = structuredClone(DEFAULT_SETTINGS);
   const segments = [
@@ -127,10 +128,11 @@ async function main() {
       return { text: answer.pieces.join(""), usage: { calls: 1, inputTokens: 5100, cachedInputTokens: 3000, outputTokens: 400, imagesSent: 0, costUsd: 0 }, model: "claude-sonnet-5-5" };
     },
     chatErrorInfo: (e: Error) => ({ kind: e.message.split(":")[0], message: e.message.split(":").slice(1).join(":").trim() || e.message }),
-    chatSlideList: async (l: any) => (
-      calls.push({ slideList: l.name }),
-      Array.from({ length: 30 }, (_, i) => ({ num: i + 1, gist: `요지 ${i + 1}`, range: i === 14 ? "[26:26~28:38]" : i === 15 ? "[28:38~28:59?]" : "", tokens: { slideText: 100, commentary: 200, transcript: 300, memo: 0 } }))
-    ),
+    chatSlideList: async (l: any) => {
+      calls.push({ slideList: l.name });
+      if (slideListDelay) await sleep(slideListDelay);
+      return Array.from({ length: 30 }, (_, i) => ({ num: i + 1, gist: `요지 ${i + 1}`, range: i === 14 ? "[26:26~28:38]" : i === 15 ? "[28:38~28:59?]" : "", tokens: { slideText: 100, commentary: 200, transcript: 300, memo: 0 } }));
+    },
     chatOtherBrief: async (l: any) => (calls.push({ otherBrief: l.name }), "## 개요\nL4 브리프 본문"),
     chatSlideImage: async (l: any, n: number) => (calls.push({ image: `${l.name}:${n}` }), { pageNum: n, mimeType: "image/jpeg", base64: "AAAA" }),
     noteSelection: () => selection,
@@ -488,6 +490,22 @@ async function main() {
     otherGone,
     otherPlain: lastAnswer().textContent!.includes("[L3 슬라이드 1]"),
   });
+
+  // ---- a slide list that arrives after the tab or the lecture changed is dropped (review LOW 1) ----
+  slideListDelay = 150;
+  button("+ 자료 추가").click();
+  button("다른 강의", pop()!).click();
+  await sleep(400);
+  const lists = () => ({ pickers: pop()!.querySelectorAll(".alt-to-obs-chat-popover-list").length, adds: Array.from(pop()!.querySelectorAll("button")).filter((b) => b.textContent === "추가").length, summary: pop()!.querySelector(".alt-to-obs-chat-popover-summary")?.textContent ?? null });
+  const afterTab = lists();
+  const lectureSelect = pop()!.querySelectorAll("select")[1] as HTMLSelectElement;
+  lectureSelect.dispatchEvent(new Event("change"));
+  lectureSelect.dispatchEvent(new Event("change"));
+  await sleep(400);
+  const afterPick = lists();
+  slideListDelay = 0;
+  button("취소", pop()!).click();
+  log.push({ step: "stale slide lists", afterTab, afterPick, closed: !pop() });
 
   // ---- right-click questions (spec 5.8): pinned on a slide; a selection as the quote, the input focused ----
   const chips = () => Array.from(root().querySelectorAll(".alt-to-obs-chat-chip"));

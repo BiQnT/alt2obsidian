@@ -52,11 +52,15 @@ export function renderAddPopover(parent: HTMLElement, o: AddPopoverOptions): HTM
   const tabs = root.createDiv({ cls: "alt-to-obs-chat-popover-tabs" });
   const body = root.createDiv({ cls: "alt-to-obs-chat-popover-body" });
   const tabButtons = new Map<Tab, HTMLButtonElement>();
+  // Each tab shown gets a new token: a slide list that arrives after another tab was picked is dropped.
+  let shown = 0;
   const show = (tab: Tab) => {
+    const token = ++shown;
+    const live = () => token === shown;
     for (const [t, b] of tabButtons) b.toggleClass("is-active", t === tab);
     body.empty();
-    if (tab === "this") void renderPicker(body, o, o.lecture, false);
-    else if (tab === "other") renderOther(body, o);
+    if (tab === "this") void renderPicker(body, o, o.lecture, false, live);
+    else if (tab === "other") renderOther(body, o, live);
     else renderSelection(body, o);
   };
   for (const [tab, label] of [
@@ -72,10 +76,11 @@ export function renderAddPopover(parent: HTMLElement, o: AddPopoverOptions): HTM
   return root;
 }
 
-/** A lecture's slide list with the range input, the toggles and the footer. */
-async function renderPicker(el: HTMLElement, o: AddPopoverOptions, lecture: ChatLecture, other: boolean): Promise<void> {
+/** A lecture's slide list with the range input, the toggles and the footer; nothing when `live()` turned false while it was read. */
+async function renderPicker(el: HTMLElement, o: AddPopoverOptions, lecture: ChatLecture, other: boolean, live: () => boolean): Promise<void> {
   const loading = el.createDiv({ cls: "alt-to-obs-muted", text: "슬라이드 목록을 읽는 중..." });
   const rows = await o.slideList(lecture);
+  if (!live()) return;
   loading.remove();
   const current = other ? null : o.current;
   const already = o.alreadyAdded(lecture.notePath);
@@ -148,7 +153,7 @@ async function renderPicker(el: HTMLElement, o: AddPopoverOptions, lecture: Chat
   update();
 }
 
-function renderOther(el: HTMLElement, o: AddPopoverOptions): void {
+function renderOther(el: HTMLElement, o: AddPopoverOptions, live: () => boolean): void {
   const others = o.choices.filter((c) => c.path !== o.lecture.notePath);
   if (others.length === 0) {
     el.createDiv({ cls: "alt-to-obs-muted", text: "보관함에 다른 강의 노트가 없습니다." });
@@ -162,14 +167,19 @@ function renderOther(el: HTMLElement, o: AddPopoverOptions): void {
   subjectEl.value = subjects.includes(o.lecture.subject) ? o.lecture.subject : subjects[0];
   const lectureEl = pick.createEl("select", { cls: "dropdown", attr: { "aria-label": "강의" } });
   const listEl = el.createDiv();
+  // The same for each lecture picked: only the last one's list is drawn.
+  let loads = 0;
   const load = async () => {
+    const token = ++loads;
+    const current = () => token === loads && live();
     listEl.empty();
     const lecture = await o.loadLecture(lectureEl.value);
+    if (!current()) return;
     if (!lecture) {
       listEl.createDiv({ cls: "alt-to-obs-muted", text: "강의 노트를 읽지 못했습니다." });
       return;
     }
-    await renderPicker(listEl, o, lecture, true);
+    await renderPicker(listEl, o, lecture, true, current);
   };
   const fill = () => {
     lectureEl.empty();
