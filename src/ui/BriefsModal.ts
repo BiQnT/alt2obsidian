@@ -5,15 +5,21 @@ import { compactTokens } from "../llm/usage";
 export interface AllBriefsPlan {
   /** Lecture notes whose brief is missing or older than the note. */
   todo: Array<{ notePath: string; hasTranscript: boolean }>;
+  /** Lecture notes whose brief is current but has no AI part (none or failed) and a transcript: built only with 강조점 포함. */
+  aiOnly: string[];
   /** Lecture notes whose brief the user edited: never overwritten here. */
   edited: string[];
-  /** The AI part for the lectures with a transcript and candidates, null when none would call. */
+  /** The AI part for the lectures with a transcript and candidates (aiOnly too), null when none would call. */
   aiEstimate: { calls: number; inputTokens: number; outputTokens: number } | null;
 }
 
 export interface AllBriefsResult {
   made: number;
+  /** The AI part failed, the script part was written ("스크립트만 씀 (강조점 실패)"). */
+  scriptOnly: number;
   skipped: number;
+  /** Briefs the user edited, left as they are. */
+  edited: number;
   failed: number;
   /** Stopped with the cancel button before the end. */
   cancelled: boolean;
@@ -32,7 +38,8 @@ export interface BriefsHost {
  * "모든 강의 브리프 만들기" (spec 4.6): how many lectures have no brief (or
  * one older than the note) and how many briefs the user edited (skipped),
  * then the script part only (no tokens) or with the AI emphasis (the
- * estimate shown), with progress, cancel and a summary at the end.
+ * estimate shown; current briefs without an AI part get one too), with
+ * progress, cancel and a summary at the end.
  */
 export class BriefsModal extends Modal {
   private controller: AbortController | null = null;
@@ -64,27 +71,29 @@ export class BriefsModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.createEl("h2", { text: "모든 강의 브리프 만들기" });
-    const withTranscript = plan.todo.filter((t) => t.hasTranscript).length;
     contentEl.createEl("p", {
       text:
         `브리프가 없거나 노트보다 오래된 강의 ${plan.todo.length}개` +
-        (plan.edited.length > 0 ? `, 직접 고친 브리프 ${plan.edited.length}개는 건너뜁니다.` : "."),
+        (plan.edited.length > 0 ? `, 직접 고친 브리프 ${plan.edited.length}개는 건너뜁니다.` : ".") +
+        (plan.aiOnly.length > 0 ? ` 강조점이 없거나 만들지 못한 브리프 ${plan.aiOnly.length}개는 강조점 포함일 때 강조점을 더합니다.` : ""),
     });
     contentEl.createEl("p", {
       cls: "alt-to-obs-muted",
       text: "스크립트만: 노트의 개요, 흐름, 슬라이드별 요지와 시각으로 만듭니다. 강조점 포함: 전사가 있는 강의는 교수님이 강조한 점과 강의 중 질문을 경량 모델로 한 번씩 더 뽑습니다.",
     });
     const actions = contentEl.createDiv({ cls: "alt-to-obs-update-actions" });
-    if (plan.todo.length === 0) {
+    if (plan.todo.length === 0 && plan.aiOnly.length === 0) {
       actions.createEl("button", { text: "닫기", cls: "mod-cta" }).addEventListener("click", () => this.close());
       return;
     }
-    actions.createEl("button", { text: "스크립트만 (토큰 0)", cls: "mod-cta" }).addEventListener("click", () => void this.run(plan, false));
+    const scriptBtn = actions.createEl("button", { text: "스크립트만 (토큰 0)", cls: "mod-cta" });
+    scriptBtn.disabled = plan.todo.length === 0;
+    scriptBtn.addEventListener("click", () => void this.run(plan, false));
     const ai = plan.aiEstimate;
     const aiBtn = actions.createEl("button", {
       text: ai ? `강조점 포함 (예상 호출 ${ai.calls}회 · 입력 약 ${compactTokens(ai.inputTokens)} · 출력 약 ${compactTokens(ai.outputTokens)})` : "강조점 포함 (전사가 있는 강의 없음)",
     });
-    aiBtn.disabled = !ai || withTranscript === 0;
+    aiBtn.disabled = !ai;
     aiBtn.addEventListener("click", () => void this.run(plan, true));
     actions.createEl("button", { text: "취소" }).addEventListener("click", () => this.close());
   }
@@ -93,7 +102,8 @@ export class BriefsModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.createEl("h2", { text: "브리프 만드는 중" });
-    const line = contentEl.createEl("p", { cls: "alt-to-obs-briefs-progress", text: `0/${plan.todo.length}` });
+    const count = plan.todo.length + (withAi ? plan.aiOnly.length : 0);
+    const line = contentEl.createEl("p", { cls: "alt-to-obs-briefs-progress", text: `0/${count}` });
     const actions = contentEl.createDiv({ cls: "alt-to-obs-update-actions" });
     const cancel = actions.createEl("button", { text: "취소" });
     const controller = new AbortController();
@@ -103,7 +113,7 @@ export class BriefsModal extends Modal {
       cancel.setText("취소하는 중...");
       controller.abort();
     });
-    new Notice(`브리프 ${plan.todo.length}개를 만듭니다${withAi ? " (강조점 포함)" : ""}.`);
+    new Notice(`브리프 ${count}개를 만듭니다${withAi ? " (강조점 포함)" : ""}.`);
     let result: AllBriefsResult;
     try {
       result = await this.host.buildAllBriefs(plan, withAi, {
@@ -116,7 +126,14 @@ export class BriefsModal extends Modal {
     } finally {
       this.controller = null;
     }
-    const summary = `${result.cancelled ? "취소했습니다. " : ""}만든 브리프 ${result.made}개, 건너뜀 ${result.skipped}개, 실패 ${result.failed}개.`;
+    const counts = [
+      `만든 브리프 ${result.made}개`,
+      result.scriptOnly > 0 ? `스크립트만 씀 (강조점 실패) ${result.scriptOnly}개` : "",
+      `건너뜀 ${result.skipped}개`,
+      result.edited > 0 ? `직접 고친 브리프 유지 ${result.edited}개` : "",
+      `실패 ${result.failed}개`,
+    ].filter(Boolean);
+    const summary = `${result.cancelled ? "취소했습니다. " : ""}${counts.join(", ")}.`;
     contentEl.empty();
     contentEl.createEl("h2", { text: result.cancelled ? "브리프 만들기 취소" : "브리프 만들기 완료" });
     contentEl.createEl("p", { cls: "alt-to-obs-briefs-summary", text: summary });

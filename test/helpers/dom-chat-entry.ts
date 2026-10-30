@@ -540,14 +540,14 @@ async function main() {
   // ---- 모든 강의 브리프 만들기 (spec 4.6) ----
   const built: any[] = [];
   const modal: any = new (BriefsModal as any)(app, {
-    planAllBriefs: async () => ({ todo: [{ notePath: L4, hasTranscript: true }, { notePath: L5, hasTranscript: false }], edited: ["X/L1.md"], aiEstimate: { calls: 1, inputTokens: 2400, outputTokens: 624 } }),
+    planAllBriefs: async () => ({ todo: [{ notePath: L4, hasTranscript: true }, { notePath: L5, hasTranscript: false }], aiOnly: ["X/L2.md"], edited: ["X/L1.md"], aiEstimate: { calls: 2, inputTokens: 4800, outputTokens: 1248 } }),
     buildAllBriefs: async (plan: any, withAi: boolean, o: any) => {
       for (const [i, t] of plan.todo.entries()) {
         o.onProgress(i, plan.todo.length, t.notePath);
         await sleep(30);
       }
       built.push(withAi);
-      return { made: 2, skipped: 1, failed: 0, cancelled: false };
+      return { made: 1, scriptOnly: 1, skipped: 0, edited: 1, failed: 0, cancelled: false };
     },
   });
   document.getElementById("host")!.replaceChildren(modal.contentEl);
@@ -555,9 +555,20 @@ async function main() {
   await until("the briefs plan", () => modal.contentEl.querySelectorAll("button").length >= 3);
   const planText = modal.contentEl.querySelector("p").textContent;
   const planButtons = Array.from(modal.contentEl.querySelectorAll("button")).map((b: any) => b.textContent);
+  const noticesBeforeRun = ((window as any).__notices ?? []).length;
   (Array.from(modal.contentEl.querySelectorAll("button")) as HTMLButtonElement[]).find((b) => b.textContent!.startsWith("강조점 포함"))!.click();
   await until("the briefs summary", () => !!modal.contentEl.querySelector(".alt-to-obs-briefs-summary"));
-  log.push({ step: "all briefs", planText, planButtons, withAi: built, summary: modal.contentEl.querySelector(".alt-to-obs-briefs-summary").textContent });
+  const runNotice = ((window as any).__notices ?? [])[noticesBeforeRun];
+  // Nothing missing or old, one current brief without its AI part: only 강조점 포함 does something.
+  const aiOnlyModal: any = new (BriefsModal as any)(app, {
+    planAllBriefs: async () => ({ todo: [], aiOnly: [L4], edited: [], aiEstimate: { calls: 1, inputTokens: 2400, outputTokens: 624 } }),
+    buildAllBriefs: async () => ({ made: 1, scriptOnly: 0, skipped: 0, edited: 0, failed: 0, cancelled: false }),
+  });
+  document.getElementById("host")!.replaceChildren(aiOnlyModal.contentEl);
+  aiOnlyModal.onOpen();
+  await until("the ai-only plan", () => aiOnlyModal.contentEl.querySelectorAll("button").length >= 3);
+  const aiOnlyButtons = (Array.from(aiOnlyModal.contentEl.querySelectorAll("button")) as HTMLButtonElement[]).map((b) => [b.textContent, b.disabled]);
+  log.push({ step: "all briefs", planText, planButtons, withAi: built, runNotice, summary: modal.contentEl.querySelector(".alt-to-obs-briefs-summary").textContent, aiOnlyText: aiOnlyModal.contentEl.querySelector("p").textContent, aiOnlyButtons });
   return log;
 }
 main().then(

@@ -318,8 +318,11 @@ console.log("PASS: brief cards: missing (노트로 바로 만들기 · 토큰 0)
 
 // 모든 강의 브리프 만들기 (spec 4.6).
 const all = at("all briefs");
-assert.equal(all.planText, "브리프가 없거나 노트보다 오래된 강의 2개, 직접 고친 브리프 1개는 건너뜁니다.");
-assert.deepEqual(all.planButtons, ["스크립트만 (토큰 0)", "강조점 포함 (예상 호출 1회 · 입력 약 2.4k · 출력 약 624)", "취소"]);
+assert.equal(all.planText, "브리프가 없거나 노트보다 오래된 강의 2개, 직접 고친 브리프 1개는 건너뜁니다. 강조점이 없거나 만들지 못한 브리프 1개는 강조점 포함일 때 강조점을 더합니다.");
+assert.deepEqual(all.planButtons, ["스크립트만 (토큰 0)", "강조점 포함 (예상 호출 2회 · 입력 약 4.8k · 출력 약 1.2k)", "취소"]);
 assert.deepEqual(all.withAi, [true]);
-assert.equal(all.summary, "만든 브리프 2개, 건너뜀 1개, 실패 0개.");
-console.log("PASS: 모든 강의 브리프 만들기: counts (to build, edited to skip), script only or with the emphasis estimate, progress and the summary");
+assert.equal(all.runNotice, "브리프 3개를 만듭니다 (강조점 포함).", "강조점 포함 also builds the current brief without its AI part");
+assert.equal(all.summary, "만든 브리프 1개, 스크립트만 씀 (강조점 실패) 1개, 건너뜀 0개, 직접 고친 브리프 유지 1개, 실패 0개.", "a failed AI part that wrote the script part, and the edited briefs, have their own counts");
+assert.equal(all.aiOnlyText, "브리프가 없거나 노트보다 오래된 강의 0개. 강조점이 없거나 만들지 못한 브리프 1개는 강조점 포함일 때 강조점을 더합니다.");
+assert.deepEqual(all.aiOnlyButtons, [["스크립트만 (토큰 0)", true], ["강조점 포함 (예상 호출 1회 · 입력 약 2.4k · 출력 약 624)", false], ["취소", false]], "only briefs without their AI part: 스크립트만 has nothing to do");
+console.log("PASS: 모든 강의 브리프 만들기: counts (to build, without an AI part, edited to skip), script only or with the emphasis estimate, progress and the summary (스크립트만 씀 (강조점 실패), 직접 고친 브리프 유지)");

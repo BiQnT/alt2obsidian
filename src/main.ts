@@ -2117,19 +2117,27 @@ export default class Alt2ObsPlugin extends Plugin {
     return estimateCalls([{ promptText: `${input.system}\n\n${input.user}`, images: 0, schema: true, outputTokens: BRIEF_AI_OUTPUT_TOKENS }], task.provider, this.estimatedEffort(task));
   }
 
-  /** "모든 강의 브리프 만들기" (spec 4.6): lecture notes whose brief is missing or out of date, those the user edited, the AI estimate. */
+  /**
+   * "모든 강의 브리프 만들기" (spec 4.6): lecture notes whose brief is missing
+   * or out of date, current briefs whose AI part is none or failed (with a
+   * transcript to make it from), those the user edited, the AI estimate.
+   */
   async planAllBriefs(): Promise<AllBriefsPlan> {
     const files = this.briefFiles();
-    const plan: AllBriefsPlan = { todo: [], edited: [], aiEstimate: null };
+    const plan: AllBriefsPlan = { todo: [], aiOnly: [], edited: [], aiEstimate: null };
     const ai = { calls: 0, inputTokens: 0, outputTokens: 0 };
     for (const file of this.app.vault.getMarkdownFiles()) {
       const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
       if (!isLectureNote(fm, null)) continue;
       const state = await readLectureBrief(files, file.path);
       if (state.status === "edited" || state.status === "edited-stale") plan.edited.push(file.path);
-      if (state.status !== "missing" && state.status !== "outdated") continue;
+      const stale = state.status === "missing" || state.status === "outdated";
+      const brief = state.status === "ok" ? await files.read(state.path) : null;
+      const noAiPart = brief !== null && ["none", "failed"].includes(aiPartStatus(aiOf(brief).part));
+      if (!stale && !noAiPart) continue;
       const cost = await this.briefAiCost(file.path);
-      plan.todo.push({ notePath: file.path, hasTranscript: !!cost });
+      if (stale) plan.todo.push({ notePath: file.path, hasTranscript: !!cost });
+      else if (cost) plan.aiOnly.push(file.path);
       if (cost) {
         ai.calls += cost.calls;
         ai.inputTokens += cost.inputTokens;
@@ -2137,24 +2145,33 @@ export default class Alt2ObsPlugin extends Plugin {
       }
     }
     plan.todo.sort((a, b) => a.notePath.localeCompare(b.notePath, "ko", { numeric: true }));
+    plan.aiOnly.sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
     plan.aiEstimate = ai.calls > 0 ? ai : null;
     return plan;
   }
 
-  /** Builds the planned briefs one by one (the AI part only for lectures with a transcript); stops between lectures on cancel. */
+  /**
+   * Builds the planned briefs one by one (the AI part only for lectures
+   * with a transcript; with it, also the current briefs without an AI
+   * part); stops between lectures on cancel. A failed AI part that still
+   * wrote the script part counts as script only, not as a failure.
+   */
   async buildAllBriefs(plan: AllBriefsPlan, withAi: boolean, o: { signal: AbortSignal; onProgress(done: number, total: number, notePath: string): void }): Promise<AllBriefsResult> {
-    const result: AllBriefsResult = { made: 0, skipped: plan.edited.length, failed: 0, cancelled: false };
+    const result: AllBriefsResult = { made: 0, scriptOnly: 0, skipped: 0, edited: plan.edited.length, failed: 0, cancelled: false };
     const files = this.briefFiles();
-    for (const [i, item] of plan.todo.entries()) {
+    const items = withAi ? [...plan.todo, ...plan.aiOnly.map((notePath) => ({ notePath, hasTranscript: true }))] : plan.todo;
+    for (const [i, item] of items.entries()) {
       if (o.signal.aborted) {
         result.cancelled = true;
         break;
       }
-      o.onProgress(i, plan.todo.length, item.notePath);
+      o.onProgress(i, items.length, item.notePath);
       try {
         const ai = withAi && item.hasTranscript ? await this.briefAiStep(item.notePath, this.data.settings.tasks.brief, null, o.signal) : undefined;
         const r = await updateLectureBrief(files, item.notePath, { today: formatDate(), ai });
-        if (r.ai === "failed") result.failed++;
+        if (r.result === "edited") result.edited++;
+        else if (r.ai === "failed" && r.result === "written") result.scriptOnly++;
+        else if (r.ai === "failed") result.failed++;
         else if (r.result === "written") result.made++;
         else result.skipped++;
       } catch (e) {
@@ -2163,7 +2180,7 @@ export default class Alt2ObsPlugin extends Plugin {
       }
     }
     if (o.signal.aborted) result.cancelled = true;
-    o.onProgress(plan.todo.length, plan.todo.length, plan.todo[plan.todo.length - 1]?.notePath ?? "");
+    o.onProgress(items.length, items.length, items[items.length - 1]?.notePath ?? "");
     return result;
   }
 

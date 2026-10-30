@@ -1081,24 +1081,46 @@ try {
       assert.equal(s.calls().length - n2, scriptOnly.estimate.calls);
       assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec10 Script brief.md"), /^ai_part: \{status: "none"\}$/m);
       plugin.data.settings.briefMode = "ai";
-      // "모든 강의 브리프 만들기" (spec 4.6): a missing brief is made (with the AI part), an edited one skipped.
-      files.delete("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md");
+      // "모든 강의 브리프 만들기" (spec 4.6): a missing brief is made (with the AI part), an edited one skipped,
+      // a current brief without its AI part (Lec10, made by "스크립트만") gets one with 강조점 포함 only.
+      const lec8Brief = "Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md";
+      const lec10Brief = "Alt2Obsidian/CSED311/Briefs/Lec10 Script brief.md";
+      files.delete(lec8Brief);
       const failPath = "Alt2Obsidian/CSED311/Briefs/Lec9 Fail brief.md";
       files.set(failPath, files.get(failPath) + "\n내가 고친 줄\n");
       const allPlan = await plugin.planAllBriefs();
       const lec8 = allPlan.todo.find((t) => t.notePath.endsWith("Lec8 Coherence.md"));
       assert.deepEqual(lec8 && lec8.hasTranscript, true, "the lecture without a brief, with its cached transcript");
       assert.ok(allPlan.edited.some((p) => p.endsWith("Lec9 Fail.md")), "the edited brief is counted to skip");
-      assert.ok(allPlan.aiEstimate && allPlan.aiEstimate.calls >= 1);
+      assert.deepEqual(allPlan.aiOnly.map((p) => p.split("/").pop()), ["Lec10 Script.md"], "the current brief without its AI part, with a cached transcript");
+      assert.ok(!allPlan.todo.some((t) => t.notePath.endsWith("Lec10 Script.md")), "it is not built again by 스크립트만");
+      assert.ok(allPlan.aiEstimate && allPlan.aiEstimate.calls >= 2, "its call is in the estimate");
+      const lec10Before = files.get(lec10Brief);
+      const n2b = s.calls().length;
+      const scriptRun = await plugin.buildAllBriefs({ ...allPlan, todo: [] }, false, { signal: new AbortController().signal, onProgress: () => {} });
+      assert.deepEqual([scriptRun.made, scriptRun.skipped, s.calls().length - n2b, files.get(lec10Brief)], [0, 0, 0, lec10Before], "스크립트만: nothing for a current brief");
       const progress = [];
       const n3 = s.calls().length;
       const built = await plugin.buildAllBriefs(allPlan, true, { signal: new AbortController().signal, onProgress: (d, t) => progress.push(`${d}/${t}`) });
-      assert.equal(built.made + built.failed, allPlan.todo.length);
-      assert.equal(built.skipped, allPlan.edited.length);
+      const total = allPlan.todo.length + allPlan.aiOnly.length;
+      assert.equal(built.made + built.failed, total);
+      assert.deepEqual([built.scriptOnly, built.skipped, built.edited], [0, 0, allPlan.edited.length], "the edited briefs have their own count");
       assert.equal(s.calls().length - n3, allPlan.aiEstimate.calls, "one call per lecture with candidates");
-      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md"), /^ai_part: \{status: "ok"/m);
+      assert.match(files.get(lec8Brief), /^ai_part: \{status: "ok"/m);
+      assert.match(files.get(lec10Brief), /^ai_part: \{status: "ok"/m, "강조점 포함 made the AI part of the current brief");
       assert.match(files.get(failPath), /내가 고친 줄/, "the edited brief is left alone");
-      assert.equal(progress[progress.length - 1], `${allPlan.todo.length}/${allPlan.todo.length}`);
+      assert.equal(progress[progress.length - 1], `${total}/${total}`);
+      // The AI part fails: the script part is still written (스크립트만 씀 (강조점 실패), not 실패), and the next 강조점 포함 offers it again.
+      files.delete(lec8Brief);
+      process.env.FAKE_CLI_MODE = "brieffail";
+      const failRun = await quietWarn(async () => plugin.buildAllBriefs(await plugin.planAllBriefs(), true, { signal: new AbortController().signal, onProgress: () => {} }));
+      process.env.FAKE_CLI_MODE = "ok";
+      assert.deepEqual([failRun.scriptOnly, failRun.failed], [1, 0]);
+      assert.match(files.get(lec8Brief), /^ai_part: \{status: "failed"\}$/m);
+      const retryPlan = await plugin.planAllBriefs();
+      assert.ok(retryPlan.aiOnly.some((p) => p.endsWith("Lec8 Coherence.md")), "a current brief whose AI part failed is offered again");
+      await plugin.buildAllBriefs(retryPlan, true, { signal: new AbortController().signal, onProgress: () => {} });
+      assert.match(files.get(lec8Brief), /^ai_part: \{status: "ok"/m);
       const stopped = new AbortController();
       stopped.abort();
       assert.equal((await plugin.buildAllBriefs(allPlan, false, { signal: stopped.signal, onProgress: () => {} })).cancelled, true, "cancel stops between lectures");
@@ -1111,7 +1133,7 @@ try {
       // Leave the vault and the transcript cache as the tests below expect them.
       for (const k of [...files.keys()]) if (/Lec(8 Coherence|9 Fail|10 Script)/.test(k)) files.delete(k);
       for (const f of readdirSync(cacheRoot, { recursive: true })) if (/local-brief/.test(String(f))) rmSync(join(cacheRoot, String(f)), { force: true });
-      console.log("PASS: brief AI part on import: candidates from the transcript, one call of the brief task counted in the estimate (row and model picker), sections and one_line written, usage in the totals not in the note; unchanged input reused; a failed call leaves the script part and one warning and is tried again; script mode makes no call; 모든 강의 브리프 만들기 builds missing briefs and skips edited ones; the panel's 강조점까지 만들기");
+      console.log("PASS: brief AI part on import: candidates from the transcript, one call of the brief task counted in the estimate (row and model picker), sections and one_line written, usage in the totals not in the note; unchanged input reused; a failed call leaves the script part and one warning and is tried again; script mode makes no call; 모든 강의 브리프 만들기 builds missing briefs, with 강조점 포함 also the AI part of current briefs without one, counts edited ones and a failed AI part (script part written) on their own; the panel's 강조점까지 만들기");
     }
 
     // Opening the lecture PDF opens the Synced Viewer for the pair (setting on by default).
