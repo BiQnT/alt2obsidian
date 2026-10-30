@@ -344,7 +344,8 @@ async function main() {
     const copied: string[] = [];
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void copied.push(t) } });
     const pre = a.createEl("pre");
-    pre.createEl("code", { text: `#include <${zw}stdio.h>\nvector<${zw}int> v;` });
+    // A rendered code block's text ends in a newline.
+    pre.createEl("code", { text: `#include <${zw}stdio.h>\nvector<${zw}int> v;\n` });
     let obsidianCopied = false;
     pre.createEl("button", { cls: "copy-code-button", text: "Copy" }).addEventListener("click", () => (obsidianCopied = true));
     const copyOf = (node: Node) => {

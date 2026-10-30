@@ -341,6 +341,7 @@ export class ChatView extends ItemView {
       e.clipboardData.setData("text/plain", text.split(ZW).join(""));
     });
     // So does a code block's copy button: this runs first (capture) and Obsidian's own handler does not.
+    // Like Obsidian's own button, it leaves out the code's trailing newline.
     this.registerDomEvent(
       this.threadEl,
       "click",
@@ -350,7 +351,7 @@ export class ChatView extends ItemView {
         if (!button || !code) return;
         e.preventDefault();
         e.stopPropagation();
-        void navigator.clipboard.writeText((code.textContent ?? "").split(ZW).join("")).then(
+        void navigator.clipboard.writeText((code.textContent ?? "").split(ZW).join("").replace(/\n$/, "")).then(
           () => new Notice("코드를 복사했습니다."),
           () => new Notice("복사하지 못했습니다.")
         );

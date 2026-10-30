@@ -206,9 +206,9 @@ console.log("PASS: grounding chips navigate: slide chips to the slide, time chip
 
 // What is copied from an answer has none of the sanitizer's zero-width spaces (review round 2, MEDIUM 3).
 const copy = at("copy without zero-width spaces");
-assert.deepEqual(copy.selection, { text: "#include <stdio.h>\nvector<int> v;", prevented: true }, "a selection: plain text without them");
+assert.deepEqual(copy.selection, { text: "#include <stdio.h>\nvector<int> v;\n", prevented: true }, "a selection: plain text without them, as selected");
 assert.deepEqual(copy.plain, { text: "", prevented: false }, "a selection without any: the browser copies as usual");
-assert.deepEqual(copy.button, ["#include <stdio.h>\nvector<int> v;"], "a code block's copy button: its code without them");
+assert.deepEqual(copy.button, ["#include <stdio.h>\nvector<int> v;"], "a code block's copy button: its code without them or its trailing newline, as Obsidian's button copies");
 assert.equal(copy.obsidianCopied, false, "instead of Obsidian's own handler");
 console.log("PASS: copying from an answer (a selection or a code block's copy button) leaves out the zero-width spaces, so copied code compiles");
 
