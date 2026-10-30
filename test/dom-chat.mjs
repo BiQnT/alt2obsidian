@@ -294,13 +294,16 @@ assert.equal(add.quoteSent, "> 선택한 문장입니다.\n> 둘째 줄", "the q
 assert.ok(add.otherBriefSent, "the other lecture's brief in the system prompt");
 assert.deepEqual(add.images, [14, 15, 16], "the added slides' images go with the question");
 assert.equal(add.quoteAfterRemove, false, "× takes the quote out");
-console.log("PASS: + 자료 추가: this lecture's list (range, locked current slide, uncertain times, image estimate), another lecture with its brief, the note's selection as a quote; all of it sent and removable with ×");
+assert.deepEqual(add.otherCites, ["L4 슬라이드 2|L4 · 슬라이드 2", "슬라이드 14|L5 · 슬라이드 14"], "[L4 슬라이드 2] is the other lecture's chip, [L5 슬라이드 14] this lecture's");
+assert.equal(add.otherPlain, true, "a lecture the question did not send stays text");
+assert.deepEqual(add.otherGone, { go: "slide", note: "Alt2Obsidian/CSED423/Lectures/L4.md", n: 2 }, "the other lecture's chip goes to that lecture's slide");
+console.log("PASS: + 자료 추가: this lecture's list (range, locked current slide, uncertain times, image estimate), another lecture with its brief, the note's selection as a quote; all of it sent and removable with ×; the answer's [L4 슬라이드 N] goes to that lecture's slide and stays a chip after a lecture switch");
 // Right-click questions (spec 5.8).
 const rc = at("right-click questions");
 assert.deepEqual(rc.sameSlide, { chip: "📄 슬라이드 12", pinned: true, focused: true }, "이 슬라이드에 질문: pinned on that slide, the input focused");
 assert.deepEqual(rc.sameQuote, { quote: "인용할 문장", focused: true }, "선택한 내용으로 질문: the quote chip");
 assert.deepEqual(rc.otherSlide, { head: "CSED423 · L4", chip: "📄 슬라이드 5", pinned: true, quote: null }, "another lecture: the panel moves there, pinned");
-assert.deepEqual(rc.otherQuote, { head: "CSED423 · L5", chip: "📄 슬라이드 20 · 따라가는 중", quote: "다른 노트의 글" });
+assert.deepEqual(rc.otherQuote, { head: "CSED423 · L5", chip: "📄 슬라이드 20 · 따라가는 중", quote: "다른 노트의 글", cites: add.otherCites }, "back on L5: the other lecture's chip is drawn again from the turn");
 assert.deepEqual(rc.notLecture, { head: "CSED423 · L5", quote: "다른 노트의 글" }, "a note that is not a lecture changes nothing");
 console.log("PASS: right-click questions: 이 슬라이드에 질문 pins the panel on that slide (another lecture too), 선택한 내용으로 질문 puts the text in as a quote, the input focused");
 assert.deepEqual(at("menu").items, ["브리프 열기", "브리프 다시 만들기", "설정 열기"]);

@@ -68,6 +68,8 @@ export interface ChatTurn {
   slide: number | null;
   /** Where "메모에 저장" writes: the question's first focus slide (spec 5.9); none without one. */
   memoTarget?: ChatMemoTarget;
+  /** Other lectures whose slides or brief the question sent: the answer's `[L4 슬라이드 N]` chips (spec 5.5). */
+  otherLectures?: Array<{ notePath: string; name: string; slides: number }>;
   answer: string;
   status: "streaming" | "done" | "stopped" | "error";
   error?: ChatErrorInfo;

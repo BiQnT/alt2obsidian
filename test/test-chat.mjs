@@ -191,7 +191,25 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.deepEqual(sections.map((p) => p.kind), ["section", "text"], "[구간 9] past the last section stays text");
   assert.deepEqual(m.parseCitations("[99:00]", { slides: 0, sections: 0, lengthMs: null }).map((p) => p.kind), ["time"], "unknown length: every time");
   assert.deepEqual(m.parseCitations("[슬라이드 5~2]", limits).map((p) => p.kind), ["text"], "a backwards range stays text");
-  console.log("PASS: grounding marks: slide, list, range, section, mm:ss and h:mm:ss, outside badge; out-of-range marks stay text");
+  // Another lecture's slides (the question sent L4, 12 slides): `[L4 슬라이드 N]`, lists and ranges, the heading's `·` too.
+  const withOthers = { ...limits, name: "L5", lectures: [{ name: "L4", slides: 12 }, { name: "Lec 3 Pipelining", slides: 40 }] };
+  const other = m.parseCitations("[L4 슬라이드 3] [L4 슬라이드 2, 5~6] [L4 · 슬라이드 7] [Lec 3 Pipelining 슬라이드 33] [L5 슬라이드 25] [L4 슬라이드 13] [L3 슬라이드 1] [참고 슬라이드 2] [슬라이드 12]", withOthers);
+  assert.deepEqual(
+    other.filter((p) => p.kind === "slide").map((p) => [p.lecture ?? null, p.slides]),
+    [
+      ["L4", [3]],
+      ["L4", [2, 5, 6]],
+      ["L4", [7]],
+      ["Lec 3 Pipelining", [33]],
+      [null, [25]],
+      [null, [12]],
+    ],
+    "another lecture's slides by its own count; this lecture's name is a plain mark"
+  );
+  assert.ok(other.some((p) => p.kind === "text" && p.text.includes("[L4 슬라이드 13] [L3 슬라이드 1] [참고 슬라이드 2]")), "past that lecture's last slide, a lecture the question did not send, any other word: text");
+  assert.equal(other.map((p) => p.text).join(""), "[L4 슬라이드 3] [L4 슬라이드 2, 5~6] [L4 · 슬라이드 7] [Lec 3 Pipelining 슬라이드 33] [L5 슬라이드 25] [L4 슬라이드 13] [L3 슬라이드 1] [참고 슬라이드 2] [슬라이드 12]");
+  assert.deepEqual(m.parseCitations("[L4 슬라이드 3]", limits).map((p) => p.kind), ["text"], "no other lecture sent: text");
+  console.log("PASS: grounding marks: slide, list, range, section, mm:ss and h:mm:ss, outside badge; out-of-range marks stay text; [L4 슬라이드 N] for another lecture the question sent, by its slide count");
 }
 
 // ---- threads: made on the first question, LRU of 10 with turns, dividers, history (spec 5.1, 5.2, 5.4) ----

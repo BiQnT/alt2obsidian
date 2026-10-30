@@ -454,10 +454,18 @@ async function main() {
   await until("the quote chip", () => text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("❝ 선택한 글 ×")));
   const added = text(".alt-to-obs-chat-chip").filter((t) => /^(📄|📚|❝)/.test(t!));
   const runsBeforeAdded = runs();
+  // The answer cites the other lecture's slide (spec 5.5): `[L4 슬라이드 2]`; this lecture by name; a lecture not sent.
+  answer = { ...answer, pieces: ["다른 강의 [L4 슬라이드 2], ", "이 강의 [L5 슬라이드 14], 안 보낸 [L3 슬라이드 1]."] };
   input.value = "자료를 더하고 묻기";
   button("보내기", root().querySelector(".alt-to-obs-chat-composer")!).click();
   await until("the answer with added material", () => runs() === runsBeforeAdded + 1 && root().querySelector(".alt-to-obs-chat-send")!.textContent === "보내기");
   const addedReq = calls.filter((c) => c.run).pop().run;
+  const lastAnswer = () => Array.from(root().querySelectorAll(".alt-to-obs-chat-a")).pop() as HTMLElement;
+  const citesOf = (el: HTMLElement) => Array.from(el.querySelectorAll(".alt-to-obs-chat-cite")).map((c) => `${c.textContent}|${c.getAttribute("title")}`);
+  const otherCites = citesOf(lastAnswer());
+  (lastAnswer().querySelector(".alt-to-obs-chat-cite.is-slide") as HTMLElement).click();
+  await until("the other lecture's slide", () => calls.some((c) => c.go && c.note === L4));
+  const otherGone = calls.filter((c) => c.go).pop();
   button("❝ 선택한 글 ×").click();
   log.push({
     step: "add material",
@@ -476,6 +484,9 @@ async function main() {
     otherBriefSent: addedReq.system.includes("[다른 강의 브리프: CSED423 · L4]\n## 개요\nL4 브리프 본문"),
     images: addedReq.images.map((i: any) => i.pageNum),
     quoteAfterRemove: text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("❝")),
+    otherCites,
+    otherGone,
+    otherPlain: lastAnswer().textContent!.includes("[L3 슬라이드 1]"),
   });
 
   // ---- right-click questions (spec 5.8): pinned on a slide; a selection as the quote, the input focused ----
@@ -493,7 +504,8 @@ async function main() {
   await view().askAboutSlide(L4, 5);
   const otherSlide = { head: text(".alt-to-obs-chat-lecture")[0], chip: slideChip(), pinned: isPinned(), quote: quoteChip() ?? null };
   await view().askAboutSelection(L5, 20, "다른 노트의 글");
-  const otherQuote = { head: text(".alt-to-obs-chat-lecture")[0], chip: slideChip(), quote: quoteChip() };
+  // Back on L5 after L4, its thread drawn again: the other lecture's chip is still a chip (kept on the turn).
+  const otherQuote = { head: text(".alt-to-obs-chat-lecture")[0], chip: slideChip(), quote: quoteChip(), cites: citesOf(lastAnswer()) };
   await view().askAboutSelection("notes/shopping.md", null, "강의 노트가 아닌 글");
   const notLecture = { head: text(".alt-to-obs-chat-lecture")[0], quote: quoteChip() };
   button("❝ 선택한 글 ×").click();

@@ -1081,7 +1081,7 @@ export class ChatView extends ItemView {
       component.load();
       this.turnComponents.set(turn.id, component);
       await MarkdownRenderer.render(this.app, safeAnswerMarkdown(turn.answer), answer, this.lecture?.notePath ?? "", component);
-      this.applyCitations(answer);
+      this.applyCitations(answer, turn);
     }
     if (turn.status === "stopped") el.createDiv({ cls: "alt-to-obs-chat-status", text: "(중지됨)" });
     if (turn.status === "error" && turn.error) this.renderError(el, turn, turn.error);
@@ -1163,11 +1163,14 @@ export class ChatView extends ItemView {
     actions.createEl("button", { text: "설정 열기" }).addEventListener("click", () => this.host.openSettings());
   }
 
-  /** Grounding marks of a rendered answer as chips, never inside code (spec 5.5). */
-  private applyCitations(root: HTMLElement): void {
+  /**
+   * Grounding marks of a rendered answer as chips, never inside code (spec
+   * 5.5). `[L4 슬라이드 N]` counts for the other lectures the turn sent.
+   */
+  private applyCitations(root: HTMLElement, turn: ChatTurn): void {
     const lecture = this.lecture;
     if (!lecture) return;
-    const limits = { slides: lecture.slideCount, sections: lecture.sectionCount, lengthMs: lecture.lengthMs };
+    const limits = { slides: lecture.slideCount, sections: lecture.sectionCount, lengthMs: lecture.lengthMs, name: lecture.name, lectures: turn.otherLectures ?? [] };
     const doc = root.ownerDocument;
     const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const nodes: Text[] = [];
@@ -1185,7 +1188,7 @@ export class ChatView extends ItemView {
         }
         const [text, title] =
           p.kind === "slide"
-            ? [`슬라이드 ${p.slides.length > 2 ? `${p.slides[0]}~${p.slides[p.slides.length - 1]}` : p.slides.join(", ")}`, `${lecture.name} · 슬라이드 ${p.slides.join(", ")}`]
+            ? [`${p.lecture ? `${p.lecture} ` : ""}슬라이드 ${p.slides.length > 2 ? `${p.slides[0]}~${p.slides[p.slides.length - 1]}` : p.slides.join(", ")}`, `${p.lecture ?? lecture.name} · 슬라이드 ${p.slides.join(", ")}`]
             : p.kind === "section"
               ? [`구간 ${p.num}`, `${lecture.name} · 구간 ${p.num}`]
               : p.kind === "time"
@@ -1195,7 +1198,7 @@ export class ChatView extends ItemView {
         // Where the mark points (spec 5.5); "강의 자료 밖" is only a badge.
         const go =
           p.kind === "slide"
-            ? () => this.host.gotoSlide(lecture, p.slides[0])
+            ? () => this.gotoCitedSlide(lecture, turn, p.lecture, p.slides[0])
             : p.kind === "section"
               ? () => this.host.gotoSection(lecture, p.num)
               : p.kind === "time"
@@ -1209,6 +1212,15 @@ export class ChatView extends ItemView {
       }
       node.replaceWith(frag);
     }
+  }
+
+  /** A slide chip: this lecture's slide, or one of another lecture the turn sent (its viewer, else its note's heading). */
+  private async gotoCitedSlide(lecture: ChatLecture, turn: ChatTurn, other: string | undefined, slide: number): Promise<void> {
+    if (!other) return this.host.gotoSlide(lecture, slide);
+    const cited = turn.otherLectures?.find((l) => l.name === other);
+    const of = cited ? await this.host.chatLecture(cited.notePath) : null;
+    if (!of) throw new Error(`강의 노트를 찾지 못했습니다: ${cited?.notePath ?? other}`);
+    await this.host.gotoSlide(of, slide);
   }
 
   // ---- the input row ----
@@ -1334,13 +1346,20 @@ export class ChatView extends ItemView {
         thread.items.push({ kind: "note", text: `앞 대화 ${pack.folded}개를 줄였습니다` });
         thread.folded = pack.folded;
       }
-      const first = this.focusTargets().find((t) => this.materials.has(this.materialKey(t.slide, t.lecture)));
+      const read = this.focusTargets().filter((t) => this.materials.has(this.materialKey(t.slide, t.lecture)));
+      const first = read[0];
+      // Other lectures whose slides or brief go with the question, kept on the turn for its `[L4 슬라이드 N]` chips.
+      const others = new Map<string, { notePath: string; name: string; slides: number }>();
+      for (const of of [...read.map((t) => t.lecture), ...this.addedBriefs.filter((b) => b.body.trim()).map((b) => b.lecture)]) {
+        if (of.notePath !== lecture.notePath) others.set(of.notePath, { notePath: of.notePath, name: of.name, slides: of.slideCount });
+      }
       const turn: ChatTurn = {
         id: newTurnId(),
         question,
         label: materialLabel(focus, this.chips.brief && !!this.brief?.body),
         slide: this.currentSlide(),
         memoTarget: first ? { notePath: first.lecture.notePath, unit: "slide", num: first.slide } : undefined,
+        ...(others.size > 0 ? { otherLectures: [...others.values()] } : {}),
         answer: "",
         status: "streaming",
         request: { task, system: pack.system, user: pack.user, images },
