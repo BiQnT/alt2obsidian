@@ -193,6 +193,14 @@ assert.deepEqual(nav.keyed, [`time:${29 * 60_000 + 10_000}`, "slide:17"], "a foc
 assert.deepEqual(nav.prevented, [true, true, false], "Space does not scroll the panel; other keys are left alone");
 console.log("PASS: grounding chips navigate: slide chips to the slide, time chips to the transcript time; by click, Enter or Space");
 
+// What is copied from an answer has none of the sanitizer's zero-width spaces (review round 2, MEDIUM 3).
+const copy = at("copy without zero-width spaces");
+assert.deepEqual(copy.selection, { text: "#include <stdio.h>\nvector<int> v;", prevented: true }, "a selection: plain text without them");
+assert.deepEqual(copy.plain, { text: "", prevented: false }, "a selection without any: the browser copies as usual");
+assert.deepEqual(copy.button, ["#include <stdio.h>\nvector<int> v;"], "a code block's copy button: its code without them");
+assert.equal(copy.obsidianCopied, false, "instead of Obsidian's own handler");
+console.log("PASS: copying from an answer (a selection or a code block's copy button) leaves out the zero-width spaces, so copied code compiles");
+
 // 메모에 저장 (spec 5.9).
 const memo = at("memo");
 assert.deepEqual(memo.items, ["답변 그대로 · 토큰 0", "세 줄로 줄여서 · 브리프 모델 1회"]);

@@ -290,6 +290,34 @@ async function main() {
   const keyed = calls.filter((c) => c.go).map((c) => `${c.go}:${c.n ?? c.ms}`).slice(gone.length);
   log.push({ step: "chips navigate", gone, keyed, prevented, role: a.querySelector(".alt-to-obs-chat-cite.is-slide")!.getAttribute("role"), outsideRole: a.querySelector(".alt-to-obs-chat-cite.is-outside")!.getAttribute("role") });
 
+  // ---- copying from an answer leaves out the sanitizer's zero-width spaces (a selection, a code block's copy button) ----
+  {
+    const zw = "\u200B";
+    const copied: string[] = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void copied.push(t) } });
+    const pre = a.createEl("pre");
+    pre.createEl("code", { text: `#include <${zw}stdio.h>\nvector<${zw}int> v;` });
+    let obsidianCopied = false;
+    pre.createEl("button", { cls: "copy-code-button", text: "Copy" }).addEventListener("click", () => (obsidianCopied = true));
+    const copyOf = (node: Node) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      document.getSelection()!.removeAllRanges();
+      document.getSelection()!.addRange(range);
+      const e = new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: new DataTransfer() });
+      (node instanceof Element ? node : node.parentElement!).dispatchEvent(e);
+      return { text: e.clipboardData!.getData("text/plain"), prevented: e.defaultPrevented };
+    };
+    const selection = copyOf(pre.querySelector("code")!);
+    const plain = copyOf(a.querySelector("p")!);
+    (pre.querySelector(".copy-code-button") as HTMLElement).click();
+    await sleep(20);
+    pre.remove();
+    delete (navigator as any).clipboard;
+    document.getSelection()!.removeAllRanges();
+    log.push({ step: "copy without zero-width spaces", selection, plain, button: copied, obsidianCopied });
+  }
+
   // ---- 메모에 저장 (spec 5.9): the question's first focus slide, as it is or cut to three lines ----
   const noticesBeforeMemo = ((window as any).__notices ?? []).length;
   button("메모에 저장", a.closest(".alt-to-obs-chat-turn")!).click();

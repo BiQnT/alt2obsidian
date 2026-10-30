@@ -36,7 +36,7 @@ import { estimateTextTokens } from "../core/budget/estimate";
 import type { StoredSpan } from "../core/prep/TranscriptAligner";
 import { formatClock } from "../core/sections";
 import { CitedLecture, parseCitations } from "../chat/citations";
-import { dataviewQueryPrefixes, safeAnswerMarkdown } from "../chat/safeMarkdown";
+import { dataviewQueryPrefixes, safeAnswerMarkdown, ZW } from "../chat/safeMarkdown";
 import {
   buildChatPack,
   ChatPack,
@@ -306,6 +306,30 @@ export class ChatView extends ItemView {
     this.chipsEl = root.createDiv({ cls: "alt-to-obs-chat-chips" });
     this.popoverEl = root.createDiv({ cls: "alt-to-obs-chat-popover-host" });
     this.threadEl = root.createDiv({ cls: "alt-to-obs-chat-thread" });
+    // What is copied from an answer leaves out the zero-width spaces the sanitizer added (code copied must compile).
+    this.registerDomEvent(this.threadEl, "copy", (e) => {
+      const text = this.threadEl.ownerDocument.getSelection()?.toString() ?? "";
+      if (!text.includes(ZW) || !e.clipboardData) return;
+      e.preventDefault();
+      e.clipboardData.setData("text/plain", text.split(ZW).join(""));
+    });
+    // So does a code block's copy button: this runs first (capture) and Obsidian's own handler does not.
+    this.registerDomEvent(
+      this.threadEl,
+      "click",
+      (e) => {
+        const button = e.target instanceof Element ? e.target.closest(".copy-code-button") : null;
+        const code = button?.closest("pre")?.querySelector("code");
+        if (!button || !code) return;
+        e.preventDefault();
+        e.stopPropagation();
+        void navigator.clipboard.writeText((code.textContent ?? "").split(ZW).join("")).then(
+          () => new Notice("코드를 복사했습니다."),
+          () => new Notice("복사하지 못했습니다.")
+        );
+      },
+      { capture: true }
+    );
     this.composerEl = root.createDiv({ cls: "alt-to-obs-chat-composer" });
     this.buildComposer();
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => void this.syncFromWorkspace()));
