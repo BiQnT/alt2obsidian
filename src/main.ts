@@ -1867,7 +1867,7 @@ export default class Alt2ObsPlugin extends Plugin {
       onProgress?.("챗봇 브리프 만드는 중...", 98);
       // An import's own transcript or none ([]); without an import context, the cache or Alt (null).
       const ai = mode === "ai" ? await this.briefAiStep(notePath, ctx?.task ?? this.data.settings.tasks.brief, ctx ? ctx.transcript ?? [] : null, ctx?.signal) : undefined;
-      const result = await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate(), ai });
+      const result = await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate(), ai, queryPrefixes: dataviewQueryPrefixes(this.app) });
       if (result.ai === "failed") ctx?.onWarning?.(`챗봇 브리프의 강조점을 만들지 못해 스크립트 부분만 썼습니다: ${result.aiError ?? "알 수 없는 오류"}`);
     } catch (e) {
       console.warn("[Alt2Obs] lecture brief not written:", e);
@@ -2098,7 +2098,7 @@ export default class Alt2ObsPlugin extends Plugin {
   /** The panel's brief buttons: the script part, or with `withAi` the AI part too ("강조점까지 만들기"). */
   async buildChatBrief(notePath: string, force: boolean, withAi = false): Promise<void> {
     const ai = withAi ? await this.briefAiStep(notePath, this.data.settings.tasks.brief, null) : undefined;
-    const result = await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate(), force, ai });
+    const result = await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate(), force, ai, queryPrefixes: dataviewQueryPrefixes(this.app) });
     if (result.ai === "failed") new Notice(`강조점을 만들지 못해 스크립트 부분만 썼습니다: ${result.aiError ?? "알 수 없는 오류"}`);
   }
 
@@ -2177,7 +2177,7 @@ export default class Alt2ObsPlugin extends Plugin {
       o.onProgress(i, items.length, item.notePath);
       try {
         const ai = withAi && item.hasTranscript ? await this.briefAiStep(item.notePath, this.data.settings.tasks.brief, null, o.signal) : undefined;
-        const r = await updateLectureBrief(files, item.notePath, { today: formatDate(), ai });
+        const r = await updateLectureBrief(files, item.notePath, { today: formatDate(), ai, queryPrefixes: dataviewQueryPrefixes(this.app) });
         if (r.result === "edited") result.edited++;
         else if (r.ai === "failed" && r.result === "written") result.scriptOnly++;
         else if (r.ai === "failed") result.failed++;

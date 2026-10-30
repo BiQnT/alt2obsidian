@@ -513,6 +513,13 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.deepEqual(texts.map((t) => t.split(zw).join("")), [evil.one_line, evil.emphasis[0].text, evil.qa[0].q, evil.qa[0].a, evil.pitfalls[0]], "only zero-width spaces added");
   const rendered = m.renderAiSections(safeAi, "slides");
   assert.ok(!/<[A-Za-z!/?]/.test(rendered) && !rendered.includes("![") && !/`\s*\$?=/.test(rendered) && !rendered.includes("%%") && !/^\s*(?:-\s*)?(`{3,}|~{3,})/m.test(rendered), "the sections written hold no tag, image, query, comment or fence");
+  // Templater commands (run in a new file, code included) and Dataview's own prefixes ("js:") are broken too.
+  const custom = { one_line: "", emphasis: [], qa: [{ t: "01:10", q: "`js: dv.pages().length` 는?", a: "<% tp.date.now() %> 로 날짜를 넣는다" }], pitfalls: ["`<%* tR += 1 %>` 를 코드로 착각한다"] };
+  const plain = m.validateBriefAi(custom, input);
+  assert.equal(plain.qa[0].q, custom.qa[0].q, "js: is no query without the setting");
+  const withPrefix = m.validateBriefAi(custom, input, ["js:"]);
+  assert.equal(withPrefix.qa[0].q, `\`${zw}js: dv.pages().length\` 는?`, "Dataview's own prefix gets a zero-width space");
+  assert.ok([withPrefix.qa[0].a, ...withPrefix.pitfalls].every((t) => !t.includes("<%") && t.includes(`<${zw}%`)), "no <% left, in code either");
   assert.throws(() => m.validateBriefAi([1], input), /JSON 객체가 아닙니다/, "not an object: asked once more");
   assert.deepEqual(m.validateBriefAi({}, input), { oneLine: "", emphasis: [], qa: [], pitfalls: [] }, "empty lists are fine");
   assert.equal(
@@ -561,6 +568,9 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   fail = false;
   const r5 = await m.updateLectureBrief(store, NOTE, { today: TODAY, ai: { transcript: transcript.slice(0, 6), run: async (p, v) => (calls++, { ai: v({ one_line: "다시 만든 줄이다", emphasis: [], qa: [], pitfalls: ["다시 만든 점이다."] }), model: "m", input: 1, output: 1 }) } });
   assert.deepEqual([r5.ai, calls], ["ok", 3], "a failed part is made again");
+  // Dataview's own prefixes reach the check of the AI part's texts.
+  await m.updateLectureBrief(store, NOTE, { today: TODAY, force: true, queryPrefixes: ["js:"], ai: { transcript: transcript.slice(0, 6), run: async (p, v) => ({ ai: v({ one_line: "", emphasis: [], qa: [], pitfalls: ["`js: dv.x` 를 표로 착각한다"] }), model: "m", input: 1, output: 1 }) } });
+  assert.ok(files.get(BRIEF).includes(`- \`${String.fromCharCode(0x200b)}js: dv.x\` 를 표로 착각한다`), "queryPrefixes made safe in the written brief");
   // No candidate: ai_part none, no call.
   const r6 = await m.updateLectureBrief(store, NOTE, { today: TODAY, ai: step([seg(0, "평범한 이야기입니다.")]) });
   assert.deepEqual([r6.ai, calls], ["none", 3]);

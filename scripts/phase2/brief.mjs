@@ -908,7 +908,7 @@ function safeFenceLanguage(line) {
   return lang === "" || SAFE_LANGUAGES.has(lang.toLowerCase()) ? line : `${lead}${fence[1]}text`;
 }
 function noTags(text) {
-  return text.replace(/<(?=[A-Za-z!/?])/g, `<${ZW}`);
+  return text.replace(/<(?=[A-Za-z!/?%])/g, `<${ZW}`);
 }
 function safeNoteMarkdown(text, queryPrefixes = []) {
   return safeAnswerMarkdown(text, queryPrefixes).replace(/%(?=%)/g, `%${ZW}`);
@@ -921,7 +921,7 @@ function safeAnswerMarkdown(text, queryPrefixes = []) {
   let out = "";
   let last = 0;
   for (const m of lines.matchAll(MATH)) {
-    out += noTags(lines.slice(last, m.index)) + m[0].replace(/<(?=[A-Za-z!/?])/g, "< ");
+    out += noTags(lines.slice(last, m.index)) + m[0].replace(/<(?=[A-Za-z!/?%])/g, "< ");
     last = (m.index ?? 0) + m[0].length;
   }
   const opensQuery = (whole, at) => {
@@ -1091,7 +1091,7 @@ function copiesCandidate(text, candidateText) {
   outside.push(t.slice(last));
   return outside.some((part) => shares(part, COPY_WINDOW, (w) => hangul(w) >= COPY_WINDOW_HANGUL));
 }
-function validateBriefAi(raw, input) {
+function validateBriefAi(raw, input, queryPrefixes = []) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
     throw new Error("\uBE0C\uB9AC\uD504 AI \uB2F5\uC774 JSON \uAC1D\uCCB4\uAC00 \uC544\uB2D9\uB2C8\uB2E4");
   const r = raw;
@@ -1103,6 +1103,7 @@ function validateBriefAi(raw, input) {
     return formatClock(ms);
   };
   const ok = (...texts) => texts.every((t) => t.length > 0) && !texts.some((t) => copiesCandidate(t, input.candidateText));
+  const safe = (text) => safeNoteMarkdown(text, queryPrefixes);
   const emphasis = [];
   for (const item of list(r.emphasis)) {
     const e = item ?? {};
@@ -1111,7 +1112,7 @@ function validateBriefAi(raw, input) {
     if (!t || !ok(text))
       continue;
     const slide = typeof e.slide === "number" && Number.isInteger(e.slide) && e.slide >= 1 && e.slide <= input.units ? e.slide : null;
-    emphasis.push({ t, slide, text: safeNoteMarkdown(text) });
+    emphasis.push({ t, slide, text: safe(text) });
   }
   const qa = [];
   for (const item of list(r.qa)) {
@@ -1120,12 +1121,12 @@ function validateBriefAi(raw, input) {
     const q = clean(e.q, ITEM_CHARS);
     const a = clean(e.a, ITEM_CHARS);
     if (t && ok(q, a))
-      qa.push({ t, q: safeNoteMarkdown(q), a: safeNoteMarkdown(a) });
+      qa.push({ t, q: safe(q), a: safe(a) });
   }
-  const pitfalls = list(r.pitfalls).map((p) => clean(p, ITEM_CHARS)).filter((p) => ok(p)).map((p) => safeNoteMarkdown(p));
+  const pitfalls = list(r.pitfalls).map((p) => clean(p, ITEM_CHARS)).filter((p) => ok(p)).map((p) => safe(p));
   const oneLine = clean(r.one_line, ONE_LINE_CHARS2);
   return {
-    oneLine: oneLine && !copiesCandidate(oneLine, input.candidateText) ? safeNoteMarkdown(oneLine) : "",
+    oneLine: oneLine && !copiesCandidate(oneLine, input.candidateText) ? safe(oneLine) : "",
     emphasis: emphasis.slice(0, CAPS.emphasis),
     qa: qa.slice(0, CAPS.qa),
     pitfalls: pitfalls.slice(0, CAPS.pitfalls)
@@ -1184,7 +1185,7 @@ async function updateLectureBrief(files, notePath, opts) {
       aiState = "reused";
     } else {
       try {
-        const r = await opts.ai.run({ system: input.system, user: input.user }, (raw) => validateBriefAi(raw, input));
+        const r = await opts.ai.run({ system: input.system, user: input.user }, (raw) => validateBriefAi(raw, input, opts.queryPrefixes));
         ai = { sections: renderAiSections(r.ai, script.kind), hash: input.hash, part: formatAiPart("ok", r), oneLine: r.ai.oneLine };
         aiState = "ok";
       } catch (e) {
@@ -1365,6 +1366,14 @@ JSON schema: ${JSON.stringify(BRIEF_AI_SCHEMA)}
   }
   process.stdout.write(JSON.stringify(out) + "\n");
 }
+function dataviewQueryPrefixes(vault) {
+  try {
+    const data = JSON.parse(readFileSync(join2(vault, ".obsidian", "plugins", "dataview", "data.json"), "utf8"));
+    return [data?.inlineQueryPrefix, data?.inlineJsQueryPrefix].filter((p) => typeof p === "string" && p.trim() !== "");
+  } catch {
+    return [];
+  }
+}
 function readAnswer(file) {
   const text = readFileSync(file, "utf8").trim().replace(/^```(?:json)?\s*\n/, "").replace(/\n```\s*$/, "");
   try {
@@ -1389,7 +1398,7 @@ async function mergeAi(args) {
   const script = await buildBriefScript(notePath, noteText);
   if (script.sourceHash !== saved.sourceHash)
     throw new Error("the note changed since build: run build again");
-  const ai = validateBriefAi(readAnswer(answerFile), saved);
+  const ai = validateBriefAi(readAnswer(answerFile), saved, dataviewQueryPrefixes(vault));
   const today = formatDate();
   const path = briefPathForNote(notePath);
   const decision = await planBriefUpdate(await files.read(path), script, {

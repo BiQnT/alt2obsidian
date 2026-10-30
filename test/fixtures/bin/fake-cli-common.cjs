@@ -113,6 +113,8 @@ function answer(stdin, schema) {
       qa: cands.length > 0 ? [{ t: cands[0][1], q: "캐시는 왜 빠른가?", a: "프로세서 가까이 있는 작은 메모리라서 빠르다." }] : [],
       pitfalls: ["캐시 일관성과 캐시 적중률을 헷갈리기 쉽다."],
     };
+    // A pitfall with an inline query under Dataview's own prefix ("js:") and a Templater command.
+    if (ms.includes("briefquery")) result.pitfalls.push("`js: dv.pages().length` 와 <% tp.file.title %> 를 헷갈린다");
     if (ms.includes("briefcopy") && cands.length > 0) {
       result.emphasis.push({ t: cands[0][1], slide: 999, text: "슬라이드 번호가 덱 밖이다" });
       result.emphasis.push({ t: "9:59:59", slide: null, text: "강의 길이를 넘는 시각이다" });

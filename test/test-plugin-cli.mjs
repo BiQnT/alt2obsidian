@@ -1127,6 +1127,26 @@ try {
       assert.equal(retry.brief.state, "call");
       await plugin.runCliImport(retry, { onConfirmUpdate: async () => true });
       assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec9 Fail brief.md"), /^ai_part: \{status: "ok"/m);
+      // Dataview's own inline query prefix ("js:") and Templater commands are made safe in the AI part: on import and from the panel.
+      {
+        const zw = String.fromCharCode(0x200b);
+        const hadPlugins = Object.prototype.hasOwnProperty.call(plugin.app, "plugins") ? plugin.app.plugins : undefined;
+        plugin.app.plugins = { plugins: { dataview: { settings: { inlineQueryPrefix: "js:" } } } };
+        process.env.FAKE_CLI_MODE = "briefquery";
+        const queryImport = await plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-q", title: "Lec11 Query" }), "CSED311");
+        const recQ = await plugin.runCliImport(queryImport);
+        const qPath = "Alt2Obsidian/CSED311/Briefs/Lec11 Query brief.md";
+        const pitfall = `- \`${zw}js: dv.pages().length\` 와 <${zw}% tp.file.title %> 를 헷갈린다`;
+        assert.ok(files.get(qPath).includes(pitfall), "import: Dataview's prefix and <% broken");
+        files.delete(qPath);
+        await plugin.buildChatBrief(recQ.path, false, true);
+        assert.ok(files.get(qPath).includes(pitfall), "the panel's 강조점까지 만들기 too");
+        process.env.FAKE_CLI_MODE = "ok";
+        if (hadPlugins === undefined) delete plugin.app.plugins;
+        else plugin.app.plugins = hadPlugins;
+        files.delete(qPath);
+        files.delete(recQ.path);
+      }
       // "스크립트만": no call, the script part.
       plugin.data.settings.briefMode = "script";
       const scriptOnly = await plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-3", title: "Lec10 Script" }), "CSED311");

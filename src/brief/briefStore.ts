@@ -66,9 +66,14 @@ export async function aiInputFor(script: BriefScript, transcript: TimedText[]): 
  * user's "새로 만들기" / "다시 만들기". With `ai` and a transcript, the AI
  * part is made when its input changed (`ai_hash`) or the last one did not
  * succeed; a failed call writes the script part with ai_part.status
- * "failed" and never throws.
+ * "failed" and never throws. `queryPrefixes`: Dataview's own inline query
+ * prefixes, made safe in the AI part's texts too.
  */
-export async function updateLectureBrief(files: BriefFiles, notePath: string, opts: { today: string; force?: boolean; ai?: BriefAiStep }): Promise<BriefUpdate> {
+export async function updateLectureBrief(
+  files: BriefFiles,
+  notePath: string,
+  opts: { today: string; force?: boolean; ai?: BriefAiStep; queryPrefixes?: readonly string[] }
+): Promise<BriefUpdate> {
   const noteText = await files.read(notePath);
   if (noteText === null) throw new Error(`강의 노트를 찾지 못했습니다: ${notePath}`);
   const script = await buildBriefScript(notePath, noteText);
@@ -89,7 +94,7 @@ export async function updateLectureBrief(files: BriefFiles, notePath: string, op
       aiState = "reused";
     } else {
       try {
-        const r = await opts.ai.run({ system: input.system, user: input.user }, (raw) => validateBriefAi(raw, input));
+        const r = await opts.ai.run({ system: input.system, user: input.user }, (raw) => validateBriefAi(raw, input, opts.queryPrefixes));
         ai = { sections: renderAiSections(r.ai, script.kind), hash: input.hash, part: formatAiPart("ok", r), oneLine: r.ai.oneLine };
         aiState = "ok";
       } catch (e) {

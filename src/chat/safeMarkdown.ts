@@ -19,9 +19,11 @@
 //   (its text shows; an inline `%%...%%` later in a line stays);
 // - in math (`$$...$$`, and `$...$` by Obsidian's rules: no space after the
 //   opening `$` or before the closing one, no digit after it) a `<` that
-//   could open a tag gets a space after it; elsewhere, code included, it
-//   gets a zero-width space, so no raw HTML, comment or declaration is
-//   left;
+//   could open a tag, or a Templater command (`<%`), gets a space after it;
+//   elsewhere, code included, it gets a zero-width space, so no raw HTML,
+//   comment or declaration is left, and Templater (which reads the raw
+//   text of a new file, code too, when "Trigger Templater on new file
+//   creation" is on) finds no command;
 // - `![` gets a zero-width space in it, so no image (remote, reference or
 //   embed) is loaded;
 // - an inline Dataview query prefix (`=`, `$=` and the ones set in
@@ -136,9 +138,9 @@ function safeFenceLanguage(line: string): string {
   return lang === "" || SAFE_LANGUAGES.has(lang.toLowerCase()) ? line : `${lead}${fence[1]}text`;
 }
 
-/** No tag, comment, declaration or processing instruction can start: `<` then a zero-width space. */
+/** No tag, comment, declaration, processing instruction or Templater command (`<%`) can start: `<` then a zero-width space. */
 function noTags(text: string): string {
-  return text.replace(/<(?=[A-Za-z!/?])/g, `<${ZW}`);
+  return text.replace(/<(?=[A-Za-z!/?%])/g, `<${ZW}`);
 }
 
 /**
@@ -170,7 +172,7 @@ export function safeAnswerMarkdown(text: string, queryPrefixes: readonly string[
   let out = "";
   let last = 0;
   for (const m of lines.matchAll(MATH)) {
-    out += noTags(lines.slice(last, m.index)) + m[0].replace(/<(?=[A-Za-z!/?])/g, "< ");
+    out += noTags(lines.slice(last, m.index)) + m[0].replace(/<(?=[A-Za-z!/?%])/g, "< ");
     last = (m.index ?? 0) + m[0].length;
   }
   const opensQuery = (whole: string, at: number) => {

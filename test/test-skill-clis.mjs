@@ -419,13 +419,18 @@ try {
       one_line: "부동소수점 덧셈의 순서와 정밀도를 다룬다",
       emphasis: [{ t: "10:00", slide: 2, text: "작은 수부터 더해야 정밀도를 지킨다고 강조했다" }, { t: "99:00", slide: 2, text: "강의 밖의 시각" }],
       qa: [{ t: "10:20", q: "왜 작은 수부터 더하나?", a: "큰 수에 더하면 작은 수가 사라진다" }],
-      pitfalls: ["덧셈 순서가 결과를 바꾼다는 점"],
+      pitfalls: ["덧셈 순서가 결과를 바꾼다는 점", "`js: dv.x` 와 <% tp.file.title %> 를 헷갈린다"],
     };
+    // Dataview's own prefixes, read from its settings in the vault like the plugin reads them from the app (a non-string ignored).
+    mkdirSync(join(vault, ".obsidian/plugins/dataview"), { recursive: true });
+    writeFileSync(join(vault, ".obsidian/plugins/dataview/data.json"), JSON.stringify({ inlineQueryPrefix: "js:", inlineJsQueryPrefix: 5 }));
     const answerFile = join(dir, "brief-work", "answer.json");
     writeFileSync(answerFile, "```json\n" + JSON.stringify(answer) + "\n```\n");
     const merged = JSON.parse(cli("brief", ["merge-ai", "--note", notePath, "--ai", answerFile, "--candidates", out]));
-    assert.deepEqual(merged, { brief: briefFile, result: "written", kept: { emphasis: 1, qa: 1, pitfalls: 1, oneLine: true } }, "the time past the lecture dropped");
-    await b.updateLectureBrief(store, rel, { today, ai: { transcript: b.timedTranscript(transcript), run: async (_p, validate) => ({ ai: validate(answer), model: "", input: 0, output: 0 }) } });
+    assert.deepEqual(merged, { brief: briefFile, result: "written", kept: { emphasis: 1, qa: 1, pitfalls: 2, oneLine: true } }, "the time past the lecture dropped");
+    const zw = String.fromCharCode(0x200b);
+    assert.ok(readFileSync(briefFile, "utf8").includes(`- \`${zw}js: dv.x\` 와 <${zw}% tp.file.title %> 를 헷갈린다`), "Dataview's own prefix and a Templater command broken");
+    await b.updateLectureBrief(store, rel, { today, queryPrefixes: ["js:"], ai: { transcript: b.timedTranscript(transcript), run: async (_p, validate) => ({ ai: validate(answer), model: "", input: 0, output: 0 }) } });
     const plugin = memory.get("Alt2Obsidian/CSED423/Briefs/L5 brief.md");
     const skill = readFileSync(briefFile, "utf8");
     assert.equal(b.bodyOf(skill), b.bodyOf(plugin), "the same body as the plugin's AI part");

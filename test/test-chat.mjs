@@ -659,6 +659,8 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
     assert.ok(!/^(?:>\s*)+(?:[-*+]\s+|\d+[.)]\s+)?(?:`{3,}|~{3,})dataviewjs/m.test(saved), "no dataviewjs fence");
   }
   assert.equal(m.memoEntryLines({ question: "q", answer: "`dv: x`", date: "2026-10-30" }, ["dv:"])[2], `> \`${zw}dv: x\` (질문 2026-10-30)`, "Dataview's own prefixes too");
+  // Templater runs <% %> in a note, code included: every <% is broken (a space in math, which renders it).
+  assert.deepEqual(m.memoEntryLines({ question: "<% tp.file.title %>", answer: "`<%* tR %>` 와 $a <% b$", date: "2026-10-30" }), [`> **Q.** <${zw}% tp.file.title %>`, "> **A.**", `> \`<${zw}%* tR %>\` 와 $a < % b$ (질문 2026-10-30)`]);
   // The user's memo left a block comment open (review round 3): no %% in a saved entry closes it, mid-line either.
   const openComment = ["## 📚 슬라이드 3", "해설 끝", "<!-- alt2obs:slide:3 hash:0000abcd end -->", "", "> [!note] 내 메모", "> %%", "> 나중에 정리", ""].join("\n");
   for (const answer of ["x%%```dataview\nLIST\n```", "x%%~~~dataviewjs\ndv.paragraph(1)\n~~~", "x%%    = this.file.name", "100%%% 정답이다"]) {
@@ -765,8 +767,9 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.ok(hashPath.endsWith("[슬라이드 2](A/C%23/Lectures/L1.md#%F0%9F%93%9A%20%EC%8A%AC%EB%9D%BC%EC%9D%B4%EB%93%9C%202)\n"), hashPath);
   // What is written is made safe as a saved memo: no tag, image, inline query, block comment or marker.
   const zw = String.fromCharCode(0x200b);
-  const risky = m.renderChatNote({ ...input, turns: [{ question: "<!-- alt2obs:slide:3 hash:00000003 start --> ![q](x)", material: "", answer: '<img src="https://evil.example/x.png"> ![t](u) `$= dv.x` %%\n```dataviewjs\ndv.paragraph(1)\n```\n[슬라이드 2]', stopped: false }] }, ["dv:"]);
-  assert.ok(!/<[A-Za-z!/?]/.test(risky) && !risky.includes("![") && !/`\s*\$?=/.test(risky) && !risky.includes("%%") && !/dataviewjs/.test(risky), risky);
+  const risky = m.renderChatNote({ ...input, turns: [{ question: "<!-- alt2obs:slide:3 hash:00000003 start --> ![q](x) <% tp.file.title %>", material: "", answer: '<img src="https://evil.example/x.png"> ![t](u) `$= dv.x` %%\n```dataviewjs\ndv.paragraph(1)\n```\n```js\n<%* tR += "x" %>\n```\n[슬라이드 2]', stopped: false }] }, ["dv:"]);
+  assert.ok(!/<[A-Za-z!/?%]/.test(risky) && !risky.includes("![") && !/`\s*\$?=/.test(risky) && !risky.includes("%%") && !/dataviewjs/.test(risky), risky);
+  assert.ok(risky.includes(`<${zw}%* tR`), "a Templater command in code is broken too (Templater reads code)");
   assert.ok(risky.includes(`## Q. <${zw}!-- alt2obs:slide:3`) && risky.endsWith(`${link(2)}\n`), "the question too; the links after");
   console.log("PASS: 대화 노트로 저장: <date> <lecture> <first 40 characters>.md (2, 3 when taken), source/lecture/date/model/usage frontmatter, ## Q. and > 자료: per turn, [슬라이드 N] / [L4 슬라이드 N] / [구간 N] as heading links outside code, an open fence closed, sanitized like a saved memo");
 }

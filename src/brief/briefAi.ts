@@ -224,10 +224,11 @@ export function copiesCandidate(text: string, candidateText: string): boolean {
  * copies the transcript goes, texts are cut to 100 characters (one_line to
  * 80) and the lists to 6, 4 and 4. The texts kept are model output that
  * goes into the vault (rendered by every plugin), so they are made safe as
- * a saved memo is. Throws only when the answer is not an object (the call
- * is asked once more then).
+ * a saved memo is, with `queryPrefixes` (the inline query prefixes set in
+ * Dataview) too. Throws only when the answer is not an object (the call is
+ * asked once more then).
  */
-export function validateBriefAi(raw: unknown, input: Pick<BriefAiInput, "lengthMs" | "units" | "candidateText">): BriefAi {
+export function validateBriefAi(raw: unknown, input: Pick<BriefAiInput, "lengthMs" | "units" | "candidateText">, queryPrefixes: readonly string[] = []): BriefAi {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("브리프 AI 답이 JSON 객체가 아닙니다");
   const r = raw as Record<string, unknown>;
   const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
@@ -237,6 +238,7 @@ export function validateBriefAi(raw: unknown, input: Pick<BriefAiInput, "lengthM
     return formatClock(ms);
   };
   const ok = (...texts: string[]) => texts.every((t) => t.length > 0) && !texts.some((t) => copiesCandidate(t, input.candidateText));
+  const safe = (text: string) => safeNoteMarkdown(text, queryPrefixes);
   const emphasis: BriefAi["emphasis"] = [];
   for (const item of list(r.emphasis)) {
     const e = (item ?? {}) as Record<string, unknown>;
@@ -244,7 +246,7 @@ export function validateBriefAi(raw: unknown, input: Pick<BriefAiInput, "lengthM
     const text = clean(e.text, ITEM_CHARS);
     if (!t || !ok(text)) continue;
     const slide = typeof e.slide === "number" && Number.isInteger(e.slide) && e.slide >= 1 && e.slide <= input.units ? e.slide : null;
-    emphasis.push({ t, slide, text: safeNoteMarkdown(text) });
+    emphasis.push({ t, slide, text: safe(text) });
   }
   const qa: BriefAi["qa"] = [];
   for (const item of list(r.qa)) {
@@ -252,15 +254,15 @@ export function validateBriefAi(raw: unknown, input: Pick<BriefAiInput, "lengthM
     const t = time(e.t);
     const q = clean(e.q, ITEM_CHARS);
     const a = clean(e.a, ITEM_CHARS);
-    if (t && ok(q, a)) qa.push({ t, q: safeNoteMarkdown(q), a: safeNoteMarkdown(a) });
+    if (t && ok(q, a)) qa.push({ t, q: safe(q), a: safe(a) });
   }
   const pitfalls = list(r.pitfalls)
     .map((p) => clean(p, ITEM_CHARS))
     .filter((p) => ok(p))
-    .map((p) => safeNoteMarkdown(p));
+    .map((p) => safe(p));
   const oneLine = clean(r.one_line, ONE_LINE_CHARS);
   return {
-    oneLine: oneLine && !copiesCandidate(oneLine, input.candidateText) ? safeNoteMarkdown(oneLine) : "",
+    oneLine: oneLine && !copiesCandidate(oneLine, input.candidateText) ? safe(oneLine) : "",
     emphasis: emphasis.slice(0, CAPS.emphasis),
     qa: qa.slice(0, CAPS.qa),
     pitfalls: pitfalls.slice(0, CAPS.pitfalls),

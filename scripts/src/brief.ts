@@ -20,8 +20,10 @@
 //   node scripts/phase2/brief.mjs merge-ai --note <note.md> --ai <answer.json> --candidates <candidates.json> [--vault <dir>]
 //     Checks the session's JSON answer with the plugin's validator (times
 //     within the lecture, slides within the deck, nothing copied from the
-//     transcript) and writes the brief's AI sections, then the subject
-//     brief. Refuses when the note changed since `build`. Prints
+//     transcript, texts made safe with Dataview's own query prefixes from
+//     <vault>/.obsidian/plugins/dataview/data.json when it is there) and
+//     writes the brief's AI sections, then the subject brief. Refuses when
+//     the note changed since `build`. Prints
 //     {"brief","result","kept":{"emphasis","qa","pitfalls","oneLine"}}.
 //
 // The vault is the nearest folder above the note that holds `.obsidian`,
@@ -159,6 +161,20 @@ async function build(args: string[]): Promise<void> {
   process.stdout.write(JSON.stringify(out) + "\n");
 }
 
+/**
+ * The inline query prefixes set in Dataview (`inlineQueryPrefix`,
+ * `inlineJsQueryPrefix` of its data.json in the vault), as the plugin reads
+ * them from the app; none when the file is not there or not readable.
+ */
+function dataviewQueryPrefixes(vault: string): string[] {
+  try {
+    const data = JSON.parse(readFileSync(join(vault, ".obsidian", "plugins", "dataview", "data.json"), "utf8")) as { inlineQueryPrefix?: unknown; inlineJsQueryPrefix?: unknown } | null;
+    return [data?.inlineQueryPrefix, data?.inlineJsQueryPrefix].filter((p): p is string => typeof p === "string" && p.trim() !== "");
+  } catch {
+    return [];
+  }
+}
+
 /** The session's answer: a JSON object, a ```json fence around it allowed. */
 function readAnswer(file: string): unknown {
   const text = readFileSync(file, "utf8")
@@ -184,7 +200,7 @@ async function mergeAi(args: string[]): Promise<void> {
   if (noteText === null) throw new Error(`no note at ${notePath}`);
   const script = await buildBriefScript(notePath, noteText);
   if (script.sourceHash !== saved.sourceHash) throw new Error("the note changed since build: run build again");
-  const ai = validateBriefAi(readAnswer(answerFile), saved);
+  const ai = validateBriefAi(readAnswer(answerFile), saved, dataviewQueryPrefixes(vault));
   const today = formatDate();
   const path = briefPathForNote(notePath);
   // The session's tokens are not known: ai_part has the status only.
