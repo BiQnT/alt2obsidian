@@ -212,7 +212,14 @@ async function main() {
   const noSelection = rightClick(heading);
   await select(heading, false);
   const withSelection = rightClick(heading);
-  log.push({ step: "right-click", onPage, noSelection, withSelection, asked, current: nav.getCurrentSlide() });
+  // Its 복사 copies the selection (the menu replaces the default one, which had it).
+  const copied: string[] = [];
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void copied.push(t) } });
+  (Menu as any).shown = null;
+  heading.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  (Menu as any).shown.items.find((i: any) => i.title === "복사").click();
+  await sleep(10);
+  log.push({ step: "right-click", onPage, noSelection, withSelection, asked, current: nav.getCurrentSlide(), copied });
   await nav.onClose();
 
   log.push({

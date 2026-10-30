@@ -338,7 +338,16 @@ export class SyncedViewerView extends ItemView {
       if (!chat || !mdPath || !text.trim()) return;
       evt.preventDefault();
       const slide = this.currentPage;
-      new Menu().addItem((item) => item.setTitle("선택한 내용으로 질문").setIcon("message-circle").onClick(() => chat.askSelection(mdPath, slide, text))).showAtMouseEvent(evt);
+      // This menu replaces the default one: it keeps 복사, so a right-click on a word is not a dead end.
+      new Menu()
+        .addItem((item) => item.setTitle("선택한 내용으로 질문").setIcon("message-circle").onClick(() => chat.askSelection(mdPath, slide, text)))
+        .addItem((item) =>
+          item
+            .setTitle("복사")
+            .setIcon("copy")
+            .onClick(() => void navigator.clipboard.writeText(text).catch(() => new Notice("복사하지 못했습니다.")))
+        )
+        .showAtMouseEvent(evt);
     });
   }
 
@@ -456,12 +465,12 @@ export class SyncedViewerView extends ItemView {
     window.setTimeout(() => flashed.removeClass("is-flash"), 2000);
   }
 
-  /** "💬 질문" shows whether the question panel is open. */
   /** The text selected in the note pane ("" for none). */
   getSelectedText(): string {
     return this.mdSelection;
   }
 
+  /** "💬 질문" shows whether the question panel is open. */
   setChatActive(open: boolean): void {
     this.chatBtnEl?.toggleClass("is-active", open);
   }

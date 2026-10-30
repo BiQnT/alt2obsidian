@@ -206,6 +206,7 @@ assert.deepEqual([sel.clearedByOther, sel.clearedInPane], ["", ""], "cleared by 
 const right = at("right-click");
 assert.deepEqual(right.onPage, { items: ["이 슬라이드에 질문"], prevented: true }, "a page's right-click menu");
 assert.deepEqual(right.noSelection, { items: null, prevented: false }, "no selection in the note: the default menu");
-assert.deepEqual(right.withSelection, { items: ["선택한 내용으로 질문"], prevented: true });
+assert.deepEqual(right.withSelection, { items: ["선택한 내용으로 질문", "복사"], prevented: true }, "with a selection: the question and 복사 (the default menu it replaces had it)");
+assert.deepEqual(right.copied, [sel.heading], "복사 copies the selection");
 assert.deepEqual(right.asked, [["slide", "note.md", 2], ["selection", "note.md", right.current, sel.heading]], "the panel is asked with the note, the slide and the text");
-console.log("PASS: Synced Viewer's showTranscriptAt(ms) and gotoSlide(n) for the question panel's chips; the note pane's selection for 노트에서 선택한 글; right-click: 이 슬라이드에 질문 on a page, 선택한 내용으로 질문 on a selection");
+console.log("PASS: Synced Viewer's showTranscriptAt(ms) and gotoSlide(n) for the question panel's chips; the note pane's selection for 노트에서 선택한 글; right-click: 이 슬라이드에 질문 on a page, 선택한 내용으로 질문 and 복사 on a selection");
