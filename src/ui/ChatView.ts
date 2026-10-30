@@ -1207,7 +1207,14 @@ export class ChatView extends ItemView {
         if (go) {
           chip.setAttr("role", "button");
           chip.setAttr("tabindex", "0");
-          chip.addEventListener("click", () => void go().catch((e) => new Notice(`이동하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`)));
+          const activate = () => void go().catch((e) => new Notice(`이동하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`));
+          chip.addEventListener("click", activate);
+          // A focused chip works from the keyboard as a button does.
+          chip.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            activate();
+          });
         }
       }
       node.replaceWith(frag);

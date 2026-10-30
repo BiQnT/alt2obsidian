@@ -2430,11 +2430,22 @@ export default class Alt2ObsPlugin extends Plugin {
     else await this.openHeading(lecture.notePath, `📚 슬라이드 ${slide}`);
   }
 
-  /** A time chip: the viewer's transcript at that time; in a summary note, the heading of the section that holds it. */
+  /**
+   * A time chip: the viewer's transcript at that time; without a viewer (no
+   * PDF), the heading of the slide aligned to it; in a summary note, the
+   * heading of the section that holds it.
+   */
   async gotoTime(lecture: ChatLecture, ms: number): Promise<void> {
     if (lecture.kind === "slides") {
       const viewer = await this.viewerFor(lecture.notePath);
-      if (viewer) await viewer.showTranscriptAt(ms);
+      if (viewer) {
+        await viewer.showTranscriptAt(ms);
+        return;
+      }
+      // The viewer's rule: the span that holds the time, else the last one that started before it.
+      const spans = parseAlignment(this.frontmatterOf(lecture.notePath)?.alt_alignment);
+      const span = spans.find((x) => ms >= x.startMs && ms < x.endMs) ?? [...spans].reverse().find((x) => x.startMs <= ms);
+      if (span) await this.openHeading(lecture.notePath, `📚 슬라이드 ${span.slide}`);
       return;
     }
     const section = (await this.sectionHeadings(lecture.notePath)).find((h) => h.startMs !== null && h.endMs !== null && ms >= h.startMs && ms < h.endMs);

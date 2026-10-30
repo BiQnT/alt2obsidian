@@ -278,7 +278,17 @@ async function main() {
   (Array.from(a.querySelectorAll(".alt-to-obs-chat-cite.is-slide"))[1] as HTMLElement).click();
   (a.querySelector(".alt-to-obs-chat-cite.is-outside") as HTMLElement).click();
   await sleep(50);
-  log.push({ step: "chips navigate", gone: calls.filter((c) => c.go).map((c) => `${c.go}:${c.n ?? c.ms}`), role: a.querySelector(".alt-to-obs-chat-cite.is-slide")!.getAttribute("role"), outsideRole: a.querySelector(".alt-to-obs-chat-cite.is-outside")!.getAttribute("role") });
+  const gone = calls.filter((c) => c.go).map((c) => `${c.go}:${c.n ?? c.ms}`);
+  // From the keyboard: Enter and Space go, another key does nothing.
+  const key = (sel: string, k: string) => {
+    const e = new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true });
+    a.querySelector(sel)!.dispatchEvent(e);
+    return e.defaultPrevented;
+  };
+  const prevented = [key(".alt-to-obs-chat-cite.is-time", "Enter"), key(".alt-to-obs-chat-cite.is-slide", " "), key(".alt-to-obs-chat-cite.is-slide", "a")];
+  await sleep(50);
+  const keyed = calls.filter((c) => c.go).map((c) => `${c.go}:${c.n ?? c.ms}`).slice(gone.length);
+  log.push({ step: "chips navigate", gone, keyed, prevented, role: a.querySelector(".alt-to-obs-chat-cite.is-slide")!.getAttribute("role"), outsideRole: a.querySelector(".alt-to-obs-chat-cite.is-outside")!.getAttribute("role") });
 
   // ---- 메모에 저장 (spec 5.9): the question's first focus slide, as it is or cut to three lines ----
   const noticesBeforeMemo = ((window as any).__notices ?? []).length;

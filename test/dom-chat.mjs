@@ -189,7 +189,9 @@ console.log("PASS: Enter sends (not while composing, not with Shift); the answer
 const nav = at("chips navigate");
 assert.deepEqual(nav.gone, ["slide:17", `time:${29 * 60_000 + 10_000}`, "slide:16"], "a slide chip to its slide (a range to its first), a time chip to its time; the outside badge goes nowhere");
 assert.deepEqual([nav.role, nav.outsideRole], ["button", null]);
-console.log("PASS: grounding chips navigate: slide chips to the slide, time chips to the transcript time");
+assert.deepEqual(nav.keyed, [`time:${29 * 60_000 + 10_000}`, "slide:17"], "a focused chip goes with Enter or Space");
+assert.deepEqual(nav.prevented, [true, true, false], "Space does not scroll the panel; other keys are left alone");
+console.log("PASS: grounding chips navigate: slide chips to the slide, time chips to the transcript time; by click, Enter or Space");
 
 // 메모에 저장 (spec 5.9).
 const memo = at("memo");

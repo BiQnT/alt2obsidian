@@ -1440,6 +1440,16 @@ try {
       assert.match(opened[0], new RegExp(`^${notePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}#⏱ 구간 2 \\d{2} \\d{2} \\d{2} \\d{2}$`), "the section's heading, as Obsidian links it");
       assert.match(opened[1], /#⏱ 구간 1 00 00 /, "a time: the section that holds it");
       assert.ok(opened[2].endsWith("#📚 슬라이드 3"), "no viewer: the slide's heading");
+      // A slide lecture without its PDF (no viewer): a time goes to the heading of the slide aligned to it.
+      const bare = "Alt2Obsidian/CSED423/Lectures/L10 Bare.md";
+      files.set(bare, '---\nalt_alignment: "1:0-20 2:20-40 3:45-60"\n---\n# L10 Bare\n\n## 📚 슬라이드 1\n\n## 📚 슬라이드 2\n\n## 📚 슬라이드 3\n');
+      const bareLec = { ...lec, notePath: bare, kind: "slides", pdfPath: null };
+      for (const ms of [30_000, 42_000, 600_000]) await plugin.gotoTime(bareLec, ms);
+      assert.deepEqual(opened.slice(3), [`${bare}#📚 슬라이드 2`, `${bare}#📚 슬라이드 2`, `${bare}#📚 슬라이드 3`], "the span that holds the time, else the last one that started before it");
+      files.set(bare, "---\nalt_kind: slides\n---\n# L10 Bare\n");
+      await plugin.gotoTime(bareLec, 30_000);
+      assert.equal(opened.length, 6, "no alignment: nowhere to go");
+      files.delete(bare);
       delete ws.openLinkText;
       delete ws.getLeavesOfType;
     }
