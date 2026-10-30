@@ -15,6 +15,8 @@ import { subjectFolderOfNote } from "../vault/layout";
 export interface CitedLecture {
   notePath: string;
   name: string;
+  /** Its subject (the note's `subject`, else its subject folder's name). */
+  subject: string;
   slides: number;
 }
 
@@ -71,8 +73,10 @@ function words(name: string): string {
 
 /**
  * The lecture the words before `슬라이드` name: the last run of them that
- * is this lecture's name (null) or a sent lecture's, the one in this
- * lecture's subject folder when two have that name; undefined for none.
+ * is this lecture's name (null) or a sent lecture's; undefined for none.
+ * When two sent lectures have that name, the words before it that name a
+ * subject (`[CSED311 L4 슬라이드 2]`) decide, then this lecture's subject
+ * folder, then the order they were sent in.
  */
 function citedLecture(label: string, limits: CitationLimits): CitedLecture | null | undefined {
   const w = words(label).split(" ");
@@ -82,7 +86,13 @@ function citedLecture(label: string, limits: CitationLimits): CitedLecture | nul
       const run = w.slice(start, end).join(" ");
       if (limits.name !== undefined && words(limits.name) === run) return null;
       const named = (limits.lectures ?? []).filter((l) => words(l.name) === run);
-      if (named.length > 0) return named.find((l) => subjectFolderOfNote(l.notePath) === folder) ?? named[0];
+      if (named.length === 0) continue;
+      const before = ` ${w.slice(0, start).join(" ")} `.toLowerCase();
+      const subjectNamed = named.filter((l) =>
+        [l.subject, subjectFolderOfNote(l.notePath).split("/").pop() ?? ""].some((s) => words(s) !== "" && before.includes(` ${words(s).toLowerCase()} `))
+      );
+      const pool = subjectNamed.length > 0 ? subjectNamed : named;
+      return pool.find((l) => subjectFolderOfNote(l.notePath) === folder) ?? pool[0];
     }
   }
   return undefined;

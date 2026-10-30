@@ -1357,7 +1357,7 @@ export class ChatView extends ItemView {
       // Other lectures whose slides or brief go with the question, kept on the turn for its `[L4 슬라이드 N]` chips.
       const others = new Map<string, CitedLecture>();
       for (const of of [...read.map((t) => t.lecture), ...this.addedBriefs.filter((b) => b.body.trim()).map((b) => b.lecture)]) {
-        if (of.notePath !== lecture.notePath) others.set(of.notePath, { notePath: of.notePath, name: of.name, slides: of.slideCount });
+        if (of.notePath !== lecture.notePath) others.set(of.notePath, { notePath: of.notePath, name: of.name, subject: of.subject, slides: of.slideCount });
       }
       const turn: ChatTurn = {
         id: newTurnId(),

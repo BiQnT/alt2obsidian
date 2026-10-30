@@ -192,8 +192,8 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.deepEqual(m.parseCitations("[99:00]", { slides: 0, sections: 0, lengthMs: null }).map((p) => p.kind), ["time"], "unknown length: every time");
   assert.deepEqual(m.parseCitations("[슬라이드 5~2]", limits).map((p) => p.kind), ["text"], "a backwards range stays text");
   // Another lecture's slides (the question sent L4, 12 slides): `[L4 슬라이드 N]`, lists and ranges, the heading's `·` too.
-  const L4 = { notePath: "A/CSED423/Lectures/L4.md", name: "L4", slides: 12 };
-  const withOthers = { ...limits, notePath: "A/CSED423/Lectures/L5.md", name: "L5", lectures: [L4, { notePath: "A/CSED423/Lectures/Lec 3 Pipelining.md", name: "Lec 3 Pipelining", slides: 40 }] };
+  const L4 = { notePath: "A/CSED423/Lectures/L4.md", name: "L4", subject: "CSED423", slides: 12 };
+  const withOthers = { ...limits, notePath: "A/CSED423/Lectures/L5.md", name: "L5", lectures: [L4, { notePath: "A/CSED423/Lectures/Lec 3 Pipelining.md", name: "Lec 3 Pipelining", subject: "CSED423", slides: 40 }] };
   const other = m.parseCitations("[L4 슬라이드 3] [L4 슬라이드 2, 5~6] [L4 · 슬라이드 7] [Lec 3 Pipelining 슬라이드 33] [L5 슬라이드 25] [L4 슬라이드 13] [L3 슬라이드 1] [참고 슬라이드 2] [슬라이드 12]", withOthers);
   assert.deepEqual(
     other.filter((p) => p.kind === "slide").map((p) => [p.lecture?.name ?? null, p.slides]),
@@ -220,10 +220,16 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
     [null, 7],
   ], "subject before it, words around it; the last name wins (L5, this lecture)");
   // Two sent lectures of one name: the one in this lecture's subject folder.
-  const twin = { notePath: "A/CSED311/Lectures/L4.md", name: "L4", slides: 40 };
+  const twin = { notePath: "A/CSED311/Lectures/L4.md", name: "L4", subject: "컴퓨터구조", slides: 40 };
   assert.deepEqual(named("[L4 슬라이드 3]", { ...withOthers, lectures: [twin, L4] }), [[L4.notePath, 3]], "same subject folder first");
   assert.deepEqual(named("[L4 슬라이드 30]", { ...withOthers, lectures: [twin, L4] }), [], "its slide count decides (30 is past CSED423's L4)");
   assert.deepEqual(named("[L4 슬라이드 30]", { ...withOthers, notePath: "A/EECS/L9.md", lectures: [twin, L4] }), [[twin.notePath, 30]], "no lecture of that name in the folder: the first sent");
+  // A subject named before the name decides first: the note's subject or its subject folder's name.
+  assert.deepEqual(named("[CSED311 L4 슬라이드 3] [컴퓨터구조 · L4 슬라이드 4] [csed423 L4 슬라이드 5]", { ...withOthers, lectures: [L4, twin] }), [
+    [twin.notePath, 3],
+    [twin.notePath, 4],
+    [L4.notePath, 5],
+  ], "the subject before the name wins over this lecture's folder (folder name or subject, any case)");
   console.log("PASS: grounding marks: slide, list, range, section, mm:ss and h:mm:ss, outside badge; out-of-range marks stay text; [L4 슬라이드 N] for another lecture the question sent, by its slide count");
 }
 
