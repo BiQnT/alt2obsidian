@@ -8,6 +8,7 @@ import { ChatPanelController, SLIDE_CHANGE_EVENT, VIEW_TYPE_CHAT } from "../../s
 import { BriefsModal } from "../../src/ui/BriefsModal";
 import { ThreadStore, turnsOf } from "../../src/chat/threads";
 import { DEFAULT_SETTINGS } from "../../src/types";
+import { estimateTextTokens } from "../../src/core/budget/estimate";
 // @ts-ignore resolved to test/helpers/obsidian-browser-stub.js
 import { Component, Menu, TFile } from "obsidian";
 
@@ -25,6 +26,7 @@ const L4 = "Alt2Obsidian/CSED423/Lectures/L4.md";
 /** A summary note (no slides, spec 9): three transcript sections. */
 const L9 = "Alt2Obsidian/CSED423/Lectures/L9.md";
 const SECTIONS: Record<number, [number, number]> = { 1: [0, 723_000], 2: [723_000, 1_440_000], 3: [1_440_000, 2_160_000] };
+const SUBJECT_BODY = "- L4 (2026-09-23, 슬라이드 20장): 렉서를 다룬다.\n- L5 (2026-09-30, 슬라이드 30장): 부동소수점 덧셈을 다룬다.";
 
 /** A workspace with a right sidebar, leaves and events, enough for the panel and its controller. */
 function makeWorkspace() {
@@ -156,7 +158,7 @@ async function main() {
     chatOtherBrief: async (l: any) => (calls.push({ otherBrief: l.name }), "## 개요\nL4 브리프 본문"),
     chatSlideImage: async (l: any, n: number) => (calls.push({ image: `${l.name}:${n}` }), { pageNum: n, mimeType: "image/jpeg", base64: "AAAA" }),
     noteSelection: () => selection,
-    chatSubjectBrief: async (path: string) => (calls.push({ subjectBrief: path }), { subject: "CSED423", body: "- L4 (2026-09-23, 슬라이드 20장): 렉서를 다룬다.\n- L5 (2026-09-30, 슬라이드 30장): 부동소수점 덧셈을 다룬다." }),
+    chatSubjectBrief: async (path: string) => (calls.push({ subjectBrief: path }), { subject: "CSED423", body: SUBJECT_BODY }),
     chatSlideCorpus: async (l: any) => (
       calls.push({ corpus: l.name }),
       [
@@ -546,6 +548,9 @@ async function main() {
   const subjectBox = pop()!.querySelector<HTMLInputElement>("input[data-subject-brief]")!;
   const subjectOffer = { label: subjectBox.parentElement!.textContent, checked: subjectBox.checked, disabled: subjectBox.disabled };
   subjectBox.click();
+  // The subject brief's tokens join the estimate once read.
+  const subjectSummaryExpected = `브리프, 과목 브리프와 1장 추가 · 약 ${((600 + estimateTextTokens(SUBJECT_BODY)) / 1000).toFixed(1)}k 토큰`;
+  await until("the subject brief's tokens", () => pop()!.querySelector(".alt-to-obs-chat-popover-summary")!.textContent === subjectSummaryExpected);
   const subjectSummary = pop()!.querySelector(".alt-to-obs-chat-popover-summary")!.textContent;
   button("추가", pop()!).click();
   await until("the other lecture added", () => text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("📚 L4 브리프 ×")) && text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("📚 CSED423 과목 브리프 ×")));
@@ -591,6 +596,7 @@ async function main() {
     otherBriefSent: addedReq.system.includes("[다른 강의 브리프: CSED423 · L4]\n## 개요\nL4 브리프 본문"),
     subjectOffer,
     subjectSummary,
+    subjectSummaryExpected,
     subjectBriefSent: addedReq.system.includes("[과목 브리프: CSED423]\n- L4 (2026-09-23, 슬라이드 20장): 렉서를 다룬다.\n- L5 (2026-09-30, 슬라이드 30장): 부동소수점 덧셈을 다룬다.\n\n[다른 강의 브리프: CSED423 · L4]"),
     subjectBriefRead: calls.filter((c) => c.subjectBrief).map((c) => c.subjectBrief),
     images: addedReq.images.map((i: any) => i.pageNum),
@@ -717,6 +723,27 @@ async function main() {
       order: withReq.system.indexOf("[강의 브리프: CSED423 · L5") < withReq.system.indexOf("[과목 브리프: CSED423]\n- L4 (2026-09-23"),
       hidden: suggestEl().style.display === "none",
     });
+  }
+
+  // ---- related slides with the 📄 chip off: the current slide may be one, and adding it turns the chip on ----
+  {
+    ws.mostRecent = { view: { getViewType: () => "alt2obsidian-synced-viewer", getState: () => ({ mdPath: L5, pdfPath: "L5.pdf" }), getCurrentSlide: () => 17 } };
+    ws.trigger(SLIDE_CHANGE_EVENT, { mdPath: L5, pdfPath: "L5.pdf", page: 17 });
+    await until("slide 17 followed", () => chips().map(label).some((t) => t.startsWith("📄 슬라이드 17 · 따라가는 중")));
+    const slideChipEl = () => chips().find((c) => c.textContent!.startsWith("📄 슬라이드 17"))!;
+    slideChipEl().click();
+    const chipOff = slideChipEl().classList.contains("is-off");
+    const runsBefore = runs();
+    answer = { ...answer, pieces: ["작은 수부터 더한다 [슬라이드 17]."] };
+    input.value = "작은 수부터 더해야 해?";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await until("the answer with the chip off", () => runs() === runsBefore + 1 && root().querySelector(".alt-to-obs-chat-send")!.textContent === "보내기" && !!lastAnswer().closest(".alt-to-obs-chat-turn")!.querySelector(".alt-to-obs-chat-related-item"));
+    const turnEl = lastAnswer().closest(".alt-to-obs-chat-turn")!;
+    const rows = Array.from(turnEl.querySelectorAll(".alt-to-obs-chat-related-item"));
+    const first = rows.map((r) => r.querySelector(".alt-to-obs-chat-related-text")!.textContent)[0];
+    const slideSent = calls.filter((c) => c.run).pop().run.user.includes("## L5 · 슬라이드 17");
+    (rows[0].querySelector("button") as HTMLButtonElement).click();
+    log.push({ step: "related with the chip off", chipOff, slideSent, first, chipOn: slideChipEl().classList.contains("is-on"), button: rows[0].querySelector("button")!.textContent, added: chips().map(label).filter((t) => t.startsWith("📄")) });
   }
 
   // ---- the menu, and the × closes the panel ----

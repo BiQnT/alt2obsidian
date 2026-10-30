@@ -805,9 +805,11 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.deepEqual(m.relatedSlides(q, docs, [17]), [{ num: 16, gist: "큰 수에 더하면 사라진다" }], "a slide in the material is left out; one shared word (slide 20) is no match");
   assert.deepEqual(m.relatedSlides("캐시가 뭐야?", docs, []), [], "no shared term");
   assert.deepEqual([m.relatedSlides("", docs, []), m.relatedSlides(q, [], [])], [[], []]);
-  for (const yes of ["L4에서 배운 거랑 뭐가 달라?", "3강 내용", "3 강에서", "lec 3", "Lec3 정리", "지난 강의랑 연결해줘", "이전 강의에서", "다른 강의에도 나와?", "몇 강에서 나왔어?"]) assert.ok(m.suggestsSubjectBrief(yes), yes);
-  for (const no of ["왜 작은 수부터 더해?", "강의 내용 요약", "l2 정규화", "강조점은?", "lecture notes"]) assert.ok(!m.suggestsSubjectBrief(no), no);
-  console.log("PASS: related slides: BM25 with the verifier's tokenizer and direct-match rule, the material left out, top 2; the subject brief is offered for questions about other lectures (L4, 3강, lec 3, 지난/이전/다른 강의, 몇 강)");
+  const siblings = ["L4", "L6", "CSED423 L10"];
+  for (const yes of ["L4에서 배운 거랑 뭐가 달라?", "L10이랑 비교해줘", "3강 내용", "제3 강에서", "lec 3", "Lec3 정리", "지난 강의랑 연결해줘", "이전 강의에서", "다른 강의에도 나와?", "몇 강에서 나왔어?"]) assert.ok(m.suggestsSubjectBrief(yes, siblings), yes);
+  for (const no of ["왜 작은 수부터 더해?", "강의 내용 요약", "L1 캐시가 뭐야?", "L2 정규화", "l2 정규화", "HTML5 태그", "HTML5 강의 자료", "3 강조점은?", "L40 내용", "L5 정리", "강조점은?", "lecture notes"]) assert.ok(!m.suggestsSubjectBrief(no, siblings), no);
+  assert.ok(m.suggestsSubjectBrief("L1 캐시", ["L1"]), "L1 is a lecture of this subject");
+  console.log("PASS: related slides: BM25 with the verifier's tokenizer and direct-match rule, the material left out, top 2; the subject brief is offered for questions about other lectures (L4 when the subject has a lecture so named, 3강 but not 강조, lec 3, 지난/이전/다른 강의, 몇 강)");
 }
 
 // ---- note parts the panel reads ----

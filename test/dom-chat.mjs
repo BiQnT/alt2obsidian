@@ -317,8 +317,9 @@ assert.deepEqual(add.noSelection, { text: "노트(synced viewer의 노트 창이
 assert.equal(add.quoted, "선택한 문장입니다.\n둘째 줄", "the selection trimmed");
 assert.deepEqual(add.added.map(bare).slice(1), ["📄 슬라이드 14 ×", "📄 슬라이드 15 ×", "📄 슬라이드 16 ×", "📄 L4 · 슬라이드 2 ×", "📚 CSED423 과목 브리프 ×", "📚 L4 브리프 ×", "❝ 선택한 글 ×"]);
 assert.deepEqual(add.subjectOffer, { label: "과목 브리프 넣기", checked: false, disabled: false }, "다른 강의: 과목 브리프 넣기, off by default");
-assert.equal(add.subjectSummary, "브리프, 과목 브리프와 1장 추가 · 약 0.6k 토큰");
-assert.deepEqual(add.subjectBriefRead, ["Alt2Obsidian/CSED423/Lectures/L4.md"], "the subject of the lecture picked");
+assert.equal(add.subjectSummary, add.subjectSummaryExpected, "the subject brief's tokens in the estimate");
+assert.notEqual(add.subjectSummary.split("· ")[1], add.otherSummary.split("· ")[1]);
+assert.deepEqual([...new Set(add.subjectBriefRead)], ["Alt2Obsidian/CSED423/Lectures/L4.md"], "the subject of the lecture picked");
 assert.ok(add.subjectBriefSent, "the subject brief after the lecture brief, before the other lecture's brief (spec 6.2)");
 assert.deepEqual(add.headings, ["## L5 · 슬라이드 18", "## L5 · 슬라이드 14", "## L5 · 슬라이드 15", "## L5 · 슬라이드 16", "## L4 · 슬라이드 2"], "the current slide first, then the added ones");
 assert.equal(add.quoteSent, "> 선택한 문장입니다.\n> 둘째 줄", "the quote as [선택한 글]");
@@ -364,6 +365,12 @@ assert.equal(summary.pinned, "⏱ 구간 3 [24:00~36:00]", "pinned (no 따라가
 const offer = at("subject brief offer");
 assert.deepEqual([offer.chip.replace(/\d+(\.\d+)?k$/, ""), offer.order, offer.hidden], ["📚 CSED423 과목 브리프 ×", true, true], "넣기: the subject brief chip, sent after the lecture brief");
 console.log("PASS: a summary note: the section above the cursor with its transcript and memo, section and time chips to its heading, its memo, dividers and 📌; the subject brief offered once for a question about other lectures (넣기 / 그냥 보내기)");
+
+const chipOff = at("related with the chip off");
+assert.deepEqual([chipOff.chipOff, chipOff.slideSent], [true, false], "the 📄 chip off: slide 17 is not sent");
+assert.match(chipOff.first, /^관련 슬라이드 17 · /, "so it may be a related slide");
+assert.deepEqual([chipOff.chipOn, chipOff.button, chipOff.added], [true, "자료에 있음", ["📄 슬라이드 17 · 따라가는 중"]], "adding it turns its chip on (no second chip)");
+console.log("PASS: related slides follow the material: with the 📄 chip off the current slide can be one, and + 자료에 추가 turns its chip back on");
 
 assert.deepEqual(at("menu").items, ["대화 저장", "브리프 열기", "브리프 다시 만들기", "설정 열기"]);
 const closed = at("closed with ×");

@@ -62,6 +62,7 @@ import { renderModelPicker } from "./modelPicker";
 import { AddRequest, renderAddPopover } from "./addMaterialPopover";
 import { DEFAULT_INCLUDE, IMAGE_TOKENS, IncludeOptions, MAX_ADDED_SLIDES, quoteOf, SlideRow } from "../chat/addMaterial";
 import { SLIDE_CHANGE_EVENT, SlideChangeInfo, VIEW_TYPE_CHAT } from "./chatPanel";
+import { subjectFolderOfNote } from "../vault/layout";
 import chatSystemPrompt from "../../prompts/chat.system.md";
 
 /** A lecture note as the panel uses it. */
@@ -715,6 +716,15 @@ export class ChatView extends ItemView {
     menu.showAtMouseEvent(e);
   }
 
+  /** The names of the other lectures in this lecture's subject folder (an `L4` in a question names one of them, spec 5.10). */
+  private siblingNames(lecture: ChatLecture): string[] {
+    const folder = subjectFolderOfNote(lecture.notePath);
+    return this.host
+      .lectureChoices()
+      .filter((c) => c.path !== lecture.notePath && subjectFolderOfNote(c.path) === folder)
+      .map((c) => c.name);
+  }
+
   /** "대화 노트로 저장" / "대화 저장" (spec 5.9): the thread's note in the Chats folder, written again when saved before. */
   private async saveChatNote(): Promise<void> {
     const lecture = this.lecture;
@@ -940,6 +950,7 @@ export class ChatView extends ItemView {
       alreadyAdded: (notePath) => this.addedSlides.filter((a) => a.lecture.notePath === notePath).map((a) => a.slide),
       addedCount: this.addedSlides.length,
       subjectBriefAdded: !!this.subjectBrief,
+      subjectBriefTokens: (notePath) => this.host.chatSubjectBrief(notePath).then((b) => estimateTextTokens(b.body)),
       choices: this.host.lectureChoices(),
       loadLecture: (notePath) => this.host.chatLecture(notePath),
       slideList: (l) => this.host.chatSlideList(l),
@@ -1251,14 +1262,18 @@ export class ChatView extends ItemView {
       const row = box.createDiv({ cls: "alt-to-obs-chat-related-item" });
       row.createSpan({ cls: "alt-to-obs-chat-related-text", text: `관련 슬라이드 ${r.num}${r.gist ? ` · ${r.gist}` : ""}`, attr: { title: r.gist } });
       const add = row.createEl("button", { text: "+ 자료에 추가" });
-      const added = () => this.currentUnit() === r.num || this.addedSlides.some((a) => a.lecture.notePath === lecture.notePath && a.slide === r.num);
+      // The current slide is in the material only while its 📄 chip is on; adding it turns the chip on.
+      const current = () => this.currentUnit() === r.num;
+      const added = () => (current() && this.chips.slide) || this.addedSlides.some((a) => a.lecture.notePath === lecture.notePath && a.slide === r.num);
+      const full = () => !current() && this.addedSlides.length >= MAX_ADDED_SLIDES;
       if (added()) {
         add.setText("자료에 있음");
         add.disabled = true;
-      } else add.disabled = this.addedSlides.length >= MAX_ADDED_SLIDES;
+      } else add.disabled = full();
       add.addEventListener("click", () => {
-        if (this.lecture !== lecture || added() || this.addedSlides.length >= MAX_ADDED_SLIDES) return;
-        this.addedSlides.push({ lecture, slide: r.num, include: { ...DEFAULT_INCLUDE } });
+        if (this.lecture !== lecture || added() || full()) return;
+        if (current()) this.chips.slide = true;
+        else this.addedSlides.push({ lecture, slide: r.num, include: { ...DEFAULT_INCLUDE } });
         add.setText("자료에 있음");
         add.disabled = true;
         this.renderChips();
@@ -1500,7 +1515,7 @@ export class ChatView extends ItemView {
       await this.syncFromWorkspace();
       const lecture = this.lecture;
       if (!lecture) return;
-      if (!opts.suggested && !this.suggested && !this.subjectBrief && suggestsSubjectBrief(question)) {
+      if (!opts.suggested && !this.suggested && !this.subjectBrief && suggestsSubjectBrief(question, this.siblingNames(lecture))) {
         this.suggested = true;
         try {
           const brief = await this.host.chatSubjectBrief(lecture.notePath);
@@ -1530,7 +1545,10 @@ export class ChatView extends ItemView {
         return;
       }
       // Slides of this lecture that match the question but are not in the material, offered under the answer (spec 5.11, no tokens).
-      const inMaterial = [this.currentUnit(), ...this.addedSlides.filter((a) => a.lecture.notePath === lecture.notePath).map((a) => a.slide)].filter((n): n is number => n !== null);
+      // What goes with the question: the current slide only while its 📄 chip is on.
+      const inMaterial = this.focusTargets()
+        .filter((t) => t.lecture.notePath === lecture.notePath)
+        .map((t) => t.slide);
       const related = lecture.kind === "slides" ? relatedSlides(question, await this.host.chatSlideCorpus(lecture).catch(() => []), inMaterial) : [];
       if (this.lecture !== lecture) return;
       const thread = this.host.chatThreads.get(lecture.notePath);

@@ -26,6 +26,8 @@ export interface AddPopoverOptions {
   addedCount: number;
   /** The subject brief is in the material already. */
   subjectBriefAdded: boolean;
+  /** Tokens of the subject brief of a lecture's subject (for the estimate when 과목 브리프 넣기 is checked). */
+  subjectBriefTokens(notePath: string): Promise<number>;
   /** Other lecture notes, by subject. */
   choices: Array<{ path: string; name: string; subject: string }>;
   loadLecture(notePath: string): Promise<ChatLecture | null>;
@@ -129,13 +131,26 @@ async function renderPicker(el: HTMLElement, o: AddPopoverOptions, lecture: Chat
   }
   // 다른 강의: "과목 브리프 넣기", checked and locked once it is in.
   let subjectBox: HTMLInputElement | null = null;
+  /** The subject brief's tokens, read once it is checked (null until then). */
+  let subjectTokens: number | null = null;
   if (other) {
     const label = el.createEl("label", { cls: "alt-to-obs-chat-popover-subject" });
-    subjectBox = label.createEl("input", { type: "checkbox" });
-    subjectBox.dataset.subjectBrief = "";
-    subjectBox.checked = o.subjectBriefAdded;
-    subjectBox.disabled = o.subjectBriefAdded;
-    subjectBox.addEventListener("change", () => update());
+    const box = label.createEl("input", { type: "checkbox" });
+    subjectBox = box;
+    box.dataset.subjectBrief = "";
+    box.checked = o.subjectBriefAdded;
+    box.disabled = o.subjectBriefAdded;
+    box.addEventListener("change", () => {
+      update();
+      if (box.checked && subjectTokens === null)
+        void o.subjectBriefTokens(lecture.notePath).then(
+          (n) => {
+            subjectTokens = n;
+            if (live()) update();
+          },
+          () => undefined
+        );
+    });
     label.appendText(o.subjectBriefAdded ? "과목 브리프 넣기 (넣음)" : "과목 브리프 넣기");
   }
   const withSubject = () => !!subjectBox && subjectBox.checked && !subjectBox.disabled;
@@ -157,7 +172,8 @@ async function renderPicker(el: HTMLElement, o: AddPopoverOptions, lecture: Chat
       if (!box.disabled) box.checked = p.slides.includes(n) || checked.has(n);
     }
     for (const [i, row] of rows.entries()) list.querySelectorAll(".alt-to-obs-chat-popover-tokens")[i]?.setText(k(rowTokens(row, include)));
-    summary.setText(other ? `브리프${withSubject() ? ", 과목 브리프" : ""}와 ${p.slides.length}장 추가 · 약 ${k(p.tokens)} 토큰` : `${p.slides.length}장 추가 · 약 ${k(p.tokens)} 토큰`);
+    const tokens = p.tokens + (withSubject() ? subjectTokens ?? 0 : 0);
+    summary.setText(other ? `브리프${withSubject() ? ", 과목 브리프" : ""}와 ${p.slides.length}장 추가 · 약 ${k(tokens)} 토큰` : `${p.slides.length}장 추가 · 약 ${k(tokens)} 토큰`);
     add.disabled = !other && p.slides.length === 0;
   };
   rangeEl.addEventListener("input", update);

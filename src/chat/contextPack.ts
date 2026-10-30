@@ -290,12 +290,20 @@ export function parseSlideRange(text: string, max: number): { slides: number[]; 
   return { slides: [...slides].sort((a, b) => a - b), ignored: [...ignored].sort((a, b) => a - b) };
 }
 
-/** Words of a question about other lectures: `L4`, `3강`, `lec 3`, "지난 강의", "이전 강의", "다른 강의", "몇 강" (spec 5.10). */
-const OTHER_LECTURE_WORDS = [/L\d+/, /\d+\s*강/, /lec\s*\d+/i, /(?:지난|이전|다른)\s*강의/, /몇\s*강/];
+/** Words of a question about other lectures: `3강` (not `3 강조점`, `HTML5 강의`), `lec 3`, "지난 강의", "이전 강의", "다른 강의", "몇 강" (spec 5.10). */
+const OTHER_LECTURE_WORDS = [/(?<![A-Za-z\d])\d+\s*강(?!조)/, /lec\s*\d+/i, /(?:지난|이전|다른)\s*강의/, /몇\s*강/];
+/** A lecture's number such as `L4`, not inside a longer word or number (`HTML5`, `L40`). */
+const LECTURE_NUMBER = /(?<![A-Za-z])L\d+(?!\d)/g;
 
-/** The question asks about other lectures: the panel offers the subject brief once before sending it (spec 5.10). */
-export function suggestsSubjectBrief(question: string): boolean {
-  return OTHER_LECTURE_WORDS.some((re) => re.test(question));
+/**
+ * The question asks about other lectures: the panel offers the subject
+ * brief once before sending it (spec 5.10). An `L4` counts only when a
+ * lecture of the subject (`siblings`, the other lectures' names) is named
+ * so, as "L1 캐시" and "L2 정규화" are no lectures in most subjects.
+ */
+export function suggestsSubjectBrief(question: string, siblings: readonly string[]): boolean {
+  if (OTHER_LECTURE_WORDS.some((re) => re.test(question))) return true;
+  return [...question.matchAll(LECTURE_NUMBER)].some(([name]) => siblings.some((s) => new RegExp(`(?<![A-Za-z0-9])${name}(?!\\d)`).test(s)));
 }
 
 /** "슬라이드 17 기준", "슬라이드 17, 18 기준", "강의 브리프 기준", or "" (what a question was asked about). */
