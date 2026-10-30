@@ -258,7 +258,7 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.ok(m.bodyOf(next.text).endsWith(`## 핵심 개념\n- **Leftmost Derivation:** 가장 왼쪽 Nonterminal (비단말)부터 바꾸는 유도다.\n\n${ai}\n`), "script part rebuilt, AI sections after it as they were");
   assert.match(m.bodyOf(next.text), /- 14 \[26:26~28:38\] 바뀐 요지다\./);
   // A brief of the first build (format 1, the lecture's id as alt_local_id) is rebuilt once: the format version is in the source hash.
-  assert.equal(m.BRIEF_FORMAT_VERSION, 2);
+  assert.equal(m.BRIEF_FORMAT_VERSION, 3);
   const firstBuild = first.text.replace(/^lecture_alt_local_id:/m, "alt_local_id:").replace(/^source_hash: "[0-9a-f]{8}"$/m, 'source_hash: "0badf00d"');
   const migrated = await m.planBriefUpdate(firstBuild, script, { today: TODAY });
   assert.equal(migrated.action, "write");
@@ -388,6 +388,40 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.equal(m.timedTranscript([{ startMs: null, endMs: null, text: "b" }]), null);
   assert.equal(m.timedTranscript(undefined), null);
   console.log("PASS: subject brief for a question: the file's body (the user's lines too), else the same lines built in memory from the notes (a brief's one_line kept), nothing written; the timestamped transcript rule the import and the Skill share");
+}
+
+// ---- what the script part copies from the note is made safe before it is written (a new file: Templater runs <% %> in it) ----
+{
+  const zw = String.fromCharCode(0x200b);
+  const files = new Map();
+  const store = {
+    read: async (p) => (files.has(p) ? files.get(p) : null),
+    write: async (p, t) => void files.set(p, t),
+    list: async (folder) => [...files.keys()].filter((p) => p.startsWith(folder + "/") && !p.slice(folder.length + 1).includes("/") && p.endsWith(".md")),
+  };
+  const risky = "<%* tR += app.vault.getFiles().length %> ![x](https://evil.example/o.png)";
+  // The overview also holds a reference-style image, which no link unwrapping drops.
+  const note = slideNote({ gist14: `${risky} 요지다.`, overviewExtra: " `js: dv.pages().length` 도 본다." }).replace("### 개요\nParse tree", `### 개요\n${risky} ![y][r] Parse tree`);
+  files.set(NOTE, note);
+  const script = await m.buildBriefScript(NOTE, note);
+  assert.ok(script.overview.includes("<%* tR") && script.map[0].text.includes("<%* tR"), "the script keeps the note's own text");
+  const clean = await m.buildBriefScript(NOTE, slideNote());
+  assert.notEqual(script.sourceHash, clean.sourceHash, "source_hash: from the note's raw text");
+  await m.updateLectureBrief(store, NOTE, { today: TODAY, queryPrefixes: ["js:"] });
+  const brief = files.get("Alt2Obsidian/CSED423/Briefs/L5 brief.md");
+  const fm = m.readFrontmatter(brief);
+  assert.equal(fm.source_hash, script.sourceHash);
+  assert.equal(fm.body_hash, await m.briefBodyHash(m.bodyOf(brief)), "body_hash: from the body as written");
+  assert.equal(await m.isEditedBrief(brief), false);
+  const body = m.bodyOf(brief);
+  assert.ok(!body.includes("<%") && !body.includes("![") && !body.includes("evil.example"), body);
+  assert.match(body, new RegExp(`^- 14 \\[26:26~28:38\\] <${zw}%\\* tR`, "m"), "the gist in the slide map");
+  assert.match(body, new RegExp(`^## 개요\\n<${zw}%\\* tR[^\\n]*!${zw}\\[y\\]\\[r\\]`, "m"), "the overview (an inline image was dropped with the links, a reference image is broken)");
+  assert.ok(body.includes(`\`${zw}js: dv.pages().length\``), "Dataview's own prefix");
+  const subject = files.get("Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md");
+  assert.ok(!subject.includes("<%") && !subject.includes("![") && subject.includes(`<${zw}%* tR`), "the subject brief line too");
+  assert.deepEqual((await m.updateLectureBrief(store, NOTE, { today: TODAY, queryPrefixes: ["js:"] })).result, "same", "built again: the same bytes, nothing written");
+  console.log("PASS: the brief's script part and the subject brief are made safe before they are written (Templater, images, Dataview's own prefixes); source_hash from the note's raw text, body_hash from the written body");
 }
 
 // ---- lecture order, neighbours; briefs are not lecture notes ----

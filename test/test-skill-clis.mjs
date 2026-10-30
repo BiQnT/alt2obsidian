@@ -372,7 +372,8 @@ try {
         "부동소수점 덧셈의 정밀도를 다룬다.",
         "<!-- alt2obs:overview end -->",
         "",
-        slide(1, "부동소수점 표현을 설명한다.", "부동소수점은 부호, 지수, 가수로 나뉜다."),
+        // A Templater command in a gist: made safe in the written brief by the same code as the plugin's.
+        slide(1, "부동소수점 표현을 설명한다.", "부동소수점은 <% tp.file.title %> 부호, 지수, 가수로 나뉜다."),
         slide(2, "작은 수부터 더한다.", gist2),
       ].join("\n");
     writeFileSync(notePath, note("작은 수끼리 먼저 더해야 정밀도를 지킨다."));
@@ -401,6 +402,7 @@ try {
     assert.equal(readFileSync(briefFile, "utf8"), memory.get("Alt2Obsidian/CSED423/Briefs/L5 brief.md"), "the same brief as the plugin's");
     assert.equal(readFileSync(subjectFile, "utf8"), memory.get("Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md"), "and the same subject brief");
     assert.match(readFileSync(briefFile, "utf8"), /^lecture: "Alt2Obsidian\/CSED423\/Lectures\/L5\.md"$/m, "the note's vault path");
+    assert.ok(!readFileSync(briefFile, "utf8").includes("<%") && readFileSync(briefFile, "utf8").includes("<\u200B% tp.file.title"), "the gist's Templater command broken");
 
     // build with the bundle: the AI part's input as the plugin builds it, beside the candidates (0600).
     const out = join(dir, "brief-work", "cands.json");

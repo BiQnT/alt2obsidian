@@ -522,300 +522,6 @@ async function shortHash(text) {
   return (await sha1Hex(text)).slice(0, 8);
 }
 
-// src/brief/lectureBrief.ts
-var BRIEF_FORMAT_VERSION = 2;
-var BRIEF_TOKEN_CAP = 4e3;
-var FALLBACK_GIST_CHARS = 70;
-var SHORT_GIST_CHARS = 40;
-var LECTURE_HEAD_CHARS = 1500;
-var ONE_LINE_CHARS = 100;
-var AI_SECTIONS = ["\uAC15\uC870\uC810", "\uAC15\uC758 \uC911 \uC9C8\uBB38", "\uD5F7\uAC08\uB9AC\uAE30 \uC26C\uC6B4 \uC810"];
-function subjectOfNote(notePath, fm) {
-  return fmString(fm, "subject") || subjectFolderOfNote(notePath).split("/").pop() || "";
-}
-function cut(text, max) {
-  const chars = Array.from(text.trim());
-  return chars.length > max ? chars.slice(0, max).join("").trim() : text.trim();
-}
-function overviewParts(overview) {
-  const parts = { \uAC1C\uC694: [], \uD750\uB984: [], "\uD575\uC2EC \uAC1C\uB150": [] };
-  let current = null;
-  let known = false;
-  for (const line of toLf(overview).split("\n")) {
-    const h = line.match(/^#{2,4}\s+(.+?)\s*$/);
-    if (h) {
-      current = parts[h[1]] ?? null;
-      if (current)
-        known = true;
-      continue;
-    }
-    current?.push(line);
-  }
-  if (!known)
-    return { overview: cut(overview, LECTURE_HEAD_CHARS), flow: "", concepts: "" };
-  const text = (k) => parts[k].join("\n").trim();
-  return { overview: text("\uAC1C\uC694"), flow: text("\uD750\uB984"), concepts: text("\uD575\uC2EC \uAC1C\uB150") };
-}
-function alignedRange(spans) {
-  if (spans.length === 0)
-    return "";
-  const low = spans.some((s) => s.low) ? "?" : "";
-  return `[${formatClock(spans[0].startMs)}~${formatClock(spans[spans.length - 1].endMs)}${low}]`;
-}
-function unitRange(kind, u, alignment) {
-  if (kind === "slides")
-    return alignedRange(spansForSlide(alignment, u.num));
-  return u.startMs !== null && u.endMs !== null ? `[${formatClock(u.startMs)}~${formatClock(u.endMs)}]` : "";
-}
-function mapLine(kind, e, maxChars) {
-  const text = maxChars === null ? e.text : cut(e.text, maxChars);
-  return `- ${kind === "transcript" ? "\uAD6C\uAC04 " : ""}${e.num}${e.range ? ` ${e.range}` : ""} ${text}`;
-}
-async function buildBriefScript(notePath, noteText) {
-  const parts = parseLectureNote(noteText);
-  const fm = parts.frontmatter;
-  const alignmentValue = fmString(fm, "alt_alignment");
-  const alignment = parseAlignment(alignmentValue);
-  let ov = { overview: "", flow: "", concepts: "" };
-  if (parts.overview)
-    ov = overviewParts(unwrapWikilinks(parts.overview));
-  else if (parts.kind === "lecture")
-    ov.overview = cut(unwrapWikilinks(parts.managed), LECTURE_HEAD_CHARS);
-  if (parts.kind === "lecture")
-    ov.flow = "";
-  const map = parts.units.map((u) => ({
-    num: u.num,
-    range: unitRange(parts.kind, u, alignment),
-    text: (u.gist !== null ? unwrapWikilinks(u.gist) : firstSentence(commentaryText(u.managed), FALLBACK_GIST_CHARS)).replace(/\s+/g, " ").trim()
-  })).filter((e) => e.text.length > 0);
-  const source = [
-    `alt2obs_brief:${BRIEF_FORMAT_VERSION}`,
-    parts.kind,
-    parts.units.map((u) => `${u.num}:${u.hash}`).join(" "),
-    parts.overview ?? parts.managed,
-    map.map((e) => mapLine(parts.kind, e, null)).join("\n"),
-    alignmentValue
-  ].join("\n");
-  return {
-    lecture: notePath,
-    stem: stemOf(notePath),
-    title: fmString(fm, "title") || stemOf(notePath),
-    subject: subjectOfNote(notePath, fm),
-    altLocalId: fmString(fm, "alt_local_id"),
-    kind: parts.kind,
-    units: parts.units.reduce((n, u) => Math.max(n, u.num), 0),
-    alignment: alignmentValue,
-    sourceHash: await shortHash(source),
-    ...ov,
-    map
-  };
-}
-function renderBriefBody(script, aiSections, gistChars) {
-  const section = (title, content) => content.trim() ? `## ${title}
-${content.trim()}` : "";
-  const mapTitle = script.kind === "transcript" ? "\uAD6C\uAC04 \uC9C0\uB3C4" : "\uC2AC\uB77C\uC774\uB4DC \uC9C0\uB3C4";
-  return [
-    `# ${script.stem} brief`,
-    section("\uAC1C\uC694", script.overview),
-    section("\uD750\uB984", script.flow),
-    section(mapTitle, script.map.map((e) => mapLine(script.kind, e, gistChars)).join("\n")),
-    section("\uD575\uC2EC \uAC1C\uB150", script.concepts),
-    aiSections.trim()
-  ].filter(Boolean).join("\n\n") + "\n";
-}
-async function briefBodyHash(body) {
-  return shortHash(toLf(body).replace(/\s+$/, ""));
-}
-function aiSectionsOf(body) {
-  const m = toLf(body).match(new RegExp(`^## (?:${AI_SECTIONS.join("|")})\\s*$`, "m"));
-  return m && m.index !== void 0 ? toLf(body).slice(m.index).trim() : "";
-}
-function aiOf(text) {
-  const fm = readFrontmatter(text);
-  return { sections: aiSectionsOf(bodyOf(text)), hash: fmString(fm, "ai_hash"), part: fmString(fm, "ai_part"), oneLine: fmString(fm, "one_line") };
-}
-function sameAi(a, b) {
-  return a.sections.trim() === b.sections.trim() && a.hash === b.hash && a.part === b.part && (a.oneLine ?? "") === (b.oneLine ?? "");
-}
-var NO_AI_PART = '{status: "none"}';
-async function composeBrief(script, ai, today) {
-  const sections = ai?.sections ?? "";
-  let body = renderBriefBody(script, sections, null);
-  if (estimateTextTokens(body) > BRIEF_TOKEN_CAP)
-    body = renderBriefBody(script, sections, SHORT_GIST_CHARS);
-  const lines = [
-    "---",
-    "alt2obs_brief: 1",
-    `lecture: ${JSON.stringify(script.lecture)}`,
-    `subject: ${JSON.stringify(script.subject)}`,
-    // Never `alt_local_id`: that key finds the lecture note (imports, the Skill's lookup, Dataview).
-    `lecture_alt_local_id: ${JSON.stringify(script.altLocalId)}`,
-    `kind: ${JSON.stringify(script.kind)}`,
-    `source_hash: ${JSON.stringify(script.sourceHash)}`,
-    `ai_hash: ${JSON.stringify(ai?.hash ?? "")}`,
-    `ai_part: ${ai?.part || NO_AI_PART}`,
-    ...ai?.oneLine ? [`one_line: ${JSON.stringify(ai.oneLine)}`] : [],
-    `body_hash: ${JSON.stringify(await briefBodyHash(body))}`,
-    `built: ${JSON.stringify(today)}`,
-    `size_tokens: ${estimateTextTokens(body)}`,
-    "---"
-  ];
-  return `${lines.join("\n")}
-${body}`;
-}
-async function isEditedBrief(text) {
-  const fm = readFrontmatter(text);
-  return !isBriefFrontmatter(fm) || await briefBodyHash(bodyOf(text)) !== fmString(fm, "body_hash");
-}
-async function planBriefUpdate(existing, script, opts) {
-  if (existing === null)
-    return { action: "write", text: await composeBrief(script, opts.ai ?? null, opts.today) };
-  const edited = await isEditedBrief(existing);
-  if (edited && !opts.force)
-    return { action: "keep", reason: "edited" };
-  const fm = readFrontmatter(existing);
-  const sameSource = fmString(fm, "source_hash") === script.sourceHash;
-  if (opts.ai) {
-    if (!opts.force && sameSource && !edited && sameAi(aiOf(existing), opts.ai))
-      return { action: "keep", reason: "same" };
-    return { action: "write", text: await composeBrief(script, opts.ai, opts.today) };
-  }
-  if (!opts.force && sameSource)
-    return { action: "keep", reason: "same" };
-  return { action: "write", text: await composeBrief(script, edited ? null : aiOf(existing), opts.today) };
-}
-function briefSection(body, title) {
-  const lines = toLf(body).split("\n");
-  const start = lines.findIndex((l) => l.trim() === `## ${title}`);
-  if (start < 0)
-    return "";
-  const end = lines.findIndex((l, i) => i > start && /^## /.test(l));
-  return lines.slice(start + 1, end < 0 ? void 0 : end).join("\n").trim();
-}
-function orderLectures(lectures) {
-  const byName = (a, b) => a.name.localeCompare(b.name, "ko", { numeric: true });
-  const dated = lectures.every((l) => !!l.altCreated);
-  return [...lectures].sort((a, b) => dated ? (a.altCreated ?? "").localeCompare(b.altCreated ?? "") || byName(a, b) : byName(a, b));
-}
-function oneLineOf(briefText) {
-  const own = fmString(readFrontmatter(briefText), "one_line");
-  return own || firstSentence(briefSection(bodyOf(briefText), "\uAC1C\uC694"), ONE_LINE_CHARS);
-}
-function subjectBriefBody(subject, entries) {
-  const lines = orderLectures(entries).map((e) => {
-    const unit = e.kind === "slides" ? `\uC2AC\uB77C\uC774\uB4DC ${e.count}\uC7A5` : e.kind === "transcript" ? `\uAD6C\uAC04 ${e.count}\uAC1C` : "";
-    const facts = [e.date, unit].filter(Boolean).join(", ");
-    return `- ${e.name}${facts ? ` (${facts})` : ""}${e.oneLine ? `: ${e.oneLine}` : ""}`;
-  });
-  return `# ${subject} subject brief
-
-${lines.join("\n")}
-`;
-}
-async function planSubjectBriefUpdate(existing, subject, entries, today) {
-  const body = subjectBriefBody(subject, entries);
-  if (existing !== null) {
-    const fm = readFrontmatter(existing);
-    const old = bodyOf(existing);
-    if (fm.alt2obs_subject_brief === void 0 || await briefBodyHash(old) !== fmString(fm, "body_hash"))
-      return { action: "keep", reason: "edited" };
-    if (toLf(old).trim() === body.trim())
-      return { action: "keep", reason: "same" };
-  }
-  const lines = ["---", "alt2obs_subject_brief: 1", `subject: ${JSON.stringify(subject)}`, `body_hash: ${JSON.stringify(await briefBodyHash(body))}`, `built: ${JSON.stringify(today)}`, "---"];
-  return { action: "write", text: `${lines.join("\n")}
-${body}` };
-}
-
-// src/core/prep/TranscriptCompressor.ts
-var KO_FILLERS = ["\uC74C", "\uC73C\uC74C", "\uC74C\uC74C", "\uC5B4", "\uC5B4\uC5B4", "\uC5D0", "\uC5D0\uC5D0", "\uADF8\uB7EC\uB2C8\uAE4C", "\uC800\uAE30", "\uADF8\uB2C8\uAE4C"];
-var EN_FILLERS = ["um", "umm", "uh", "uhh", "uhm", "erm", "er", "hmm", "you know", "i mean"];
-var PAUSE_FILLERS_RE = /(^|[\s,.!?])(?:뭐|아|ah)(?:,|…|\.{2,})(?=$|\s)/giu;
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-var FILLER_RE = new RegExp(
-  `(^|[\\s,.!?])(?:${[...KO_FILLERS, ...EN_FILLERS].sort((a, b) => b.length - a.length).map(escapeRegex).join("|")})(?:[,.\u2026]+|\\.{2,})?(?=$|[\\s,.!?])`,
-  "giu"
-);
-function removeFillers(text) {
-  let prev = "";
-  let out = text;
-  while (prev !== out) {
-    prev = out;
-    out = out.replace(FILLER_RE, "$1").replace(PAUSE_FILLERS_RE, "$1");
-  }
-  return out.replace(/[ \t]{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^[\s,]+/, "").trim();
-}
-function collapseRepeats(text) {
-  const words = text.split(/\s+/).filter((w) => w.length > 0);
-  const key = (w) => w.toLowerCase().replace(/[,.!?]+$/, "");
-  const out = [];
-  let i = 0;
-  while (i < words.length) {
-    let skipped = false;
-    for (let n = 4; n >= 1; n--) {
-      if (out.length < n || i + n > words.length)
-        continue;
-      let same = true;
-      for (let k = 0; k < n; k++) {
-        if (key(out[out.length - n + k]) !== key(words[i + k])) {
-          same = false;
-          break;
-        }
-      }
-      if (same) {
-        for (let k = 0; k < n; k++)
-          out[out.length - n + k] = words[i + k];
-        i += n;
-        skipped = true;
-        break;
-      }
-    }
-    if (!skipped)
-      out.push(words[i++]);
-  }
-  return out.join(" ");
-}
-function splitSentences(text) {
-  return text.replace(/\s+/g, " ").split(/(?<=[.!?…])\s+|(?<=(?:다|요|죠|까|니다|습니다)[.!?]?)\s+(?=\S)/u).map((s) => s.trim()).filter((s) => s.length > 0);
-}
-function sentenceKey(s) {
-  return s.normalize("NFC").toLowerCase().replace(/[\s,.!?…"'`]+/g, "");
-}
-function dedupeSentences(sentences) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const s of sentences) {
-    const k = sentenceKey(s);
-    if (k.length === 0 || seen.has(k))
-      continue;
-    const prev = out.length > 0 ? sentenceKey(out[out.length - 1]) : "";
-    if (k.length >= 6 && prev.includes(k))
-      continue;
-    seen.add(k);
-    out.push(s);
-  }
-  return out;
-}
-
-// src/prompts/render.ts
-var PLACEHOLDER = /\{\{([A-Za-z0-9_]+)\}\}/g;
-function renderPrompt(template, vars) {
-  const lf = template.replace(/\r\n/g, "\n");
-  const body = lf.endsWith("\n") ? lf.slice(0, -1) : lf;
-  const leftover = body.replace(PLACEHOLDER, "");
-  if (leftover.includes("{{")) {
-    throw new Error("Malformed placeholder in prompt template");
-  }
-  return body.replace(PLACEHOLDER, (_match, name) => {
-    if (!Object.prototype.hasOwnProperty.call(vars, name)) {
-      throw new Error(`Missing prompt variable: ${name}`);
-    }
-    return String(vars[name]);
-  });
-}
-
 // src/chat/safeMarkdown.ts
 var SAFE_LANGUAGES = /* @__PURE__ */ new Set([
   "",
@@ -943,6 +649,300 @@ function safeAnswerMarkdown(text, queryPrefixes = []) {
       return `${lead}%${ZW}${rest.slice(1)}`;
     return opensQuery(rest, 0) && !underline(lead, rest, all[i - 1]) ? `${lead}${ZW}${rest}` : line;
   }).join("\n");
+}
+
+// src/brief/lectureBrief.ts
+var BRIEF_FORMAT_VERSION = 3;
+var BRIEF_TOKEN_CAP = 4e3;
+var FALLBACK_GIST_CHARS = 70;
+var SHORT_GIST_CHARS = 40;
+var LECTURE_HEAD_CHARS = 1500;
+var ONE_LINE_CHARS = 100;
+var AI_SECTIONS = ["\uAC15\uC870\uC810", "\uAC15\uC758 \uC911 \uC9C8\uBB38", "\uD5F7\uAC08\uB9AC\uAE30 \uC26C\uC6B4 \uC810"];
+function subjectOfNote(notePath, fm) {
+  return fmString(fm, "subject") || subjectFolderOfNote(notePath).split("/").pop() || "";
+}
+function cut(text, max) {
+  const chars = Array.from(text.trim());
+  return chars.length > max ? chars.slice(0, max).join("").trim() : text.trim();
+}
+function overviewParts(overview) {
+  const parts = { \uAC1C\uC694: [], \uD750\uB984: [], "\uD575\uC2EC \uAC1C\uB150": [] };
+  let current = null;
+  let known = false;
+  for (const line of toLf(overview).split("\n")) {
+    const h = line.match(/^#{2,4}\s+(.+?)\s*$/);
+    if (h) {
+      current = parts[h[1]] ?? null;
+      if (current)
+        known = true;
+      continue;
+    }
+    current?.push(line);
+  }
+  if (!known)
+    return { overview: cut(overview, LECTURE_HEAD_CHARS), flow: "", concepts: "" };
+  const text = (k) => parts[k].join("\n").trim();
+  return { overview: text("\uAC1C\uC694"), flow: text("\uD750\uB984"), concepts: text("\uD575\uC2EC \uAC1C\uB150") };
+}
+function alignedRange(spans) {
+  if (spans.length === 0)
+    return "";
+  const low = spans.some((s) => s.low) ? "?" : "";
+  return `[${formatClock(spans[0].startMs)}~${formatClock(spans[spans.length - 1].endMs)}${low}]`;
+}
+function unitRange(kind, u, alignment) {
+  if (kind === "slides")
+    return alignedRange(spansForSlide(alignment, u.num));
+  return u.startMs !== null && u.endMs !== null ? `[${formatClock(u.startMs)}~${formatClock(u.endMs)}]` : "";
+}
+function mapLine(kind, e, maxChars) {
+  const text = maxChars === null ? e.text : cut(e.text, maxChars);
+  return `- ${kind === "transcript" ? "\uAD6C\uAC04 " : ""}${e.num}${e.range ? ` ${e.range}` : ""} ${text}`;
+}
+async function buildBriefScript(notePath, noteText) {
+  const parts = parseLectureNote(noteText);
+  const fm = parts.frontmatter;
+  const alignmentValue = fmString(fm, "alt_alignment");
+  const alignment = parseAlignment(alignmentValue);
+  let ov = { overview: "", flow: "", concepts: "" };
+  if (parts.overview)
+    ov = overviewParts(unwrapWikilinks(parts.overview));
+  else if (parts.kind === "lecture")
+    ov.overview = cut(unwrapWikilinks(parts.managed), LECTURE_HEAD_CHARS);
+  if (parts.kind === "lecture")
+    ov.flow = "";
+  const map = parts.units.map((u) => ({
+    num: u.num,
+    range: unitRange(parts.kind, u, alignment),
+    text: (u.gist !== null ? unwrapWikilinks(u.gist) : firstSentence(commentaryText(u.managed), FALLBACK_GIST_CHARS)).replace(/\s+/g, " ").trim()
+  })).filter((e) => e.text.length > 0);
+  const source = [
+    `alt2obs_brief:${BRIEF_FORMAT_VERSION}`,
+    parts.kind,
+    parts.units.map((u) => `${u.num}:${u.hash}`).join(" "),
+    parts.overview ?? parts.managed,
+    map.map((e) => mapLine(parts.kind, e, null)).join("\n"),
+    alignmentValue
+  ].join("\n");
+  return {
+    lecture: notePath,
+    stem: stemOf(notePath),
+    title: fmString(fm, "title") || stemOf(notePath),
+    subject: subjectOfNote(notePath, fm),
+    altLocalId: fmString(fm, "alt_local_id"),
+    kind: parts.kind,
+    units: parts.units.reduce((n, u) => Math.max(n, u.num), 0),
+    alignment: alignmentValue,
+    sourceHash: await shortHash(source),
+    ...ov,
+    map
+  };
+}
+function renderBriefBody(script, aiSections, gistChars, queryPrefixes = []) {
+  const section = (title, content) => content.trim() ? `## ${title}
+${content.trim()}` : "";
+  const mapTitle = script.kind === "transcript" ? "\uAD6C\uAC04 \uC9C0\uB3C4" : "\uC2AC\uB77C\uC774\uB4DC \uC9C0\uB3C4";
+  const scriptPart = [
+    `# ${script.stem} brief`,
+    section("\uAC1C\uC694", script.overview),
+    section("\uD750\uB984", script.flow),
+    section(mapTitle, script.map.map((e) => mapLine(script.kind, e, gistChars)).join("\n")),
+    section("\uD575\uC2EC \uAC1C\uB150", script.concepts)
+  ].filter(Boolean).join("\n\n");
+  return [safeNoteMarkdown(scriptPart, queryPrefixes), aiSections.trim()].filter(Boolean).join("\n\n") + "\n";
+}
+async function briefBodyHash(body) {
+  return shortHash(toLf(body).replace(/\s+$/, ""));
+}
+function aiSectionsOf(body) {
+  const m = toLf(body).match(new RegExp(`^## (?:${AI_SECTIONS.join("|")})\\s*$`, "m"));
+  return m && m.index !== void 0 ? toLf(body).slice(m.index).trim() : "";
+}
+function aiOf(text) {
+  const fm = readFrontmatter(text);
+  return { sections: aiSectionsOf(bodyOf(text)), hash: fmString(fm, "ai_hash"), part: fmString(fm, "ai_part"), oneLine: fmString(fm, "one_line") };
+}
+function sameAi(a, b) {
+  return a.sections.trim() === b.sections.trim() && a.hash === b.hash && a.part === b.part && (a.oneLine ?? "") === (b.oneLine ?? "");
+}
+var NO_AI_PART = '{status: "none"}';
+async function composeBrief(script, ai, today, queryPrefixes = []) {
+  const sections = ai?.sections ?? "";
+  let body = renderBriefBody(script, sections, null, queryPrefixes);
+  if (estimateTextTokens(body) > BRIEF_TOKEN_CAP)
+    body = renderBriefBody(script, sections, SHORT_GIST_CHARS, queryPrefixes);
+  const lines = [
+    "---",
+    "alt2obs_brief: 1",
+    `lecture: ${JSON.stringify(script.lecture)}`,
+    `subject: ${JSON.stringify(script.subject)}`,
+    // Never `alt_local_id`: that key finds the lecture note (imports, the Skill's lookup, Dataview).
+    `lecture_alt_local_id: ${JSON.stringify(script.altLocalId)}`,
+    `kind: ${JSON.stringify(script.kind)}`,
+    `source_hash: ${JSON.stringify(script.sourceHash)}`,
+    `ai_hash: ${JSON.stringify(ai?.hash ?? "")}`,
+    `ai_part: ${ai?.part || NO_AI_PART}`,
+    ...ai?.oneLine ? [`one_line: ${JSON.stringify(ai.oneLine)}`] : [],
+    `body_hash: ${JSON.stringify(await briefBodyHash(body))}`,
+    `built: ${JSON.stringify(today)}`,
+    `size_tokens: ${estimateTextTokens(body)}`,
+    "---"
+  ];
+  return `${lines.join("\n")}
+${body}`;
+}
+async function isEditedBrief(text) {
+  const fm = readFrontmatter(text);
+  return !isBriefFrontmatter(fm) || await briefBodyHash(bodyOf(text)) !== fmString(fm, "body_hash");
+}
+async function planBriefUpdate(existing, script, opts) {
+  if (existing === null)
+    return { action: "write", text: await composeBrief(script, opts.ai ?? null, opts.today, opts.queryPrefixes) };
+  const edited = await isEditedBrief(existing);
+  if (edited && !opts.force)
+    return { action: "keep", reason: "edited" };
+  const fm = readFrontmatter(existing);
+  const sameSource = fmString(fm, "source_hash") === script.sourceHash;
+  if (opts.ai) {
+    if (!opts.force && sameSource && !edited && sameAi(aiOf(existing), opts.ai))
+      return { action: "keep", reason: "same" };
+    return { action: "write", text: await composeBrief(script, opts.ai, opts.today, opts.queryPrefixes) };
+  }
+  if (!opts.force && sameSource)
+    return { action: "keep", reason: "same" };
+  return { action: "write", text: await composeBrief(script, edited ? null : aiOf(existing), opts.today, opts.queryPrefixes) };
+}
+function briefSection(body, title) {
+  const lines = toLf(body).split("\n");
+  const start = lines.findIndex((l) => l.trim() === `## ${title}`);
+  if (start < 0)
+    return "";
+  const end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+  return lines.slice(start + 1, end < 0 ? void 0 : end).join("\n").trim();
+}
+function orderLectures(lectures) {
+  const byName = (a, b) => a.name.localeCompare(b.name, "ko", { numeric: true });
+  const dated = lectures.every((l) => !!l.altCreated);
+  return [...lectures].sort((a, b) => dated ? (a.altCreated ?? "").localeCompare(b.altCreated ?? "") || byName(a, b) : byName(a, b));
+}
+function oneLineOf(briefText) {
+  const own = fmString(readFrontmatter(briefText), "one_line");
+  return own || firstSentence(briefSection(bodyOf(briefText), "\uAC1C\uC694"), ONE_LINE_CHARS);
+}
+function subjectBriefBody(subject, entries) {
+  const lines = orderLectures(entries).map((e) => {
+    const unit = e.kind === "slides" ? `\uC2AC\uB77C\uC774\uB4DC ${e.count}\uC7A5` : e.kind === "transcript" ? `\uAD6C\uAC04 ${e.count}\uAC1C` : "";
+    const facts = [e.date, unit].filter(Boolean).join(", ");
+    return `- ${e.name}${facts ? ` (${facts})` : ""}${e.oneLine ? `: ${e.oneLine}` : ""}`;
+  });
+  return `# ${subject} subject brief
+
+${lines.join("\n")}
+`;
+}
+async function planSubjectBriefUpdate(existing, subject, entries, today, queryPrefixes = []) {
+  const body = safeNoteMarkdown(subjectBriefBody(subject, entries), queryPrefixes);
+  if (existing !== null) {
+    const fm = readFrontmatter(existing);
+    const old = bodyOf(existing);
+    if (fm.alt2obs_subject_brief === void 0 || await briefBodyHash(old) !== fmString(fm, "body_hash"))
+      return { action: "keep", reason: "edited" };
+    if (toLf(old).trim() === body.trim())
+      return { action: "keep", reason: "same" };
+  }
+  const lines = ["---", "alt2obs_subject_brief: 1", `subject: ${JSON.stringify(subject)}`, `body_hash: ${JSON.stringify(await briefBodyHash(body))}`, `built: ${JSON.stringify(today)}`, "---"];
+  return { action: "write", text: `${lines.join("\n")}
+${body}` };
+}
+
+// src/core/prep/TranscriptCompressor.ts
+var KO_FILLERS = ["\uC74C", "\uC73C\uC74C", "\uC74C\uC74C", "\uC5B4", "\uC5B4\uC5B4", "\uC5D0", "\uC5D0\uC5D0", "\uADF8\uB7EC\uB2C8\uAE4C", "\uC800\uAE30", "\uADF8\uB2C8\uAE4C"];
+var EN_FILLERS = ["um", "umm", "uh", "uhh", "uhm", "erm", "er", "hmm", "you know", "i mean"];
+var PAUSE_FILLERS_RE = /(^|[\s,.!?])(?:뭐|아|ah)(?:,|…|\.{2,})(?=$|\s)/giu;
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+var FILLER_RE = new RegExp(
+  `(^|[\\s,.!?])(?:${[...KO_FILLERS, ...EN_FILLERS].sort((a, b) => b.length - a.length).map(escapeRegex).join("|")})(?:[,.\u2026]+|\\.{2,})?(?=$|[\\s,.!?])`,
+  "giu"
+);
+function removeFillers(text) {
+  let prev = "";
+  let out = text;
+  while (prev !== out) {
+    prev = out;
+    out = out.replace(FILLER_RE, "$1").replace(PAUSE_FILLERS_RE, "$1");
+  }
+  return out.replace(/[ \t]{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^[\s,]+/, "").trim();
+}
+function collapseRepeats(text) {
+  const words = text.split(/\s+/).filter((w) => w.length > 0);
+  const key = (w) => w.toLowerCase().replace(/[,.!?]+$/, "");
+  const out = [];
+  let i = 0;
+  while (i < words.length) {
+    let skipped = false;
+    for (let n = 4; n >= 1; n--) {
+      if (out.length < n || i + n > words.length)
+        continue;
+      let same = true;
+      for (let k = 0; k < n; k++) {
+        if (key(out[out.length - n + k]) !== key(words[i + k])) {
+          same = false;
+          break;
+        }
+      }
+      if (same) {
+        for (let k = 0; k < n; k++)
+          out[out.length - n + k] = words[i + k];
+        i += n;
+        skipped = true;
+        break;
+      }
+    }
+    if (!skipped)
+      out.push(words[i++]);
+  }
+  return out.join(" ");
+}
+function splitSentences(text) {
+  return text.replace(/\s+/g, " ").split(/(?<=[.!?…])\s+|(?<=(?:다|요|죠|까|니다|습니다)[.!?]?)\s+(?=\S)/u).map((s) => s.trim()).filter((s) => s.length > 0);
+}
+function sentenceKey(s) {
+  return s.normalize("NFC").toLowerCase().replace(/[\s,.!?…"'`]+/g, "");
+}
+function dedupeSentences(sentences) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const s of sentences) {
+    const k = sentenceKey(s);
+    if (k.length === 0 || seen.has(k))
+      continue;
+    const prev = out.length > 0 ? sentenceKey(out[out.length - 1]) : "";
+    if (k.length >= 6 && prev.includes(k))
+      continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+// src/prompts/render.ts
+var PLACEHOLDER = /\{\{([A-Za-z0-9_]+)\}\}/g;
+function renderPrompt(template, vars) {
+  const lf = template.replace(/\r\n/g, "\n");
+  const body = lf.endsWith("\n") ? lf.slice(0, -1) : lf;
+  const leftover = body.replace(PLACEHOLDER, "");
+  if (leftover.includes("{{")) {
+    throw new Error("Malformed placeholder in prompt template");
+  }
+  return body.replace(PLACEHOLDER, (_match, name) => {
+    if (!Object.prototype.hasOwnProperty.call(vars, name)) {
+      throw new Error(`Missing prompt variable: ${name}`);
+    }
+    return String(vars[name]);
+  });
 }
 
 // prompts/lecture-brief.system.md
@@ -1195,15 +1195,15 @@ async function updateLectureBrief(files, notePath, opts) {
       }
     }
   }
-  const decision = await planBriefUpdate(existing, script, { today: opts.today, force: opts.force, ai });
+  const decision = await planBriefUpdate(existing, script, { today: opts.today, force: opts.force, ai, queryPrefixes: opts.queryPrefixes });
   const done = (result) => ({ path, result, ...aiState ? { ai: aiState } : {}, ...aiError ? { aiError } : {} });
   if (decision.action === "keep")
     return done(decision.reason);
   await files.write(path, decision.text);
-  await updateSubjectBrief(files, notePath, script.subject, opts.today);
+  await updateSubjectBrief(files, notePath, script.subject, opts.today, opts.queryPrefixes);
   return done("written");
 }
-async function updateSubjectBrief(files, notePath, subject, today) {
+async function updateSubjectBrief(files, notePath, subject, today, queryPrefixes = []) {
   const target = subjectBriefPath(subjectFolderOfNote(notePath), subject);
   const folder = briefPathForNote(notePath).replace(/\/?[^/]*$/, "");
   const entries = [];
@@ -1217,7 +1217,7 @@ async function updateSubjectBrief(files, notePath, subject, today) {
     if (note)
       entries.push(subjectEntry(lecture, note, text));
   }
-  const decision = await planSubjectBriefUpdate(await files.read(target), subject, entries, today);
+  const decision = await planSubjectBriefUpdate(await files.read(target), subject, entries, today, queryPrefixes);
   if (decision.action === "keep")
     return { path: target, result: decision.reason };
   await files.write(target, decision.text);
@@ -1326,7 +1326,7 @@ async function build(args) {
   if (!!transcriptFile !== !!target)
     usage();
   const files = vaultFiles(vault);
-  const r = await updateLectureBrief(files, notePath, { today: formatDate() });
+  const r = await updateLectureBrief(files, notePath, { today: formatDate(), queryPrefixes: dataviewQueryPrefixes(vault) });
   const out = { brief: join2(vault, r.path), result: r.result, ai: null };
   if (!transcriptFile || !target)
     out.aiReason = "no transcript";
@@ -1398,16 +1398,18 @@ async function mergeAi(args) {
   const script = await buildBriefScript(notePath, noteText);
   if (script.sourceHash !== saved.sourceHash)
     throw new Error("the note changed since build: run build again");
-  const ai = validateBriefAi(readAnswer(answerFile), saved, dataviewQueryPrefixes(vault));
+  const queryPrefixes = dataviewQueryPrefixes(vault);
+  const ai = validateBriefAi(readAnswer(answerFile), saved, queryPrefixes);
   const today = formatDate();
   const path = briefPathForNote(notePath);
   const decision = await planBriefUpdate(await files.read(path), script, {
     today,
-    ai: { sections: renderAiSections(ai, script.kind), hash: saved.hash, part: formatAiPart("ok"), oneLine: ai.oneLine }
+    ai: { sections: renderAiSections(ai, script.kind), hash: saved.hash, part: formatAiPart("ok"), oneLine: ai.oneLine },
+    queryPrefixes
   });
   if (decision.action === "write") {
     await files.write(path, decision.text);
-    await updateSubjectBrief(files, notePath, script.subject, today);
+    await updateSubjectBrief(files, notePath, script.subject, today, queryPrefixes);
   }
   const result = decision.action === "keep" ? decision.reason : "written";
   const kept = { emphasis: ai.emphasis.length, qa: ai.qa.length, pitfalls: ai.pitfalls.length, oneLine: !!ai.oneLine };

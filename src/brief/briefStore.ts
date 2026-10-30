@@ -67,7 +67,8 @@ export async function aiInputFor(script: BriefScript, transcript: TimedText[]): 
  * part is made when its input changed (`ai_hash`) or the last one did not
  * succeed; a failed call writes the script part with ai_part.status
  * "failed" and never throws. `queryPrefixes`: Dataview's own inline query
- * prefixes, made safe in the AI part's texts too.
+ * prefixes, made safe in what is written (the script part, the AI part's
+ * texts, the subject brief) too.
  */
 export async function updateLectureBrief(
   files: BriefFiles,
@@ -104,11 +105,11 @@ export async function updateLectureBrief(
       }
     }
   }
-  const decision = await planBriefUpdate(existing, script, { today: opts.today, force: opts.force, ai });
+  const decision = await planBriefUpdate(existing, script, { today: opts.today, force: opts.force, ai, queryPrefixes: opts.queryPrefixes });
   const done = (result: BriefUpdate["result"]): BriefUpdate => ({ path, result, ...(aiState ? { ai: aiState } : {}), ...(aiError ? { aiError } : {}) });
   if (decision.action === "keep") return done(decision.reason);
   await files.write(path, decision.text);
-  await updateSubjectBrief(files, notePath, script.subject, opts.today);
+  await updateSubjectBrief(files, notePath, script.subject, opts.today, opts.queryPrefixes);
   return done("written");
 }
 
@@ -133,9 +134,9 @@ export async function readLectureBrief(files: BriefFiles, notePath: string): Pro
 /**
  * The subject brief of the note's subject folder, assembled from every
  * lecture brief in its Briefs folder (no tokens): rewritten when a line
- * changed, never over the user's edits.
+ * changed, never over the user's edits; made safe with `queryPrefixes`.
  */
-export async function updateSubjectBrief(files: BriefFiles, notePath: string, subject: string, today: string): Promise<BriefUpdate> {
+export async function updateSubjectBrief(files: BriefFiles, notePath: string, subject: string, today: string, queryPrefixes: readonly string[] = []): Promise<BriefUpdate> {
   const target = subjectBriefPath(subjectFolderOfNote(notePath), subject);
   const folder = briefPathForNote(notePath).replace(/\/?[^/]*$/, "");
   const entries: SubjectBriefEntry[] = [];
@@ -148,7 +149,7 @@ export async function updateSubjectBrief(files: BriefFiles, notePath: string, su
     const note = lecture ? await files.read(lecture) : null;
     if (note) entries.push(subjectEntry(lecture, note, text));
   }
-  const decision = await planSubjectBriefUpdate(await files.read(target), subject, entries, today);
+  const decision = await planSubjectBriefUpdate(await files.read(target), subject, entries, today, queryPrefixes);
   if (decision.action === "keep") return { path: target, result: decision.reason };
   await files.write(target, decision.text);
   return { path: target, result: "written" };

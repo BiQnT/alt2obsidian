@@ -1953,7 +1953,7 @@ export default class Alt2ObsPlugin extends Plugin {
       );
       if (answer !== "rebuild") return false;
     }
-    const result = await updateLectureBrief(files, notePath, { today: formatDate(), force: true });
+    const result = await updateLectureBrief(files, notePath, { today: formatDate(), force: true, queryPrefixes: dataviewQueryPrefixes(this.app) });
     new Notice(`브리프를 다시 만들었습니다: ${result.path}`);
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
       if (leaf.view instanceof ChatView && leaf.view.lecturePath() === notePath) void leaf.view.reloadBrief();

@@ -17,7 +17,12 @@
 //   ## 강조점 / ## 강의 중 질문 / ## 헷갈리기 쉬운 점      (AI part)
 //
 // The script part costs no tokens and is rebuilt whenever the note's source
-// changes; the AI part (phase 2) is carried over as it is. A body whose hash
+// changes; the AI part (phase 2) is carried over as it is. A brief is a new
+// file other plugins read (Templater runs `<% %>` in a new file, code
+// included), so the text the script part copies from the note is made safe
+// as a saved memo is (safeNoteMarkdown) before it is written; the hashes
+// stay those of the note's own text (`source_hash`) and of the written body
+// (`body_hash`). A body whose hash
 // is not `body_hash` was edited by the user and is never overwritten without
 // the user's say. The subject brief lists the subject's lectures, one line
 // each, assembled from the lecture briefs (no tokens).
@@ -28,14 +33,15 @@ import { parseAlignment, spansForSlide, StoredSpan } from "../core/prep/Transcri
 import { formatClock } from "../core/sections";
 import { shortHash } from "../core/slideHash";
 import { stemOf, subjectFolderOfNote } from "../vault/layout";
+import { safeNoteMarkdown } from "../chat/safeMarkdown";
 import { bodyOf, commentaryText, firstSentence, fmString, isBriefFrontmatter, LectureNoteKind, NoteUnit, parseLectureNote, readFrontmatter, unwrapWikilinks } from "./lectureNote";
 
 /**
  * Brief format version: part of `source_hash`, so a new format rebuilds
  * every brief the user did not edit once. 2: `lecture_alt_local_id` in
- * place of the first build's `alt_local_id`.
+ * place of the first build's `alt_local_id`. 3: the script part made safe.
  */
-export const BRIEF_FORMAT_VERSION = 2;
+export const BRIEF_FORMAT_VERSION = 3;
 /** Body size (estimateTextTokens) above which the slide map's gists are cut (spec 4.2). */
 export const BRIEF_TOKEN_CAP = 4000;
 /** A slide without a gist: the first sentence of its commentary, cut to this. */
@@ -169,22 +175,25 @@ export async function buildBriefScript(notePath: string, noteText: string): Prom
   };
 }
 
-/** The brief body: title, script sections, then the AI sections (empty sections left out). */
-export function renderBriefBody(script: BriefScript, aiSections: string, gistChars: number | null): string {
+/**
+ * The brief body: title, script sections, then the AI sections (empty
+ * sections left out). The script part, text copied from the note, is made
+ * safe with `queryPrefixes` (Dataview's own); the AI sections were made
+ * safe when they were checked.
+ */
+export function renderBriefBody(script: BriefScript, aiSections: string, gistChars: number | null, queryPrefixes: readonly string[] = []): string {
   const section = (title: string, content: string) => (content.trim() ? `## ${title}\n${content.trim()}` : "");
   const mapTitle = script.kind === "transcript" ? "구간 지도" : "슬라이드 지도";
-  return (
-    [
-      `# ${script.stem} brief`,
-      section("개요", script.overview),
-      section("흐름", script.flow),
-      section(mapTitle, script.map.map((e) => mapLine(script.kind, e, gistChars)).join("\n")),
-      section("핵심 개념", script.concepts),
-      aiSections.trim(),
-    ]
-      .filter(Boolean)
-      .join("\n\n") + "\n"
-  );
+  const scriptPart = [
+    `# ${script.stem} brief`,
+    section("개요", script.overview),
+    section("흐름", script.flow),
+    section(mapTitle, script.map.map((e) => mapLine(script.kind, e, gistChars)).join("\n")),
+    section("핵심 개념", script.concepts),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return [safeNoteMarkdown(scriptPart, queryPrefixes), aiSections.trim()].filter(Boolean).join("\n\n") + "\n";
 }
 
 /** Body hash as written to `body_hash`: LF line ends, trailing white space ignored. */
@@ -222,10 +231,10 @@ function sameAi(a: CarriedAi, b: CarriedAi): boolean {
 const NO_AI_PART = '{status: "none"}';
 
 /** The whole brief file. Over the size cap the slide map's gists are cut to 40 characters (spec 4.2). */
-export async function composeBrief(script: BriefScript, ai: CarriedAi | null, today: string): Promise<string> {
+export async function composeBrief(script: BriefScript, ai: CarriedAi | null, today: string, queryPrefixes: readonly string[] = []): Promise<string> {
   const sections = ai?.sections ?? "";
-  let body = renderBriefBody(script, sections, null);
-  if (estimateTextTokens(body) > BRIEF_TOKEN_CAP) body = renderBriefBody(script, sections, SHORT_GIST_CHARS);
+  let body = renderBriefBody(script, sections, null, queryPrefixes);
+  if (estimateTextTokens(body) > BRIEF_TOKEN_CAP) body = renderBriefBody(script, sections, SHORT_GIST_CHARS, queryPrefixes);
   const lines = [
     "---",
     "alt2obs_brief: 1",
@@ -281,8 +290,12 @@ export type BriefDecision = { action: "write"; text: string } | { action: "keep"
  * sections, so an AI part with nothing to say or a failed one is not made
  * again for nothing.
  */
-export async function planBriefUpdate(existing: string | null, script: BriefScript, opts: { today: string; force?: boolean; ai?: CarriedAi }): Promise<BriefDecision> {
-  if (existing === null) return { action: "write", text: await composeBrief(script, opts.ai ?? null, opts.today) };
+export async function planBriefUpdate(
+  existing: string | null,
+  script: BriefScript,
+  opts: { today: string; force?: boolean; ai?: CarriedAi; queryPrefixes?: readonly string[] }
+): Promise<BriefDecision> {
+  if (existing === null) return { action: "write", text: await composeBrief(script, opts.ai ?? null, opts.today, opts.queryPrefixes) };
   const edited = await isEditedBrief(existing);
   if (edited && !opts.force) return { action: "keep", reason: "edited" };
   const fm = readFrontmatter(existing);
@@ -290,11 +303,11 @@ export async function planBriefUpdate(existing: string | null, script: BriefScri
   // A new AI part (`ai`): written unless the brief already holds exactly it.
   if (opts.ai) {
     if (!opts.force && sameSource && !edited && sameAi(aiOf(existing), opts.ai)) return { action: "keep", reason: "same" };
-    return { action: "write", text: await composeBrief(script, opts.ai, opts.today) };
+    return { action: "write", text: await composeBrief(script, opts.ai, opts.today, opts.queryPrefixes) };
   }
   if (!opts.force && sameSource) return { action: "keep", reason: "same" };
   // The AI part goes along as it is (sections, hash, status and one line, even an empty or failed one), unless the user edited the brief.
-  return { action: "write", text: await composeBrief(script, edited ? null : aiOf(existing), opts.today) };
+  return { action: "write", text: await composeBrief(script, edited ? null : aiOf(existing), opts.today, opts.queryPrefixes) };
 }
 
 /** What the question panel sends of a brief: the body without the frontmatter and the `# ... brief` title (spec 6.1). */
@@ -359,9 +372,9 @@ export function subjectBriefBody(subject: string, entries: SubjectBriefEntry[]):
   return `# ${subject} subject brief\n\n${lines.join("\n")}\n`;
 }
 
-/** The subject brief file: written when its lines changed, never over the user's edits. */
-export async function planSubjectBriefUpdate(existing: string | null, subject: string, entries: SubjectBriefEntry[], today: string): Promise<BriefDecision> {
-  const body = subjectBriefBody(subject, entries);
+/** The subject brief file: written when its lines changed (made safe with `queryPrefixes`), never over the user's edits. */
+export async function planSubjectBriefUpdate(existing: string | null, subject: string, entries: SubjectBriefEntry[], today: string, queryPrefixes: readonly string[] = []): Promise<BriefDecision> {
+  const body = safeNoteMarkdown(subjectBriefBody(subject, entries), queryPrefixes);
   if (existing !== null) {
     const fm = readFrontmatter(existing);
     const old = bodyOf(existing);

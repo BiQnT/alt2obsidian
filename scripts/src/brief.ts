@@ -20,15 +20,16 @@
 //   node scripts/phase2/brief.mjs merge-ai --note <note.md> --ai <answer.json> --candidates <candidates.json> [--vault <dir>]
 //     Checks the session's JSON answer with the plugin's validator (times
 //     within the lecture, slides within the deck, nothing copied from the
-//     transcript, texts made safe with Dataview's own query prefixes from
-//     <vault>/.obsidian/plugins/dataview/data.json when it is there) and
-//     writes the brief's AI sections, then the subject brief. Refuses when
-//     the note changed since `build`. Prints
+//     transcript, texts made safe) and writes the brief's AI sections, then
+//     the subject brief. Refuses when the note changed since `build`. Prints
 //     {"brief","result","kept":{"emphasis","qa","pitfalls","oneLine"}}.
 //
 // The vault is the nearest folder above the note that holds `.obsidian`,
 // unless --vault names it (then --note may be a vault path). The brief
-// names the note by its vault path, as the plugin writes it.
+// names the note by its vault path, as the plugin writes it, and what is
+// written is made safe with Dataview's own query prefixes read from the
+// vault (<vault>/.obsidian/plugins/dataview/data.json), as the plugin reads
+// them from the app.
 
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -128,7 +129,7 @@ async function build(args: string[]): Promise<void> {
   const target = option(args, "--out-candidates");
   if (!!transcriptFile !== !!target) usage();
   const files = vaultFiles(vault);
-  const r = await updateLectureBrief(files, notePath, { today: formatDate() });
+  const r = await updateLectureBrief(files, notePath, { today: formatDate(), queryPrefixes: dataviewQueryPrefixes(vault) });
   const out: Record<string, unknown> = { brief: join(vault, r.path), result: r.result, ai: null };
   if (!transcriptFile || !target) out.aiReason = "no transcript";
   else if (r.result === "edited") out.aiReason = "edited";
@@ -200,17 +201,19 @@ async function mergeAi(args: string[]): Promise<void> {
   if (noteText === null) throw new Error(`no note at ${notePath}`);
   const script = await buildBriefScript(notePath, noteText);
   if (script.sourceHash !== saved.sourceHash) throw new Error("the note changed since build: run build again");
-  const ai = validateBriefAi(readAnswer(answerFile), saved, dataviewQueryPrefixes(vault));
+  const queryPrefixes = dataviewQueryPrefixes(vault);
+  const ai = validateBriefAi(readAnswer(answerFile), saved, queryPrefixes);
   const today = formatDate();
   const path = briefPathForNote(notePath);
   // The session's tokens are not known: ai_part has the status only.
   const decision = await planBriefUpdate(await files.read(path), script, {
     today,
     ai: { sections: renderAiSections(ai, script.kind), hash: saved.hash, part: formatAiPart("ok"), oneLine: ai.oneLine },
+    queryPrefixes,
   });
   if (decision.action === "write") {
     await files.write(path, decision.text);
-    await updateSubjectBrief(files, notePath, script.subject, today);
+    await updateSubjectBrief(files, notePath, script.subject, today, queryPrefixes);
   }
   const result = decision.action === "keep" ? decision.reason : "written";
   const kept = { emphasis: ai.emphasis.length, qa: ai.qa.length, pitfalls: ai.pitfalls.length, oneLine: !!ai.oneLine };
