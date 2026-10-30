@@ -1130,10 +1130,34 @@ try {
       await plugin.buildChatBrief("Alt2Obsidian/CSED311/Lectures/Lec8 Coherence.md", false, true);
       assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec8 Coherence brief.md"), /^ai_part: \{status: "ok"/m);
       assert.equal(await plugin.briefAiEstimate(recB.path.replace("Lec8 Coherence", "nowhere")), null);
+      // An import's brief step reads no transcript but the one its estimate planned with (none here),
+      // though Lec8's is in the cache: no call the estimate and the cap did not count.
+      files.delete(lec8Brief);
+      const n4 = s.calls().length;
+      await plugin.writeBriefAfterImport(recB.path, { task: plugin.data.settings.tasks.brief, transcript: null });
+      assert.equal(s.calls().length, n4, "no brief call");
+      assert.match(files.get(lec8Brief), /^ai_part: \{status: "none"\}$/m, "the script part only");
+      // An unexpected error in the brief estimate never stops the prepare step: the script part only, and no brief call at the run.
+      const realFiles = plugin.briefFiles;
+      plugin.briefFiles = () => ({
+        ...realFiles.call(plugin),
+        read: async (p) => {
+          if (p.includes("/Briefs/")) throw new Error("brief disk gone");
+          return realFiles.call(plugin).read(p);
+        },
+      });
+      const odd = await quietWarn(() => plugin.prepareCliImport("", plugin.previewFromBundle({ ...briefBundle(), sourceId: "local-brief-4", title: "Lec11 Estimate" }), "CSED311"));
+      plugin.briefFiles = realFiles;
+      assert.deepEqual([odd.brief.state, odd.estimate.brief], ["script", undefined]);
+      const n5 = s.calls().length;
+      await plugin.runCliImport(odd);
+      assert.equal(s.calls().length - n5, odd.estimate.calls, "the estimated calls only");
+      assert.ok(!s.calls().slice(n5).some((c) => c.stdin.includes("[후보 문장]")), "no brief call");
+      assert.match(files.get("Alt2Obsidian/CSED311/Briefs/Lec11 Estimate brief.md"), /^ai_part: \{status: "none"\}$/m);
       // Leave the vault and the transcript cache as the tests below expect them.
-      for (const k of [...files.keys()]) if (/Lec(8 Coherence|9 Fail|10 Script)/.test(k)) files.delete(k);
+      for (const k of [...files.keys()]) if (/Lec(8 Coherence|9 Fail|10 Script|11 Estimate)/.test(k)) files.delete(k);
       for (const f of readdirSync(cacheRoot, { recursive: true })) if (/local-brief/.test(String(f))) rmSync(join(cacheRoot, String(f)), { force: true });
-      console.log("PASS: brief AI part on import: candidates from the transcript, one call of the brief task counted in the estimate (row and model picker), sections and one_line written, usage in the totals not in the note; unchanged input reused; a failed call leaves the script part and one warning and is tried again; script mode makes no call; 모든 강의 브리프 만들기 builds missing briefs, with 강조점 포함 also the AI part of current briefs without one, counts edited ones and a failed AI part (script part written) on their own; the panel's 강조점까지 만들기");
+      console.log("PASS: brief AI part on import: candidates from the transcript, one call of the brief task counted in the estimate (row and model picker), sections and one_line written, usage in the totals not in the note; unchanged input reused; a failed call leaves the script part and one warning and is tried again; script mode makes no call; 모든 강의 브리프 만들기 builds missing briefs, with 강조점 포함 also the AI part of current briefs without one, counts edited ones and a failed AI part (script part written) on their own; the panel's 강조점까지 만들기; an import makes no brief call its estimate did not plan (no other transcript, none after the estimate failed and fell back to the script part)");
     }
 
     // Opening the lecture PDF opens the Synced Viewer for the pair (setting on by default).

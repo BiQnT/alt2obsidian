@@ -235,7 +235,11 @@ export interface CliImportHooks {
 interface BriefStepContext {
   /** The brief task of this run (the estimate panel's picker, else the setting). */
   task: TaskLLMSetting;
-  /** The lecture's timestamped transcript from the import; null: read from the cache or Alt. */
+  /**
+   * The timestamped transcript the import's estimate planned with; null
+   * when it planned no AI part (none then: the import never reads another
+   * transcript, whose call the estimate and the cap did not count).
+   */
   transcript: TimedText[] | null;
   signal?: AbortSignal;
   onWarning?: (text: string) => void;
@@ -1455,7 +1459,11 @@ export default class Alt2ObsPlugin extends Plugin {
     onProgress?.("예산 산정 완료", 100);
     const diagramPages = plan && settings.generation.saveKeyDiagrams ? selectKeyDiagrams(plan.slides, plan.scanned) : [];
     const altPdfIgnored = pdfSource === "attached" && !!altPdf;
-    const brief = await this.planBriefEstimate({ notePath, preview, subject, plan, transcriptPlan, alignment, existingNote });
+    // The brief never stops an import: an unexpected error plans the script part only (the run then makes no AI part either).
+    const brief = await this.planBriefEstimate({ notePath, preview, subject, plan, transcriptPlan, alignment, existingNote }).catch((e): BriefEstimatePlan => {
+      console.warn("[Alt2Obs] brief estimate failed:", e);
+      return { state: "script" };
+    });
     return this.withEstimate({ url, preview, subject, notePath, pdfData, plan, transcriptPlan, pdfSource, altPdfIgnored, context, fewerImages: false, alignment, slideTexts, diagramPages, overrides: {}, brief });
   }
 
@@ -1657,7 +1665,9 @@ export default class Alt2ObsPlugin extends Plugin {
     const signal = controller.signal;
     const commentaryTask = this.runTask(prepared, "commentary");
     const conceptTask = this.runTask(prepared, "concepts");
-    const brief: BriefStepContext = { task: this.runTask(prepared, "brief"), transcript: timedTranscript(prepared.preview.bundle), signal, onWarning: hooks.onWarning };
+    // The estimate fell back to the script part (spec 4.5): no AI part then either.
+    const planned = prepared.brief.state === "script" ? null : timedTranscript(prepared.preview.bundle);
+    const brief: BriefStepContext = { task: this.runTask(prepared, "brief"), transcript: planned, signal, onWarning: hooks.onWarning };
     try {
       const commentaryLlm = await this.providerFor("commentary", job, usage, signal, commentaryTask);
       const conceptLlm = await this.providerFor("concepts", job, usage, signal, conceptTask);
@@ -1860,7 +1870,8 @@ export default class Alt2ObsPlugin extends Plugin {
     if (mode === "off") return;
     try {
       onProgress?.("챗봇 브리프 만드는 중...", 98);
-      const ai = mode === "ai" ? await this.briefAiStep(notePath, ctx?.task ?? this.data.settings.tasks.brief, ctx?.transcript ?? null, ctx?.signal) : undefined;
+      // An import's own transcript or none ([]); without an import context, the cache or Alt (null).
+      const ai = mode === "ai" ? await this.briefAiStep(notePath, ctx?.task ?? this.data.settings.tasks.brief, ctx ? ctx.transcript ?? [] : null, ctx?.signal) : undefined;
       const result = await updateLectureBrief(this.briefFiles(), notePath, { today: formatDate(), ai });
       if (result.ai === "failed") ctx?.onWarning?.(`챗봇 브리프의 강조점을 만들지 못해 스크립트 부분만 썼습니다: ${result.aiError ?? "알 수 없는 오류"}`);
     } catch (e) {
@@ -1870,15 +1881,15 @@ export default class Alt2ObsPlugin extends Plugin {
   }
 
   /**
-   * The AI step of a lecture's brief: its timestamped transcript (the
-   * import's, else the cache or Alt) and one call of the brief task, its
+   * The AI step of a lecture's brief: its timestamped transcript (the one
+   * given, with null the cache or Alt) and one call of the brief task, its
    * usage added to the plugin totals (never to the note's alt2obs_usage).
    * Undefined without a transcript: the script part only.
    */
   async briefAiStep(notePath: string, task: TaskLLMSetting, transcript: TimedText[] | null, signal?: AbortSignal): Promise<BriefAiStep | undefined> {
     if (!isCliProvider(task.provider)) return undefined;
     let segments = transcript;
-    if (!segments || segments.length === 0) {
+    if (segments === null) {
       const id = fmString(this.frontmatterOf(notePath) ?? {}, "alt_local_id");
       segments = id ? await this.loadTranscript(id) : null;
     }
