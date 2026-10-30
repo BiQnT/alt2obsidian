@@ -39,13 +39,13 @@ const UNIT_HEADING = /^## (?:📚 슬라이드|⏱ 구간) \d+/;
  * line after a closing code fence, which must stay alone on its line).
  * The lines as composed are made safe as the panel renders an answer.
  */
-export function memoEntryLines(e: MemoEntry): string[] {
+export function memoEntryLines(e: MemoEntry, queryPrefixes: readonly string[] = []): string[] {
   const answer = toLf(e.answer).replace(/^\s*\n/, "").trimEnd().split("\n");
   const lines = [`> **Q.** ${e.question.replace(/\s+/g, " ").trim()}`, "> **A.**", ...answer.map((l) => (l.trim() ? `> ${l}` : ">"))];
   const stamp = `(질문 ${e.date})`;
   if (/^\s*(`{3,}|~{3,})\s*$/.test(answer[answer.length - 1])) lines.push(`> ${stamp}`);
   else lines[lines.length - 1] += ` ${stamp}`;
-  return safeAnswerMarkdown(lines.join("\n")).split("\n");
+  return safeAnswerMarkdown(lines.join("\n"), queryPrefixes).split("\n");
 }
 
 function headingOf(target: MemoTarget): RegExp {
@@ -58,8 +58,12 @@ function endMarkerOf(target: MemoTarget): RegExp {
     : new RegExp(`^<!-- alt2obs:section:${target.num} hash:[0-9a-f]{8} end -->\\s*$`);
 }
 
-/** The note with the entry in the unit's memo callout, null when the unit (its heading or end marker) is not in the note. */
-export function insertMemo(note: string, target: MemoTarget, entry: MemoEntry): string | null {
+/**
+ * The note with the entry in the unit's memo callout, null when the unit
+ * (its heading or end marker) is not in the note. `queryPrefixes`: the
+ * inline query prefixes set in Dataview, made safe as well.
+ */
+export function insertMemo(note: string, target: MemoTarget, entry: MemoEntry, queryPrefixes: readonly string[] = []): string | null {
   const lines = toLf(note).split("\n");
   const heading = lines.findIndex((l) => headingOf(target).test(l));
   if (heading < 0) return null;
@@ -75,7 +79,7 @@ export function insertMemo(note: string, target: MemoTarget, entry: MemoEntry): 
   // The unit's free space: up to the next heading or plugin marker (the next unit, the failure list).
   let stop = end + 1;
   while (stop < lines.length && !/^## /.test(lines[stop]) && !lines[stop].startsWith("<!-- alt2obs:")) stop++;
-  const entryLines = memoEntryLines(entry);
+  const entryLines = memoEntryLines(entry, queryPrefixes);
   const title = lines.slice(end + 1, stop).findIndex((l) => MEMO_CALLOUT.test(l));
   if (title < 0) {
     // No callout: a new one after the end marker and a blank line.

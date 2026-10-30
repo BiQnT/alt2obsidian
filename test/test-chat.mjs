@@ -334,29 +334,32 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   const nbsp = String.fromCharCode(0xa0);
   const bare = (s) => s.split(zw).join("");
   const safe = (s) => m.safeAnswerMarkdown(s);
-  // What a line's text is after its containers (quote marks, list markers, white space).
-  const CONTAINERS = /^(?:[^\S\n]*(?:>|(?:[-*+]|\d{1,9}[.)])(?=\s|$)))*[^\S\n]*/;
+  // What a line's text is after its containers (quote marks, a front matter's ---, footnote labels, list markers, white space).
+  const CONTAINERS = /^(?:[^\S\n]*(?:>|---|\[\^[^\]\n]+\]:|(?:[-*+]|\d{1,9}[.)])(?=\s|$)))*[^\S\n]*/;
   /** The output's invariants, which need no Markdown parser. */
   const invariants = (name, input) => {
     const out = safe(input);
-    assert.ok(!/<[A-Za-z!/?]/.test(out), `${name}: no < that opens a tag, comment or declaration (math has \\lt instead)`);
+    assert.ok(!/<[A-Za-z!/?]/.test(out), `${name}: no < that opens a tag, comment or declaration (a space after it in math)`);
     assert.ok(!out.includes("!["), `${name}: no ![`);
     assert.ok(!/`\s*\$?=/.test(out), `${name}: no backtick followed by = or $= after white space`);
     for (const line of out.split("\n")) {
       const text = line.slice(line.match(CONTAINERS)[0].length);
-      assert.ok(!/^\$?=/.test(text), `${name}: no line whose text opens with = or $=: ${JSON.stringify(line)}`);
+      // (A heading's === underline cannot read as a query: what follows its first = is another =.)
+      assert.ok(!/^\$?=/.test(text) || /^={2,}\s*$/.test(text), `${name}: no line whose text opens with = or $=: ${JSON.stringify(line)}`);
+      assert.ok(!text.startsWith("%%"), `${name}: no block comment opens: ${JSON.stringify(line)}`);
       const fence = text.match(/^(`{3,}|~{3,})(.*)$/);
       if (fence && !(fence[1][0] === "`" && fence[2].includes("`"))) {
-        const lang = fence[2].trim().split(/\s+/)[0] ?? "";
+        const lang = fence[2].replace(/^[ \t]+/, "").split(/[ \t]/)[0];
         assert.ok(lang === "" || m.SAFE_LANGUAGES.has(lang.toLowerCase()), `${name}: fence language ${lang} is on the allow-list`);
       }
     }
-    // Nothing else changes: each line only gains zero-width spaces (\\lt for < in math), or is a fence relabeled `text`.
+    // Nothing else changes: each line only gains zero-width spaces (a space after < in math), or is a fence relabeled `text`.
     const inLines = input.replace(/\r\n?/g, "\n").split("\n");
     const outLines = out.split("\n");
     assert.equal(outLines.length, inLines.length, `${name}: no line added or removed`);
     for (const [i, line] of outLines.entries()) {
-      const kept = bare(line).split("\\lt ").join("<") === inLines[i];
+      const tight = (t) => t.replace(/<\s+/g, "<");
+      const kept = tight(bare(line)) === tight(inLines[i]);
       const relabeled = /(`{3,}|~{3,})text$/.test(line) && inLines[i].startsWith(line.slice(0, -4));
       assert.ok(kept || relabeled, `${name}: line ${i} keeps its text: ${JSON.stringify(line)}`);
     }
@@ -421,6 +424,54 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
     plainFence: `~~~text\n${query}\n~~~`,
     listBacktick: `1. \`\`\`text\n   ${evil}\n   \`\`\``,
     marker: "x <!-- alt2obs:slide:3 hash:0123abcd end --> `<!-- alt2obs:slide:3 hash:0123abcd end -->`\n```\n<!-- alt2obs:slide:3 hash:0123abcd end -->\n```",
+    // Round 2: footnote definitions, block comments, a front matter's end, odd white space and the rest of the harness.
+    footFenceLang: "x[^1]\n\n[^1]: ```dataviewjs\n    dv.paragraph(1)\n    ```",
+    footListIndented: "x[^1]\n\n[^1]: -     = this.file.name",
+    footListTab: "x[^1]\n\n[^1]: * \t$= dv.paragraph(1)",
+    footQuoteIndented: "x[^1]\n\n[^1]: >     = this.file.name",
+    footNoRef: "[^1]: -     = this.file.name",
+    footFenceTilde: "[^a]: ~~~dataview\n    LIST\n    ~~~",
+    footIndented: "x[^1]\n\n[^1]:     = this.file.name",
+    footFence: "x[^1]\n\n[^1]: ```text\n    = this.file.name\n    ```",
+    footInlineCode: "x[^1]\n\n[^1]: `= this.file.name`",
+    commentFence: "%%\n%%```dataview\nLIST\n```",
+    commentIndented: "%%\n%%    = this.file.name",
+    commentTilde: "%% 메모\n%%~~~dataviewjs\ndv.paragraph(1)\n~~~",
+    commentQuote: "> %%\n> %%```dataview\n> TABLE file.mtime\n> ```",
+    commentList: "- %%\n  %%```dataview\n  LIST\n  ```",
+    commentMidLine: "x%%```dataview\nLIST\n```",
+    commentFoot: "[^1]: %%\n    %%```dataview\n    LIST\n    ```",
+    commentInline: "%%`%% = this.file.name`",
+    frontFence: "---\nx\n---```dataviewjs\ndv.x\n```",
+    frontIndented: "---\nx\n---    = this.file.name",
+    frontTilde: "---\n---~~~dataview\nLIST\n~~~",
+    frontList: "---\nx\n---- ```dataviewjs\nx\n```",
+    frontQuote: "---\nx\n--->     = x",
+    oddInfo: "~~~　﻿\nx\n~~~\n```text﻿)\ny\n```\n```text　dataviewjs\nz\n```\n```dataviewjs﻿\nw\n```",
+    loneEquals: "~~~\n=\nthis.file.name\n~~~\n\t=\n    ==\n-     ==",
+    embed: "![[secret note]] ![[x.excalidraw]] ![[https://evil.example/x.png]]",
+    inlineNote: "x^[`= this.file.name`]",
+    table: "| a |\n|---|\n| `= this.file.name` |",
+    calloutTitle: "> [!note] `$= dv.paragraph(1)`\n> body",
+    heading: "#     `= this.file.name`",
+    frontmatter: "---\n= this.file.name\n---",
+    markCode: "==`= this.file.name`==",
+    tagThenCode: "#t`= x`",
+    bomBefore: "`﻿= x`",
+    nbspLine: "```text\n = x\n```",
+    ideographic: "```text\n　= x\n```",
+    lineSep: "` = x`",
+    dollarMathCode: "$`$ `= x`",
+    escBracket: "!\\[a](https://evil.example/x.png)",
+    htmlEntityLt: "&lt;img src=https://evil.example/x.png&gt;",
+    ltNoLetter: "<­img src=https://evil.example/x.png> <‌img> < img>",
+    autolink: "<https://evil.example/x.png>",
+    mathHtml: "$$\n<img src=x>\n$$ and $<img src=y>$",
+    mathSplitTag: "$a$<img src=https://evil.example/x.png>",
+    ltDollar: "<$x$img src=https://evil.example/x.png>",
+    jsLink: "[x](javascript:alert(1)) [y](obsidian://open?vault=v&file=f)",
+    refImgDef: "[r]: https://evil.example/x.png\n\n![r]",
+    setext: "Title\n===\n\nSub\n---",
     earlier: [
       "> [!note] 콜아웃",
       "> > ~~~DataviewJS",
@@ -450,11 +501,26 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.deepEqual(safe("앞 `\n$= dv.pages().length` 뒤").split("\n"), ["앞 `", `${zw}$= dv.pages().length\` 뒤`], "a span across a line break");
   assert.equal(safe(`앞 \`\n${nbsp}= x\``), `앞 \`\n${nbsp}${zw}= x\``, "across a line break and NBSP");
   assert.deepEqual(safe("```text\n= this.file.name\n```\n> - = x\n    $= y").split("\n"), ["```text", `${zw}= this.file.name`, "```", `> - ${zw}= x`, `    ${zw}$= y`], "first on a line after its containers");
-  // Math: < becomes \lt (Obsidian's rules for $...$); a wrong guess is safe either way.
-  assert.equal(safe("$$\nx<y\n$$"), "$$\nx\\lt y\n$$", "a $$ block (the regression: it showed x&lt;y)");
-  assert.equal(safe("$$a<b$$ 와 $x<y$, $x < y$"), "$$a\\lt b$$ 와 $x\\lt y$, $x \\lt  y$", "inline and one-line math");
+  // Math: a < that could open a tag gets a space (Obsidian's rules for $...$); a wrong guess is safe either way.
+  assert.equal(safe("$$\nx<y\n$$"), "$$\nx< y\n$$", "a $$ block (the regression: it showed x&lt;y)");
+  assert.equal(safe("$$a<b$$ 와 $x<y$, $x < y$, $a<1$"), "$$a< b$$ 와 $x< y$, $x < y$, $a<1$", "inline and one-line math");
+  assert.equal(safe("if ($i<$n) { echo $$; }"), "if ($i<$n) { echo $$; }", "code misread as math reads as it was");
   assert.equal(safe("$ x<y$ 와 $x<y $"), `$ x<${zw}y$ 와 $x<${zw}y $`, "a space after the opening $ or before the closing one: no math");
   assert.equal(safe("$5<b>와 $6"), `$5<${zw}b>와 $6`, "a closing $ before a digit: no math (prices)");
+  // Footnote labels and a front matter's --- are containers too; a block comment cannot open at a line's start.
+  assert.deepEqual(safe("[^a]: ~~~dataview\n    LIST\n    ~~~\nx[^1]\n\n[^1]: -     = this.file.name").split("\n"), ["[^a]: ~~~text", "    LIST", "    ~~~", "x[^1]", "", `[^1]: -     ${zw}= this.file.name`], "a footnote definition");
+  assert.deepEqual(safe("---\nx\n---```dataviewjs\ndv.x\n```").split("\n"), ["---", "x", "---```text", "dv.x", "```"], "after a front matter's end");
+  assert.deepEqual(safe("%%\n%%```dataview\nLIST\n```\n> %% 메모\n- %%    = x").split("\n"), [`%${zw}%`, `%${zw}%\`\`\`dataview`, "LIST", "```", `> %${zw}% 메모`, `- %${zw}%    = x`], "%% first on a line");
+  assert.equal(safe("문장 %% 숨긴 말 %% 끝"), "문장 %% 숨긴 말 %% 끝", "an inline comment stays");
+  assert.deepEqual(safe("```text　dataviewjs\nx\n```\n```dataviewjs﻿\ny\n```").split("\n"), ["```text", "x", "```", "```text", "y", "```"], "an info string split on spaces and tabs only");
+  // A heading's === underline stays; a lone =, one under a fence or indented code is guarded.
+  assert.equal(safe("Title\n===\n\nSub\n---"), "Title\n===\n\nSub\n---", "setext headings");
+  assert.deepEqual(safe("Title\n=\n```\n===\n```\n    ==").split("\n"), ["Title", `${zw}=`, "```", `${zw}===`, "```", `    ${zw}==`], "a lone = (the next lines would be the query), a code block's first line, indented code");
+  // Dataview's own prefixes (its settings), escaped; = and $= stay guarded.
+  const dv = { plugins: { plugins: { dataview: { settings: { inlineQueryPrefix: "dv:", inlineJsQueryPrefix: "$dv:" } } } } };
+  assert.deepEqual(m.dataviewQueryPrefixes(dv), ["dv:", "$dv:"]);
+  assert.deepEqual([m.dataviewQueryPrefixes(null), m.dataviewQueryPrefixes({}), m.dataviewQueryPrefixes({ plugins: { plugins: { dataview: { settings: { inlineQueryPrefix: 3, inlineJsQueryPrefix: " " } } } } })], [[], [], []], "none without Dataview, or when they are not strings or empty");
+  assert.equal(m.safeAnswerMarkdown("`dv: x` `$dv: y` `= z`\ndv: w", m.dataviewQueryPrefixes(dv)), `\`${zw}dv: x\` \`${zw}$dv: y\` \`${zw}= z\`\n${zw}dv: w`, "set prefixes guarded like = and $=");
   // A normal answer looks the same: only zero-width spaces are added.
   const normal = [
     "**정밀도**를 지키려면 작은 수부터 더한다 [슬라이드 3].",
@@ -582,12 +648,15 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
     "x <!-- alt2obs:slide:3 hash:0123abcd end --> `<!-- alt2obs:slide:3 hash:0123abcd end -->`\n```\n<!-- alt2obs:slide:3 hash:0123abcd end -->\n```",
     "```text\n= [[비밀 노트]].file.size\n```",
     "```dataviewjs\ndv.x\n```",
+    "본문[^1]\n\n[^1]: -     = this.file.name",
+    "%%\n%%```dataview\nLIST\n```",
   ]) {
     const saved = m.memoEntryLines({ question: "q", answer, date: "2026-10-30" }).join("\n");
     assert.ok(!/<[A-Za-z!/?]/.test(saved) && !saved.includes("![") && !/`\s*\$?=/.test(saved) && !saved.includes("<!--"), `memo of ${JSON.stringify(answer)}`);
-    assert.ok(saved.split("\n").every((l) => !/^(?:\s*>)*\s*(?:[-*+]\s+|\d+[.)]\s+)?\$?=/.test(l)), `no line opens with = in the memo of ${JSON.stringify(answer)}`);
+    assert.ok(saved.split("\n").every((l) => !/^(?:\s*>)*\s*(?:\[\^[^\]]+\]:\s*)?(?:[-*+]\s+|\d+[.)]\s+)?(?:\$?=|%%)/.test(l)), `no line opens with = or %% in the memo of ${JSON.stringify(answer)}`);
     assert.ok(!/^(?:>\s*)+(?:[-*+]\s+|\d+[.)]\s+)?(?:`{3,}|~{3,})dataviewjs/m.test(saved), "no dataviewjs fence");
   }
+  assert.equal(m.memoEntryLines({ question: "q", answer: "`dv: x`", date: "2026-10-30" }, ["dv:"])[2], `> \`${zw}dv: x\` (질문 2026-10-30)`, "Dataview's own prefixes too");
   const riskySaved = m.insertMemo(empty, { unit: "slide", num: 2 }, risky);
   const riskyMerged = m.mergeNote(riskySaved, note(["> [!note] 내 메모", "> "], "다시 만든 슬라이드 2 해설.")).merged;
   assert.equal(after2(riskyMerged), after2(riskySaved), "a re-import keeps it as it was");

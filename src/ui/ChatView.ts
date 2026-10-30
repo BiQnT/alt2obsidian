@@ -36,7 +36,7 @@ import { estimateTextTokens } from "../core/budget/estimate";
 import type { StoredSpan } from "../core/prep/TranscriptAligner";
 import { formatClock } from "../core/sections";
 import { CitedLecture, parseCitations } from "../chat/citations";
-import { safeAnswerMarkdown } from "../chat/safeMarkdown";
+import { dataviewQueryPrefixes, safeAnswerMarkdown } from "../chat/safeMarkdown";
 import {
   buildChatPack,
   ChatPack,
@@ -1080,7 +1080,7 @@ export class ChatView extends ItemView {
       const component = new Component();
       component.load();
       this.turnComponents.set(turn.id, component);
-      await MarkdownRenderer.render(this.app, safeAnswerMarkdown(turn.answer), answer, this.lecture?.notePath ?? "", component);
+      await MarkdownRenderer.render(this.app, safeAnswerMarkdown(turn.answer, dataviewQueryPrefixes(this.app)), answer, this.lecture?.notePath ?? "", component);
       this.applyCitations(answer, turn);
     }
     if (turn.status === "stopped") el.createDiv({ cls: "alt-to-obs-chat-status", text: "(중지됨)" });

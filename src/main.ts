@@ -131,6 +131,7 @@ import { ChatPanelController, VIEW_TYPE_CHAT } from "./ui/chatPanel";
 import { ChatErrorInfo, ChatMemoTarget, ChatRunRequest, ChatRunResult, ThreadStore } from "./chat/threads";
 import { formatTranscriptLines, segmentsInSpans, TEXTLESS_PAGE_CHARS, TimedText, transcriptLines } from "./chat/contextPack";
 import { insertMemo } from "./chat/memoSave";
+import { dataviewQueryPrefixes } from "./chat/safeMarkdown";
 import { SLIDE_TEXT_STANDIN_TOKENS, SlideRow } from "./chat/addMaterial";
 import { isAuthError, isUsageLimitError } from "./llm/cli/CliProviderBase";
 import { renderPrompt } from "./prompts/render";
@@ -2360,7 +2361,7 @@ export default class Alt2ObsPlugin extends Plugin {
     const text = shorten ? await this.threeLineMemo(question, answer) : answer;
     let found = true;
     await this.app.vault.process(file, (note) => {
-      const next = insertMemo(note, target, { question, answer: text, date: formatDate() });
+      const next = insertMemo(note, target, { question, answer: text, date: formatDate() }, dataviewQueryPrefixes(this.app));
       found = next !== null;
       return next ?? note;
     });
