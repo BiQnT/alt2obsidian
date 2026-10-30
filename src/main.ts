@@ -2314,8 +2314,11 @@ export default class Alt2ObsPlugin extends Plugin {
   noteSelection(): string {
     const view = this.app.workspace.getMostRecentLeaf?.()?.view;
     if (view instanceof SyncedViewerView) return view.getSelectedText();
-    if (view instanceof MarkdownView) return view.editor.getSelection();
-    return "";
+    if (!(view instanceof MarkdownView)) return "";
+    if (view.getMode() !== "preview") return view.editor.getSelection();
+    // Reading mode has no editor selection: the window's, when it is in the note.
+    const sel = view.contentEl.ownerDocument.getSelection();
+    return sel && !sel.isCollapsed && sel.anchorNode && view.contentEl.contains(sel.anchorNode) ? sel.toString() : "";
   }
 
   /**

@@ -17,7 +17,7 @@ import { FAKE_CLAUDE, FAKE_CODEX, fakeSession } from "./helpers/fake-cli.mjs";
 // pdfjs (bundled via PdfProcessor) warns about missing canvas polyfills on load.
 const quiet = { log: console.log, warn: console.warn };
 console.log = console.warn = () => {};
-const { default: Plugin, TFile, TFolder, insertFrontmatterLine, notices, SyncedViewerView, VIEW_TYPE_SYNCED_VIEWER } = await importTs("test/helpers/plugin-entry.ts");
+const { default: Plugin, MarkdownView, TFile, TFolder, insertFrontmatterLine, notices, SyncedViewerView, VIEW_TYPE_SYNCED_VIEWER } = await importTs("test/helpers/plugin-entry.ts");
 Object.assign(console, quiet);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Runs fn with console.warn silenced (an expected failure logs one). */
@@ -791,6 +791,26 @@ try {
     assert.equal((await plugin.chatSlideImage(lecture, 7))?.pageNum, 7, "an added slide's image");
     assert.equal(await plugin.chatSlideImage({ ...lecture, pdfPath: null }, 7), null);
     assert.equal(plugin.noteSelection(), "", "no note open: no selection");
+    {
+      // An editor: its selection; reading mode (no editor selection): the window's, only when it is in the note.
+      const inNote = {};
+      let sel = { isCollapsed: false, anchorNode: inNote, toString: () => "읽기 모드에서 고른 글" };
+      let mode = "source";
+      const contentEl = { contains: (n) => n === inNote, ownerDocument: { getSelection: () => sel } };
+      const md = Object.assign(Object.create(MarkdownView.prototype), { getMode: () => mode, contentEl, editor: { getSelection: () => "편집기에서 고른 글" } });
+      const ws = plugin.app.workspace;
+      const had = Object.prototype.hasOwnProperty.call(ws, "getMostRecentLeaf") ? ws.getMostRecentLeaf : undefined;
+      ws.getMostRecentLeaf = () => ({ view: md });
+      assert.equal(plugin.noteSelection(), "편집기에서 고른 글", "an editor's selection");
+      mode = "preview";
+      assert.equal(plugin.noteSelection(), "읽기 모드에서 고른 글", "reading mode: the window's selection in the note");
+      sel = { ...sel, anchorNode: {} };
+      assert.equal(plugin.noteSelection(), "", "a selection outside the note does not count");
+      sel = { ...sel, anchorNode: inNote, isCollapsed: true };
+      assert.equal(plugin.noteSelection(), "", "a caret is no selection");
+      if (had) ws.getMostRecentLeaf = had;
+      else delete ws.getMostRecentLeaf;
+    }
     // The editor's right-click items (spec 5.8): in a lecture note only, the selection and the cursor's slide.
     const fakeMenu = () => ({ items: [], addItem(cb) { const item = { title: "", setTitle(t) { this.title = t; return this; }, setIcon() { return this; }, onClick(f) { this.click = f; return this; } }; cb(item); this.items.push(item); return this; } });
     const noteLines = files.get(record.path).split("\n");
