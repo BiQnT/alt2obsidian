@@ -10,7 +10,7 @@
   </p>
 </div>
 
-Alt2Obs is for students who record their lectures with the [Alt](https://www.altalt.io) app. It reads the lectures in the Alt desktop app on your computer and writes one note per lecture into your vault: a section for every slide, with commentary that your own Claude Code or Codex CLI writes from the slide and the part of the recording that covers it, plus concept notes linked with `[[wikilinks]]`. You study in a viewer that scrolls the PDF and the note together, and your own memos survive every re-import.
+Alt2Obs is for students who record their lectures with the [Alt](https://www.altalt.io) app. It reads the lectures in the Alt desktop app on your computer and writes one note per lecture into your vault: a section for every slide, with commentary that your own Claude Code or Codex CLI writes from the slide and the part of the recording that covers it, plus concept notes linked with `[[wikilinks]]`. You study in a viewer that scrolls the PDF and the note together, and your own memos survive every re-import. When a slide raises a question, you ask it in a panel beside the viewer, with that slide and a short brief of the lecture as context.
 
 The interface and the generated notes are in Korean, with academic terms kept in English. Alt2Obs was named **Alt2Obsidian** before 2.0.0. Its plugin id is `alt2obsidian` (only 2.0.0 used `alt-to-obs`).
 
@@ -56,8 +56,9 @@ The interface and the generated notes are in Korean, with academic terms kept in
 
 **BRAT.** Add `BiQnT/alt2obsidian` as a beta plugin in [BRAT](https://github.com/TfTHacker/obsidian42-brat) to follow new releases.
 
-### Upgrading from Alt2Obsidian 1.x or 2.0.0
+### Upgrading from an earlier version
 
+- **From 2.0.1 or 2.0.2**: the update installs in place and keeps your settings, records and notes. The model table gains the **질문** (question) and **챗봇 브리프** (chatbot brief) rows. From now on each import also writes the lecture's brief; for a lecture imported before, the question panel offers to build its brief without tokens, or run **모든 강의 브리프 만들기** (build all lecture briefs) from the command palette.
 - **From 1.x or a 2.0.0 beta**: the update installs in place (same id and folder) and keeps your settings, records and hotkeys. Notes and memos stay as they are. To move 1.x notes into the 2.0 folder layout, run **Migrate 1.x vault layout** from the command palette. Gemini API and Ollama support is gone; if you need it, stay on [1.1.0](https://github.com/BiQnT/alt2obsidian/releases/tag/1.1.0). CSS snippets written for the old `alt2obsidian-*` classes need the `alt-to-obs-*` classes.
 - **From 2.0.0 (id `alt-to-obs`)**: Obsidian treats 2.0.0 and later versions as two separate plugins, both named Alt2Obs. Install the new version, disable 2.0.0 without deleting it, then enable the new version: it imports 2.0.0's settings and records once and tells you so. Then delete 2.0.0 and set any hotkeys again. The [user guide](https://github.com/BiQnT/alt2obsidian/blob/main/docs/user-guide.md#coming-from-200-id-alt-to-obs) has the details.
 
@@ -68,6 +69,7 @@ The interface and the generated notes are in Korean, with academic terms kept in
 3. Select the book icon in the ribbon (**Alt 강의 가져오기**, import an Alt lecture) to open the sidebar. In the **Alt 노트 목록** (Alt note list) tab, pick a lecture and check its subject.
 4. Select **가져오기** (import), review the estimated usage, then select **시작** (start).
 5. The note opens in the Synced Viewer. Write your own notes in the `> [!note] 내 메모` callout under each slide.
+6. To ask about the slide you are on, select **💬 질문** (question) in the viewer's toolbar. The panel opens on the right with that slide and the lecture brief as material; the same button closes it.
 
 The [user guide](https://github.com/BiQnT/alt2obsidian/blob/main/docs/user-guide.md) covers every option, lectures without slides, note checking and troubleshooting.
 
@@ -124,6 +126,8 @@ The plugin reads, and never changes, the files that version 2.0.0 (released unde
 
 - **On the first start:** `plugins/alt-to-obs/data.json`, and the modification times of that file and of the plugin's own `data.json`. Later starts read them again until the plugin first saves its data, or while 2.0.0's file cannot be read. The command **Import settings from version 2.0.0 (alt-to-obs)** reads 2.0.0's file again when you run it.
 - **On every start and whenever a PDF is opened:** `community-plugins.json` and `plugins/alt-to-obs/manifest.json`, to know whether 2.0.0 is still enabled.
+
+While Dataview is enabled, the plugin also reads Dataview's inline query prefixes from the running Dataview plugin (not from its files), so that model text it writes into the vault cannot run as a Dataview query.
 
 ## Documentation
 
