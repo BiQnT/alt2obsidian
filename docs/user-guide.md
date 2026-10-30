@@ -395,7 +395,7 @@ Under the chips is the estimate for this question: input (from the second questi
 
 Type the question and press Enter (Shift+Enter for a new line; Enter while a Korean syllable is being composed does not send), or select a quick question: **더 쉽게** (simpler), **예시 하나** (one example), **시험에 나올 점** (what may be on the exam), **앞 슬라이드와 연결** (how it follows the previous slide). The model row under the box changes the model for this question only; **기본값으로 저장** saves it.
 
-A question about another lecture (`L4`, `3강`, `lec 3`, 지난 강의, 이전 강의, 다른 강의, 몇 강) while no subject brief is added first shows **과목 브리프를 넣을까요?** (add the subject brief?) with its tokens: **넣기** (add) or **그냥 보내기** (send as it is). This is asked once per lecture.
+A question about another lecture (`L4` when a lecture of the subject has that name, `3강`, `lec 3`, 지난 강의, 이전 강의, 다른 강의, 몇 강) while no subject brief is added first shows **과목 브리프를 넣을까요?** (add the subject brief?) with its tokens: **넣기** (add) or **그냥 보내기** (send as it is). This is asked once per lecture.
 
 Claude's answer appears as it is written, then is shown as formatted Markdown. Codex sends its answer only when it is done, so the panel shows **답변 쓰는 중 · N초** (writing, N seconds) with a note that Codex shows the answer at once. **중지** (stop), in place of **보내기** while an answer is written, ends the call; what came stays, marked **(중지됨)**, and is not sent with the next question.
 
