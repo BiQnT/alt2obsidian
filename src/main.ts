@@ -101,7 +101,7 @@ import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
 import { pluginCacheDir } from "./sources/altPaths";
-import { sanitizeFilename, formatDate } from "./utils/helpers";
+import { sanitizeFilename, formatDate, formatLocalDate } from "./utils/helpers";
 import { attachmentPathForNote, briefPathForNote, chatsFolderForNote, lecturePath, stemOf, subjectFolderOfNote, verificationPathForNote } from "./vault/layout";
 import {
   estimateVerification,
@@ -2377,7 +2377,8 @@ export default class Alt2ObsPlugin extends Plugin {
   async saveChatNote(thread: ChatThread, lecture: ChatLecture): Promise<string> {
     const turns = turnsOf(thread).filter((t) => (t.status === "done" || t.status === "stopped") && t.answer.trim());
     if (turns.length === 0) throw new Error("저장할 답이 아직 없습니다.");
-    const date = formatDate();
+    // The user's own day, in the file name and the frontmatter.
+    const date = formatLocalDate();
     const sections = lecture.kind === "transcript" ? (await this.sectionHeadings(lecture.notePath)).map((h) => ({ num: h.num, heading: h.text })) : [];
     const text = renderChatNote(
       {
@@ -2433,7 +2434,7 @@ export default class Alt2ObsPlugin extends Plugin {
     const text = shorten ? await this.threeLineMemo(question, answer) : answer;
     let found = true;
     await this.app.vault.process(file, (note) => {
-      const next = insertMemo(note, target, { question, answer: text, date: formatDate() }, dataviewQueryPrefixes(this.app));
+      const next = insertMemo(note, target, { question, answer: text, date: formatLocalDate() }, dataviewQueryPrefixes(this.app));
       found = next !== null;
       return next ?? note;
     });

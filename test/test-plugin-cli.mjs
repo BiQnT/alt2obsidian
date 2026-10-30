@@ -899,7 +899,9 @@ try {
     assert.equal(plugin.data.settings.tasks.brief.model, "haiku");
     assert.equal(memoCall.argv[memoCall.argv.indexOf("--model") + 1], "haiku", "the brief task's model");
     assert.equal(plugin.data.usageTotals.calls, usageBeforeMemo + 1, "its usage counted");
-    const today = new Date().toISOString().slice(0, 10);
+    // The memo's and the chat note's date: this computer's day, not UTC's.
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const savedMemo = [
       "> [!note] 내 메모",
       "> 내 메모 유지",

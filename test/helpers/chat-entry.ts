@@ -10,3 +10,4 @@ export * from "../../src/chat/related";
 export { mergeNote } from "../../src/core/merge";
 export { unitAtLine, memoText, commentaryText } from "../../src/brief/lectureNote";
 export { estimateTextTokens, PROVIDER_COSTS } from "../../src/core/budget/estimate";
+export { formatLocalDate } from "../../src/utils/helpers";

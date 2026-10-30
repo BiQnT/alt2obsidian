@@ -682,6 +682,14 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
 {
   assert.equal(m.chatNoteName("2026-10-30", "L5", '왜 작은 수부터\n더해? a:b<c>|[d]#e^f "g" *h* /i\\j'), "2026-10-30 L5 왜 작은 수부터 더해 abc d e f g h ij.md", "no character a file name or a link to it cannot hold");
   assert.equal(m.chatNoteName("2026-10-30", "L5", "가".repeat(50)), `2026-10-30 L5 ${"가".repeat(40)}.md`, "the first 40 characters of the question");
+  // A long lecture name: the stem stops at 200 UTF-8 bytes, between characters.
+  const longName = m.chatNoteName("2026-10-30", "가나다".repeat(40), "왜 그래?");
+  const stem = longName.replace(/\.md$/, "");
+  assert.ok(Buffer.byteLength(stem, "utf8") <= 200 && Buffer.byteLength(stem, "utf8") > 195, `${Buffer.byteLength(stem, "utf8")} bytes`);
+  assert.ok(`2026-10-30 ${"가나다".repeat(40)}`.startsWith(stem) && !stem.includes("\uFFFD"), "a prefix of whole characters");
+  assert.equal(m.chatNoteName("2026-10-30", "😀".repeat(80), "q").replace(/\.md$/, ""), `2026-10-30 ${"😀".repeat(47)}`, "a 4-byte character is never split");
+  // The note's date is this computer's day (UTC's is the day before in KST until 09:00).
+  assert.equal(m.formatLocalDate(new Date(2026, 9, 30, 0, 30)), "2026-10-30");
   const taken = new Set(["A/Chats/x.md", "A/Chats/x 2.md"]);
   assert.equal(m.uniqueChatNotePath("A/Chats", "x.md", (p) => taken.has(p)), "A/Chats/x 3.md", "a name taken: 2, then 3");
   assert.equal(m.uniqueChatNotePath("A/Chats", "y.md", (p) => taken.has(p)), "A/Chats/y.md");
@@ -765,6 +773,15 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.ok(sectionNote.endsWith("요약 [[A/S/Lectures/L9#⏱ 구간 2 12 03 24 00|구간 2]], 없는 [구간 9], [슬라이드 1]\n"), sectionNote);
   const hashPath = m.renderChatNote({ ...input, notePath: "A/C#/Lectures/L1.md", lecture: "L1", turns: [{ question: "q", material: "", answer: "[슬라이드 2]", stopped: false }] });
   assert.ok(hashPath.endsWith("[슬라이드 2](A/C%23/Lectures/L1.md#%F0%9F%93%9A%20%EC%8A%AC%EB%9D%BC%EC%9D%B4%EB%93%9C%202)\n"), hashPath);
+  const commentPath = m.renderChatNote({ ...input, notePath: "A/100%%/Lectures/L1.md", lecture: "L1", turns: [{ question: "q", material: "", answer: "[슬라이드 2]", stopped: false }] });
+  assert.ok(commentPath.endsWith("[슬라이드 2](A/100%25%25/Lectures/L1.md#%F0%9F%93%9A%20%EC%8A%AC%EB%9D%BC%EC%9D%B4%EB%93%9C%202)\n"), "a path with %% (a comment in a wikilink): the encoded Markdown link");
+  // A fence an answer leaves open is closed in its container: a quote, a list item, the top level; a container that ended closed it already.
+  const lastBlock = (answer) => m.renderChatNote({ ...input, turns: [{ question: "q", material: "", answer, stopped: true }] }).split("## Q. q\n\n")[1];
+  assert.equal(lastBlock("> ```js\n> let a = 1;"), "> ```js\n> let a = 1;\n> ```\n\n(중지됨)\n", "in a quote: > ```");
+  assert.equal(lastBlock("- ```js\n  let a = 1;"), "- ```js\n  let a = 1;\n  ```\n\n(중지됨)\n", "in a list item: its indentation");
+  assert.equal(lastBlock("1. 코드:\n   ```js\n   let a = 1;"), "1. 코드:\n   ```js\n   let a = 1;\n   ```\n\n(중지됨)\n", "an indented fence in an item");
+  assert.equal(lastBlock("```js\nlet a = 1;"), "```js\nlet a = 1;\n```\n\n(중지됨)\n", "top level");
+  assert.equal(lastBlock("> ```js\n> x\n\n다음 [슬라이드 2]"), `> \`\`\`js\n> x\n\n다음 ${link(2)}\n\n(중지됨)\n`, "the quote ended, and its fence: nothing to close, the text after it linked");
   // What is written is made safe as a saved memo: no tag, image, inline query, block comment or marker.
   const zw = String.fromCharCode(0x200b);
   const risky = m.renderChatNote({ ...input, turns: [{ question: "<!-- alt2obs:slide:3 hash:00000003 start --> ![q](x) <% tp.file.title %>", material: "", answer: '<img src="https://evil.example/x.png"> ![t](u) `$= dv.x` %%\n```dataviewjs\ndv.paragraph(1)\n```\n```js\n<%* tR += "x" %>\n```\n[슬라이드 2]', stopped: false }] }, ["dv:"]);
