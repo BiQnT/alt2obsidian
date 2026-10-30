@@ -63,7 +63,7 @@ export type EvidenceSource = "direct" | "weak" | "neighbour" | "heading" | "sect
 export const MIN_SHARED_TERMS = 2;
 export const MIN_DIRECT_SCORE = 8;
 
-function strongHit(h: SlideHit | undefined): boolean {
+export function strongHit(h: SlideHit | undefined): boolean {
   return !!h && (h.shared >= MIN_SHARED_TERMS || h.score >= MIN_DIRECT_SCORE);
 }
 
@@ -246,6 +246,12 @@ function slideHits(scores: number[], terms: Set<string>, index: EvidenceIndex, k
       excerpt: slideExcerpt(index.slideTexts[i], terms),
     };
   });
+}
+
+/** The slides that match a text best (BM25 with its retrieval terms), up to `k`; the question panel's related slides. */
+export function rankSlides(text: string, index: EvidenceIndex, k: number): SlideHit[] {
+  const tokens = retrievalTerms(text);
+  return slideHits(bm25(tokens, index.slides), new Set(tokens), index, k);
 }
 
 /** Direct evidence of one claim: BM25 over the slides and the transcript chunks with its retrieval terms. */

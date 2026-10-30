@@ -17,6 +17,7 @@ import type { EffortLevel, ImageInput, LLMUsage, ProviderId, TaskLLMSetting } fr
 import type { CitedLecture } from "./citations";
 import type { HistoryTurn } from "./contextPack";
 import type { MemoTarget } from "./memoSave";
+import type { RelatedSlide } from "./related";
 
 /** The note and unit whose memo "메모에 저장" writes. */
 export type ChatMemoTarget = MemoTarget & { notePath: string };
@@ -71,6 +72,10 @@ export interface ChatTurn {
   memoTarget?: ChatMemoTarget;
   /** Other lectures whose slides or brief the question sent: the answer's `[L4 슬라이드 N]` chips (spec 5.5). */
   otherLectures?: CitedLecture[];
+  /** What the question sent, for the chat note's `> 자료:` line (spec 5.9). */
+  material?: string;
+  /** Slides of this lecture that match the question, not in its material (spec 5.11). */
+  related?: RelatedSlide[];
   answer: string;
   status: "streaming" | "done" | "stopped" | "error";
   error?: ChatErrorInfo;
@@ -95,6 +100,8 @@ export interface ChatThread {
   folded: number;
   /** Last use (ms), for the recent list. */
   used: number;
+  /** The chat note it was saved to: saving again replaces that file (spec 5.9). */
+  savedPath?: string;
 }
 
 /** A run started, got a piece (or started over), or ended. */

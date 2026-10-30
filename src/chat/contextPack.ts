@@ -290,6 +290,14 @@ export function parseSlideRange(text: string, max: number): { slides: number[]; 
   return { slides: [...slides].sort((a, b) => a - b), ignored: [...ignored].sort((a, b) => a - b) };
 }
 
+/** Words of a question about other lectures: `L4`, `3강`, `lec 3`, "지난 강의", "이전 강의", "다른 강의", "몇 강" (spec 5.10). */
+const OTHER_LECTURE_WORDS = [/L\d+/, /\d+\s*강/, /lec\s*\d+/i, /(?:지난|이전|다른)\s*강의/, /몇\s*강/];
+
+/** The question asks about other lectures: the panel offers the subject brief once before sending it (spec 5.10). */
+export function suggestsSubjectBrief(question: string): boolean {
+  return OTHER_LECTURE_WORDS.some((re) => re.test(question));
+}
+
 /** "슬라이드 17 기준", "슬라이드 17, 18 기준", "강의 브리프 기준", or "" (what a question was asked about). */
 export function materialLabel(focus: Array<Pick<FocusUnit, "unit" | "num">>, withBrief: boolean): string {
   if (focus.length > 0) return `${focus[0].unit === "slide" ? "슬라이드" : "구간"} ${focus.map((u) => u.num).join(", ")} 기준`;

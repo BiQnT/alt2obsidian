@@ -7,7 +7,9 @@
  * the estimate), "메모에 저장" (the memo callout filled, appended to or
  * made, CRLF kept, kept by a re-import), the grounding marks of an answer,
  * the threads (LRU and the
- * "슬라이드 N으로 이동" dividers) and the note parts the panel reads.
+ * "슬라이드 N으로 이동" dividers), the chat note (대화 노트로 저장), the
+ * related slides, the subject brief offer and the note parts the panel
+ * reads.
  * No tokens, no obsidian.
  * Run: node test/test-chat.mjs
  */
@@ -672,6 +674,120 @@ const INSTRUCTIONS = readFileSync(join(repo, "prompts/chat.system.md"), "utf8");
   assert.deepEqual(managed(riskyMerged).slice(2), managed(empty).slice(2), "and slide 3 is still slide 3");
   assert.equal((riskyMerged.match(/<!-- alt2obs:slide:3 /g) ?? []).length, 2);
   console.log("PASS: 메모에 저장: an empty memo callout filled, one with text appended to after >, a missing one made after the end marker; managed blocks and other slides untouched; CRLF kept; sections too; a re-import (mergeNote) keeps it; what is saved is sanitized and holds no marker");
+}
+
+// ---- 대화 노트로 저장 (spec 5.9): name, path, what each turn sent, the note ----
+{
+  assert.equal(m.chatNoteName("2026-10-30", "L5", '왜 작은 수부터\n더해? a:b<c>|[d]#e^f "g" *h* /i\\j'), "2026-10-30 L5 왜 작은 수부터 더해 abc d e f g h ij.md", "no character a file name or a link to it cannot hold");
+  assert.equal(m.chatNoteName("2026-10-30", "L5", "가".repeat(50)), `2026-10-30 L5 ${"가".repeat(40)}.md`, "the first 40 characters of the question");
+  const taken = new Set(["A/Chats/x.md", "A/Chats/x 2.md"]);
+  assert.equal(m.uniqueChatNotePath("A/Chats", "x.md", (p) => taken.has(p)), "A/Chats/x 3.md", "a name taken: 2, then 3");
+  assert.equal(m.uniqueChatNotePath("A/Chats", "y.md", (p) => taken.has(p)), "A/Chats/y.md");
+
+  const line = (text) => [{ startMs: 1, text }];
+  assert.equal(
+    m.materialSummary("L5", [
+      { lecture: "L5", unit: "slide", num: 17, range: "[29:06~35:56]", transcript: line("a") },
+      { lecture: "L5", unit: "slide", num: 14, range: "", transcript: [] },
+      { lecture: "L4", unit: "slide", num: 2, range: "[01:00~02:00?]", transcript: line("b") },
+    ], ["선택한 글", "과목 브리프"], true),
+    "슬라이드 17, 14, L4 슬라이드 2, 전사 29:06-35:56, L4 전사 01:00-02:00, 선택한 글, 과목 브리프"
+  );
+  assert.equal(m.materialSummary("L9", [{ lecture: "L9", unit: "section", num: 2, range: "[12:03~24:00]", transcript: line("c") }], [], true), "구간 2, 전사 12:03-24:00");
+  assert.equal(m.materialSummary("L5", [], [], true), "강의 브리프", "the brief alone");
+  assert.equal(m.materialSummary("L5", [], [], false), "");
+
+  const usage = (input, cached, output) => ({ calls: 1, inputTokens: input, cachedInputTokens: cached, outputTokens: output, imagesSent: 0, costUsd: 0 });
+  const L4 = { notePath: "Alt2Obsidian/CSED423/Lectures/L4.md", name: "L4", subject: "CSED423", slides: 20 };
+  const input = {
+    notePath: "Alt2Obsidian/CSED423/Lectures/L5.md",
+    lecture: "L5",
+    date: "2026-10-30",
+    slides: 30,
+    sections: [],
+    turns: [
+      {
+        question: "왜 작은 수부터\n더해?",
+        material: "슬라이드 17, 전사 29:06-35:56",
+        answer: "작은 수끼리 먼저 더한다 [슬라이드 17]. 범위 [슬라이드 16~18], 시각 [29:10], 없는 [슬라이드 99], 다른 강의 [L4 슬라이드 2], 안 보낸 [L3 슬라이드 1] (강의 자료 밖).\n\n`[슬라이드 17]` 은 코드다.\n\n```\n[슬라이드 3]\n```",
+        stopped: false,
+        usage: usage(5100, 3000, 400),
+        model: "claude-sonnet-5-5",
+        otherLectures: [L4],
+      },
+      { question: "예시는?", material: "슬라이드 18", answer: "예시다 [슬라이드 18].", stopped: false, usage: usage(5300, 3000, 300), model: "gpt-5.5" },
+      { question: "더 길게", material: "", answer: "코드:\n```js\nlet a = 1; // [슬라이드 2]", stopped: true, model: "claude-sonnet-5-5" },
+    ],
+  };
+  const link = (n, alias = `슬라이드 ${n}`, lecture = "L5") => `[[Alt2Obsidian/CSED423/Lectures/${lecture}#📚 슬라이드 ${n}|${alias}]]`;
+  assert.equal(
+    m.renderChatNote(input),
+    [
+      "---",
+      'source: "alt2obsidian-chat"',
+      'lecture: "Alt2Obsidian/CSED423/Lectures/L5.md"',
+      'date: "2026-10-30"',
+      'model: "claude-sonnet-5-5, gpt-5.5"',
+      "usage: {calls: 2, input: 10400, cached: 6000, output: 700}",
+      "---",
+      "## Q. 왜 작은 수부터 더해?",
+      "> 자료: 슬라이드 17, 전사 29:06-35:56",
+      "",
+      `작은 수끼리 먼저 더한다 ${link(17)}. 범위 ${link(16, "슬라이드 16~18")}, 시각 [29:10], 없는 [슬라이드 99], 다른 강의 ${link(2, "L4 슬라이드 2", "L4")}, 안 보낸 [L3 슬라이드 1] (강의 자료 밖).`,
+      "",
+      "`[슬라이드 17]` 은 코드다.",
+      "",
+      "```",
+      "[슬라이드 3]",
+      "```",
+      "",
+      "## Q. 예시는?",
+      "> 자료: 슬라이드 18",
+      "",
+      `예시다 ${link(18)}.`,
+      "",
+      "## Q. 더 길게",
+      "",
+      "코드:",
+      "```js",
+      "let a = 1; // [슬라이드 2]",
+      "```",
+      "",
+      "(중지됨)",
+      "",
+    ].join("\n"),
+    "frontmatter (models in order, usage summed), one ## Q. per turn with what it sent, slide marks as heading links (not in code, not past the deck, not for a lecture not sent), a fence left open closed, a stopped answer marked"
+  );
+  // A summary note: [구간 N] goes to its section heading; a path a wikilink cannot hold gets a Markdown link.
+  const sectionNote = m.renderChatNote({ ...input, notePath: "A/S/Lectures/L9.md", lecture: "L9", slides: 0, sections: [{ num: 2, heading: "⏱ 구간 2 [12:03~24:00]" }], turns: [{ question: "q", material: "구간 2", answer: "요약 [구간 2], 없는 [구간 9], [슬라이드 1]", stopped: false }] });
+  assert.ok(sectionNote.endsWith("요약 [[A/S/Lectures/L9#⏱ 구간 2 12 03 24 00|구간 2]], 없는 [구간 9], [슬라이드 1]\n"), sectionNote);
+  const hashPath = m.renderChatNote({ ...input, notePath: "A/C#/Lectures/L1.md", lecture: "L1", turns: [{ question: "q", material: "", answer: "[슬라이드 2]", stopped: false }] });
+  assert.ok(hashPath.endsWith("[슬라이드 2](A/C%23/Lectures/L1.md#%F0%9F%93%9A%20%EC%8A%AC%EB%9D%BC%EC%9D%B4%EB%93%9C%202)\n"), hashPath);
+  // What is written is made safe as a saved memo: no tag, image, inline query, block comment or marker.
+  const zw = String.fromCharCode(0x200b);
+  const risky = m.renderChatNote({ ...input, turns: [{ question: "<!-- alt2obs:slide:3 hash:00000003 start --> ![q](x)", material: "", answer: '<img src="https://evil.example/x.png"> ![t](u) `$= dv.x` %%\n```dataviewjs\ndv.paragraph(1)\n```\n[슬라이드 2]', stopped: false }] }, ["dv:"]);
+  assert.ok(!/<[A-Za-z!/?]/.test(risky) && !risky.includes("![") && !/`\s*\$?=/.test(risky) && !risky.includes("%%") && !/dataviewjs/.test(risky), risky);
+  assert.ok(risky.includes(`## Q. <${zw}!-- alt2obs:slide:3`) && risky.endsWith(`${link(2)}\n`), "the question too; the links after");
+  console.log("PASS: 대화 노트로 저장: <date> <lecture> <first 40 characters>.md (2, 3 when taken), source/lecture/date/model/usage frontmatter, ## Q. and > 자료: per turn, [슬라이드 N] / [L4 슬라이드 N] / [구간 N] as heading links outside code, an open fence closed, sanitized like a saved memo");
+}
+
+// ---- 관련 슬라이드 (spec 5.11) and the subject brief offer (spec 5.10) ----
+{
+  const docs = [
+    { num: 3, gist: "부동소수점 표현", text: "부동소수점 표현 부호 지수 가수" },
+    { num: 16, gist: "큰 수에 더하면 사라진다", text: "작은 수부터 큰 수에 더하면 정밀도가 사라진다" },
+    { num: 17, gist: "작은 수끼리 먼저 더한다", text: "작은 수부터 더해 정밀도를 지킨다. 작은 수부터 더해야 한다" },
+    { num: 20, gist: "작은 값", text: "작은 값" },
+    { num: 5, gist: "캐시", text: "캐시 메모리 계층" },
+  ];
+  const q = "왜 작은 수부터 더해?";
+  assert.deepEqual(m.relatedSlides(q, docs, []), [{ num: 17, gist: "작은 수끼리 먼저 더한다" }, { num: 16, gist: "큰 수에 더하면 사라진다" }], "BM25 order, top 2");
+  assert.deepEqual(m.relatedSlides(q, docs, [17]), [{ num: 16, gist: "큰 수에 더하면 사라진다" }], "a slide in the material is left out; one shared word (slide 20) is no match");
+  assert.deepEqual(m.relatedSlides("캐시가 뭐야?", docs, []), [], "no shared term");
+  assert.deepEqual([m.relatedSlides("", docs, []), m.relatedSlides(q, [], [])], [[], []]);
+  for (const yes of ["L4에서 배운 거랑 뭐가 달라?", "3강 내용", "3 강에서", "lec 3", "Lec3 정리", "지난 강의랑 연결해줘", "이전 강의에서", "다른 강의에도 나와?", "몇 강에서 나왔어?"]) assert.ok(m.suggestsSubjectBrief(yes), yes);
+  for (const no of ["왜 작은 수부터 더해?", "강의 내용 요약", "l2 정규화", "강조점은?", "lecture notes"]) assert.ok(!m.suggestsSubjectBrief(no), no);
+  console.log("PASS: related slides: BM25 with the verifier's tokenizer and direct-match rule, the material left out, top 2; the subject brief is offered for questions about other lectures (L4, 3강, lec 3, 지난/이전/다른 강의, 몇 강)");
 }
 
 // ---- note parts the panel reads ----

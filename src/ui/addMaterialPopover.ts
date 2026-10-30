@@ -6,14 +6,15 @@
 //   locked), what each added slide carries (slide text, commentary,
 //   transcript, memo, slide image off by default), "N장 추가 · 약 Xk 토큰";
 // - 다른 강의: subject and lecture dropdowns and the same list; adding puts
-//   that lecture's brief in too (as "다른 강의 브리프");
+//   that lecture's brief in too (as "다른 강의 브리프"), and with "과목 브리프
+//   넣기" its subject's brief (spec 5.10);
 // - 노트에서 선택한 글: the text selected in the note, put in as a quote.
 // Up to 8 added slides; the estimate is rough, a send counts exactly.
 
 import type { ChatLecture } from "./ChatView";
 import { DEFAULT_INCLUDE, IncludeOptions, MAX_ADDED_SLIDES, planAddition, quoteOf, rowTime, rowTokens, SlideRow } from "../chat/addMaterial";
 
-export type AddRequest = { lecture: ChatLecture; slides: number[]; include: IncludeOptions; withBrief: boolean } | { quote: string };
+export type AddRequest = { lecture: ChatLecture; slides: number[]; include: IncludeOptions; withBrief: boolean; withSubjectBrief: boolean } | { quote: string };
 
 export interface AddPopoverOptions {
   lecture: ChatLecture;
@@ -23,6 +24,8 @@ export interface AddPopoverOptions {
   alreadyAdded(notePath: string): number[];
   /** Slides already added, every lecture's. */
   addedCount: number;
+  /** The subject brief is in the material already. */
+  subjectBriefAdded: boolean;
   /** Other lecture notes, by subject. */
   choices: Array<{ path: string; name: string; subject: string }>;
   loadLecture(notePath: string): Promise<ChatLecture | null>;
@@ -124,6 +127,18 @@ async function renderPicker(el: HTMLElement, o: AddPopoverOptions, lecture: Chat
     });
     t.appendText(label);
   }
+  // 다른 강의: "과목 브리프 넣기", checked and locked once it is in.
+  let subjectBox: HTMLInputElement | null = null;
+  if (other) {
+    const label = el.createEl("label", { cls: "alt-to-obs-chat-popover-subject" });
+    subjectBox = label.createEl("input", { type: "checkbox" });
+    subjectBox.dataset.subjectBrief = "";
+    subjectBox.checked = o.subjectBriefAdded;
+    subjectBox.disabled = o.subjectBriefAdded;
+    subjectBox.addEventListener("change", () => update());
+    label.appendText(o.subjectBriefAdded ? "과목 브리프 넣기 (넣음)" : "과목 브리프 넣기");
+  }
+  const withSubject = () => !!subjectBox && subjectBox.checked && !subjectBox.disabled;
   const footer = el.createDiv({ cls: "alt-to-obs-chat-popover-footer" });
   const summary = footer.createSpan({ cls: "alt-to-obs-chat-popover-summary" });
   footer.createEl("button", { text: "취소" }).addEventListener("click", () => o.onClose());
@@ -142,13 +157,13 @@ async function renderPicker(el: HTMLElement, o: AddPopoverOptions, lecture: Chat
       if (!box.disabled) box.checked = p.slides.includes(n) || checked.has(n);
     }
     for (const [i, row] of rows.entries()) list.querySelectorAll(".alt-to-obs-chat-popover-tokens")[i]?.setText(k(rowTokens(row, include)));
-    summary.setText(other ? `브리프와 ${p.slides.length}장 추가 · 약 ${k(p.tokens)} 토큰` : `${p.slides.length}장 추가 · 약 ${k(p.tokens)} 토큰`);
+    summary.setText(other ? `브리프${withSubject() ? ", 과목 브리프" : ""}와 ${p.slides.length}장 추가 · 약 ${k(p.tokens)} 토큰` : `${p.slides.length}장 추가 · 약 ${k(p.tokens)} 토큰`);
     add.disabled = !other && p.slides.length === 0;
   };
   rangeEl.addEventListener("input", update);
   add.addEventListener("click", () => {
     const p = plan();
-    o.onAdd({ lecture, slides: p.slides, include: { ...include }, withBrief: other });
+    o.onAdd({ lecture, slides: p.slides, include: { ...include }, withBrief: other, withSubjectBrief: withSubject() });
   });
   update();
 }

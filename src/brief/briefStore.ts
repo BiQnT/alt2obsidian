@@ -15,11 +15,13 @@ import {
   briefStatus,
   buildBriefScript,
   CarriedAi,
+  composeBrief,
   isEditedBrief,
   oneLineOf,
   planBriefUpdate,
   planSubjectBriefUpdate,
   SubjectBriefEntry,
+  subjectBriefBody,
 } from "./lectureBrief";
 import { aiPartStatus, BriefAi, briefAiInput, BriefAiInput, formatAiPart, renderAiSections, validateBriefAi } from "./briefAi";
 
@@ -139,20 +141,56 @@ export async function updateSubjectBrief(files: BriefFiles, notePath: string, su
     // Lecture briefs only (the subject brief has alt2obs_subject_brief instead).
     const lecture = fm.alt2obs_brief !== undefined ? fmString(fm, "lecture") : "";
     const note = lecture ? await files.read(lecture) : null;
-    if (!note) continue;
-    const parts = parseLectureNote(note);
-    const altCreated = fmString(parts.frontmatter, "alt_created");
-    entries.push({
-      name: stemOf(lecture),
-      date: (altCreated || fmString(parts.frontmatter, "date")).slice(0, 10),
-      altCreated: altCreated || undefined,
-      kind: parts.kind,
-      count: parts.units.length,
-      oneLine: oneLineOf(text),
-    });
+    if (note) entries.push(subjectEntry(lecture, note, text));
   }
   const decision = await planSubjectBriefUpdate(await files.read(target), subject, entries, today);
   if (decision.action === "keep") return { path: target, result: decision.reason };
   await files.write(target, decision.text);
   return { path: target, result: "written" };
+}
+
+/** A lecture's line in the subject brief: from its note and its brief. */
+function subjectEntry(notePath: string, noteText: string, briefText: string): SubjectBriefEntry {
+  const parts = parseLectureNote(noteText);
+  const altCreated = fmString(parts.frontmatter, "alt_created");
+  return {
+    name: stemOf(notePath),
+    date: (altCreated || fmString(parts.frontmatter, "date")).slice(0, 10),
+    altCreated: altCreated || undefined,
+    kind: parts.kind,
+    count: parts.units.length,
+    oneLine: oneLineOf(briefText),
+  };
+}
+
+/**
+ * The subject brief a question sends (spec 5.10): the file's body without
+ * its frontmatter and title; without a file, the same lines assembled in
+ * memory from the subject's lecture notes (no tokens, nothing written),
+ * each from its lecture brief, or from the script part its note gives when
+ * it has none.
+ */
+export async function subjectBriefForChat(files: BriefFiles, notePath: string, subject: string, lectureNotes: string[], today: string): Promise<string> {
+  const existing = await files.read(subjectBriefPath(subjectFolderOfNote(notePath), subject));
+  if (existing !== null) return briefChatBody(existing);
+  const entries: SubjectBriefEntry[] = [];
+  for (const path of lectureNotes) {
+    const note = await files.read(path);
+    if (!note) continue;
+    const brief = (await files.read(briefPathForNote(path))) ?? (await composeBrief(await buildBriefScript(path, note), null, today));
+    entries.push(subjectEntry(path, note, brief));
+  }
+  return briefChatBody(subjectBriefBody(subject, entries));
+}
+
+/**
+ * The timestamped part of an import's transcript (the brief's AI part
+ * reads it, spec 4.5); null when no segment has both times. The plugin's
+ * import and the Skill use this one rule, so their `ai_hash` agree.
+ */
+export function timedTranscript(segments: Array<{ startMs: number | null; endMs: number | null; text: string }> | undefined): TimedText[] | null {
+  const timed = (segments ?? [])
+    .filter((s) => s.startMs !== null && s.endMs !== null)
+    .map((s) => ({ startMs: s.startMs as number, endMs: s.endMs as number, text: s.text }));
+  return timed.length > 0 ? timed : null;
 }

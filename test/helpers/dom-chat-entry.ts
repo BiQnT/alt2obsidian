@@ -6,7 +6,7 @@
 import { ChatView } from "../../src/ui/ChatView";
 import { ChatPanelController, SLIDE_CHANGE_EVENT, VIEW_TYPE_CHAT } from "../../src/ui/chatPanel";
 import { BriefsModal } from "../../src/ui/BriefsModal";
-import { ThreadStore } from "../../src/chat/threads";
+import { ThreadStore, turnsOf } from "../../src/chat/threads";
 import { DEFAULT_SETTINGS } from "../../src/types";
 // @ts-ignore resolved to test/helpers/obsidian-browser-stub.js
 import { Component, Menu, TFile } from "obsidian";
@@ -22,6 +22,9 @@ async function until(what: string, ok: () => boolean): Promise<void> {
 
 const L5 = "Alt2Obsidian/CSED423/Lectures/L5.md";
 const L4 = "Alt2Obsidian/CSED423/Lectures/L4.md";
+/** A summary note (no slides, spec 9): three transcript sections. */
+const L9 = "Alt2Obsidian/CSED423/Lectures/L9.md";
+const SECTIONS: Record<number, [number, number]> = { 1: [0, 723_000], 2: [723_000, 1_440_000], 3: [1_440_000, 2_160_000] };
 
 /** A workspace with a right sidebar, leaves and events, enough for the panel and its controller. */
 function makeWorkspace() {
@@ -90,7 +93,9 @@ async function main() {
     chatLecture: async (path: string) =>
       (calls.push({ lecture: path }), path === L5 || path === L4)
         ? { notePath: path, name: path === L5 ? "L5" : "L4", subject: "CSED423", kind: "slides", pdfPath: path.replace(/\.md$/, ".pdf"), slideCount: 30, sectionCount: 0, lengthMs: 60 * 60_000, neighbours: { prev: "L4", next: "L6" } }
-        : null,
+        : path === L9
+          ? { notePath: L9, name: "L9", subject: "CSED423", kind: "transcript", pdfPath: null, slideCount: 0, sectionCount: 3, lengthMs: 36 * 60_000, neighbours: { prev: "L8", next: null } }
+          : null,
     chatBrief: async (path: string) => {
       calls.push({ briefRead: path });
       if (briefStatus === "broken") throw new Error("brief unreadable");
@@ -102,7 +107,16 @@ async function main() {
     },
     briefAiEstimate: async (path: string) => (path === L4 ? 2400 : null),
     rebuildBrief: async () => true,
-    chatMaterial: async (_l: unknown, slide: number) => (materialDelay && (await sleep(materialDelay)), {
+    chatMaterial: async (l: any, slide: number) => (materialDelay && (await sleep(materialDelay)), l.kind === "transcript" ? {
+      // A section of the summary note: its summary, memo and the transcript of its range.
+      slideText: "",
+      image: null,
+      commentary: `구간 ${slide} 요약: 캐시를 다룬다.`,
+      memo: slide === 2 ? "구간 메모" : "",
+      segments: slide === 2 ? [{ startMs: 13 * 60_000, endMs: 13 * 60_000 + 10_000, text: "캐시는 가까운 저장소입니다." }] : [],
+      spans: [{ slide, startMs: SECTIONS[slide][0], endMs: SECTIONS[slide][1], low: false }],
+      transcriptEndMs: null,
+    } : {
       slideText: `Slide ${slide} floating point addition`,
       image: null,
       commentary: `해설 ${slide}: 작은 수끼리 먼저 더한다.`,
@@ -114,6 +128,12 @@ async function main() {
     runChat: async (req: any) => {
       calls.push({ run: req });
       if (answer.mode === "error") throw new Error(answer.error);
+      if (answer.mode === "whole") {
+        // Codex: no piece, the whole answer at the end.
+        await sleep(2300);
+        req.onDelta(answer.pieces.join(""));
+        return { text: answer.pieces.join(""), usage: { calls: 1, inputTokens: 17000, cachedInputTokens: 0, outputTokens: 400, imagesSent: 0, costUsd: 0 }, model: "" };
+      }
       if (answer.mode === "hang") {
         req.onDelta("받은 부분");
         await new Promise<void>((resolve, reject) => {
@@ -136,6 +156,20 @@ async function main() {
     chatOtherBrief: async (l: any) => (calls.push({ otherBrief: l.name }), "## 개요\nL4 브리프 본문"),
     chatSlideImage: async (l: any, n: number) => (calls.push({ image: `${l.name}:${n}` }), { pageNum: n, mimeType: "image/jpeg", base64: "AAAA" }),
     noteSelection: () => selection,
+    chatSubjectBrief: async (path: string) => (calls.push({ subjectBrief: path }), { subject: "CSED423", body: "- L4 (2026-09-23, 슬라이드 20장): 렉서를 다룬다.\n- L5 (2026-09-30, 슬라이드 30장): 부동소수점 덧셈을 다룬다." }),
+    chatSlideCorpus: async (l: any) => (
+      calls.push({ corpus: l.name }),
+      [
+        { num: 5, gist: "캐시", text: "캐시 메모리 계층" },
+        { num: 16, gist: "큰 수에 더하면 사라진다", text: "작은 수부터 큰 수에 더하면 정밀도가 사라진다" },
+        { num: 17, gist: "작은 수부터 더한다", text: "작은 수부터 더해 정밀도를 지킨다. 작은 수부터 더해야 한다" },
+        { num: 20, gist: "작은 수끼리 먼저 더해 정밀도를 지킨다", text: "작은 수부터 더해 큰 수의 정밀도를 지킨다" },
+      ]
+    ),
+    saveChatNote: async (thread: any, l: any) => {
+      calls.push({ chatNote: { note: l.notePath, turns: turnsOf(thread).map((t) => [t.question, t.material]) } });
+      return `Alt2Obsidian/CSED423/Chats/2026-10-30 ${l.name} ${turnsOf(thread)[0].question}.md`;
+    },
     saveChatMemo: async (target: any, question: string, answer: string, shorten: boolean) => {
       calls.push({ memo: { target, question, answer: answer.slice(0, 9), shorten } });
       if (shorten) throw new Error("브리프 모델이 없습니다");
@@ -272,6 +306,20 @@ async function main() {
     task: req.task,
   });
 
+  // ---- related slides under the answer (spec 5.11): the current slide left out; a click adds one for the next question ----
+  {
+    const turnEl = a.closest(".alt-to-obs-chat-turn")!;
+    const rows = () => Array.from(turnEl.querySelectorAll(".alt-to-obs-chat-related-item")).map((r) => `${r.querySelector(".alt-to-obs-chat-related-text")!.textContent}|${r.querySelector("button")!.textContent}`);
+    const before = rows();
+    const runsBefore = runs();
+    (turnEl.querySelector(".alt-to-obs-chat-related-item button") as HTMLButtonElement).click();
+    await until("the related slide added", () => text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("📄 슬라이드 20 ×")));
+    const after = rows();
+    const disabled = (turnEl.querySelector(".alt-to-obs-chat-related-item button") as HTMLButtonElement).disabled;
+    button("📄 슬라이드 20").click();
+    log.push({ step: "related slides", before, after, disabled, sentNothing: runs() === runsBefore, corpus: calls.filter((c) => c.corpus).map((c) => c.corpus), removed: !text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("📄 슬라이드 20")) });
+  }
+
   // ---- the grounding chips go where they point (spec 5.5) ----
   (a.querySelector(".alt-to-obs-chat-cite.is-slide") as HTMLElement).click();
   (a.querySelector(".alt-to-obs-chat-cite.is-time") as HTMLElement).click();
@@ -326,6 +374,13 @@ async function main() {
   memoMenu.items[1].click();
   await until("both memo saves", () => calls.filter((c) => c.memo).length === 2 && ((window as any).__notices ?? []).length >= noticesBeforeMemo + 3);
   log.push({ step: "memo", items: memoMenu.items.map((i: any) => i.title), saved: calls.filter((c) => c.memo).map((c) => c.memo), notices: ((window as any).__notices ?? []).slice(noticesBeforeMemo) });
+
+  // ---- 대화 노트로 저장 (spec 5.9): the thread with what each turn sent ----
+  const noticesBeforeNote = ((window as any).__notices ?? []).length;
+  button("메모에 저장", a.closest(".alt-to-obs-chat-turn")!).click();
+  (Menu as any).shown.items[2].click();
+  await until("the chat note", () => calls.some((c) => c.chatNote) && ((window as any).__notices ?? []).length > noticesBeforeNote);
+  log.push({ step: "chat note", saved: calls.find((c) => c.chatNote).chatNote, notice: ((window as any).__notices ?? [])[noticesBeforeNote] });
 
   // ---- closing the panel does not stop an answer (spec 5.4); a panel opened again shows it ----
   const original = answer;
@@ -393,13 +448,19 @@ async function main() {
     const card = root().querySelectorAll(`.alt-to-obs-chat-error.is-${kind}`)[0] as HTMLElement;
     cards.push({ kind, title: card.querySelector("strong")!.textContent, fix: card.querySelector("p")!.textContent, buttons: Array.from(card.querySelectorAll("button")).map((b) => b.textContent) });
   }
-  // "Codex로 보내기" sends the same question with the Codex defaults; it answers.
-  answer = { ...answer, mode: "ok" };
+  // "Codex로 보내기" sends the same question with the Codex defaults; it answers all at once (no pieces), the clock running meanwhile.
+  answer = { ...answer, mode: "whole" };
   const last = root().querySelectorAll(".alt-to-obs-chat-error.is-other")[0] as HTMLElement;
   button("Codex로 보내기", last).click();
+  const codexStatus = () => text(".alt-to-obs-chat-status").find((t) => t!.startsWith("답변 쓰는 중")) ?? "";
+  await until("the Codex status", () => codexStatus() !== "");
+  const codexFirst = codexStatus();
+  await until("the clock ticks", () => /· [1-9]초 ·/.test(codexStatus()));
+  const codexTicked = codexStatus();
   await until("the retried answer", () => calls.filter((c) => c.run).pop().run.task.provider === "codex-cli" && !root().querySelector(".alt-to-obs-chat-a.is-streaming") && !root().querySelector(".alt-to-obs-chat-error.is-other"));
+  answer = { ...answer, mode: "ok" };
   button("설정 열기", root().querySelector(".alt-to-obs-chat-error")!).click();
-  log.push({ step: "errors", cards, retried: calls.filter((c) => c.run).pop().run.task, settingsOpened: calls.some((c) => c.settings) });
+  log.push({ step: "errors", cards, retried: calls.filter((c) => c.run).pop().run.task, settingsOpened: calls.some((c) => c.settings), codexFirst, codexTicked });
 
   // ---- the brief cannot be read now: the last state stays (no "읽는 중" forever) ----
   briefStatus = "broken";
@@ -480,8 +541,13 @@ async function main() {
   const otherLecture = (pop()!.querySelectorAll("select")[1] as HTMLSelectElement).value;
   pop()!.querySelector<HTMLInputElement>('input[data-slide="2"]')!.click();
   const otherSummary = pop()!.querySelector(".alt-to-obs-chat-popover-summary")!.textContent;
+  // "과목 브리프 넣기" (spec 5.10).
+  const subjectBox = pop()!.querySelector<HTMLInputElement>("input[data-subject-brief]")!;
+  const subjectOffer = { label: subjectBox.parentElement!.textContent, checked: subjectBox.checked, disabled: subjectBox.disabled };
+  subjectBox.click();
+  const subjectSummary = pop()!.querySelector(".alt-to-obs-chat-popover-summary")!.textContent;
   button("추가", pop()!).click();
-  await until("the other lecture added", () => text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("📚 L4 브리프 ×")));
+  await until("the other lecture added", () => text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("📚 L4 브리프 ×")) && text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("📚 CSED423 과목 브리프 ×")));
   button("+ 자료 추가").click();
   button("노트에서 선택한 글", pop()!).click();
   const noSelection = { text: pop()!.querySelector(".alt-to-obs-muted")?.textContent, disabled: button("인용으로 넣기", pop()!).disabled };
@@ -522,6 +588,10 @@ async function main() {
     headings: addedReq.user.match(/^## .+$/gm),
     quoteSent: addedReq.user.split("[선택한 글]\n")[1]?.split("\n\n")[0] ?? null,
     otherBriefSent: addedReq.system.includes("[다른 강의 브리프: CSED423 · L4]\n## 개요\nL4 브리프 본문"),
+    subjectOffer,
+    subjectSummary,
+    subjectBriefSent: addedReq.system.includes("[과목 브리프: CSED423]\n- L4 (2026-09-23, 슬라이드 20장): 렉서를 다룬다.\n- L5 (2026-09-30, 슬라이드 30장): 부동소수점 덧셈을 다룬다.\n\n[다른 강의 브리프: CSED423 · L4]"),
+    subjectBriefRead: calls.filter((c) => c.subjectBrief).map((c) => c.subjectBrief),
     images: addedReq.images.map((i: any) => i.pageNum),
     quoteAfterRemove: text(".alt-to-obs-chat-chip").some((t) => t!.startsWith("❝")),
     otherCites,
@@ -536,6 +606,8 @@ async function main() {
   await sleep(400);
   const lists = () => ({ pickers: pop()!.querySelectorAll(".alt-to-obs-chat-popover-list").length, adds: Array.from(pop()!.querySelectorAll("button")).filter((b) => b.textContent === "추가").length, summary: pop()!.querySelector(".alt-to-obs-chat-popover-summary")?.textContent ?? null });
   const afterTab = lists();
+  const lockedBox = pop()!.querySelector<HTMLInputElement>("input[data-subject-brief]");
+  const subjectLocked = lockedBox ? { label: lockedBox.parentElement!.textContent, checked: lockedBox.checked, disabled: lockedBox.disabled } : null;
   const lectureSelect = pop()!.querySelectorAll("select")[1] as HTMLSelectElement;
   lectureSelect.dispatchEvent(new Event("change"));
   lectureSelect.dispatchEvent(new Event("change"));
@@ -543,7 +615,7 @@ async function main() {
   const afterPick = lists();
   slideListDelay = 0;
   button("취소", pop()!).click();
-  log.push({ step: "stale slide lists", afterTab, afterPick, closed: !pop() });
+  log.push({ step: "stale slide lists", afterTab, afterPick, closed: !pop(), subjectLocked });
 
   // ---- right-click questions (spec 5.8): pinned on a slide; a selection as the quote, the input focused ----
   const chips = () => Array.from(root().querySelectorAll(".alt-to-obs-chat-chip"));
@@ -566,6 +638,85 @@ async function main() {
   const notLecture = { head: text(".alt-to-obs-chat-lecture")[0], quote: quoteChip() };
   button("❝ 선택한 글 ×").click();
   log.push({ step: "right-click questions", sameSlide, sameQuote, otherSlide, otherQuote, notLecture });
+
+  // ---- a summary note (spec 9): the section above the editor's cursor is the focus; the subject brief offered once (spec 5.10) ----
+  {
+    const l9 = ["---", 'alt_kind: "transcript"', "---", "# L9", "", "## ⏱ 구간 1 [00:00~12:03]", "요약 1", "", "## ⏱ 구간 2 [12:03~24:00]", "요약 2", "", "## ⏱ 구간 3 [24:00~36:00]", "요약 3", ""].join("\n");
+    let line = 9;
+    ws.mostRecent = { view: { getViewType: () => "markdown", file: { path: L9, extension: "md" }, editor: { getCursor: () => ({ line }), getValue: () => l9 } } };
+    ws.trigger("active-leaf-change");
+    await until("the section chip", () => chips().map(label).some((t) => t.startsWith("⏱ 구간 2 [12:03~24:00] · 따라가는 중")));
+    await until("the section's transcript", () => chips().map(label).some((t) => t.startsWith("🎙 전사")));
+    const focus = { head: text(".alt-to-obs-chat-lecture")[0], chips: chips().map(label).filter((t) => /^(⏱|🎙|✏️)/.test(t)), pinTitle: root().querySelector(".alt-to-obs-chat-pin")!.getAttribute("title") };
+    // A question about another lecture: the subject brief offered first; 그냥 보내기 sends without it.
+    const runsBefore = runs();
+    answer = { ...answer, pieces: ["캐시는 가깝다 [구간 2], ", "시각 [13:00], 없는 [구간 9], 슬라이드는 없다 [슬라이드 3]."] };
+    input.value = "지난 강의랑 뭐가 달라?";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    const suggestEl = () => root().querySelector(".alt-to-obs-chat-suggest") as HTMLElement;
+    await until("the suggestion", () => suggestEl().style.display !== "none" && !!suggestEl().textContent);
+    const offered = { text: suggestEl().querySelector("span")!.textContent, buttons: Array.from(suggestEl().querySelectorAll("button")).map((b) => b.textContent), runs: runs() - runsBefore, input: input.value };
+    button("그냥 보내기", suggestEl()).click();
+    await until("sent without the subject brief", () => runs() === runsBefore + 1 && root().querySelector(".alt-to-obs-chat-send")!.textContent === "보내기" && !!lastAnswer().querySelector(".alt-to-obs-chat-cite"));
+    const plainReq = calls.filter((c) => c.run).pop().run;
+    const sectionAnswer = lastAnswer();
+    const cites = Array.from(sectionAnswer.querySelectorAll(".alt-to-obs-chat-cite")).map((c) => `${c.className.replace("alt-to-obs-chat-cite", "").trim()}:${c.textContent}`);
+    const turnEl = sectionAnswer.closest(".alt-to-obs-chat-turn")!;
+    const sent = {
+      label: turnEl.querySelector(".alt-to-obs-chat-q-meta")?.textContent,
+      unit: plainReq.user.split("[이번 자료]\n")[1]?.split("\n\n[질문]")[0],
+      subjectBrief: plainReq.system.includes("[과목 브리프:"),
+      cites,
+      plain: sectionAnswer.textContent!.includes("[슬라이드 3]") && sectionAnswer.textContent!.includes("[구간 9]"),
+      related: turnEl.querySelectorAll(".alt-to-obs-chat-related-item").length,
+      corpus: calls.filter((c) => c.corpus).some((c) => c.corpus === "L9"),
+    };
+    (sectionAnswer.querySelector(".alt-to-obs-chat-cite.is-section") as HTMLElement).click();
+    (sectionAnswer.querySelector(".alt-to-obs-chat-cite.is-time") as HTMLElement).click();
+    await sleep(50);
+    const gone = calls.filter((c) => c.go && c.note === L9).map((c) => `${c.go}:${c.n ?? c.ms}`);
+    // Once per lecture: the next such question goes as it is.
+    input.value = "L4와 비교해줘";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await until("the second question", () => runs() === runsBefore + 2 && root().querySelector(".alt-to-obs-chat-send")!.textContent === "보내기");
+    const once = { suggestShown: suggestEl().style.display !== "none", subjectBrief: calls.filter((c) => c.run).pop().run.system.includes("[과목 브리프:") };
+    // 메모에 저장 goes to the section's memo.
+    const noticesBefore = ((window as any).__notices ?? []).length;
+    button("메모에 저장", lastAnswer().closest(".alt-to-obs-chat-turn")!).click();
+    (Menu as any).shown.items[0].click();
+    await until("the section memo", () => calls.filter((c) => c.memo).length === 3);
+    const memo = { target: calls.filter((c) => c.memo).pop().memo.target, notice: ((window as any).__notices ?? [])[noticesBefore] };
+    // The cursor moves to section 3: a divider; pinned, a move elsewhere changes nothing.
+    line = 12;
+    ws.trigger("active-leaf-change");
+    await until("section 3 followed", () => chips().map(label).some((t) => t.startsWith("⏱ 구간 3 [24:00~36:00] · 따라가는 중")));
+    const dividers = text(".alt-to-obs-chat-divider");
+    root().querySelector<HTMLButtonElement>(".alt-to-obs-chat-pin")!.click();
+    const pinnedTitle = root().querySelector(".alt-to-obs-chat-pin")!.getAttribute("title");
+    line = 6;
+    ws.trigger("active-leaf-change");
+    await sleep(300);
+    const pinned = chips().map(label).find((t) => t.startsWith("⏱"));
+    log.push({ step: "summary note", focus, offered, sent, gone, once, memo, dividers, pinnedTitle, pinned });
+
+    // Back on L5 (a fresh offer): 넣기 adds the subject brief and sends.
+    ws.mostRecent = { view: { getViewType: () => "alt2obsidian-synced-viewer", getState: () => ({ mdPath: L5, pdfPath: "L5.pdf" }), getCurrentSlide: () => 18 } };
+    ws.trigger("active-leaf-change");
+    await until("back on L5", () => text(".alt-to-obs-chat-lecture")[0] === "CSED423 · L5");
+    const runsL5 = runs();
+    input.value = "3강에서 배운 거랑 이어져?";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await until("the L5 suggestion", () => suggestEl().style.display !== "none" && !!suggestEl().textContent);
+    button("넣기", suggestEl()).click();
+    await until("sent with the subject brief", () => runs() === runsL5 + 1 && root().querySelector(".alt-to-obs-chat-send")!.textContent === "보내기");
+    const withReq = calls.filter((c) => c.run).pop().run;
+    log.push({
+      step: "subject brief offer",
+      chip: chips().map(label).find((t) => t.startsWith("📚")),
+      order: withReq.system.indexOf("[강의 브리프: CSED423 · L5") < withReq.system.indexOf("[과목 브리프: CSED423]\n- L4 (2026-09-23"),
+      hidden: suggestEl().style.display === "none",
+    });
+  }
 
   // ---- the menu, and the × closes the panel ----
   button("⋯").click();

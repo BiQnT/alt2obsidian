@@ -788,6 +788,24 @@ try {
     assert.ok(!/^---|alt2obs_brief|# Lec7 Caches brief/m.test(other), "the body only");
     assert.equal(files.has(otherBriefPath), false, "nothing written");
     if (savedBrief !== undefined) files.set(otherBriefPath, savedBrief);
+    // 과목 브리프 (spec 5.10): its file's body, else built in memory from the subject's lecture notes (nothing written).
+    const subjectBriefPath = "Alt2Obsidian/CSED311/Briefs/CSED311 subject brief.md";
+    const savedSubject = files.get(subjectBriefPath);
+    files.delete(subjectBriefPath);
+    const inMemory = await plugin.chatSubjectBrief(record.path);
+    assert.equal(inMemory.subject, "CSED311");
+    assert.match(inMemory.body, /^- Lec7 Caches \([^)]*슬라이드 8장\)/, "built in memory from the lecture notes");
+    assert.equal(files.has(subjectBriefPath), false, "nothing written");
+    files.set(subjectBriefPath, '---\nalt2obs_subject_brief: 1\nsubject: "CSED311"\n---\n# CSED311 subject brief\n\n- 내가 쓴 과목 브리프\n');
+    assert.deepEqual(await plugin.chatSubjectBrief(record.path), { subject: "CSED311", body: "- 내가 쓴 과목 브리프" }, "the file's body when there is one");
+    if (savedSubject !== undefined) files.set(subjectBriefPath, savedSubject);
+    else files.delete(subjectBriefPath);
+    // 관련 슬라이드 (spec 5.11): each slide's gist, commentary and the page text the panel has read (no PDF read for it).
+    const corpus = await plugin.chatSlideCorpus(lecture);
+    assert.deepEqual(corpus.map((d) => d.num), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.equal(corpus[6].gist, "슬라이드 7의 요지");
+    assert.ok(corpus[6].text.includes(m7.commentary) && corpus[6].text.includes(TEXTS[6]), "the commentary and the page text read before");
+    assert.deepEqual(await plugin.chatSlideCorpus({ ...lecture, kind: "transcript" }), [], "slides only");
     assert.equal((await plugin.chatSlideImage(lecture, 7))?.pageNum, 7, "an added slide's image");
     assert.equal(await plugin.chatSlideImage({ ...lecture, pdfPath: null }, 7), null);
     assert.equal(plugin.noteSelection(), "", "no note open: no selection");
@@ -903,6 +921,41 @@ try {
     assert.ok(files.get(record.path).includes(savedMemo), "both saved in slide 2's memo, after what was there");
     assert.equal((await plugin.chatMaterial(lecture, 2)).memo.split("**Q.**").length, 3, "the panel reads them as the memo");
     await assert.rejects(plugin.saveChatMemo({ ...memoAt, num: 99 }, "q", "a", false), /슬라이드 99의 메모 자리를 찾지 못했습니다/);
+    // 대화 노트로 저장 (spec 5.9): the thread in the subject's Chats folder through the vault; saved again, the same file.
+    const chatTurn = (id, question, answer, status = "done") => ({
+      id,
+      question,
+      label: "슬라이드 2 기준",
+      material: "슬라이드 2",
+      slide: 2,
+      answer,
+      status,
+      request: { task: plugin.data.settings.tasks.chat, system: "", user: "", images: [] },
+      at: 0,
+      usage: { calls: 1, inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, imagesSent: 0, costUsd: 0 },
+      model: "claude-sonnet-5-5",
+    });
+    const thread = plugin.chatThreads.get(record.path);
+    thread.items.push({ kind: "turn", turn: chatTurn(9001, "캐시가 뭐야?", "가까운 저장소다 [슬라이드 2].") }, { kind: "turn", turn: chatTurn(9002, "실패한 질문", "", "error") });
+    const chatPath = await plugin.saveChatNote(thread, lecture);
+    assert.equal(chatPath, `Alt2Obsidian/CSED311/Chats/${today} Lec7 Caches 캐시가 뭐야.md`);
+    assert.ok(
+      files.get(chatPath).startsWith(`---\nsource: "alt2obsidian-chat"\nlecture: "Alt2Obsidian/CSED311/Lectures/Lec7 Caches.md"\ndate: "${today}"\nmodel: "claude-sonnet-5-5"\nusage: {calls: 1, input: 100, cached: 40, output: 10}\n---\n`),
+      files.get(chatPath)
+    );
+    assert.ok(files.get(chatPath).includes("## Q. 캐시가 뭐야?\n> 자료: 슬라이드 2\n\n가까운 저장소다 [[Alt2Obsidian/CSED311/Lectures/Lec7 Caches#📚 슬라이드 2|슬라이드 2]]."));
+    assert.ok(!files.get(chatPath).includes("실패한 질문"), "a failed turn is not saved");
+    thread.items.push({ kind: "turn", turn: chatTurn(9003, "또?", "또 있다.") });
+    assert.equal(await plugin.saveChatNote(thread, lecture), chatPath, "saved again: the same file");
+    assert.equal((files.get(chatPath).match(/^## Q\. /gm) ?? []).length, 2, "with the new turn");
+    plugin.chatThreads.clear(record.path);
+    const nextThread = plugin.chatThreads.get(record.path);
+    nextThread.items.push({ kind: "turn", turn: chatTurn(9004, "캐시가 뭐야?", "다시 묻는다.") });
+    const nextPath = await plugin.saveChatNote(nextThread, lecture);
+    assert.equal(nextPath, `Alt2Obsidian/CSED311/Chats/${today} Lec7 Caches 캐시가 뭐야 2.md`, "another thread of the same name: 2");
+    await assert.rejects(plugin.saveChatNote(plugin.chatThreads.get("Alt2Obsidian/CSED311/Lectures/none.md"), lecture), /저장할 답이 아직 없습니다/);
+    for (const path of [record.path, "Alt2Obsidian/CSED311/Lectures/none.md"]) plugin.chatThreads.clear(path);
+    for (const path of [chatPath, nextPath]) files.delete(path);
     await plugin.runCliImport(await plugin.prepareCliImport("https://altalt.io/note/x", preview(), "CSED311"), { onConfirmUpdate: async () => true });
     assert.ok(files.get(record.path).includes(savedMemo), "a re-import keeps the saved memo");
     assert.deepEqual([...files.get(record.path).matchAll(/^## 📚 슬라이드 (\d+)$/gm)].map((x) => +x[1]), [1, 2, 3, 4, 5, 6, 7, 8], "and every slide where it was");
@@ -1436,6 +1489,16 @@ try {
       Object.assign(ws, { openLinkText: async (t) => void opened.push(t), getLeavesOfType: () => [] });
       const lec = await plugin.chatLecture(notePath);
       assert.equal(lec.kind, "transcript");
+      // The panel's focus in a summary note (spec 9): a section's summary, memo and the transcript of its heading's range.
+      const clock = (t) => t.split(":").reduce((a, x) => a * 60 + Number(x), 0) * 1000;
+      const heads = [...files.get(notePath).matchAll(/^## ⏱ 구간 (\d+) \[([\d:]+)~([\d:]+)\]$/gm)].map((x) => ({ num: +x[1], startMs: clock(x[2]), endMs: clock(x[3]) }));
+      assert.equal(lec.sectionCount, heads.length);
+      assert.equal(lec.lengthMs, heads[heads.length - 1].endMs, "its length: the last section's end");
+      const sec = await plugin.chatMaterial(lec, 2);
+      assert.deepEqual(sec.spans, [{ slide: 2, startMs: heads[1].startMs, endMs: heads[1].endMs, low: false }]);
+      assert.ok(sec.commentary && !/alt2obs/.test(sec.commentary), "the section's summary without its meta and markers");
+      assert.deepEqual([sec.slideText, sec.image], ["", null]);
+      assert.ok(sec.segments.length > 0 && sec.segments.every((x) => x.startMs >= heads[1].startMs && x.startMs < heads[1].endMs), "the transcript of the range");
       await plugin.gotoSection(lec, 2);
       await plugin.gotoTime(lec, 30_000);
       await plugin.gotoSlide({ ...lec, kind: "slides" }, 3);

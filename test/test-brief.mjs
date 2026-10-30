@@ -356,6 +356,40 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   console.log("PASS: brief store: Briefs/<lecture> brief.md, subject brief by lecture order with one line each, unchanged import writes nothing, user edits kept (lecture and subject brief)");
 }
 
+// ---- the subject brief a question sends (spec 5.10): its file, else built in memory; the timestamped transcript ----
+{
+  const files = new Map();
+  const writes = [];
+  const store = {
+    read: async (p) => (files.has(p) ? files.get(p) : null),
+    write: async (p, t) => void (writes.push(p), files.set(p, t)),
+    list: async (folder) => [...files.keys()].filter((p) => p.startsWith(folder + "/") && !p.slice(folder.length + 1).includes("/") && p.endsWith(".md")),
+  };
+  const L = (n) => `Alt2Obsidian/CSED423/Lectures/L${n}.md`;
+  files.set(L(5), slideNote());
+  files.set(L(4), slideNote().replace('alt_created: "2026-09-30"', 'alt_created: "2026-09-23"').replace("### 개요\nParse tree", "### 개요\nLexer와 Parser의 역할을 나눈다. 그 다음 문장. Parse tree"));
+  const lines = "- L4 (2026-09-23, 슬라이드 3장): Lexer와 Parser의 역할을 나눈다.\n- L5 (2026-09-30, 슬라이드 3장): Parse tree와 Derivation 순서가 평가에 주는 영향을 다룬다.";
+  assert.equal(await m.subjectBriefForChat(store, L(5), "CSED423", [L(5), L(4)], TODAY), lines, "no brief yet: the lines built from the notes, in lecture order");
+  assert.deepEqual(writes, [], "nothing written");
+  await m.updateLectureBrief(store, L(4), { today: TODAY });
+  await m.updateLectureBrief(store, L(5), { today: TODAY });
+  const subjectPath = "Alt2Obsidian/CSED423/Briefs/CSED423 subject brief.md";
+  assert.equal(await m.subjectBriefForChat(store, L(5), "CSED423", [], TODAY), lines, "the file's body, without frontmatter and title");
+  files.set(subjectPath, files.get(subjectPath) + "- 내가 더한 줄\n");
+  assert.ok((await m.subjectBriefForChat(store, L(5), "CSED423", [], TODAY)).endsWith("- 내가 더한 줄"), "the user's own lines go too");
+  // Without the subject brief file, a lecture brief's one_line still names the lecture.
+  files.delete(subjectPath);
+  const b4 = "Alt2Obsidian/CSED423/Briefs/L4 brief.md";
+  files.set(b4, files.get(b4).replace("body_hash:", 'one_line: "렉서와 파서를 나눈다"\nbody_hash:'));
+  assert.match(await m.subjectBriefForChat(store, L(5), "CSED423", [L(4), L(5)], TODAY), /^- L4 \(2026-09-23, 슬라이드 3장\): 렉서와 파서를 나눈다$/m);
+  assert.equal(files.has(subjectPath), false);
+
+  assert.deepEqual(m.timedTranscript([{ startMs: 0, endMs: 1000, text: "a" }, { startMs: null, endMs: null, text: "b" }, { startMs: 2000, endMs: null, text: "c" }]), [{ startMs: 0, endMs: 1000, text: "a" }], "segments with both times");
+  assert.equal(m.timedTranscript([{ startMs: null, endMs: null, text: "b" }]), null);
+  assert.equal(m.timedTranscript(undefined), null);
+  console.log("PASS: subject brief for a question: the file's body (the user's lines too), else the same lines built in memory from the notes (a brief's one_line kept), nothing written; the timestamped transcript rule the import and the Skill share");
+}
+
 // ---- lecture order, neighbours; briefs are not lecture notes ----
 {
   const list = [{ name: "L10" }, { name: "L2" }, { name: "L1" }];

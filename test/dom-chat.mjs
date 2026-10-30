@@ -8,14 +8,18 @@
  * with a slide range, the panel follows the viewer's slide (and 📌 stops
  * it), chips turn material on and off, Enter does not send while a Korean
  * syllable is composed, the answer streams as text and then renders as
- * Markdown with grounding chips (none inside code) and "메모에 저장"
- * (as it is or cut to three lines), a slide change puts a
+ * Markdown with grounding chips (none inside code), the related slides
+ * under it (one added for the next question), "메모에 저장" (as it is or
+ * cut to three lines) and "대화 노트로 저장", a slide change puts a
  * divider in the thread, a stopped answer stays marked and is not sent
  * again, the error cards, the per-question cap asked in the panel, "+ 자료
  * 추가" (this lecture's slides, another lecture with its brief, the
  * note's selection as a quote), the right-click questions (pinned on a
- * slide, a selection as a quote) and the brief cards (missing, edited and
- * stale).
+ * slide, a selection as a quote), the brief cards (missing, edited and
+ * stale), a Codex answer that comes at once (the clock and the note
+ * meanwhile), "과목 브리프 넣기" and the subject brief offered once for a
+ * question about other lectures, and a summary note whose focus is the
+ * transcript section above the editor's cursor (spec 9).
  *
  * Needs a Chromium binary, so it is not part of `npm test`:
  *   npm run test:dom                 (finds Playwright's headless shell or Google Chrome)
@@ -185,6 +189,13 @@ assert.equal(answered.transcriptSent, true);
 assert.deepEqual(answered.task, { provider: "claude-cli", model: "sonnet", effort: "low" }, "the chat task's model");
 console.log("PASS: Enter sends (not while composing, not with Shift); the answer streams as text, then renders as Markdown with slide, time and outside chips (not in code); the usage line names the model");
 
+// Related slides (spec 5.11).
+const related = at("related slides");
+assert.deepEqual(related.before, ["관련 슬라이드 20 · 작은 수끼리 먼저 더해 정밀도를 지킨다|+ 자료에 추가", "관련 슬라이드 16 · 큰 수에 더하면 사라진다|+ 자료에 추가"], "the two best matches, the current slide 17 left out");
+assert.deepEqual([related.after[0], related.disabled], ["관련 슬라이드 20 · 작은 수끼리 먼저 더해 정밀도를 지킨다|자료에 있음", true]);
+assert.deepEqual([related.sentNothing, related.removed, related.corpus], [true, true, ["L5"]], "added for the next question only, nothing sent; removable with ×");
+console.log("PASS: related slides under the answer (BM25, no tokens): the two best matches not in the material, + 자료에 추가 adds one for the next question");
+
 // The chips go where they point (spec 5.5).
 const nav = at("chips navigate");
 assert.deepEqual(nav.gone, ["slide:17", `time:${29 * 60_000 + 10_000}`, "slide:16"], "a slide chip to its slide (a range to its first), a time chip to its time; the outside badge goes nowhere");
@@ -203,13 +214,17 @@ console.log("PASS: copying from an answer (a selection or a code block's copy bu
 
 // 메모에 저장 (spec 5.9).
 const memo = at("memo");
-assert.deepEqual(memo.items, ["답변 그대로 · 토큰 0", "세 줄로 줄여서 · 브리프 모델 1회"]);
+assert.deepEqual(memo.items, ["답변 그대로 · 토큰 0", "세 줄로 줄여서 · 브리프 모델 1회", "대화 노트로 저장"]);
 assert.deepEqual(memo.saved, [
   { target: { notePath: "Alt2Obsidian/CSED423/Lectures/L5.md", unit: "slide", num: 17 }, question: "왜 작은 수부터 더해?", answer: "부동소수점 덧셈은", shorten: false },
   { target: { notePath: "Alt2Obsidian/CSED423/Lectures/L5.md", unit: "slide", num: 17 }, question: "왜 작은 수부터 더해?", answer: "부동소수점 덧셈은", shorten: true },
 ], "the slide the question was about, the question and the whole answer");
 assert.deepEqual(memo.notices, ["답변을 세 줄로 줄여 슬라이드 17 메모에 저장합니다...", "슬라이드 17 메모에 저장했습니다.", "메모에 저장하지 못했습니다: 브리프 모델이 없습니다"]);
 console.log("PASS: 메모에 저장: 답변 그대로 (토큰 0) or 세 줄로 줄여서 into the memo of the question's slide, a failure said in a notice");
+const chatNote = at("chat note");
+assert.deepEqual(chatNote.saved, { note: "Alt2Obsidian/CSED423/Lectures/L5.md", turns: [["왜 작은 수부터 더해?", "슬라이드 17, 전사 29:06-35:56"]] }, "the thread, with what each turn sent");
+assert.equal(chatNote.notice, "대화 노트를 저장했습니다: Alt2Obsidian/CSED423/Chats/2026-10-30 L5 왜 작은 수부터 더해?.md");
+console.log("PASS: 대화 노트로 저장 from the answer's menu saves the thread with what each turn sent");
 
 // A run outlives the panel (spec 5.4).
 const outlived = at("outlived the panel");
@@ -248,6 +263,8 @@ assert.equal(card("other").fix, "boom");
 for (const c of errors.cards) assert.deepEqual(c.buttons, ["다시 보내기", "Codex로 보내기", "설정 열기"], `${c.kind}: buttons`);
 assert.deepEqual(errors.retried, { provider: "codex-cli", model: "", effort: "low" }, "the other provider with its chat defaults");
 assert.equal(errors.settingsOpened, true);
+assert.match(errors.codexFirst, /^답변 쓰는 중 · \d초 · Codex는 답을 다 쓴 뒤 한 번에 보여줍니다$/, "Codex: no pieces, said so");
+assert.match(errors.codexTicked, /^답변 쓰는 중 · [1-9]초 · /, "the elapsed time goes on");
 console.log("PASS: error cards for login, usage limit, missing CLI, timeout and others, with retry, the other provider and the settings");
 
 // The brief unreadable now: the last state stays (review M4).
@@ -298,7 +315,11 @@ assert.equal(add.otherSummary, "브리프와 1장 추가 · 약 0.6k 토큰");
 assert.deepEqual(add.otherBriefRead, ["L4"]);
 assert.deepEqual(add.noSelection, { text: "노트(synced viewer의 노트 창이나 편집기)에서 글을 선택한 뒤 이 탭을 다시 여세요.", disabled: true });
 assert.equal(add.quoted, "선택한 문장입니다.\n둘째 줄", "the selection trimmed");
-assert.deepEqual(add.added.map(bare).slice(1), ["📄 슬라이드 14 ×", "📄 슬라이드 15 ×", "📄 슬라이드 16 ×", "📄 L4 · 슬라이드 2 ×", "📚 L4 브리프 ×", "❝ 선택한 글 ×"]);
+assert.deepEqual(add.added.map(bare).slice(1), ["📄 슬라이드 14 ×", "📄 슬라이드 15 ×", "📄 슬라이드 16 ×", "📄 L4 · 슬라이드 2 ×", "📚 CSED423 과목 브리프 ×", "📚 L4 브리프 ×", "❝ 선택한 글 ×"]);
+assert.deepEqual(add.subjectOffer, { label: "과목 브리프 넣기", checked: false, disabled: false }, "다른 강의: 과목 브리프 넣기, off by default");
+assert.equal(add.subjectSummary, "브리프, 과목 브리프와 1장 추가 · 약 0.6k 토큰");
+assert.deepEqual(add.subjectBriefRead, ["Alt2Obsidian/CSED423/Lectures/L4.md"], "the subject of the lecture picked");
+assert.ok(add.subjectBriefSent, "the subject brief after the lecture brief, before the other lecture's brief (spec 6.2)");
 assert.deepEqual(add.headings, ["## L5 · 슬라이드 18", "## L5 · 슬라이드 14", "## L5 · 슬라이드 15", "## L5 · 슬라이드 16", "## L4 · 슬라이드 2"], "the current slide first, then the added ones");
 assert.equal(add.quoteSent, "> 선택한 문장입니다.\n> 둘째 줄", "the quote as [선택한 글]");
 assert.ok(add.otherBriefSent, "the other lecture's brief in the system prompt");
@@ -312,6 +333,7 @@ const staleLists = at("stale slide lists");
 assert.deepEqual(staleLists.afterTab, { pickers: 1, adds: 1, summary: "브리프와 0장 추가 · 약 0.0k 토큰" }, "this lecture's list, still loading when 다른 강의 was picked, is not drawn under it");
 assert.deepEqual(staleLists.afterPick, staleLists.afterTab, "a lecture picked twice while its list loads: one list");
 assert.equal(staleLists.closed, true);
+assert.deepEqual(staleLists.subjectLocked, { label: "과목 브리프 넣기 (넣음)", checked: true, disabled: true }, "the subject brief in already: checked and locked");
 console.log("PASS: + 자료 추가: a slide list that arrives after the tab or the lecture changed is dropped");
 // Right-click questions (spec 5.8).
 const rc = at("right-click questions");
@@ -321,7 +343,29 @@ assert.deepEqual(rc.otherSlide, { head: "CSED423 · L4", chip: "📄 슬라이�
 assert.deepEqual(rc.otherQuote, { head: "CSED423 · L5", chip: "📄 슬라이드 20 · 따라가는 중", quote: "다른 노트의 글", cites: add.otherCites }, "back on L5: the other lecture's chip is drawn again from the turn");
 assert.deepEqual(rc.notLecture, { head: "CSED423 · L5", quote: "다른 노트의 글" }, "a note that is not a lecture changes nothing");
 console.log("PASS: right-click questions: 이 슬라이드에 질문 pins the panel on that slide (another lecture too), 선택한 내용으로 질문 puts the text in as a quote, the input focused");
-assert.deepEqual(at("menu").items, ["브리프 열기", "브리프 다시 만들기", "설정 열기"]);
+// A summary note (spec 9) and the subject brief offer (spec 5.10).
+const summary = at("summary note");
+assert.equal(summary.focus.head, "CSED423 · L9");
+assert.deepEqual(summary.focus.chips.map(bare), ["⏱ 구간 2 [12:03~24:00] · 따라가는 중", "🎙 전사 12:03-24:00", "✏️ 내 메모"], "the section above the cursor, its transcript and memo");
+assert.equal(summary.focus.pinTitle, "이 구간에 고정");
+assert.deepEqual(summary.offered, { text: "과목 브리프를 넣을까요? · 약 0.1k", buttons: ["넣기", "그냥 보내기"], runs: 0, input: "지난 강의랑 뭐가 달라?" }, "offered before sending; the question waits in the input");
+assert.equal(summary.sent.label, "구간 2 기준");
+assert.equal(summary.sent.unit, "## L9 · 구간 2 [12:03~24:00]\n### 요약\n구간 2 요약: 캐시를 다룬다.\n### 내 메모\n구간 메모\n### 전사\n[13:00] 캐시는 가까운 저장소입니다.", "the section: its summary, memo and transcript");
+assert.equal(summary.sent.subjectBrief, false, "그냥 보내기: without the subject brief");
+assert.deepEqual(summary.sent.cites, ["is-section:구간 2", "is-time:▶ 13:00"]);
+assert.equal(summary.sent.plain, true, "no slide chip in a summary note, no section past the last one");
+assert.deepEqual([summary.sent.related, summary.sent.corpus], [0, false], "no related slides without slides");
+assert.deepEqual(summary.gone, ["section:2", `time:${13 * 60_000}`], "[구간 N] and [mm:ss] go to the section's heading");
+assert.deepEqual(summary.once, { suggestShown: false, subjectBrief: false }, "offered once per lecture");
+assert.deepEqual(summary.memo, { target: { notePath: "Alt2Obsidian/CSED423/Lectures/L9.md", unit: "section", num: 2 }, notice: "구간 2 메모에 저장했습니다." }, "the section's memo");
+assert.deepEqual(summary.dividers, ["구간 3으로 이동"]);
+assert.equal(summary.pinnedTitle, "고정 풀기 (지금 구간을 따라감)");
+assert.equal(summary.pinned, "⏱ 구간 3 [24:00~36:00]", "pinned (no 따라가는 중): the cursor elsewhere changes nothing");
+const offer = at("subject brief offer");
+assert.deepEqual([offer.chip.replace(/\d+(\.\d+)?k$/, ""), offer.order, offer.hidden], ["📚 CSED423 과목 브리프 ×", true, true], "넣기: the subject brief chip, sent after the lecture brief");
+console.log("PASS: a summary note: the section above the cursor with its transcript and memo, section and time chips to its heading, its memo, dividers and 📌; the subject brief offered once for a question about other lectures (넣기 / 그냥 보내기)");
+
+assert.deepEqual(at("menu").items, ["대화 저장", "브리프 열기", "브리프 다시 만들기", "설정 열기"]);
 const closed = at("closed with ×");
 assert.deepEqual([closed.open, closed.threadKept, closed.events], [false, true, [false]], "× closes the panel; the threads stay in the plugin");
 console.log("PASS: brief cards: missing (노트로 바로 만들기 · 토큰 0) and edited then stale (내 수정 유지 / 새로 만들기 with confirmation); the menu; × keeps the threads");

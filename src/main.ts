@@ -102,7 +102,7 @@ import { createHash } from "node:crypto";
 import { join as joinPath } from "node:path";
 import { pluginCacheDir } from "./sources/altPaths";
 import { sanitizeFilename, formatDate } from "./utils/helpers";
-import { attachmentPathForNote, briefPathForNote, lecturePath, stemOf, subjectFolderOfNote, verificationPathForNote } from "./vault/layout";
+import { attachmentPathForNote, briefPathForNote, chatsFolderForNote, lecturePath, stemOf, subjectFolderOfNote, verificationPathForNote } from "./vault/layout";
 import {
   estimateVerification,
   mergeVerificationNote,
@@ -122,15 +122,17 @@ import { MigrationModal } from "./ui/MigrationModal";
 import { AllBriefsPlan, AllBriefsResult, BriefsModal } from "./ui/BriefsModal";
 import { normalizeConcepts } from "./core/conceptNames";
 import { decidePdfOpen, isLectureFrontmatter, isLectureNote, lectureNoteForPdf } from "./ui/pdfOpen";
-import { aiInputFor, BriefAiStep, BriefFiles, readLectureBrief, updateLectureBrief } from "./brief/briefStore";
+import { aiInputFor, BriefAiStep, BriefFiles, readLectureBrief, subjectBriefForChat, timedTranscript, updateLectureBrief } from "./brief/briefStore";
 import { aiPartStatus, BRIEF_AI_OUTPUT_TOKENS, BRIEF_AI_SCHEMA, briefAiInput } from "./brief/briefAi";
 import { commentaryText, fmString, isBriefFrontmatter, memoText, parseLectureNote, readFrontmatter, unitAtLine } from "./brief/lectureNote";
 import { aiOf, briefChatBody, buildBriefScript, composeBrief, isEditedBrief, neighbourLectures, subjectOfNote } from "./brief/lectureBrief";
 import { ChatBriefState, ChatLecture, ChatView, SlideMaterial } from "./ui/ChatView";
 import { ChatPanelController, VIEW_TYPE_CHAT } from "./ui/chatPanel";
-import { ChatErrorInfo, ChatMemoTarget, ChatRunRequest, ChatRunResult, ThreadStore } from "./chat/threads";
+import { ChatErrorInfo, ChatMemoTarget, ChatRunRequest, ChatRunResult, ChatThread, ThreadStore, turnsOf } from "./chat/threads";
 import { formatTranscriptLines, segmentsInSpans, TEXTLESS_PAGE_CHARS, TimedText, transcriptLines } from "./chat/contextPack";
 import { insertMemo } from "./chat/memoSave";
+import { chatNoteName, renderChatNote, uniqueChatNotePath } from "./chat/chatNote";
+import type { SlideDoc } from "./chat/related";
 import { dataviewQueryPrefixes } from "./chat/safeMarkdown";
 import { SLIDE_TEXT_STANDIN_TOKENS, SlideRow } from "./chat/addMaterial";
 import { isAuthError, isUsageLimitError } from "./llm/cli/CliProviderBase";
@@ -264,14 +266,6 @@ type AltToObsRead =
   | { state: "missing" }
   | { state: "unreadable"; error: string; mtime: number | null }
   | { state: "ok"; data: Record<string, unknown>; mtime: number | null };
-
-/** The timestamped part of an import's transcript (local sources), null without one. */
-function timedTranscript(bundle: LectureBundle | undefined): TimedText[] | null {
-  const timed = (bundle?.transcript ?? [])
-    .filter((s) => s.startMs !== null && s.endMs !== null)
-    .map((s) => ({ startMs: s.startMs as number, endMs: s.endMs as number, text: s.text }));
-  return timed.length > 0 ? timed : null;
-}
 
 /** Saved data without the API keys of 1.x and 2.0.0-beta.3 (nothing reads them; they are not carried over). */
 function withoutLegacyKeys(data: Record<string, unknown>): Record<string, unknown> {
@@ -1486,7 +1480,7 @@ export default class Alt2ObsPlugin extends Plugin {
   }): Promise<BriefEstimatePlan> {
     const mode = this.data.settings.briefMode;
     if (mode !== "ai") return { state: mode === "off" ? "off" : "script" };
-    const transcript = timedTranscript(o.preview.bundle);
+    const transcript = timedTranscript(o.preview.bundle?.transcript);
     if (!transcript) return { state: "no-transcript" };
     const existingBrief = await this.briefFiles().read(briefPathForNote(o.notePath));
     if (existingBrief !== null && (await isEditedBrief(existingBrief))) return { state: "edited" };
@@ -1667,7 +1661,7 @@ export default class Alt2ObsPlugin extends Plugin {
     const commentaryTask = this.runTask(prepared, "commentary");
     const conceptTask = this.runTask(prepared, "concepts");
     // The estimate fell back to the script part (spec 4.5): no AI part then either.
-    const planned = prepared.brief.state === "script" ? null : timedTranscript(prepared.preview.bundle);
+    const planned = prepared.brief.state === "script" ? null : timedTranscript(prepared.preview.bundle?.transcript);
     const brief: BriefStepContext = { task: this.runTask(prepared, "brief"), transcript: planned, signal, onWarning: hooks.onWarning };
     try {
       const commentaryLlm = await this.providerFor("commentary", job, usage, signal, commentaryTask);
@@ -2075,6 +2069,9 @@ export default class Alt2ObsPlugin extends Plugin {
     // The alignment's end until a slide's material reads the transcript (its end then counts).
     const spans = parseAlignment(fm.alt_alignment);
     const alignmentEnd = spans.length > 0 ? Math.max(...spans.map((s) => s.endMs)) : null;
+    // A summary note: its last section's end.
+    const sectionEnds = parts.units.map((u) => u.endMs).filter((ms): ms is number => ms !== null);
+    const sectionEnd = parts.kind === "transcript" && sectionEnds.length > 0 ? Math.max(...sectionEnds) : null;
     const folder = notePath.replace(/\/?[^/]*$/, "");
     const siblings = this.vaultLectureNotes()
       .filter((v) => v.path.replace(/\/?[^/]*$/, "") === folder)
@@ -2088,7 +2085,7 @@ export default class Alt2ObsPlugin extends Plugin {
       pdfPath: parts.kind === "slides" ? this.siblingPdf(notePath)?.path ?? null : null,
       slideCount: parts.kind === "slides" ? Math.max(maxNum, Number(fm.slide_count) || 0) : 0,
       sectionCount: parts.kind === "transcript" ? maxNum : 0,
-      lengthMs: alignmentEnd,
+      lengthMs: alignmentEnd ?? sectionEnd,
       neighbours: neighbourLectures(stemOf(notePath), siblings),
     };
   }
@@ -2196,7 +2193,11 @@ export default class Alt2ObsPlugin extends Plugin {
     return result;
   }
 
-  /** One slide's material (spec 6.2): page text (or its image), commentary, memo, aligned transcript. */
+  /**
+   * One slide's material (spec 6.2): page text (or its image), commentary,
+   * memo, aligned transcript. A transcript section of a summary note (spec
+   * 9): its summary, memo and the transcript of its heading's range.
+   */
   async chatMaterial(lecture: ChatLecture, slide: number): Promise<SlideMaterial> {
     const file = this.app.vault.getAbstractFileByPath(lecture.notePath);
     if (!(file instanceof TFile)) throw new Error(`강의 노트를 찾지 못했습니다: ${lecture.notePath}`);
@@ -2204,7 +2205,8 @@ export default class Alt2ObsPlugin extends Plugin {
     const parts = parseLectureNote(await this.app.vault.read(file));
     const fm = this.frontmatterOf(lecture.notePath) ?? parts.frontmatter;
     const unit = parts.units.find((u) => u.num === slide);
-    const spans = spansForSlide(parseAlignment(fm.alt_alignment), slide);
+    const section = lecture.kind === "transcript" && unit && unit.startMs !== null && unit.endMs !== null ? { slide, startMs: unit.startMs, endMs: unit.endMs, low: false } : null;
+    const spans = lecture.kind === "transcript" ? (section ? [section] : []) : spansForSlide(parseAlignment(fm.alt_alignment), slide);
     let slideText = "";
     let image: SlideMaterial["image"] = null;
     const pdf = lecture.pdfPath ? this.app.vault.getAbstractFileByPath(lecture.pdfPath) : null;
@@ -2330,6 +2332,76 @@ export default class Alt2ObsPlugin extends Plugin {
   async chatOtherBrief(lecture: ChatLecture): Promise<string> {
     const state = await readLectureBrief(this.briefFiles(), lecture.notePath);
     return state.body ?? briefChatBody(await composeBrief(state.script, null, formatDate()));
+  }
+
+  /**
+   * The subject brief for a question (spec 5.10): its file's body, else
+   * assembled in memory from the subject's lecture notes (no tokens,
+   * nothing written).
+   */
+  async chatSubjectBrief(notePath: string): Promise<{ subject: string; body: string }> {
+    const file = this.app.vault.getAbstractFileByPath(notePath);
+    const fm = this.frontmatterOf(notePath) ?? (file instanceof TFile ? readFrontmatter(await this.app.vault.cachedRead(file)) : {});
+    const subject = subjectOfNote(notePath, fm);
+    const folder = subjectFolderOfNote(notePath);
+    const lectures = this.vaultLectureNotes()
+      .map((v) => v.path)
+      .filter((p) => subjectFolderOfNote(p) === folder);
+    return { subject, body: await subjectBriefForChat(this.briefFiles(), notePath, subject, lectures, formatDate()) };
+  }
+
+  /**
+   * A slide lecture's slides for the related-slide search (spec 5.11): the
+   * gist of the slide map, the commentary, and the page text when the panel
+   * has read that PDF already (no PDF is read for this).
+   */
+  async chatSlideCorpus(lecture: ChatLecture): Promise<SlideDoc[]> {
+    const file = this.app.vault.getAbstractFileByPath(lecture.notePath);
+    if (!(file instanceof TFile) || lecture.kind !== "slides") return [];
+    const text = await this.app.vault.cachedRead(file);
+    const gists = new Map((await buildBriefScript(lecture.notePath, text)).map.map((e) => [e.num, e.text]));
+    const pdf = lecture.pdfPath ? this.app.vault.getAbstractFileByPath(lecture.pdfPath) : null;
+    const pages = pdf instanceof TFile ? this.chatPageTextCache.get(this.pdfVersion(pdf)) ?? null : null;
+    return parseLectureNote(text).units.map((u) => {
+      const gist = gists.get(u.num) ?? "";
+      return { num: u.num, gist, text: [gist, commentaryText(u.managed), pages?.[u.num - 1] ?? ""].filter(Boolean).join("\n") };
+    });
+  }
+
+  /**
+   * "대화 노트로 저장" / "대화 저장" (spec 5.9): the thread's finished turns
+   * as a note in the subject's Chats folder, written through the vault. A
+   * thread saved before replaces its file (when it is still there); a new
+   * one gets " 2", " 3" when its name is taken. Returns the note's path.
+   */
+  async saveChatNote(thread: ChatThread, lecture: ChatLecture): Promise<string> {
+    const turns = turnsOf(thread).filter((t) => (t.status === "done" || t.status === "stopped") && t.answer.trim());
+    if (turns.length === 0) throw new Error("저장할 답이 아직 없습니다.");
+    const date = formatDate();
+    const sections = lecture.kind === "transcript" ? (await this.sectionHeadings(lecture.notePath)).map((h) => ({ num: h.num, heading: h.text })) : [];
+    const text = renderChatNote(
+      {
+        notePath: lecture.notePath,
+        lecture: lecture.name,
+        date,
+        slides: lecture.slideCount,
+        sections,
+        turns: turns.map((t) => ({ question: t.question, material: t.material ?? t.label.replace(/ 기준$/, ""), answer: t.answer, stopped: t.status === "stopped", usage: t.usage, model: t.model, otherLectures: t.otherLectures })),
+      },
+      dataviewQueryPrefixes(this.app)
+    );
+    const vault = this.app.vault;
+    const saved = thread.savedPath ? vault.getAbstractFileByPath(thread.savedPath) : null;
+    if (saved instanceof TFile) {
+      await vault.process(saved, () => text);
+      return saved.path;
+    }
+    const folder = chatsFolderForNote(lecture.notePath);
+    const path = uniqueChatNotePath(folder, chatNoteName(date, lecture.name, turns[0].question), (p) => vault.getAbstractFileByPath(p) !== null);
+    await this.vaultManager!.ensureFolder(folder);
+    await vault.create(path, text);
+    thread.savedPath = path;
+    return path;
   }
 
   /** An added slide's page as an image (long edge 1024, JPEG 80), null without its PDF. */

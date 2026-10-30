@@ -16,8 +16,12 @@
 //   when the note changes; the PDF text and the transcript stay cached.
 // - The answer streams in as plain text (redrawn once per animation frame),
 //   then is rendered as Markdown (made safe first: src/chat/safeMarkdown.ts)
-//   with its grounding marks as chips (spec 5.5; they only show what they
-//   point at until navigation comes).
+//   with its grounding marks as chips that go where they point (spec 5.5),
+//   and the slides that match the question but were not sent (spec 5.11).
+// - A summary note (no slides, spec 9) works the same with its transcript
+//   sections: the section above the editor's cursor is the focus.
+// - A question about other lectures offers the subject brief once (spec
+//   5.10); "대화 저장" keeps the thread as a note (spec 5.9).
 // - Threads and their runs live in the plugin (ThreadStore): closing the
 //   panel neither drops a thread nor stops an answer; the panel only
 //   listens while it is open.
@@ -45,9 +49,13 @@ import {
   formatTranscriptLines,
   materialLabel,
   parseSlideRange,
+  SECTION_TRANSCRIPT_CAP,
+  suggestsSubjectBrief,
   TimedText,
   transcriptLines,
 } from "../chat/contextPack";
+import { materialSummary } from "../chat/chatNote";
+import { RelatedSlide, relatedSlides, SlideDoc } from "../chat/related";
 import { ChatErrorInfo, ChatMemoTarget, ChatThread, ChatTurn, historyOf, moveThreadTo, newTurnId, ThreadEvent, ThreadStore, TurnRunner, turnsOf } from "../chat/threads";
 import { defaultTaskSetting, estimateEffort, isCliProvider, ModelCatalog, modelName } from "../settings/llmSettings";
 import { renderModelPicker } from "./modelPicker";
@@ -127,6 +135,12 @@ export interface ChatHost extends TurnRunner {
   noteSelection(): string;
   /** "메모에 저장": the answer as it is, or cut to three lines (`shorten`, the brief task's model), in the unit's memo callout. */
   saveChatMemo(target: ChatMemoTarget, question: string, answer: string, shorten: boolean): Promise<void>;
+  /** "대화 노트로 저장" / "대화 저장": the thread as a note in the subject's Chats folder (its file replaced when saved again); its path. */
+  saveChatNote(thread: ChatThread, lecture: ChatLecture): Promise<string>;
+  /** The subject brief of a lecture's subject: its file's body, else assembled in memory (no tokens, nothing written). */
+  chatSubjectBrief(notePath: string): Promise<{ subject: string; body: string }>;
+  /** A slide lecture's slides for the related-slide search: gist, commentary, page text already read. */
+  chatSlideCorpus(lecture: ChatLecture): Promise<SlideDoc[]>;
   openSettings(): void;
   openLectureViewer(notePath: string): Promise<void>;
   /** A slide chip (spec 5.5): the slide in the lecture's Synced Viewer (opened if needed), else its heading in the note. */
@@ -156,6 +170,11 @@ const MATERIAL_DELAY_MS = 200;
 const NOTE_CHANGE_DELAY_MS = 300;
 /** Within this much of the end, the thread keeps following a streaming answer. */
 const NEAR_BOTTOM_PX = 60;
+
+/** A turn the chat note keeps: an answer that ended or was stopped (spec 5.9). */
+function savable(turn: ChatTurn): boolean {
+  return (turn.status === "done" || turn.status === "stopped") && !!turn.answer.trim();
+}
 
 /** Briefs the user chose to keep as they are ("내 수정 유지"), by note and source, for this session. */
 const keptBriefs = new Set<string>();
@@ -205,6 +224,12 @@ export class ChatView extends ItemView {
   private addedSlides: Array<{ lecture: ChatLecture; slide: number; include: IncludeOptions }> = [];
   /** Other lectures' briefs added ("다른 강의 브리프"). */
   private addedBriefs: Array<{ lecture: ChatLecture; body: string }> = [];
+  /** The subject brief added (the 다른 강의 tab's checkbox or the suggestion), sent before the other briefs. */
+  private subjectBrief: { subject: string; body: string } | null = null;
+  /** The subject brief offered for a question about other lectures ("넣기 / 그냥 보내기"), with that question. */
+  private suggestion: { question: string; brief: { subject: string; body: string } } | null = null;
+  /** The subject brief was offered for this lecture: it is offered once (spec 5.10). */
+  private suggested = false;
   /** Text selected in the note, sent as [선택한 글]. */
   private quote: string | null = null;
   /** The "+ 자료 추가" popover is open. */
@@ -249,6 +274,8 @@ export class ChatView extends ItemView {
   private composerEl!: HTMLElement;
   private inputEl!: HTMLTextAreaElement;
   private capEl!: HTMLElement;
+  /** "과목 브리프를 넣을까요?" above the input. */
+  private suggestEl!: HTMLElement;
   private modelEl!: HTMLElement;
   private estimateEl: HTMLElement | null = null;
   private sendBtn!: HTMLButtonElement;
@@ -380,12 +407,9 @@ export class ChatView extends ItemView {
       return;
     }
     if (v.getViewType?.() === "markdown" && v.file && v.file.extension !== "pdf") {
-      let slide: number | null = null;
-      if (v.editor) {
-        const at = unitAtLine(v.editor.getValue(), v.editor.getCursor().line);
-        slide = at?.unit === "slide" ? at.num : null;
-      }
-      await this.showLecture(v.file.path, slide);
+      // The slide (or, in a summary note, the transcript section) above the cursor.
+      const at = v.editor ? unitAtLine(v.editor.getValue(), v.editor.getCursor().line) : null;
+      await this.showLecture(v.file.path, at?.num ?? null, [], at?.unit ?? "slide");
     }
   }
 
@@ -400,12 +424,15 @@ export class ChatView extends ItemView {
   }
 
   /**
-   * The panel on a lecture (and slide). A note that is not a lecture note
-   * changes nothing: the last lecture stays.
+   * The panel on a lecture (and slide, or `unit` "section": a transcript
+   * section of a summary note). A unit of the other kind is no focus (a
+   * section heading left in a slide note's backup). A note that is not a
+   * lecture note changes nothing: the last lecture stays.
    */
-  async showLecture(notePath: string, slide: number | null, pinned: number[] = []): Promise<void> {
+  async showLecture(notePath: string, slide: number | null, pinned: number[] = [], unit: "slide" | "section" = "slide"): Promise<void> {
+    const fits = (l: ChatLecture) => l.kind === (unit === "slide" ? "slides" : "transcript");
     if (notePath === this.lecture?.notePath && pinned.length === 0) {
-      this.follow(slide);
+      this.follow(fits(this.lecture) ? slide : null);
       return;
     }
     const seq = ++this.switchSeq;
@@ -414,10 +441,13 @@ export class ChatView extends ItemView {
     this.lecture = lecture;
     this.materials.clear();
     this.clearRendered();
-    this.followed = slide;
+    this.followed = fits(lecture) ? slide : null;
     this.pinned = pinned[0] ?? null;
     this.addedSlides = pinned.slice(1, 1 + MAX_ADDED_SLIDES).map((slide) => ({ lecture, slide, include: { ...DEFAULT_INCLUDE } }));
     this.addedBriefs = [];
+    this.subjectBrief = null;
+    this.suggestion = null;
+    this.suggested = false;
     this.quote = null;
     this.popoverOpen = false;
     this.images.clear();
@@ -453,10 +483,15 @@ export class ChatView extends ItemView {
     }, NOTE_CHANGE_DELAY_MS);
   }
 
-  /** The slide the question is about (pinned, else followed), null without one. */
-  private currentSlide(): number | null {
-    if (this.lecture?.kind !== "slides") return null;
+  /** The slide (or a summary note's section) the question is about, pinned, else followed; null without one. */
+  private currentUnit(): number | null {
+    if (this.lecture?.kind !== "slides" && this.lecture?.kind !== "transcript") return null;
     return this.pinned ?? this.followed;
+  }
+
+  /** What the lecture's units are called: "구간" in a summary note, else "슬라이드". */
+  private unitWord(lecture: ChatLecture | null = this.lecture): string {
+    return lecture?.kind === "transcript" ? "구간" : "슬라이드";
   }
 
   /**
@@ -467,7 +502,7 @@ export class ChatView extends ItemView {
   private focusTargets(): Array<{ lecture: ChatLecture; slide: number; include: IncludeOptions }> {
     const lecture = this.lecture;
     if (!lecture) return [];
-    const current = this.currentSlide();
+    const current = this.currentUnit();
     const own: IncludeOptions = { slideText: true, commentary: true, transcript: this.chips.transcript, memo: this.chips.memo, image: false };
     const head = this.chips.slide && current !== null ? [{ lecture, slide: current, include: own }] : [];
     return [...head, ...this.addedSlides.filter((a) => !(a.lecture.notePath === lecture.notePath && a.slide === current))];
@@ -475,7 +510,7 @@ export class ChatView extends ItemView {
 
   /** Every slide whose material is read: the current one (for its chips) and the added ones. */
   private materialTargets(): Array<{ lecture: ChatLecture; slide: number }> {
-    const current = this.currentSlide();
+    const current = this.currentUnit();
     return [...(this.lecture && current !== null ? [{ lecture: this.lecture, slide: current }] : []), ...this.addedSlides];
   }
 
@@ -606,7 +641,9 @@ export class ChatView extends ItemView {
   }
 
   private writingText(turn: ChatTurn): string {
-    return `답변 쓰는 중 · ${Math.round((Date.now() - (turn.startedAt ?? turn.at)) / 1000)}초`;
+    const text = `답변 쓰는 중 · ${Math.round((Date.now() - (turn.startedAt ?? turn.at)) / 1000)}초`;
+    // Codex sends no pieces (spec 5.4): the answer appears when it is done.
+    return turn.request.task.provider === "codex-cli" ? `${text} · Codex는 답을 다 쓴 뒤 한 번에 보여줍니다` : text;
   }
 
   private tickClock(): void {
@@ -663,6 +700,7 @@ export class ChatView extends ItemView {
     const menu = new Menu();
     const lecture = this.lecture;
     const brief = this.brief;
+    if (this.thread && turnsOf(this.thread).some(savable)) menu.addItem((i) => i.setTitle("대화 저장").onClick(() => void this.saveChatNote()));
     if (lecture && brief && brief.status !== "missing") menu.addItem((i) => i.setTitle("브리프 열기").onClick(() => void this.host.openVaultFile(brief.path)));
     if (lecture)
       menu.addItem((i) =>
@@ -674,6 +712,18 @@ export class ChatView extends ItemView {
       );
     menu.addItem((i) => i.setTitle("설정 열기").onClick(() => this.host.openSettings()));
     menu.showAtMouseEvent(e);
+  }
+
+  /** "대화 노트로 저장" / "대화 저장" (spec 5.9): the thread's note in the Chats folder, written again when saved before. */
+  private async saveChatNote(): Promise<void> {
+    const lecture = this.lecture;
+    const thread = this.thread;
+    if (!lecture || !thread) return;
+    try {
+      new Notice(`대화 노트를 저장했습니다: ${await this.host.saveChatNote(thread, lecture)}`);
+    } catch (e) {
+      new Notice(`대화 노트를 저장하지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   /** "새 대화": the lecture's thread goes (a running answer is stopped). */
@@ -777,13 +827,16 @@ export class ChatView extends ItemView {
         title: brief.body,
         onClick: () => this.toggleChip("brief"),
       });
-    const current = this.currentSlide();
+    const current = this.currentUnit();
     if (current !== null) {
       const m = this.materials.get(this.materialKey(current));
+      // A summary note's section (spec 9): "⏱ 구간 N [mm:ss~mm:ss]", its summary in place of the slide text and commentary.
+      const section = lecture.kind === "transcript";
       const slideText = m ? [m.slideText, m.commentary].filter(Boolean).join("\n\n") : "";
+      const word = this.unitWord();
       const group = row.createDiv({ cls: "alt-to-obs-chat-chip-group" });
       this.chip(group, {
-        text: `📄 슬라이드 ${current}${this.pinned !== null ? "" : " · 따라가는 중"}`,
+        text: `${section ? `⏱ 구간 ${current}${m && m.spans.length > 0 ? ` ${alignedRange(m.spans)}` : ""}` : `📄 슬라이드 ${current}`}${this.pinned !== null ? "" : " · 따라가는 중"}`,
         tokens: m ? estimateTextTokens(slideText) + (m.image ? 1060 : 0) : undefined,
         on: this.chips.slide,
         title: slideText || "읽는 중",
@@ -792,15 +845,15 @@ export class ChatView extends ItemView {
       const pin = group.createEl("button", {
         text: "📌",
         cls: `alt-to-obs-chat-pin${this.pinned !== null ? " is-active" : ""}`,
-        attr: { title: this.pinned !== null ? "고정 풀기 (지금 슬라이드를 따라감)" : "이 슬라이드에 고정" },
+        attr: { title: this.pinned !== null ? `고정 풀기 (지금 ${section ? "구간을" : "슬라이드를"} 따라감)` : `이 ${word}에 고정` },
       });
       pin.addEventListener("click", () => this.togglePin());
 
       if (m && m.segments.length > 0) {
-        const lines = transcriptLines(m.segments, this.host.data.settings.generation.transcriptCapChars, m.slideText);
+        const lines = transcriptLines(m.segments, section ? SECTION_TRANSCRIPT_CAP : this.host.data.settings.generation.transcriptCapChars, m.slideText);
         const span = `${formatClock(m.spans[0].startMs)}-${formatClock(m.spans[m.spans.length - 1].endMs)}`;
         this.chip(row, { text: `🎙 전사 ${span}`, tokens: estimateTextTokens(formatTranscriptLines(lines)), on: this.chips.transcript, title: formatTranscriptLines(lines), onClick: () => this.toggleChip("transcript") });
-      } else if (m) this.chip(row, { text: "🎙 정렬된 전사 없음", disabled: true });
+      } else if (m) this.chip(row, { text: section ? "🎙 전사 없음" : "🎙 정렬된 전사 없음", disabled: true });
       if (m && m.memo) this.chip(row, { text: "✏️ 내 메모", tokens: estimateTextTokens(m.memo), on: this.chips.memo, title: m.memo, onClick: () => this.toggleChip("memo") });
       else if (m) this.chip(row, { text: "✏️ 비어 있음", disabled: true });
     }
@@ -819,6 +872,19 @@ export class ChatView extends ItemView {
         },
       });
       chip.addClass("is-extra");
+    }
+    const subject = this.subjectBrief;
+    if (subject) {
+      this.chip(row, {
+        text: `📚 ${subject.subject ? `${subject.subject} ` : ""}과목 브리프 ×`,
+        tokens: estimateTextTokens(subject.body),
+        on: true,
+        title: subject.body,
+        onClick: () => {
+          this.subjectBrief = null;
+          this.renderChips();
+        },
+      }).addClass("is-extra");
     }
     for (const b of this.addedBriefs) {
       this.chip(row, {
@@ -869,9 +935,10 @@ export class ChatView extends ItemView {
     if (!this.popoverOpen || !lecture) return;
     renderAddPopover(el, {
       lecture,
-      current: this.currentSlide(),
+      current: lecture.kind === "slides" ? this.currentUnit() : null,
       alreadyAdded: (notePath) => this.addedSlides.filter((a) => a.lecture.notePath === notePath).map((a) => a.slide),
       addedCount: this.addedSlides.length,
+      subjectBriefAdded: !!this.subjectBrief,
       choices: this.host.lectureChoices(),
       loadLecture: (notePath) => this.host.chatLecture(notePath),
       slideList: (l) => this.host.chatSlideList(l),
@@ -895,6 +962,16 @@ export class ChatView extends ItemView {
           this.addedBriefs.push({ lecture: request.lecture, body });
         } catch (e) {
           new Notice(`그 강의의 브리프를 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      // "과목 브리프 넣기" (spec 5.10): the subject brief of the lecture picked.
+      if (request.withSubjectBrief && !this.subjectBrief) {
+        try {
+          const brief = await this.host.chatSubjectBrief(request.lecture.notePath);
+          if (this.lecture !== shown) return;
+          this.subjectBrief = brief;
+        } catch (e) {
+          new Notice(`과목 브리프를 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     }
@@ -951,16 +1028,18 @@ export class ChatView extends ItemView {
       if (!m) continue;
       // A textless page goes as an image anyway; an added slide may ask for its image too.
       const image = m.image ?? (t.include.image ? this.images.get(key) ?? null : null);
+      // A summary note's section: its summary, memo and up to 1500 characters of transcript (spec 6.2).
+      const section = t.lecture.kind === "transcript";
       focus.push({
         lecture: t.lecture.name,
-        unit: "slide",
+        unit: section ? "section" : "slide",
         num: t.slide,
         range: alignedRange(m.spans),
         slideText: m.image || !t.include.slideText ? "" : m.slideText,
         imageAttached: !!m.image,
         commentary: t.include.commentary ? m.commentary : "",
         memo: t.include.memo ? m.memo : "",
-        transcript: t.include.transcript ? transcriptLines(m.segments, settings.generation.transcriptCapChars, `${m.slideText}\n${question}`) : [],
+        transcript: t.include.transcript ? transcriptLines(m.segments, section ? SECTION_TRANSCRIPT_CAP : settings.generation.transcriptCapChars, `${m.slideText}\n${question}`) : [],
       });
       if (image) images.push(image);
     }
@@ -971,7 +1050,11 @@ export class ChatView extends ItemView {
       lecture: lecture.name,
       neighbours: lecture.neighbours,
       brief,
-      extraBriefs: this.addedBriefs.map((b) => ({ title: `다른 강의 브리프: ${[b.lecture.subject, b.lecture.name].filter(Boolean).join(" · ")}`, body: b.body })),
+      // The subject brief, then the other lectures' briefs (spec 6.2).
+      extraBriefs: [
+        ...(this.subjectBrief ? [{ title: `과목 브리프: ${this.subjectBrief.subject}`, body: this.subjectBrief.body }] : []),
+        ...this.addedBriefs.map((b) => ({ title: `다른 강의 브리프: ${[b.lecture.subject, b.lecture.name].filter(Boolean).join(" · ")}`, body: b.body })),
+      ],
       history: historyOf(this.thread),
       focus,
       quote: this.quote,
@@ -1036,8 +1119,8 @@ export class ChatView extends ItemView {
         const turns = turnsOf(t);
         const turn = turns[turns.length - 1] ?? null;
         const name = (t.notePath.split("/").pop() ?? t.notePath).replace(/\.md$/, "");
-        const text = [name, turn?.slide ? `슬라이드 ${turn.slide}` : "", turn ? clock(turn.at) : ""].filter(Boolean).join(" · ");
-        list.createEl("button", { text, cls: "alt-to-obs-chat-recent-item" }).addEventListener("click", () => void this.showLecture(t.notePath, turn?.slide ?? null));
+        const text = [name, turn?.slide ? `${turn.memoTarget?.unit === "section" ? "구간" : "슬라이드"} ${turn.slide}` : "", turn ? clock(turn.at) : ""].filter(Boolean).join(" · ");
+        list.createEl("button", { text, cls: "alt-to-obs-chat-recent-item" }).addEventListener("click", () => void this.showLecture(t.notePath, turn?.slide ?? null, [], turn?.memoTarget?.unit ?? "slide"));
       }
     }
   }
@@ -1061,12 +1144,12 @@ export class ChatView extends ItemView {
     }
     const thread = this.thread;
     if (!thread || thread.items.length === 0) {
-      const slide = this.currentSlide();
-      el.createDiv({ cls: "alt-to-obs-chat-hint", text: `자료: 강의 브리프${slide !== null ? `, 슬라이드 ${slide}` : ""}. 아래에 질문을 쓰거나 빠른 질문을 누르세요.` });
+      const slide = this.currentUnit();
+      el.createDiv({ cls: "alt-to-obs-chat-hint", text: `자료: 강의 브리프${slide !== null ? `, ${this.unitWord()} ${slide}` : ""}. 아래에 질문을 쓰거나 빠른 질문을 누르세요.` });
       return;
     }
     for (const item of thread.items) {
-      if (item.kind === "divider") el.createDiv({ cls: "alt-to-obs-chat-divider", text: `슬라이드 ${item.slide}으로 이동` });
+      if (item.kind === "divider") el.createDiv({ cls: "alt-to-obs-chat-divider", text: `${this.unitWord()} ${item.slide}으로 이동` });
       else if (item.kind === "note") el.createDiv({ cls: "alt-to-obs-chat-note", text: item.text });
       else {
         const cached = this.turnEls.get(item.turn.id);
@@ -1134,12 +1217,16 @@ export class ChatView extends ItemView {
     again.disabled = !!this.runningTurn();
     again.addEventListener("click", () => this.rerun(turn));
     const target = turn.memoTarget;
-    if (target && turn.status === "done" && turn.answer.trim()) {
+    if (turn.status === "done" && turn.answer.trim()) {
       const save = actions.createEl("button", { text: "메모에 저장" });
       save.addEventListener("click", (evt) => {
         const menu = new Menu();
-        menu.addItem((i) => i.setTitle("답변 그대로 · 토큰 0").onClick(() => void this.saveMemo(target, turn, false)));
-        menu.addItem((i) => i.setTitle("세 줄로 줄여서 · 브리프 모델 1회").onClick(() => void this.saveMemo(target, turn, true)));
+        // The memo of the question's first slide or section; a question without one has none.
+        if (target) {
+          menu.addItem((i) => i.setTitle("답변 그대로 · 토큰 0").onClick(() => void this.saveMemo(target, turn, false)));
+          menu.addItem((i) => i.setTitle("세 줄로 줄여서 · 브리프 모델 1회").onClick(() => void this.saveMemo(target, turn, true)));
+        }
+        menu.addItem((i) => i.setTitle("대화 노트로 저장").onClick(() => void this.saveChatNote()));
         menu.showAtMouseEvent(evt);
       });
     }
@@ -1149,6 +1236,32 @@ export class ChatView extends ItemView {
       el.createDiv({
         cls: "alt-to-obs-chat-usage",
         text: `${model} · ${turn.effort || "CLI 기본값"} · 입력 ${k(u.inputTokens)} (캐시 ${k(u.cachedInputTokens)}) · 출력 ${k(u.outputTokens)}`,
+      });
+    }
+    if (turn.status !== "streaming" && turn.related?.length) this.renderRelated(el, turn.related);
+  }
+
+  /** "관련 슬라이드 16 · <gist> · + 자료에 추가" (spec 5.11): a click adds the slide for the next question. */
+  private renderRelated(el: HTMLElement, related: RelatedSlide[]): void {
+    const lecture = this.lecture;
+    if (!lecture) return;
+    const box = el.createDiv({ cls: "alt-to-obs-chat-related" });
+    for (const r of related) {
+      const row = box.createDiv({ cls: "alt-to-obs-chat-related-item" });
+      row.createSpan({ cls: "alt-to-obs-chat-related-text", text: `관련 슬라이드 ${r.num}${r.gist ? ` · ${r.gist}` : ""}`, attr: { title: r.gist } });
+      const add = row.createEl("button", { text: "+ 자료에 추가" });
+      const added = () => this.currentUnit() === r.num || this.addedSlides.some((a) => a.lecture.notePath === lecture.notePath && a.slide === r.num);
+      if (added()) {
+        add.setText("자료에 있음");
+        add.disabled = true;
+      } else add.disabled = this.addedSlides.length >= MAX_ADDED_SLIDES;
+      add.addEventListener("click", () => {
+        if (this.lecture !== lecture || added() || this.addedSlides.length >= MAX_ADDED_SLIDES) return;
+        this.addedSlides.push({ lecture, slide: r.num, include: { ...DEFAULT_INCLUDE } });
+        add.setText("자료에 있음");
+        add.disabled = true;
+        this.renderChips();
+        void this.loadMaterials(false);
       });
     }
   }
@@ -1262,6 +1375,7 @@ export class ChatView extends ItemView {
       quick.createEl("button", { text: label, cls: "alt-to-obs-chat-quick-chip", attr: { title: question } }).addEventListener("click", () => void this.send(question));
     }
     this.capEl = c.createDiv({ cls: "alt-to-obs-chat-cap" });
+    this.suggestEl = c.createDiv({ cls: "alt-to-obs-chat-suggest" });
     this.inputEl = c.createEl("textarea", { cls: "alt-to-obs-chat-input", attr: { rows: "3", placeholder: "질문을 쓰세요 (Enter 보내기, Shift+Enter 줄바꿈)" } });
     this.inputEl.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.shiftKey) return;
@@ -1295,6 +1409,7 @@ export class ChatView extends ItemView {
     for (const b of Array.from(this.composerEl.querySelectorAll<HTMLButtonElement>(".alt-to-obs-chat-quick-chip"))) b.disabled = busy;
     this.renderModel(busy);
     this.renderCap();
+    this.renderSuggest();
   }
 
   private renderModel(busy: boolean): void {
@@ -1327,7 +1442,7 @@ export class ChatView extends ItemView {
     go.addEventListener("click", () => {
       const question = this.capPending;
       this.capPending = null;
-      if (question !== null) void this.send(question, true);
+      if (question !== null) void this.send(question, { overCap: true });
     });
     el.createEl("button", { text: "취소" }).addEventListener("click", () => {
       // The question goes back to the input.
@@ -1338,15 +1453,43 @@ export class ChatView extends ItemView {
   }
 
   /**
+   * "과목 브리프를 넣을까요? · 약 Nk · 넣기 / 그냥 보내기" (spec 5.10): both
+   * send the question the row was shown for (it waits in the input).
+   */
+  private renderSuggest(): void {
+    const el = this.suggestEl;
+    el.empty();
+    const s = this.suggestion;
+    el.toggle(s !== null);
+    if (!s) return;
+    el.createSpan({ text: `과목 브리프를 넣을까요? · 약 ${k(estimateTextTokens(s.brief.body))}` });
+    const go = (withBrief: boolean) => {
+      if (this.suggestion !== s) return;
+      this.suggestion = null;
+      if (withBrief) this.subjectBrief = s.brief;
+      this.renderSuggest();
+      this.renderChips();
+      void this.send(s.question, { suggested: true });
+    };
+    el.createEl("button", { text: "넣기", cls: "mod-cta" }).addEventListener("click", () => go(true));
+    el.createEl("button", { text: "그냥 보내기" }).addEventListener("click", () => go(false));
+  }
+
+  /**
    * Sends a question (spec 5.4): the commentary, memo and brief read again,
    * the pack, the cap check, then a run in the lecture's thread (made now
-   * if it is the first question). A second send while this one is being
-   * prepared does nothing.
+   * if it is the first question). A question about other lectures without
+   * the subject brief first offers it, once per lecture (spec 5.10). A
+   * second send while this one is being prepared does nothing.
    */
-  async send(text: string, overCapOk = false): Promise<void> {
+  async send(text: string, opts: { overCap?: boolean; suggested?: boolean } = {}): Promise<void> {
     const question = text.trim();
     if (!question || this.sending || !this.lecture || this.runningTurn()) return;
     this.sending = true;
+    if (this.suggestion) {
+      this.suggestion = null;
+      this.renderSuggest();
+    }
     // Disabling the input takes its focus: it gets it back when the send is done.
     const hadFocus = this.inputEl.ownerDocument.activeElement === this.inputEl;
     if (this.inputEl.value.trim() === question) this.inputEl.value = "";
@@ -1356,6 +1499,20 @@ export class ChatView extends ItemView {
       await this.syncFromWorkspace();
       const lecture = this.lecture;
       if (!lecture) return;
+      if (!opts.suggested && !this.suggested && !this.subjectBrief && suggestsSubjectBrief(question)) {
+        this.suggested = true;
+        try {
+          const brief = await this.host.chatSubjectBrief(lecture.notePath);
+          if (this.lecture !== lecture) return;
+          // The question stays in the input (put back below) until 넣기 or 그냥 보내기.
+          if (brief.body.trim()) {
+            this.suggestion = { question, brief };
+            return;
+          }
+        } catch (e) {
+          console.warn("[Alt2Obs] subject brief not read:", e);
+        }
+      }
       await Promise.all([this.loadMaterials(true), this.loadBrief(true)]);
       if (this.lecture !== lecture) return;
       const task = { ...this.runChoice };
@@ -1366,11 +1523,15 @@ export class ChatView extends ItemView {
       const { pack, images, focus } = this.pack(question);
       const effort = estimateEffort(task.provider, task.model, task.effort, this.host.modelCatalog());
       const est = estimateChat(pack, task.provider, effort, images.length);
-      if (!overCapOk && est.input + est.output > this.host.data.settings.chatTokenCap) {
+      if (!opts.overCap && est.input + est.output > this.host.data.settings.chatTokenCap) {
         this.capPending = question;
         sent = true;
         return;
       }
+      // Slides of this lecture that match the question but are not in the material, offered under the answer (spec 5.11, no tokens).
+      const inMaterial = [this.currentUnit(), ...this.addedSlides.filter((a) => a.lecture.notePath === lecture.notePath).map((a) => a.slide)].filter((n): n is number => n !== null);
+      const related = lecture.kind === "slides" ? relatedSlides(question, await this.host.chatSlideCorpus(lecture).catch(() => []), inMaterial) : [];
+      if (this.lecture !== lecture) return;
       const thread = this.host.chatThreads.get(lecture.notePath);
       if (pack.folded > thread.folded) {
         thread.items.push({ kind: "note", text: `앞 대화 ${pack.folded}개를 줄였습니다` });
@@ -1387,9 +1548,16 @@ export class ChatView extends ItemView {
         id: newTurnId(),
         question,
         label: materialLabel(focus, this.chips.brief && !!this.brief?.body),
-        slide: this.currentSlide(),
-        memoTarget: first ? { notePath: first.lecture.notePath, unit: "slide", num: first.slide } : undefined,
+        slide: this.currentUnit(),
+        memoTarget: first ? { notePath: first.lecture.notePath, unit: first.lecture.kind === "transcript" ? "section" : "slide", num: first.slide } : undefined,
         ...(others.size > 0 ? { otherLectures: [...others.values()] } : {}),
+        material: materialSummary(
+          lecture.name,
+          focus,
+          [...(this.quote ? ["선택한 글"] : []), ...(this.subjectBrief ? ["과목 브리프"] : []), ...this.addedBriefs.map((b) => `${b.lecture.name} 브리프`)],
+          this.chips.brief && !!this.brief?.body
+        ),
+        ...(related.length > 0 ? { related } : {}),
         answer: "",
         status: "streaming",
         request: { task, system: pack.system, user: pack.user, images },
