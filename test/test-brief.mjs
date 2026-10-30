@@ -462,6 +462,23 @@ function slideNote({ gist14 = "같은 문장 x - 2 * y도 유도 방식에 따�
   assert.equal(m.copiesCandidate("“Translation Lookaside Buffer”의 역할을 묻는다.", tlb.candidateText), false, "and in curly quotes");
   assert.equal(m.copiesCandidate('"Lookaside Buffer를 쓰면 주소 변환이 빨라"라고 했다.', tlb.candidateText), true, "a quote that shares the sentence's Hangul is a copy");
   assert.deepEqual(m.validateBriefAi({ emphasis: [{ t: "05:00", slide: 3, text: "Translation Lookaside Buffer는 주소 변환 결과를 캐시한다." }], pitfalls: ["Translation Lookaside Buffer와 page table을 헷갈리기 쉽다."] }, tlb), { oneLine: "", emphasis: [{ t: "05:00", slide: 3, text: "Translation Lookaside Buffer는 주소 변환 결과를 캐시한다." }], qa: [], pitfalls: ["Translation Lookaside Buffer와 page table을 헷갈리기 쉽다."] });
+  // The AI part goes into the vault, rendered by every plugin: its texts are made safe as a saved memo is (review round 3).
+  const evil = {
+    one_line: "요약 ![x](https://evil.example/o.png) %% 숨김",
+    emphasis: [{ t: "00:30", slide: 14, text: "```dataviewjs dv.paragraph(app.vault.getFiles().length)``` 와 `= this.file.name` 를 봤다" }],
+    qa: [{ t: "01:10", q: "<img src=https://evil.example/q.png> 는?", a: "`$= dv.pages().length` 다 %%" }],
+    pitfalls: ["![[비밀 노트]] 와 <iframe src=x> 를 헷갈린다"],
+  };
+  const safeAi = m.validateBriefAi(evil, input);
+  const texts = [safeAi.oneLine, ...safeAi.emphasis.map((e) => e.text), ...safeAi.qa.flatMap((e) => [e.q, e.a]), ...safeAi.pitfalls];
+  assert.equal(texts.length, 5, "all kept (none copies the transcript)");
+  const zw = String.fromCharCode(0x200b);
+  for (const t of texts) {
+    assert.ok(!/<[A-Za-z!/?]/.test(t) && !t.includes("![") && !/`\s*\$?=/.test(t) && !t.includes("%%"), `made safe: ${JSON.stringify(t)}`);
+  }
+  assert.deepEqual(texts.map((t) => t.split(zw).join("")), [evil.one_line, evil.emphasis[0].text, evil.qa[0].q, evil.qa[0].a, evil.pitfalls[0]], "only zero-width spaces added");
+  const rendered = m.renderAiSections(safeAi, "slides");
+  assert.ok(!/<[A-Za-z!/?]/.test(rendered) && !rendered.includes("![") && !/`\s*\$?=/.test(rendered) && !rendered.includes("%%") && !/^\s*(?:-\s*)?(`{3,}|~{3,})/m.test(rendered), "the sections written hold no tag, image, query, comment or fence");
   assert.throws(() => m.validateBriefAi([1], input), /JSON 객체가 아닙니다/, "not an object: asked once more");
   assert.deepEqual(m.validateBriefAi({}, input), { oneLine: "", emphasis: [], qa: [], pitfalls: [] }, "empty lists are fine");
   assert.equal(
