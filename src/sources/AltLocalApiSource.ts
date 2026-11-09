@@ -2,6 +2,10 @@
 // <token>`, responses `{ok, data}`. `/api/status` needs no token. Read-only
 // use: GET routes only.
 //
+// Alt 0.19.0 removed the note routes used here. What replaced them
+// (`POST /api/call`) answers only for Alt Pro accounts, so from 0.19.0 on
+// the notes are read from a copy of Alt's database instead (see detect).
+//
 // The token is read from Alt's token file when a source is created and kept
 // in memory only. It is never logged, stored or put in an error message.
 
@@ -56,6 +60,17 @@ export async function probeAltStatus(port: number, timeoutMs = 800): Promise<{ v
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether this Alt version still serves the note routes (`/api/lectureNotes`,
+ * `/api/folders/tree`, `/api/noteComponents/...`). They are gone from
+ * 0.19.0. A version that does not parse counts as without them: the
+ * database copy works with every Alt.
+ */
+export function altHasNoteRoutes(version: string): boolean {
+  const m = /^v?(\d+)\.(\d+)(?:\.|$)/.exec(version.trim());
+  return !!m && Number(m[1]) === 0 && Number(m[2]) < 19;
 }
 
 function flattenFolders(tree: unknown, out: Map<string, FolderRow>): void {
@@ -149,18 +164,28 @@ export class AltLocalApiSource implements AltLocalSource {
   /**
    * Finds a running Alt: /api/status on the configured port and the next
    * ones Alt falls back to. Null when Alt does not answer or the token file
-   * cannot be read; `reason` says why.
+   * cannot be read; `reason` says why. Null also when Alt answers but is
+   * 0.19.0 or newer (no note routes) and no verified older Alt answers on a
+   * later port: then `runningVersion` is its version, and the token is not
+   * read or sent.
    */
-  static async detect(userData: string, opts: DetectOptions = {}): Promise<{ source: AltLocalApiSource | null; reason: string }> {
+  static async detect(userData: string, opts: DetectOptions = {}): Promise<{ source: AltLocalApiSource | null; reason: string; runningVersion?: string }> {
     const { port, enabled } = readHttpServerConfig(userData);
     const verify = opts.verifyOwner ?? systemOwnerVerifier();
     // The configured port first, then the ones Alt falls back to. The token
     // goes only to a listener verified as Alt run by this user; an
     // unverified port is skipped and never sees the token.
     let refused = "";
+    // The first Alt 0.19.0+ that answers; read from the database unless a
+    // verified older Alt answers on a later port. Never sent the token.
+    let newer: string | null = null;
     for (let p = port; p < port + ALT_PORT_TRIES; p++) {
       const status = await probeAltStatus(p, opts.probeTimeoutMs ?? 800);
       if (!status) continue;
+      if (!altHasNoteRoutes(status.version)) {
+        newer ??= status.version;
+        continue;
+      }
       const owner = await verify(p);
       // A check that names no process is not a verification.
       if (!owner.ok || owner.pid === undefined) {
@@ -177,6 +202,13 @@ export class AltLocalApiSource implements AltLocalSource {
       return {
         source: new AltLocalApiSource({ port: p, token, version: status.version, openPathDb: opts.openPathDb, verifyOwner: verify, ownerPid: owner.pid, now: opts.now }),
         reason: "",
+      };
+    }
+    if (newer !== null) {
+      return {
+        source: null,
+        reason: `Alt${newer ? ` ${newer}` : ""}의 로컬 API로는 노트를 읽을 수 없습니다 (0.19.0부터 Alt Pro 전용).`,
+        runningVersion: newer,
       };
     }
     if (refused) return { source: null, reason: `로컬 API가 Alt인지 확인하지 못해 토큰을 보내지 않았습니다: ${refused}` };

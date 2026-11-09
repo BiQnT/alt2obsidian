@@ -668,6 +668,10 @@ async function probeAltStatus(port, timeoutMs = 800) {
     return null;
   }
 }
+function altHasNoteRoutes(version) {
+  const m = /^v?(\d+)\.(\d+)(?:\.|$)/.exec(version.trim());
+  return !!m && Number(m[1]) === 0 && Number(m[2]) < 19;
+}
 function flattenFolders(tree, out) {
   if (!Array.isArray(tree))
     return;
@@ -714,16 +718,24 @@ var AltLocalApiSource = class _AltLocalApiSource {
   /**
    * Finds a running Alt: /api/status on the configured port and the next
    * ones Alt falls back to. Null when Alt does not answer or the token file
-   * cannot be read; `reason` says why.
+   * cannot be read; `reason` says why. Null also when Alt answers but is
+   * 0.19.0 or newer (no note routes) and no verified older Alt answers on a
+   * later port: then `runningVersion` is its version, and the token is not
+   * read or sent.
    */
   static async detect(userData, opts = {}) {
     const { port, enabled } = readHttpServerConfig(userData);
     const verify = opts.verifyOwner ?? systemOwnerVerifier();
     let refused = "";
+    let newer = null;
     for (let p = port; p < port + ALT_PORT_TRIES; p++) {
       const status = await probeAltStatus(p, opts.probeTimeoutMs ?? 800);
       if (!status)
         continue;
+      if (!altHasNoteRoutes(status.version)) {
+        newer ??= status.version;
+        continue;
+      }
       const owner = await verify(p);
       if (!owner.ok || owner.pid === void 0) {
         refused = refused || owner.reason || "\uD3EC\uD2B8\uC758 \uD504\uB85C\uC138\uC2A4\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4";
@@ -740,6 +752,13 @@ var AltLocalApiSource = class _AltLocalApiSource {
       return {
         source: new _AltLocalApiSource({ port: p, token, version: status.version, openPathDb: opts.openPathDb, verifyOwner: verify, ownerPid: owner.pid, now: opts.now }),
         reason: ""
+      };
+    }
+    if (newer !== null) {
+      return {
+        source: null,
+        reason: `Alt${newer ? ` ${newer}` : ""}\uC758 \uB85C\uCEEC API\uB85C\uB294 \uB178\uD2B8\uB97C \uC77D\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4 (0.19.0\uBD80\uD130 Alt Pro \uC804\uC6A9).`,
+        runningVersion: newer
       };
     }
     if (refused)
@@ -855,11 +874,12 @@ var AltLocalApiSource = class _AltLocalApiSource {
 };
 
 // src/sources/AltLocalDbSource.ts
-import { copyFileSync, constants, existsSync as existsSync2, mkdtempSync, readdirSync as readdirSync3, rmSync, statSync as statSync2 } from "node:fs";
+import { closeSync, copyFileSync, constants, existsSync as existsSync2, mkdtempSync, openSync, readdirSync as readdirSync3, readSync, rmSync, statSync as statSync2 } from "node:fs";
 import { readFile as readFile2 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join as join3 } from "node:path";
-var KNOWN_SCHEMA_VERSIONS = [40];
+var KNOWN_SCHEMA_VERSIONS = [40, 41];
+var RUNNING_COPY_MAX_AGE_MS = 3e4;
 var REQUIRED_COLUMNS = {
   lecture_notes: ["id", "folder_id", "title", "lecture_date", "type", "updated_at", "deleted_at"],
   folders: ["id", "name", "parent_id", "deleted_at"],
@@ -888,7 +908,7 @@ function loadSqlite() {
     }
   }
   throw new AltDbError(
-    "\uC774 Obsidian\uC5D0\uB294 \uB0B4\uC7A5 SQLite(node:sqlite)\uAC00 \uC5C6\uC5B4 Alt \uB370\uC774\uD130\uBCA0\uC774\uC2A4\uB97C \uC77D\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. Obsidian \uC124\uCE58 \uD30C\uC77C\uC744 \uCD5C\uC2E0\uC73C\uB85C \uBC1B\uAC70\uB098, Alt\uB97C \uC2E4\uD589\uD574 \uB85C\uCEEC API\uB85C \uAC00\uC838\uC624\uC138\uC694."
+    "\uC774 Obsidian\uC5D0\uB294 \uB0B4\uC7A5 SQLite(node:sqlite)\uAC00 \uC5C6\uC5B4 Alt \uB370\uC774\uD130\uBCA0\uC774\uC2A4\uB97C \uC77D\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. Obsidian \uC124\uCE58 \uD30C\uC77C\uC744 \uCD5C\uC2E0\uC73C\uB85C \uBC1B\uC73C\uC138\uC694. Alt 0.18 \uC774\uD558\uB77C\uBA74 Alt\uB97C \uC2E4\uD589\uD574 \uB85C\uCEEC API\uB85C \uAC00\uC838\uC62C \uC218\uB3C4 \uC788\uC2B5\uB2C8\uB2E4."
   );
 }
 function checkSchema(db) {
@@ -912,7 +932,7 @@ function checkSchema(db) {
   }
   if (missing.length > 0) {
     throw new AltDbError(
-      `\uC54C \uC218 \uC5C6\uB294 Alt \uB370\uC774\uD130\uBCA0\uC774\uC2A4 \uC2A4\uD0A4\uB9C8\uC785\uB2C8\uB2E4 (\uBC84\uC804 ${version ?? "?"}, \uC5C6\uB294 \uD56D\uBAA9: ${missing.slice(0, 6).join(", ")}). Alt\uB97C \uC2E4\uD589\uD574 \uB85C\uCEEC API\uB85C \uAC00\uC838\uC624\uC138\uC694.`
+      `\uC54C \uC218 \uC5C6\uB294 Alt \uB370\uC774\uD130\uBCA0\uC774\uC2A4 \uC2A4\uD0A4\uB9C8\uC785\uB2C8\uB2E4 (\uBC84\uC804 ${version ?? "?"}, \uC5C6\uB294 \uD56D\uBAA9: ${missing.slice(0, 6).join(", ")}). Alt2Obs\uB97C \uCD5C\uC2E0 \uBC84\uC804\uC73C\uB85C \uC5C5\uB370\uC774\uD2B8\uD558\uC138\uC694. Alt 0.18 \uC774\uD558\uB77C\uBA74 Alt\uB97C \uCF1C\uC11C \uB85C\uCEEC API\uB85C \uAC00\uC838\uC62C \uC218\uB3C4 \uC788\uC2B5\uB2C8\uB2E4.`
     );
   }
   return { version, known: version !== null && KNOWN_SCHEMA_VERSIONS.includes(version) };
@@ -964,6 +984,35 @@ function sweepStaleCopies(tmpRoot, now = Date.now()) {
   }
   return removed;
 }
+function storeStamp(file) {
+  const st = statSync2(file);
+  let wal = "none";
+  try {
+    const fd = openSync(`${file}-wal`, "r");
+    try {
+      const head = Buffer.alloc(12);
+      const n = readSync(fd, head, 0, 12, 12);
+      wal = n === 12 ? head.toString("hex") : `short:${n}`;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+  }
+  return `${st.size}:${st.mtimeMs}:${wal}`;
+}
+function copyStore(file, target) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const before = storeStamp(file);
+    copyFileSync(file, target, constants.COPYFILE_FICLONE);
+    if (existsSync2(`${file}-wal`))
+      copyFileSync(`${file}-wal`, `${target}-wal`, constants.COPYFILE_FICLONE);
+    else
+      rmSync(`${target}-wal`, { force: true });
+    if (storeStamp(file) === before)
+      return;
+  }
+  throw new Error("Alt\uAC00 \uB370\uC774\uD130\uBCA0\uC774\uC2A4\uB97C \uC4F0\uB294 \uC911\uC774\uB77C \uC77C\uAD00\uB41C \uC0AC\uBCF8\uC744 \uB9CC\uB4E4\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4");
+}
 var AltLocalDbSource = class _AltLocalDbSource {
   constructor(db, copyDir, schema, storeName, hasFileRefs) {
     this.db = db;
@@ -974,16 +1023,28 @@ var AltLocalDbSource = class _AltLocalDbSource {
     this.storeDetail = "";
     this.accountId = void 0;
     this.support = "none";
+    this.altVersion = null;
+    /** Set while Alt runs: where a fresh copy comes from. */
+    this.refreshFrom = null;
+    this.copiedAt = 0;
     this.schema = schema;
     this.storeName = storeName;
-    this.label = `Alt \uAEBC\uC9D0 \xB7 DB \uC77D\uAE30${schema.known ? "" : ` (\uD655\uC778\uB418\uC9C0 \uC54A\uC740 \uC2A4\uD0A4\uB9C8 v${schema.version ?? "?"})`}`;
+  }
+  /** "Alt 꺼짐 · DB 읽기", or "Alt 실행 중 · DB 읽기 (v0.20.0)" when Alt runs; an unknown schema is noted. */
+  get label() {
+    const v = this.altVersion ?? "";
+    const notes = [/^\d/.test(v) ? `v${v}` : v, this.schema.known ? "" : `\uD655\uC778\uB418\uC9C0 \uC54A\uC740 \uC2A4\uD0A4\uB9C8 v${this.schema.version ?? "?"}`].filter(Boolean);
+    return `${this.altVersion !== null ? "Alt \uC2E4\uD589 \uC911" : "Alt \uAEBC\uC9D0"} \xB7 DB \uC77D\uAE30${notes.length ? ` (${notes.join(", ")})` : ""}`;
   }
   setScope(c, userKnown) {
     this.accountId = c.accountId;
-    const channels = ["lecture_notes", "folders", "note_components"].every((t) => hasColumn(this.db, t, "channel_id"));
-    this.support = !channels ? "none" : SCOPE_TABLES.every((t) => this.tableExists(t)) ? "full" : "channel-only";
+    this.support = this.scopeSupport();
     if (!userKnown)
       this.storeDetail = `\uB85C\uADF8\uC778 \uACC4\uC815\uC744 \uC54C \uC218 \uC5C6\uC5B4 \uAC00\uC7A5 \uCD5C\uADFC \uC800\uC7A5\uC18C\uB97C \uC77D\uC5C8\uC2B5\uB2C8\uB2E4: ${this.storeName}`;
+  }
+  scopeSupport() {
+    const channels = ["lecture_notes", "folders", "note_components"].every((t) => hasColumn(this.db, t, "channel_id"));
+    return !channels ? "none" : SCOPE_TABLES.every((t) => this.tableExists(t)) ? "full" : "channel-only";
   }
   tableExists(name) {
     return !!this.db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type IN ('table','view') AND name = ?").get(name);
@@ -1010,6 +1071,12 @@ var AltLocalDbSource = class _AltLocalDbSource {
       try {
         source = _AltLocalDbSource.openCopy(file, sqlite, opts.tmpRoot ?? tmpdir());
         source.setScope(candidate, userKnown);
+        if (opts.altVersion !== void 0) {
+          const now = opts.now ?? Date.now;
+          source.altVersion = opts.altVersion;
+          source.refreshFrom = { file, sqlite, tmpRoot: opts.tmpRoot ?? tmpdir(), now };
+          source.copiedAt = now();
+        }
       } catch (e) {
         if (e instanceof AltDbError) {
           fallback?.close();
@@ -1046,9 +1113,7 @@ var AltLocalDbSource = class _AltLocalDbSource {
     const dir = mkdtempSync(join3(tmpRoot, COPY_PREFIX));
     try {
       const target = join3(dir, basename(file));
-      copyFileSync(file, target, constants.COPYFILE_FICLONE);
-      if (existsSync2(`${file}-wal`))
-        copyFileSync(`${file}-wal`, `${target}-wal`, constants.COPYFILE_FICLONE);
+      copyStore(file, target);
       const db = new sqlite.DatabaseSync(target);
       try {
         db.exec("PRAGMA query_only = 1");
@@ -1061,6 +1126,44 @@ var AltLocalDbSource = class _AltLocalDbSource {
     } catch (e) {
       rmSync(dir, { recursive: true, force: true });
       throw e;
+    }
+  }
+  /**
+   * Alt running: replaces a copy older than RUNNING_COPY_MAX_AGE_MS with a
+   * fresh one of the same store. The source object stays the same, so a
+   * caller in the middle of a scan keeps working (queries are synchronous).
+   */
+  refreshIfStale() {
+    const from = this.refreshFrom;
+    if (!from || from.now() - this.copiedAt < RUNNING_COPY_MAX_AGE_MS)
+      return;
+    let fresh;
+    try {
+      fresh = _AltLocalDbSource.openCopy(from.file, from.sqlite, from.tmpRoot);
+    } catch (e) {
+      if (e instanceof AltDbError)
+        throw e;
+      console.warn("[Alt2Obs] a fresh copy of Alt's database failed, the earlier copy is used:", e);
+      return;
+    }
+    const old = { db: this.db, dir: this.copyDir };
+    this.db = fresh.db;
+    this.copyDir = fresh.copyDir;
+    this.hasFileRefs = fresh.hasFileRefs;
+    this.schema = fresh.schema;
+    this.support = this.scopeSupport();
+    this.copiedAt = from.now();
+    _AltLocalDbSource.release(old.db, old.dir);
+  }
+  static release(db, dir) {
+    try {
+      db.close();
+    } catch {
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      console.warn("[Alt2Obs] could not remove an old copy of Alt's database yet:", e);
     }
   }
   noteCount() {
@@ -1089,7 +1192,7 @@ var AltLocalDbSource = class _AltLocalDbSource {
     try {
       return this.db.prepare(sql).all(noteId);
     } catch (e) {
-      if (!this.hasFileRefs)
+      if (!this.hasFileRefs || !/no such (table|column)/i.test(e instanceof Error ? e.message : String(e)))
         throw e;
       this.hasFileRefs = false;
       return this.components(noteId);
@@ -1099,6 +1202,7 @@ var AltLocalDbSource = class _AltLocalDbSource {
     return detailsFromComponents(this.components(id));
   }
   async getBundle(id) {
+    this.refreshIfStale();
     const note = this.db.prepare(`SELECT ln.id, ln.title, ln.type, ln.lecture_date, ln.folder_id, ln.updated_at FROM lecture_notes ln WHERE ln.id = ? AND ${this.scope("ln")}`).get(id);
     if (!note)
       throw new AltDbError("Alt \uB370\uC774\uD130\uBCA0\uC774\uC2A4\uC5D0\uC11C \uC774 \uB178\uD2B8\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
@@ -1113,6 +1217,7 @@ var AltLocalDbSource = class _AltLocalDbSource {
     });
   }
   close() {
+    this.refreshFrom = null;
     try {
       this.db.close();
     } catch {
@@ -1133,8 +1238,9 @@ async function connectAltLocal(userData, opts = {}) {
   if (api.source)
     return { source: api.source, label: api.source.label, detail: "" };
   try {
-    const db = AltLocalDbSource.open(dbOpts);
-    return { source: db, label: db.label, detail: [api.reason, db.storeDetail].filter(Boolean).join(" ") };
+    const db = AltLocalDbSource.open({ ...dbOpts, altVersion: api.runningVersion });
+    const reason = api.runningVersion !== void 0 ? "" : api.reason;
+    return { source: db, label: db.label, detail: [reason, db.storeDetail].filter(Boolean).join(" ") };
   } catch (e) {
     return { source: null, label: "\uC5F0\uACB0 \uC548 \uB428", detail: `${api.reason} ${e instanceof Error ? e.message : String(e)}`.trim() };
   }

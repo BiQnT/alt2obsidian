@@ -321,9 +321,18 @@ try {
   {
     const { ud } = makeUserData("db-bad", { dropColumn: "content_text" });
     assert.throws(() => m.AltLocalDbSource.open({ userData: ud, tmpRoot: root }), (e) => e instanceof m.AltDbError && /알 수 없는 Alt 데이터베이스 스키마/.test(e.message) && /note_components\.content_text/.test(e.message));
-    const { ud: ud2 } = makeUserData("db-newer", { version: 41 });
+    const { ud: ud2 } = makeUserData("db-newer", { version: 42 });
     const src = m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root });
-    assert.equal(src.label, "Alt 꺼짐 · DB 읽기 (확인되지 않은 스키마 v41)");
+    assert.equal(src.label, "Alt 꺼짐 · DB 읽기 (확인되지 않은 스키마 v42)");
+    for (const [altVersion, label] of [["0.20.0", "Alt 실행 중 · DB 읽기 (v0.20.0, 확인되지 않은 스키마 v42)"], ["", "Alt 실행 중 · DB 읽기 (확인되지 않은 스키마 v42)"], ["dev", "Alt 실행 중 · DB 읽기 (dev, 확인되지 않은 스키마 v42)"]]) {
+      const running = m.AltLocalDbSource.open({ userData: ud2, tmpRoot: root, altVersion });
+      assert.equal(running.label, label);
+      running.close();
+    }
+    const { ud: ud41 } = makeUserData("db-v41", { version: 41 });
+    const v41 = m.AltLocalDbSource.open({ userData: ud41, tmpRoot: root });
+    assert.deepEqual([v41.label, v41.schema], ["Alt 꺼짐 · DB 읽기", { version: 41, known: true }], "v41 (Alt 0.18 to 0.20) is a checked schema");
+    v41.close();
     assert.equal((await src.listNotes()).length, 4);
     src.close();
     assert.throws(() => m.AltLocalDbSource.open({ userData: join(root, "nothing"), tmpRoot: root }), /찾지 못했습니다/);
@@ -603,6 +612,217 @@ try {
     const off = await m.AltLocalApiSource.detect(apiUd, { probeTimeoutMs: 300 });
     assert.match(off.reason, /로컬 HTTP 서버가 꺼져/);
     console.log("PASS: source selection: API, else database copy, else none, with the reason");
+  }
+
+  // Alt 0.19.0+ has no note routes (and /api/call needs Alt Pro): a running
+  // Alt of that version is read from the database copy, with no owner check
+  // and no token sent; only the status probe reaches it.
+  {
+    for (const [v, has] of [["0.12.0", true], ["0.18.0", true], ["0.18.9", true], ["0.19.0", false], ["0.20.0", false], ["0.19.0-beta.1", false], ["1.0.0", false], ["dev", false], ["", false], ["v0.18.0", true], ["0.18", true], ["0.19", false]]) {
+      assert.equal(m.altHasNoteRoutes(v), has, v);
+    }
+    const seen = [];
+    let version = "0.20.0";
+    const s = http.createServer((req, res) => {
+      seen.push({ url: req.url, auth: req.headers.authorization ?? null });
+      res.writeHead(req.url === "/api/status" ? 200 : 404, { "Content-Type": "application/json" });
+      if (req.url === "/api/status") return res.end(JSON.stringify({ ok: true, data: { ok: true, version, platform: "win32", uptime: 1 } }));
+      res.end(JSON.stringify({ ok: false, error: `Not found: ${req.method} ${req.url}` }));
+    });
+    await new Promise((r) => s.listen(0, "127.0.0.1", r));
+    try {
+      writeFileSync(join(apiUd, "storage-httpServer.json"), JSON.stringify({ enabled: true, port: s.address().port }));
+      let checks = 0;
+      const alt = async () => (checks++, { ok: true, reason: "", pid: 4242 });
+      const det = await m.AltLocalApiSource.detect(apiUd, { verifyOwner: alt });
+      assert.equal(det.source, null);
+      assert.equal(det.runningVersion, "0.20.0");
+      assert.match(det.reason, /0\.20\.0의 로컬 API로는 노트를 읽을 수 없습니다 \(0\.19\.0부터 Alt Pro 전용\)/);
+      const c = await m.connectAltLocal(apiUd, { tmpRoot: root, verifyOwner: alt });
+      assert.equal(c.source.mode, "db");
+      assert.equal(c.label, "Alt 실행 중 · DB 읽기 (v0.20.0)");
+      assert.doesNotMatch(c.detail, /Alt Pro/, "no reason line for the normal 0.19+ path");
+      assert.equal((await c.source.listNotes()).length, 4);
+      c.source.close();
+      version = "0.19.0";
+      const c19 = await m.connectAltLocal(apiUd, { tmpRoot: root, verifyOwner: alt });
+      assert.equal(c19.label, "Alt 실행 중 · DB 읽기 (v0.19.0)");
+      c19.source.close();
+      // Skill CLI: the same choice, and its forced API mode says why it cannot.
+      const run = async (args) => JSON.parse((await promisify(execFile)("node", [join(repo, "scripts/phase2/alt-local.mjs"), ...args, "--alt-dir", apiUd], { encoding: "utf8" })).stdout);
+      const st = await run(["status"]);
+      assert.deepEqual([st.mode, st.label], ["db", "Alt 실행 중 · DB 읽기 (v0.19.0)"]);
+      assert.equal(checks, 0, "no owner check: nothing is sent to it");
+      assert.ok(seen.length > 0 && seen.every((r) => r.url === "/api/status" && r.auth === null), "only the unauthenticated status probe");
+    } finally {
+      await new Promise((r) => s.close(r));
+    }
+    console.log("PASS: Alt 0.19.0+ (no note routes): database copy labelled 'Alt 실행 중', no owner check, no token, status probe only; plugin and Skill CLI");
+  }
+
+  // Alt 0.19.0+ edge cases: the token file is not even read; the database
+  // copy failing gives "연결 안 됨" with both reasons; the CLI's forced API
+  // mode says why; a verified older Alt on a later port still gets the API.
+  {
+    const seen = [];
+    const s = http.createServer((req, res) => {
+      seen.push({ url: req.url, auth: req.headers.authorization ?? null });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, data: { ok: true, version: "0.20.0" } }));
+    });
+    await new Promise((r) => s.listen(0, "127.0.0.1", r));
+    const tokenFile = m.tokenFilePath(apiUd);
+    try {
+      writeFileSync(join(apiUd, "storage-httpServer.json"), JSON.stringify({ enabled: true, port: s.address().port }));
+      rmSync(tokenFile);
+      const noToken = await m.connectAltLocal(apiUd, { tmpRoot: root, verifyOwner: async () => ({ ok: true, reason: "", pid: 1 }) });
+      assert.equal(noToken.label, "Alt 실행 중 · DB 읽기 (v0.20.0)");
+      assert.doesNotMatch(noToken.detail, /토큰/);
+      noToken.source.close();
+      writeFileSync(tokenFile, FAKE_TOKEN);
+      const broken = await m.connectAltLocal(apiUd, { tmpRoot: root, sqlite: { DatabaseSync: class { constructor() { throw new Error("boom"); } } } });
+      assert.equal(broken.source, null);
+      assert.equal(broken.label, "연결 안 됨");
+      assert.match(broken.detail, /0\.19\.0부터 Alt Pro 전용/);
+      assert.match(broken.detail, /boom/);
+      const forced = JSON.parse((await promisify(execFile)("node", [join(repo, "scripts/phase2/alt-local.mjs"), "status", "--source", "api", "--alt-dir", apiUd], { encoding: "utf8" })).stdout);
+      assert.deepEqual([forced.mode, forced.label], ["none", "연결 안 됨"]);
+      assert.match(forced.detail, /Alt 0\.20\.0의 로컬 API로는 노트를 읽을 수 없습니다/);
+      assert.ok(seen.every((r) => r.auth === null), "never a token");
+    } finally {
+      writeFileSync(tokenFile, FAKE_TOKEN);
+      await new Promise((r) => s.close(r));
+    }
+
+    // 0.20 on the configured port, a verified Alt 0.18 on the next one: the API of the 0.18.
+    const hits = [];
+    const make = (label, version) =>
+      http.createServer((req, res) => {
+        hits.push({ label, url: req.url, auth: req.headers.authorization ?? null });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        if (req.url === "/api/status") return res.end(JSON.stringify({ ok: true, data: { ok: true, version } }));
+        res.end(JSON.stringify({ ok: true, data: [] }));
+      });
+    let a;
+    let b;
+    let p0 = 0;
+    for (let tries = 0; tries < 20 && !b; tries++) {
+      a = make("new", "0.20.0");
+      await new Promise((r) => a.listen(0, "127.0.0.1", r));
+      p0 = a.address().port;
+      b = make("old", "0.18.0");
+      const okListen = await new Promise((r) => {
+        b.once("error", () => r(false));
+        b.listen(p0 + 1, "127.0.0.1", () => r(true));
+      });
+      if (!okListen) {
+        a.close();
+        b = null;
+      }
+    }
+    assert.ok(b, "two adjacent ports");
+    try {
+      writeFileSync(join(apiUd, "storage-httpServer.json"), JSON.stringify({ enabled: true, port: p0 }));
+      const c = await m.connectAltLocal(apiUd, { tmpRoot: root, verifyOwner: async (port) => (port === p0 + 1 ? { ok: true, reason: "", pid: 9 } : { ok: false, reason: "not this user" }) });
+      assert.equal(c.source.mode, "api");
+      assert.equal(c.label, "Alt 연결됨 · 로컬 API (v0.18.0)");
+      c.source.close();
+      assert.ok(hits.filter((h) => h.label === "new").every((h) => h.auth === null), "the 0.20 listener never got the token");
+    } finally {
+      await new Promise((r) => a.close(r));
+      await new Promise((r) => b.close(r));
+    }
+    console.log("PASS: Alt 0.19.0+: token file not read, a failed copy says both reasons, CLI --source api explains, a verified older Alt on a later port keeps the API");
+  }
+
+  // Alt running (0.19.0+): a copy older than 30 s is made again before a
+  // bundle is read, in place (same source object, old copy removed); a
+  // closed Alt's copy is never refreshed.
+  {
+    const { ud, store } = makeUserData("db-refresh");
+    let clock = 5000000;
+    const now = () => clock;
+    const copies = () => readdirSync(root).filter((d) => d.startsWith("alt-to-obs-altdb-")).length;
+    const src = m.AltLocalDbSource.open({ userData: ud, tmpRoot: root, altVersion: "0.20.0", now });
+    const closed = m.AltLocalDbSource.open({ userData: ud, tmpRoot: root, now });
+    const held = await src.getBundle("n2");
+    assert.equal(held.transcript[0].text, "memo only lecture");
+    const writer = new DatabaseSync(store);
+    writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+    writer.prepare("UPDATE note_components SET content_text = ? WHERE id = 'c7'").run(JSON.stringify([{ createdAt: 1, relativeStart: 0, segments: [{ start: 0, end: 61000, text: "the finished recording", speaker: "" }] }]));
+    const count0 = copies();
+    clock += m.RUNNING_COPY_MAX_AGE_MS - 1;
+    assert.equal((await src.getBundle("n2")).transcript[0].text, "memo only lecture", "a recent copy is reused");
+    clock += 1;
+    assert.equal((await src.getBundle("n2")).transcript[0].text, "the finished recording", "an old copy is made again");
+    assert.equal(copies(), count0, "the earlier copy is removed");
+    assert.equal((await src.noteDetails("n1")).hasSlides, true, "the same source keeps working");
+    clock += m.RUNNING_COPY_MAX_AGE_MS * 10;
+    assert.equal((await closed.getBundle("n2")).transcript[0].text, "memo only lecture", "Alt closed: no refresh");
+    writer.close();
+    src.close();
+    closed.close();
+    assert.equal(copies(), count0 - 2);
+    console.log("PASS: running Alt: a copy older than 30 s is made again before a bundle (in place, old copy removed); Alt closed: never");
+  }
+
+  // Copy safety while Alt writes: the stamp ignores appended WAL frames and
+  // changes on a checkpoint that restarts the WAL; a refresh that fails keeps
+  // the earlier copy (nothing leaked); an old copy that cannot be removed yet
+  // leaves no closed handle; a closed source makes no copy; a schema change
+  // while Alt runs is an error, not old data.
+  {
+    const { ud, store } = makeUserData("db-safety");
+    const w = new DatabaseSync(store);
+    w.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+    const ins = w.prepare("INSERT INTO lecture_notes (id, title, type) VALUES (?, 'x', 'slide')");
+    ins.run("s1");
+    const st0 = m.storeStamp(store);
+    ins.run("s2");
+    assert.equal(m.storeStamp(store), st0, "appended frames: same stamp");
+    w.exec("PRAGMA wal_checkpoint(RESTART)");
+    ins.run("s3");
+    assert.notEqual(m.storeStamp(store), st0, "checkpoint and WAL restart: new stamp");
+    w.close();
+
+    let clock = 7000000;
+    const now = () => clock;
+    const copies = () => readdirSync(root).filter((d) => d.startsWith("alt-to-obs-altdb-"));
+    let opened = 0;
+    let failFrom = Infinity;
+    const flaky = { DatabaseSync: class extends DatabaseSync { constructor(path, o) { if (++opened >= failFrom) throw new Error("copy torn"); super(path, o ?? {}); } } };
+    const src = m.AltLocalDbSource.open({ userData: ud, tmpRoot: root, altVersion: "0.20.0", now, sqlite: flaky });
+    const base = copies().length;
+    failFrom = opened + 1;
+    clock += m.RUNNING_COPY_MAX_AGE_MS;
+    assert.equal((await src.getBundle("n2")).title, "6강", "a failed refresh reads the earlier copy");
+    assert.equal(copies().length, base, "the failed copy left nothing");
+    failFrom = Infinity;
+    const oldDir = src.copyDir;
+    const { chmodSync } = await import("node:fs");
+    chmodSync(oldDir, 0o555);
+    try {
+      await src.getBundle("n2");
+      assert.notEqual(src.copyDir, oldDir, "swapped to the fresh copy");
+      assert.equal((await src.noteDetails("n1")).hasSlides, true, "no closed handle after a failed removal");
+    } finally {
+      chmodSync(oldDir, 0o755);
+      rmSync(oldDir, { recursive: true, force: true });
+    }
+    src.close();
+    const afterClose = copies().length;
+    clock += m.RUNNING_COPY_MAX_AGE_MS;
+    await assert.rejects(src.getBundle("n2"));
+    assert.equal(copies().length, afterClose, "a closed source makes no copy");
+
+    const src2 = m.AltLocalDbSource.open({ userData: ud, tmpRoot: root, altVersion: "0.20.0", now });
+    const alter = new DatabaseSync(store);
+    alter.exec("ALTER TABLE note_components DROP COLUMN metadata");
+    alter.close();
+    clock += m.RUNNING_COPY_MAX_AGE_MS;
+    await assert.rejects(src2.getBundle("n2"), (e) => e instanceof m.AltDbError && /알 수 없는 Alt 데이터베이스 스키마/.test(e.message));
+    src2.close();
+    console.log("PASS: copy safety: stamp ignores WAL appends, changes on checkpoint+restart; failed refresh keeps the earlier copy; undeletable old copy leaves no closed handle; closed source makes no copy; schema change while running is an error");
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

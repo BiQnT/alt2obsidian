@@ -1,8 +1,8 @@
 // Skill-side Alt local source CLI (spec 4.1, 4.7): the plugin's
 // src/sources code, so the Skill lists and exports the same notes the
-// sidebar shows. Read only: Alt's local API (GET routes) when Alt runs,
-// else a private copy of its database. The API token is read from Alt's
-// token file and never printed.
+// sidebar shows. Read only: Alt's local API (GET routes) when an Alt
+// older than 0.19.0 runs, else a private copy of its database. The API
+// token is read from Alt's token file and never printed.
 //
 // Usage:
 //   node scripts/phase2/alt-local.mjs status

@@ -44,7 +44,7 @@ Alt2Obs는 [Alt](https://www.altalt.io) 앱으로 강의를 녹음하는 학생�
 
 - **데스크톱 Obsidian 1.7.2 이상.** 데스크톱 전용입니다. macOS에서 확인했고, Windows와 Linux는 단위 테스트로만 확인했습니다.
 - **Alt 데스크톱 앱.** 강의 목록을 읽으려면 같은 컴퓨터에 있어야 합니다. 없으면 공개 공유 링크로 가져올 수 있습니다.
-- **Obsidian 안의 Node 22.13 이상.** Node 내장 `node:sqlite`로 Alt 데이터베이스 사본을 읽을 때 씁니다. Alt가 꺼져 있을 때, 그리고 Alt가 켜져 있어도 동기화된 슬라이드 파일의 위치를 찾을 때 필요합니다. 개발자 콘솔(Ctrl+Shift+I, macOS는 Cmd+Option+I)을 열고 `process.versions.node`를 입력하면 버전을 볼 수 있습니다. Node가 더 오래되었다면 Alt를 켠 뒤 가져오세요. 이때 동기화된 슬라이드 파일은 찾지 못할 수 있습니다.
+- **Obsidian 안의 Node 22.13 이상.** Node 내장 `node:sqlite`로 Alt 데이터베이스 사본을 읽을 때 씁니다. Alt 0.19.0 이상은 로컬 API가 노트를 내주지 않아 항상 필요하고, 그보다 오래된 Alt는 Alt가 꺼져 있을 때와 동기화된 슬라이드 파일의 위치를 찾을 때 필요합니다. 개발자 콘솔(Ctrl+Shift+I, macOS는 Cmd+Option+I)을 열고 `process.versions.node`를 입력하면 버전을 볼 수 있습니다. Node가 더 오래되었다면 Obsidian을 최신으로 설치하세요. Alt 0.18 이하라면 Alt를 켠 뒤 가져와도 되지만, 이때 동기화된 슬라이드 파일은 찾지 못할 수 있습니다.
 - **Claude Code나 Codex CLI**를 설치하고 로그인해 둡니다. 생성은 내 요금제로 합니다. Claude Code를 쓸 수 있는 Claude 계정(유료 Claude 요금제나 Anthropic API 크레딧)이나, Codex가 포함된 ChatGPT 요금제(또는 OpenAI API 키)가 필요합니다.
 - 선택: 노션에 정리한 노트를 검증하려면 Notion 계정과 Claude Code의 Notion MCP.
 
@@ -108,7 +108,7 @@ Alt2Obs에는 텔레메트리, 사용 통계 수집, 광고, 업데이트 확인
 
 - **Alt 데이터 폴더**는 읽기만 합니다. macOS `~/Library/Application Support/alt`, Windows `%APPDATA%\alt`, Linux `$XDG_CONFIG_HOME/alt` 또는 `~/.config/alt`, 아니면 설정에서 정한 폴더입니다. 공유 링크 없이 강의 목록을 보여 주고 가져오려면 필요합니다. 읽는 것:
   - 로컬 API 토큰과 서버 설정(`http-server-token`, `storage-httpServer.json`), 로그인한 계정(`storage-desktopSync.json`). 토큰은 메모리에만 둡니다.
-  - Alt 데이터베이스. OS 임시 폴더에 따로 복사한 사본을 읽습니다. Alt 로컬 API를 쓸 수 없을 때(Alt가 꺼져 있거나, 로컬 서버가 꺼져 있거나, 아래 포트 확인에 실패했을 때), 그리고 Alt가 켜져 있어도 동기화된 슬라이드 파일의 위치를 찾을 때 복사합니다. 사본은 플러그인이 Alt에 다시 연결하거나 꺼질 때까지 두었다가 지웁니다. 비정상 종료로 남은 사본은 한 시간이 지난 뒤 다음 복사 때 지웁니다.
+  - Alt 데이터베이스. OS 임시 폴더에 따로 복사한 사본을 읽습니다. Alt 0.19.0 이상이 실행 중일 때(로컬 API가 노트를 내주지 않음), Alt 로컬 API를 쓸 수 없을 때(Alt가 꺼져 있거나, 로컬 서버가 꺼져 있거나, 아래 포트 확인에 실패했을 때), 그리고 Alt가 켜져 있어도 동기화된 슬라이드 파일의 위치를 찾을 때 복사합니다. 사본은 플러그인이 Alt에 다시 연결하거나 꺼질 때까지 두었다가 지웁니다. 비정상 종료로 남은 사본은 한 시간이 지난 뒤 다음 복사 때 지웁니다.
   - 슬라이드 PDF 파일. Alt가 기록해 둔 경로에서 읽습니다(보통 Alt 데이터 폴더 안).
 - **Alt 포트 확인.** Alt 로컬 API에 토큰을 보내기 전에, 그 포트에서 듣는 프로그램이 내가 실행한 Alt인지 확인합니다. `lsof`, `ps`(macOS), `/proc`(Linux), `netstat`, `tasklist`(Windows)를 씁니다.
 - **CLI 찾기.** 로그인 셸을 `$SHELL -ilc 'command -v claude'`(또는 `codex`. `$SHELL`이 없으면 `/bin/zsh`)로 실행하므로 `.zshrc` 같은 셸 시작 파일을 읽어 들입니다. Windows에서는 `where`를 씁니다. 흔한 설치 폴더도 살펴봅니다.
