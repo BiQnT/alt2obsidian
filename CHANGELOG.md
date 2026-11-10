@@ -2,6 +2,13 @@
 
 Condensed history of Alt2Obs (named Alt2Obsidian before 2.0.0). Release notes and files are on [GitHub releases](https://github.com/BiQnT/alt2obsidian/releases); the betas 2.0.0-beta.1 to beta.4 and beta.6 had no release of their own. Design decisions and measurements are in the [2.0 spec](docs/specs/2.0.0-spec.md) (Korean).
 
+## 2.1.1 (2026-11-10)
+
+- **Alt 0.19.0 and later work again.** Alt 0.19.0 removed the local API's note routes, so the note list failed with HTTP 404; their replacement answers only Alt Pro accounts. With such an Alt running, the plugin now reads the private copy of Alt's database instead, and the status reads **Alt 실행 중 · DB 읽기 (v0.21.0)**. The API token is neither read nor sent to it. Alt 0.18 and older keep the local API. Checked with Alt 0.21.0: the same note list and lecture contents as Alt 0.18.0 over the API.
+- **A lecture just recorded is complete.** While Alt runs, a copy older than 30 seconds is made again before a lecture is read, and a copy taken while Alt was rewriting its database is repeated. A database schema that changes while Alt runs is reported as an error instead of old data.
+- **Skill.** `alt-local.mjs` reads Alt 0.19.0+ the same way. Reading the database needs Node 22.13 or later (`node:sqlite`), now also while Alt runs.
+- README, README.ko.md and the user guides describe the new status.
+
 ## 2.1.0 (2026-10-30)
 
 Design and decisions: the [2.1.0 spec](docs/specs/2.1.0-spec.md) (Korean). Known limitation: the question panel shows math and diagrams (LaTeX, Mermaid) in an answer as text for now; rendering them in the panel is planned for a 2.1.x update.
