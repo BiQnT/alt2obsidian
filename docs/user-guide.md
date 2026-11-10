@@ -94,7 +94,8 @@ Select the book icon in the ribbon (**Alt 강의 가져오기**, import an Alt l
 
 The status chip at the top shows how the plugin reaches Alt:
 
-- `Alt 연결됨 · 로컬 API` (connected, local API): Alt is running and the plugin reads it through Alt's local API.
+- `Alt 연결됨 · 로컬 API` (connected, local API): Alt (0.18 or older) is running and the plugin reads it through Alt's local API.
+- `Alt 실행 중 · DB 읽기` (Alt running, reading the database): Alt 0.19.0 or later is running. From that version Alt's local API serves notes only to Alt Pro accounts, so the plugin reads a private copy of Alt's database for every account. A copy older than 30 seconds is made again right before a lecture is imported. If a lecture you just finished recording is missing from the list, select the status chip to refresh.
 - `Alt 꺼짐 · DB 읽기` (Alt closed, reading the database): the plugin reads a private copy of Alt's database. This also shows while Alt runs if its local API cannot be used.
 - `연결 안 됨` (not connected), with the reason below it.
 
@@ -607,12 +608,12 @@ On Obsidian 1.13 and later the tab is drawn from setting definitions, so its set
 
 **Alt shows `연결 안 됨` (not connected).** The reason is shown under the status chip:
 
-- Alt is not running and its database cannot be read: start Alt and select the status chip.
-- `Alt 설정에서 로컬 HTTP 서버가 꺼져 있습니다`: Alt's local HTTP server is off in Alt's settings.
+- Alt is not running and its database cannot be read: check the reason under the status chip. With Alt 0.18 or older, starting Alt and selecting the status chip reads it through the local API.
+- `Alt 설정에서 로컬 HTTP 서버가 꺼져 있습니다`: Alt's local HTTP server is off in Alt's settings. Turn it on with Alt 0.18 or older; 0.19.0 and later are read from the database copy either way.
 - The token file cannot be read, or Alt rejects the token: restart Alt, then refresh.
 - The program on Alt's port could not be confirmed as Alt: the plugin does not send the token and reads the database copy instead.
-- Reading the database while Alt is closed needs the built-in SQLite of Obsidian's Node (`node:sqlite`, Node 22.13 or later). To check, open the developer console (Ctrl+Shift+I, or Cmd+Option+I on macOS) and run `process.versions.node`. An older Obsidian installer lacks it: install the latest Obsidian or start Alt.
-- `알 수 없는 Alt 데이터베이스 스키마` (unknown database schema): start Alt so the local API is used.
+- Reading the database while Alt is closed needs the built-in SQLite of Obsidian's Node (`node:sqlite`, Node 22.13 or later). To check, open the developer console (Ctrl+Shift+I, or Cmd+Option+I on macOS) and run `process.versions.node`. An older Obsidian installer lacks it: install the latest Obsidian. Alt 0.19.0 and later are read from the database even while they run, so this applies then too.
+- `알 수 없는 Alt 데이터베이스 스키마` (unknown database schema): update Alt2Obs to the latest version. With Alt 0.18 or older, starting Alt so the local API is used also works.
 - Alt keeps its data somewhere else: set **Alt 데이터 폴더**.
 
 **The slide PDF is not on this computer.** A slide file synced to Alt from elsewhere may not be downloaded to this computer yet. Open the slides once in Alt, then select **새로고침** (refresh). Even while Alt runs, the plugin finds synced slide files through a copy of Alt's database, so this also needs `node:sqlite` (see above).
@@ -660,7 +661,7 @@ On Obsidian 1.13 and later the tab is drawn from setting definitions, so its set
 | OS | macOS (Windows and Linux: unit tests only) |
 | Obsidian minimum | 1.7.2 (Obsidian 1.13 APIs, such as settings search, are used when present) |
 | Obsidian | 1.14.4 app code, 1.12.4 installer |
-| Alt | 0.14.0 (local database), 0.12.0 (local API) |
+| Alt | Local API: 0.18.0, 0.12.0. Local database: 0.18.0 (schema v41), 0.14.0 (schema v40). From 0.19.0 the database is read even while Alt runs (same schema v41 confirmed in the 0.20.0 app bundle) |
 | Claude Code CLI | 2.1.291 (the card warns below 2.1.283) |
 | Codex CLI | 0.155.1 (the card warns below it) |
 

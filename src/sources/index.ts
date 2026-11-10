@@ -1,5 +1,6 @@
 // Source selection (spec 4.1): the local API when Alt answers, else a copy
-// of Alt's database, else none (the URL tab still works).
+// of Alt's database, else none (the URL tab still works). Alt 0.19.0 and
+// newer serve no notes through the local API, so they always get the copy.
 
 import { AltLocalApiSource } from "./AltLocalApiSource";
 import { AltLocalDbSource, SqliteModule } from "./AltLocalDbSource";
@@ -12,7 +13,7 @@ export { inferSubject } from "./altRows";
 
 export interface ConnectResult {
   source: AltLocalSource | null;
-  /** Sidebar status line: "Alt 연결됨 · 로컬 API", "Alt 꺼짐 · DB 읽기", "연결 안 됨". */
+  /** Sidebar status line: "Alt 연결됨 · 로컬 API", "Alt 실행 중 · DB 읽기", "Alt 꺼짐 · DB 읽기", "연결 안 됨". */
   label: string;
   /** Why the better sources were not used ("" when the API is used). */
   detail: string;
@@ -31,8 +32,10 @@ export async function connectAltLocal(
   });
   if (api.source) return { source: api.source, label: api.source.label, detail: "" };
   try {
-    const db = AltLocalDbSource.open(dbOpts);
-    return { source: db, label: db.label, detail: [api.reason, db.storeDetail].filter(Boolean).join(" ") };
+    const db = AltLocalDbSource.open({ ...dbOpts, altVersion: api.runningVersion });
+    // A running Alt 0.19.0+ reads from the copy as a matter of course: no reason line for it.
+    const reason = api.runningVersion !== undefined ? "" : api.reason;
+    return { source: db, label: db.label, detail: [reason, db.storeDetail].filter(Boolean).join(" ") };
   } catch (e) {
     return { source: null, label: "연결 안 됨", detail: `${api.reason} ${e instanceof Error ? e.message : String(e)}`.trim() };
   }

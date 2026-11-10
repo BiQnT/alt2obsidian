@@ -1,17 +1,20 @@
-// Alt's SQLite store, for when Alt is not running (spec 2.2, 4.1).
+// Alt's SQLite store, for when Alt is not running, and for a running Alt
+// 0.19.0+, whose local API serves no notes (spec 2.2, 4.1).
 //
 // The live files are never opened: the database and its -wal file are
 // copied to a private temp folder first (APFS clones on macOS, so a large
 // store copies instantly), and the copy is opened with SQLite writes
 // disabled (`PRAGMA query_only`). The copy is opened read-write only so
 // SQLite can replay the copied WAL into it; nothing is written back.
+// While Alt runs, a copy older than RUNNING_COPY_MAX_AGE_MS is made again
+// before a lecture is read, so an import sees what Alt wrote since.
 //
 // SQLite comes from Node's built-in `node:sqlite` (Node 22.5+; Obsidian
 // 1.8+ desktop ships Electron with Node 22). No native module is bundled.
 // Before reading, the schema is checked: the tables and columns this source
 // needs must exist, otherwise it fails with a clear message.
 
-import { copyFileSync, constants, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { closeSync, copyFileSync, constants, existsSync, mkdtempSync, openSync, readdirSync, readSync, rmSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -20,7 +23,10 @@ import { bundleFromRows, ComponentRow, detailsFromComponents, FolderRow, NoteRow
 import { AltLocalSource, AltNoteDetails, AltNoteSummary, LectureBundle } from "./types";
 
 /** Schema versions (`migrations.version`) this source was checked against. */
-export const KNOWN_SCHEMA_VERSIONS = [40];
+export const KNOWN_SCHEMA_VERSIONS = [40, 41];
+
+/** With Alt running, a copy older than this is made again before a lecture's bundle is read. */
+export const RUNNING_COPY_MAX_AGE_MS = 30_000;
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
   lecture_notes: ["id", "folder_id", "title", "lecture_date", "type", "updated_at", "deleted_at"],
@@ -68,7 +74,7 @@ export function loadSqlite(): SqliteModule {
     }
   }
   throw new AltDbError(
-    "이 Obsidian에는 내장 SQLite(node:sqlite)가 없어 Alt 데이터베이스를 읽을 수 없습니다. Obsidian 설치 파일을 최신으로 받거나, Alt를 실행해 로컬 API로 가져오세요."
+    "이 Obsidian에는 내장 SQLite(node:sqlite)가 없어 Alt 데이터베이스를 읽을 수 없습니다. Obsidian 설치 파일을 최신으로 받으세요. Alt 0.18 이하라면 Alt를 실행해 로컬 API로 가져올 수도 있습니다."
   );
 }
 
@@ -97,7 +103,7 @@ export function checkSchema(db: Database): SchemaInfo {
   }
   if (missing.length > 0) {
     throw new AltDbError(
-      `알 수 없는 Alt 데이터베이스 스키마입니다 (버전 ${version ?? "?"}, 없는 항목: ${missing.slice(0, 6).join(", ")}). Alt를 실행해 로컬 API로 가져오세요.`
+      `알 수 없는 Alt 데이터베이스 스키마입니다 (버전 ${version ?? "?"}, 없는 항목: ${missing.slice(0, 6).join(", ")}). Alt2Obs를 최신 버전으로 업데이트하세요. Alt 0.18 이하라면 Alt를 켜서 로컬 API로 가져올 수도 있습니다.`
     );
   }
   return { version, known: version !== null && KNOWN_SCHEMA_VERSIONS.includes(version) };
@@ -177,18 +183,68 @@ export interface DbSourceOptions {
   sqlite?: SqliteModule;
   /** Parent of the private copy folder (default: the OS temp folder). */
   tmpRoot?: string;
+  /** Version of the running Alt, when it runs but its local API serves no notes (0.19.0+). Shown in the label. */
+  altVersion?: string;
+  /** Clock for the copy's age (tests). */
+  now?: () => number;
+}
+
+/**
+ * What changes when Alt checkpoints its store and starts the WAL over: the
+ * main file's size and mtime, and the WAL header's checkpoint sequence and
+ * salts (bytes 12 to 24), or the WAL's absence or length. Frames appended
+ * to the WAL leave it unchanged (a torn tail is dropped by the checksums).
+ * The header does not depend on file times, which Windows may not update
+ * while Alt keeps the file open.
+ */
+export function storeStamp(file: string): string {
+  const st = statSync(file);
+  let wal = "none";
+  try {
+    const fd = openSync(`${file}-wal`, "r");
+    try {
+      const head = Buffer.alloc(12);
+      const n = readSync(fd, head, 0, 12, 12);
+      wal = n === 12 ? head.toString("hex") : `short:${n}`;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // no WAL
+  }
+  return `${st.size}:${st.mtimeMs}:${wal}`;
+}
+
+/**
+ * Copies the store and its -wal. A checkpoint followed by a WAL restart
+ * between the two copies would pair the main file with the wrong WAL, so
+ * the copy is made again when the stamp changed; after 3 unsettled tries
+ * it fails (the caller says to try again shortly).
+ */
+function copyStore(file: string, target: string): void {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const before = storeStamp(file);
+    copyFileSync(file, target, constants.COPYFILE_FICLONE);
+    if (existsSync(`${file}-wal`)) copyFileSync(`${file}-wal`, `${target}-wal`, constants.COPYFILE_FICLONE);
+    else rmSync(`${target}-wal`, { force: true });
+    if (storeStamp(file) === before) return;
+  }
+  throw new Error("Alt가 데이터베이스를 쓰는 중이라 일관된 사본을 만들지 못했습니다");
 }
 
 export class AltLocalDbSource implements AltLocalSource {
   readonly mode = "db" as const;
-  readonly label: string;
-  readonly schema: SchemaInfo;
+  schema: SchemaInfo;
   /** Which store file was copied (file name only). */
   readonly storeName: string;
   /** Status detail naming the store when the signed-in account is unknown ("" otherwise). */
   storeDetail = "";
   private accountId: string | null | undefined = undefined;
   private support: ScopeSupport = "none";
+  private altVersion: string | null = null;
+  /** Set while Alt runs: where a fresh copy comes from. */
+  private refreshFrom: { file: string; sqlite: SqliteModule; tmpRoot: string; now: () => number } | null = null;
+  private copiedAt = 0;
 
   private constructor(
     private db: Database,
@@ -199,15 +255,25 @@ export class AltLocalDbSource implements AltLocalSource {
   ) {
     this.schema = schema;
     this.storeName = storeName;
-    this.label = `Alt 꺼짐 · DB 읽기${schema.known ? "" : ` (확인되지 않은 스키마 v${schema.version ?? "?"})`}`;
+  }
+
+  /** "Alt 꺼짐 · DB 읽기", or "Alt 실행 중 · DB 읽기 (v0.20.0)" when Alt runs; an unknown schema is noted. */
+  get label(): string {
+    const v = this.altVersion ?? "";
+    const notes = [/^\d/.test(v) ? `v${v}` : v, this.schema.known ? "" : `확인되지 않은 스키마 v${this.schema.version ?? "?"}`].filter(Boolean);
+    return `${this.altVersion !== null ? "Alt 실행 중" : "Alt 꺼짐"} · DB 읽기${notes.length ? ` (${notes.join(", ")})` : ""}`;
   }
 
   private setScope(c: DbCandidate, userKnown: boolean): void {
     this.accountId = c.accountId;
+    this.support = this.scopeSupport();
+    if (!userKnown) this.storeDetail = `로그인 계정을 알 수 없어 가장 최근 저장소를 읽었습니다: ${this.storeName}`;
+  }
+
+  private scopeSupport(): ScopeSupport {
     // Stores without channels (pre-sync) have nothing to scope.
     const channels = ["lecture_notes", "folders", "note_components"].every((t) => hasColumn(this.db, t, "channel_id"));
-    this.support = !channels ? "none" : SCOPE_TABLES.every((t) => this.tableExists(t)) ? "full" : "channel-only";
-    if (!userKnown) this.storeDetail = `로그인 계정을 알 수 없어 가장 최근 저장소를 읽었습니다: ${this.storeName}`;
+    return !channels ? "none" : SCOPE_TABLES.every((t) => this.tableExists(t)) ? "full" : "channel-only";
   }
 
   private tableExists(name: string): boolean {
@@ -236,6 +302,12 @@ export class AltLocalDbSource implements AltLocalSource {
       try {
         source = AltLocalDbSource.openCopy(file, sqlite, opts.tmpRoot ?? tmpdir());
         source.setScope(candidate, userKnown);
+        if (opts.altVersion !== undefined) {
+          const now = opts.now ?? Date.now;
+          source.altVersion = opts.altVersion;
+          source.refreshFrom = { file, sqlite, tmpRoot: opts.tmpRoot ?? tmpdir(), now };
+          source.copiedAt = now();
+        }
       } catch (e) {
         // An unknown schema is fatal: an older store would show stale notes.
         if (e instanceof AltDbError) {
@@ -273,8 +345,7 @@ export class AltLocalDbSource implements AltLocalSource {
     const dir = mkdtempSync(join(tmpRoot, COPY_PREFIX));
     try {
       const target = join(dir, basename(file));
-      copyFileSync(file, target, constants.COPYFILE_FICLONE);
-      if (existsSync(`${file}-wal`)) copyFileSync(`${file}-wal`, `${target}-wal`, constants.COPYFILE_FICLONE);
+      copyStore(file, target);
       const db = new sqlite.DatabaseSync(target);
       try {
         db.exec("PRAGMA query_only = 1");
@@ -287,6 +358,49 @@ export class AltLocalDbSource implements AltLocalSource {
     } catch (e) {
       rmSync(dir, { recursive: true, force: true });
       throw e;
+    }
+  }
+
+  /**
+   * Alt running: replaces a copy older than RUNNING_COPY_MAX_AGE_MS with a
+   * fresh one of the same store. The source object stays the same, so a
+   * caller in the middle of a scan keeps working (queries are synchronous).
+   */
+  private refreshIfStale(): void {
+    const from = this.refreshFrom;
+    if (!from || from.now() - this.copiedAt < RUNNING_COPY_MAX_AGE_MS) return;
+    let fresh: AltLocalDbSource;
+    try {
+      fresh = AltLocalDbSource.openCopy(from.file, from.sqlite, from.tmpRoot);
+    } catch (e) {
+      // Alt changed its schema while running: say so rather than read old data.
+      if (e instanceof AltDbError) throw e;
+      // A copy that would not open or settle: the earlier copy is read, the next bundle tries again.
+      console.warn("[Alt2Obs] a fresh copy of Alt's database failed, the earlier copy is used:", e);
+      return;
+    }
+    // Swap first, then let the old copy go: a folder that cannot be removed
+    // yet (Windows) leaves no closed handle behind; the next sweep removes it.
+    const old = { db: this.db, dir: this.copyDir };
+    this.db = fresh.db;
+    this.copyDir = fresh.copyDir;
+    this.hasFileRefs = fresh.hasFileRefs;
+    this.schema = fresh.schema;
+    this.support = this.scopeSupport();
+    this.copiedAt = from.now();
+    AltLocalDbSource.release(old.db, old.dir);
+  }
+
+  private static release(db: Database, dir: string): void {
+    try {
+      db.close();
+    } catch {
+      // already closed
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      console.warn("[Alt2Obs] could not remove an old copy of Alt's database yet:", e);
     }
   }
 
@@ -328,7 +442,7 @@ export class AltLocalDbSource implements AltLocalSource {
       return this.db.prepare(sql).all(noteId) as ComponentRow[];
     } catch (e) {
       // file_ref_local_files missing in an older store: paths from file_metadata only.
-      if (!this.hasFileRefs) throw e;
+      if (!this.hasFileRefs || !/no such (table|column)/i.test(e instanceof Error ? e.message : String(e))) throw e;
       this.hasFileRefs = false;
       return this.components(noteId);
     }
@@ -339,6 +453,7 @@ export class AltLocalDbSource implements AltLocalSource {
   }
 
   async getBundle(id: string): Promise<LectureBundle> {
+    this.refreshIfStale();
     const note = this.db
       .prepare(`SELECT ln.id, ln.title, ln.type, ln.lecture_date, ln.folder_id, ln.updated_at FROM lecture_notes ln WHERE ln.id = ? AND ${this.scope("ln")}`)
       .get(id) as NoteRow | undefined;
@@ -355,6 +470,8 @@ export class AltLocalDbSource implements AltLocalSource {
   }
 
   close(): void {
+    // A closed source never makes a new copy.
+    this.refreshFrom = null;
     try {
       this.db.close();
     } catch {
